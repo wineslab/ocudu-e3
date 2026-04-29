@@ -78,6 +78,7 @@ option(BUILD_TESTING         "Compile tests"                                ON)
 option(ENABLE_GPROF          "Enable gprof"                                 OFF)
 option(FORCE_DEBUG_INFO      "Add debug information to Release build"       OFF)
 option(ENABLE_OCUDU_TRACY   "Enable using the tracy profiler if available" OFF)
+option(ENABLE_JBPF           "Enable jbpf"                              OFF)
 if (BUILD_TESTING)
     if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
         option(TEST_GDB_PRINTERS  "Enable tests for GDB pretty printers"  OFF)
@@ -137,6 +138,64 @@ else (ENABLE_DPDK)
   unset(ENABLE_PDSCH_HWACC CACHE)
   unset(ENABLE_PUSCH_HWACC CACHE)
 endif (ENABLE_DPDK)
+
+########################################################################
+# Janus (jbpf) integration
+########################################################################
+# When ENABLE_JBPF=ON, ocudu-janus builds its own copy of jbpf from the
+# external/jbpf submodule and exposes the capture_xran_packet hook in the
+# OFH data plane. No external prebuilt jbpf tree is required.
+if (ENABLE_JBPF)
+    if (NOT EXISTS "${CMAKE_SOURCE_DIR}/external/jbpf/CMakeLists.txt")
+        message(FATAL_ERROR
+            "ENABLE_JBPF=ON but the jbpf submodule at external/jbpf is missing. "
+            "Run './init_modules.sh' (or 'git submodule update --init --recursive external/jbpf') "
+            "to populate it.")
+    endif ()
+
+    # Force jbpf into the modes we consume.
+    set(JBPF_EXPERIMENTAL_FEATURES ON CACHE BOOL "Enable jbpf experimental features" FORCE)
+    set(JBPF_STATIC ON CACHE BOOL "Build jbpf as static library" FORCE)
+    # jbpf's own CMakeLists.txt attempts to run init_and_patch_submodules.sh
+    # when this is ON; we manage its submodules from ocudu-janus's init script
+    # so disable its auto-init to keep configure reproducible.
+    set(INITIALIZE_SUBMODULES OFF CACHE BOOL "Let jbpf init its own submodules" FORCE)
+    # jbpf defaults BUILD_TESTING=ON, which would rope its tests into the
+    # ocudu-janus build. Silence it just for the add_subdirectory() call and
+    # restore the original setting afterwards so ocudu-janus tests are
+    # unaffected.
+    set(__janus_saved_build_testing ${BUILD_TESTING})
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+
+    add_subdirectory(external/jbpf)
+
+    set(BUILD_TESTING ${__janus_saved_build_testing} CACHE BOOL "" FORCE)
+    unset(__janus_saved_build_testing)
+
+    add_definitions(-DJBPF_ENABLED)
+    # Keep the codelet and hook-framework views of fmt aligned.
+    add_definitions(-DFMT_USE_BITINT=0)
+    # Worker threads that fire jbpf hooks (e.g. ru_txrx_*) are spawned by
+    # ocudu's worker manager and never call jbpf_register_thread() directly.
+    # With auto-register on, the hook body lazy-registers the calling thread
+    # on first entry, so its thread-local ck epoch record is valid before
+    # ck_epoch_begin() runs. Without this, a hook fire from an unregistered
+    # thread segfaults the moment a codelet is attached.
+    add_definitions(-DJBPF_AUTOREGISTER_THREAD)
+
+    include_directories(${JBPF_LIB_HEADER_FILES})
+    include_directories(${JBPF_IO_HEADER_FILES})
+    include_directories(${JBPF_MEM_MGMT_HEADER_FILES})
+    include_directories(${JBPF_COMMON_HEADERS})
+    include_directories(${JBPF_LCM_IPC_HEADER_FILES})
+    include_directories(${JBPF_CK_HEADER_FILES})
+
+    # The ocudu-janus hook spec + the vendored jbpf_srsran_contexts / defs.
+    include_directories(${CMAKE_SOURCE_DIR}/ocudu_janus/verifier/specs)
+    include_directories(${CMAKE_SOURCE_DIR}/include/ocudu/janus)
+
+    message(STATUS "Janus (jbpf) hooks enabled. Building jbpf from external/jbpf")
+endif (ENABLE_JBPF)
 
 ########################################################################
 # ENABLE_EXPORT

@@ -21,3 +21,8 @@ add_library(ocudu_ofh_receiver STATIC ${SOURCES})
 target_include_directories(ocudu_ofh_receiver PRIVATE ${CMAKE_SOURCE_DIR}/lib/ofh)
 target_link_libraries(ocudu_ofh_receiver PRIVATE ocudu_ran ocudu_ofh_message_serdes ocudu_ofh_compression
         ocudu_ofh_ethernet ocudu_ofh_ecpri ocudulog ocudu_instrumentation)
+
+if (ENABLE_JBPF)
+    add_definitions(-DJBPF_ENABLED)
+    target_link_libraries(ocudu_ofh_receiver PRIVATE jbpf)
+endif (ENABLE_JBPF)

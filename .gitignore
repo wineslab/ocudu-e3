@@ -7,3 +7,7 @@
 # one user's workflow (e.g., build folders). See also https://git-scm.com/docs/gitignore).
 
 /utils/gdb/python/ocudu/__pycache__
+
+# Build artefacts (top-level out from jbpf, top-level build from cmake).
+/build/
+/out/

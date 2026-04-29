@@ -43,6 +43,13 @@ add_backward(gnb)
 target_include_directories(gnb PRIVATE ${CMAKE_SOURCE_DIR})
 install(TARGETS gnb RUNTIME)
 target_link_libraries(gnb PRIVATE gnb_base ocudu_flexible_o_du_split_dynamic)
+
+if (ENABLE_JBPF)
+        add_definitions(-DJBPF_ENABLED)
+        target_link_libraries(gnb PRIVATE jbpf)
+endif (ENABLE_JBPF)
+
+
 notify_binary_target(gnb)
 
 # Add the targets for the rest of the splits.

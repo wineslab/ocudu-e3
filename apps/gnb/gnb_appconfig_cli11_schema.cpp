@@ -28,6 +28,60 @@ static void configure_cli11_metrics_args(CLI::App& app, metrics_appconfig& metri
       ->capture_default_str();
 }
 
+#ifdef JBPF_ENABLED
+
+static void configure_cli11_jbpf_args(CLI::App& app, jbpf_appconfig& config)
+{
+  app.add_option("--jbpf_enable_ipc", config.jbpf_ipc_enabled, "jbpf mode [0: Standalone mode 1: IPC mode]")
+      ->capture_default_str()->check(CLI::Range(0, 1));
+  app.add_option("--jbpf_standalone_io_out_ip", config.jbpf_standalone_io_out_ip, "Standalone mode IO output IP")
+      ->capture_default_str();
+  app.add_option("--jbpf_standalone_io_out_port", config.jbpf_standalone_io_out_port, "Standalone mode IO out port")
+      ->capture_default_str()->check(CLI::Range(0, 65535));
+  app.add_option("--jbpf_standalone_io_in_port", config.jbpf_standalone_io_in_port, "Standalone mode IO in port")
+      ->capture_default_str()->check(CLI::Range(0, 65535));
+  app.add_option("--jbpf_standalone_io_cpu", config.jbpf_standalone_io_cpu, "Standalone mode IO thread CPU id")
+      ->capture_default_str();
+  app.add_option("--jbpf_standalone_io_policy", config.jbpf_standalone_io_policy,
+      "Standalone IO thread CPU scheduling policy [0 : SCHED_OTHER, 1 : SCHED_FIFO]")
+      ->capture_default_str()->check(CLI::Range(0, 1));
+  app.add_option("--jbpf_standalone_io_priority", config.jbpf_standalone_io_priority,
+      "Standalone mode IO thread CPU scheduling priority")
+      ->capture_default_str()->check(CLI::Range(0, 99));
+  app.add_option("--jbpf_io_mem_size_mb", config.jbpf_io_mem_size_mb, "jbpf IO memory size in MBs")
+      ->capture_default_str();
+  app.add_option("--jbpf_ipc_mem_name", config.jbpf_ipc_mem_name, "IPC mode memory name")
+      ->capture_default_str();
+  app.add_option("--jbpf_ipc_mem_size", config.jbpf_ipc_mem_size, "IPC mode memory size")
+      ->capture_default_str();
+  app.add_option("--jbpf_enable_lcm_ipc", config.jbpf_has_lcm_ipc_thread, "Enable LCM IPC interface")
+      ->capture_default_str()->check(CLI::Range(0, 1));
+  app.add_option("--jbpf_lcm_ipc_name", config.jbpf_lcm_ipc_name, "LCM IPC socket name")
+      ->capture_default_str();
+  app.add_option("--jbpf_run_path", config.jbpf_run_path, "jbpf run path")
+      ->capture_default_str();
+  app.add_option("--jbpf_namespace", config.jbpf_namespace, "jbpf namespace")
+      ->capture_default_str();
+  app.add_option("--jbpf_agent_cpu", config.jbpf_agent_cpu, "Agent thread CPU id")
+      ->capture_default_str();
+  app.add_option("--jbpf_agent_policy", config.jbpf_agent_policy,
+      "Agent thread CPU scheduling policy [0 : SCHED_OTHER, 1 : SCHED_FIFO]")
+      ->capture_default_str()->check(CLI::Range(0, 1));
+  app.add_option("--jbpf_agent_priority", config.jbpf_agent_priority,
+      "Agent thread CPU scheduling priority")
+      ->capture_default_str()->check(CLI::Range(0, 99));
+  app.add_option("--jbpf_maint_cpu", config.jbpf_maint_cpu, "Maintenance thread CPU id")
+      ->capture_default_str();
+  app.add_option("--jbpf_maint_policy", config.jbpf_maint_policy,
+      "Maintenance thread CPU scheduling policy [0 : SCHED_OTHER, 1 : SCHED_FIFO]")
+      ->capture_default_str()->check(CLI::Range(0, 1));
+  app.add_option("--jbpf_maint_priority", config.jbpf_maint_priority,
+      "Maintenance thread CPU scheduling priority")
+      ->capture_default_str()->check(CLI::Range(0, 99));
+}
+
+#endif
+
 #ifdef DPDK_FOUND
 static void manage_hal_optional(CLI::App& app, gnb_appconfig& gnb_cfg)
 {
@@ -66,6 +120,12 @@ void ocudu::configure_cli11_with_gnb_appconfig_schema(CLI::App& app, gnb_appconf
   app_services::configure_cli11_with_executor_metrics_appconfig_schema(app, gnb_cfg.metrics_cfg.executors_metrics_cfg);
   app_services::configure_cli11_with_app_resource_usage_config_schema(app, gnb_cfg.metrics_cfg.rusage_config);
   app_services::configure_cli11_with_metrics_appconfig_schema(app, gnb_cfg.metrics_cfg.metrics_service_cfg);
+
+#ifdef JBPF_ENABLED
+  // jbpf section.
+  CLI::App* jbpf_subcmd = add_subcommand(app, "jbpf", "jbpf configuration")->configurable();
+  configure_cli11_jbpf_args(*jbpf_subcmd, gnb_cfg.jbpf_cfg);
+#endif
 
 #ifdef DPDK_FOUND
   // HAL section.
