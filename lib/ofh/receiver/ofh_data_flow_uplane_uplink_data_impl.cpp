@@ -6,6 +6,11 @@
 #include "ocudu/instrumentation/traces/ofh_traces.h"
 #include "ocudu/ofh/serdes/ofh_message_decoder_properties.h"
 
+#ifdef JBPF_ENABLED
+#include "jbpf_srsran_hooks.h"
+DEFINE_JBPF_HOOK(capture_uplane_iq);
+#endif
+
 using namespace ocudu;
 using namespace ofh;
 
@@ -34,6 +39,24 @@ void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned eaxc, span
     return;
   }
   ofh_tracer << trace_event("ofh_receiver_uplane_decode", decode_tp);
+
+#ifdef JBPF_ENABLED
+  // Post-decode UL hook: emits already-decompressed cbf16_t IQ + parsed
+  // slot/sym/eAxC metadata. One fire per section (typically 1 per packet).
+  for (const auto& section : results.sections) {
+    hook_capture_uplane_iq(
+        section.iq_samples.data(),
+        static_cast<uint32_t>(section.iq_samples.size() * sizeof(cbf16_t)),
+        static_cast<uint16_t>(results.params.slot.sfn()),
+        static_cast<uint16_t>(results.params.slot.subframe_index()),
+        static_cast<uint16_t>(results.params.slot.slot_index()),
+        static_cast<uint16_t>(results.params.symbol_id),
+        static_cast<uint16_t>(section.start_prb),
+        static_cast<uint16_t>(section.nof_prbs),
+        static_cast<uint16_t>(eaxc),
+        JBPF_UL);
+  }
+#endif
 
   if (should_uplane_packet_be_filtered(eaxc, results)) {
     metrics_collector.increase_dropped_messages();

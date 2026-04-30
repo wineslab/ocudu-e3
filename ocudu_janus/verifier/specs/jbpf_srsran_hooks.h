@@ -36,6 +36,44 @@ DECLARE_JBPF_HOOK(capture_xran_packet,
             )
         )
 
+/*
+ * capture_uplane_iq: post-decode hook.
+ *
+ * Fires once per (decoded) U-plane section after uplane_decoder->decode()
+ * succeeds. The IQ samples are already decompressed (cbf16_t, 4 bytes per
+ * complex sample) and the slot/symbol/eAxC metadata is already parsed -
+ * the codelet does not need to walk the eCPRI/Open Fronthaul headers.
+ */
+DECLARE_JBPF_HOOK(capture_uplane_iq,
+        struct jbpf_ran_uplane_ctx ctx,
+        ctx,
+        HOOK_PROTO(
+            const void* iq_samples,
+            uint32_t iq_size_bytes,
+            uint16_t sfn,
+            uint16_t subframe_id,
+            uint16_t slot_id,
+            uint16_t symbol_id,
+            uint16_t start_prb,
+            uint16_t nof_prbs,
+            uint16_t eaxc,
+            JbpfDirection_t direction
+            ),
+        HOOK_ASSIGN(
+            ctx.ctx_id = 1;
+            ctx.data = (uint64_t)iq_samples;
+            ctx.data_end = (uint64_t)((const uint8_t*)iq_samples + iq_size_bytes);
+            ctx.sfn = sfn;
+            ctx.subframe_id = subframe_id;
+            ctx.slot_id = slot_id;
+            ctx.symbol_id = symbol_id;
+            ctx.start_prb = start_prb;
+            ctx.nof_prbs = nof_prbs;
+            ctx.eaxc = eaxc;
+            ctx.direction = direction;
+            )
+        )
+
 #ifdef __cplusplus
 }
 #endif

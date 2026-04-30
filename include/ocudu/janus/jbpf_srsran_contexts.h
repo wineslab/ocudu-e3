@@ -33,6 +33,25 @@ struct jbpf_ran_ofh_ctx {
   JbpfDirection_t direction; /* 0 DL, 1 UL */
 };
 
+/* OFH U-plane (post-decode, decompressed) context.
+ * Fired by the gNB right after uplane_decoder->decode() succeeds, so the
+ * IQ samples are already decompressed (cbf16_t = bf16 real + bf16 imag,
+ * 4 bytes/sample) and the slot/symbol metadata is already parsed. */
+struct jbpf_ran_uplane_ctx {
+  uint64_t data;       /* Pointer to cbf16_t IQ samples */
+  uint64_t data_end;   /* Pointer to end+1 of IQ buffer */
+  uint64_t meta_data;  /* Used by ebpf */
+  uint16_t ctx_id;
+  uint16_t sfn;        /* 3GPP system frame number */
+  uint16_t subframe_id;
+  uint16_t slot_id;    /* slot index within radio frame */
+  uint16_t symbol_id;
+  uint16_t start_prb;
+  uint16_t nof_prbs;
+  uint16_t eaxc;
+  JbpfDirection_t direction; /* 0 DL, 1 UL */
+};
+
 /* L2 context*/
 struct jbpf_ran_layer2_ctx {
     uint64_t data; /* Pointer to beginning of variable-sized L2 struct */
