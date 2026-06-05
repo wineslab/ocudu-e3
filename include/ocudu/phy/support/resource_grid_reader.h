@@ -106,6 +106,25 @@ public:
   /// \param[in]  port    Port index.
   /// \param[in]  l       OFDM symbol index.
   virtual span<const cbf16_t> get_view(unsigned port, unsigned l) const = 0;
+
+#ifdef JBPF_ENABLED
+  /// \brief Gets a read-only pointer to the contiguous backing storage of the
+  /// resource grid.
+  ///
+  /// The returned buffer covers `get_nof_ports() * get_nof_symbols() *
+  /// get_nof_subc()` elements laid out as `[port][symbol][subcarrier]` in row-
+  /// major order. Intended for the capture_uplink_slot jbpf hook (and any
+  /// future zero-copy observer) that needs to read or copy out the entire
+  /// grid in one shot without going through the per-symbol get_view API.
+  ///
+  /// Lifetime: the pointer is valid only while the resource grid instance is
+  /// alive; observers must not retain it beyond the slot processing window
+  /// during which they obtained it.
+  ///
+  /// Only declared when JBPF_ENABLED is set so this jbpf-specific accessor
+  /// doesn't leak into default builds.
+  virtual const cbf16_t* get_raw_storage() const = 0;
+#endif
 };
 
 } // namespace ocudu

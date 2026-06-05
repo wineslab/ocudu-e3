@@ -74,6 +74,54 @@ DECLARE_JBPF_HOOK(capture_uplane_iq,
             )
         )
 
+/*
+ * capture_uplink_slot: per-slot snapshot hook.
+ *
+ * Fires once per UL slot, on the last symbol, after the upper-PHY
+ * symbol handler has populated the resource grid with the full slot.
+ * The codelet receives a pointer to a contiguous cbf16_t buffer of
+ * shape [nof_ports][nof_symbols][nof_subcarriers] - already
+ * decompressed (RU did the BFP decompression) and laid out in the
+ * resource grid's natural order. No eCPRI/Open Fronthaul parsing
+ * required on the codelet side; metadata (sfn, subframe, slot, sector,
+ * grid dimensions) comes through the ctx struct.
+ *
+ * Buffer lifetime: the snapshot is owned by the upper_phy_rx_symbol_
+ * handler instance and reused across slots. The codelet must finish
+ * reading or copy out before returning - the next slot will overwrite
+ * the same memory.
+ */
+DECLARE_JBPF_HOOK(capture_uplink_slot,
+        struct jbpf_ran_slot_ctx ctx,
+        ctx,
+        HOOK_PROTO(
+            const void* iq_grid,
+            uint32_t iq_size_bytes,
+            uint64_t gnb_ts_ns,
+            uint16_t sfn,
+            uint16_t subframe_id,
+            uint16_t slot_id,
+            uint16_t nof_ports,
+            uint16_t nof_symbols,
+            uint16_t nof_subcarriers,
+            uint16_t sector_id,
+            JbpfDirection_t direction
+            ),
+        HOOK_ASSIGN(
+            ctx.ctx_id = sector_id;
+            ctx.data = (uint64_t)iq_grid;
+            ctx.data_end = (uint64_t)((const uint8_t*)iq_grid + iq_size_bytes);
+            ctx.gnb_ts_ns = gnb_ts_ns;
+            ctx.sfn = sfn;
+            ctx.subframe_id = subframe_id;
+            ctx.slot_id = slot_id;
+            ctx.nof_ports = nof_ports;
+            ctx.nof_symbols = nof_symbols;
+            ctx.nof_subcarriers = nof_subcarriers;
+            ctx.direction = direction;
+            )
+        )
+
 #ifdef __cplusplus
 }
 #endif

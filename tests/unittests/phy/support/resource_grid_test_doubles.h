@@ -333,6 +333,17 @@ public:
     return grid.get_view({l, port});
   }
 
+#ifdef JBPF_ENABLED
+  // Test spy override - tests don't exercise the capture_uplink_slot jbpf
+  // hook so a backing-tensor pointer is not meaningful here. Returning the
+  // first stored sample's address is good enough to satisfy the interface
+  // and keep the spy linkable when JBPF is enabled.
+  const cbf16_t* get_raw_storage() const override
+  {
+    return grid.get_view({0u, 0u}).data();
+  }
+#endif
+
   void write(span<const expected_entry_t> entries_)
   {
     unsigned current_max_sc   = max_prb * NOF_SUBCARRIERS_PER_RB;

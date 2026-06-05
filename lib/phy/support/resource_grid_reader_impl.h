@@ -58,6 +58,17 @@ public:
   // See interface for documentation.
   span<const cbf16_t> get_view(unsigned port, unsigned l) const override;
 
+#ifdef JBPF_ENABLED
+  // See interface for documentation. Returns the contiguous backing buffer of
+  // the underlying [port][symbol][subc] tensor by taking a view across all
+  // dimensions (the tensor's get_data() is protected; get_view<NDIMS>({})
+  // is the public equivalent and resolves to the same contiguous span).
+  const cbf16_t* get_raw_storage() const override
+  {
+    return data.template get_view<static_cast<unsigned>(resource_grid_dimensions::all)>({}).data();
+  }
+#endif
+
   /// Checks if a port is empty.
   bool is_port_empty(unsigned i_port) const { return (empty.load(std::memory_order_acquire) & (1U << i_port)) != 0; }
 

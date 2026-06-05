@@ -52,6 +52,32 @@ struct jbpf_ran_uplane_ctx {
   JbpfDirection_t direction; /* 0 DL, 1 UL */
 };
 
+/* Upper-PHY per-slot snapshot context.
+ * Fired once per UL slot, on the last symbol, after the upper-PHY symbol
+ * handler has populated the resource grid with the full slot. The IQ
+ * samples are cbf16_t (already decompressed) and laid out contiguously
+ * as [port][symbol][subcarrier] in the snapshot buffer the hook hands
+ * the codelet. The codelet does not walk eCPRI/Open Fronthaul headers
+ * nor does it accumulate per-symbol/per-section state. */
+struct jbpf_ran_slot_ctx {
+  uint64_t data;             /* Pointer to cbf16_t IQ snapshot */
+  uint64_t data_end;         /* Pointer to end+1 of snapshot buffer */
+  uint64_t meta_data;        /* Used by ebpf */
+  /* CLOCK_REALTIME ns stamped by the gNB at hook fire (right before
+   * the slot is handed off to the codelet). Anchor for RAN -> dApp
+   * end-to-end latency measurement. Same clock as jbpf_time_get_ns()
+   * (see external/jbpf/src/core/jbpf_helper_impl.c). */
+  uint64_t gnb_ts_ns;
+  uint16_t ctx_id;           /* Sector id */
+  uint16_t sfn;              /* 3GPP system frame number */
+  uint16_t subframe_id;
+  uint16_t slot_id;          /* slot index within subframe */
+  uint16_t nof_ports;        /* number of antenna ports in the snapshot */
+  uint16_t nof_symbols;      /* number of OFDM symbols in the slot (12 or 14) */
+  uint16_t nof_subcarriers;  /* number of subcarriers per symbol (12 * nof_prbs) */
+  JbpfDirection_t direction; /* 0 DL, 1 UL */
+};
+
 /* L2 context*/
 struct jbpf_ran_layer2_ctx {
     uint64_t data; /* Pointer to beginning of variable-sized L2 struct */

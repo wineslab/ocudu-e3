@@ -45,6 +45,14 @@ target_link_libraries(ocudu_upper_phy
         ocudu_uplink_processor
         ocudu_upper_phy_metrics)
 
+# capture_uplink_slot jbpf hook in upper_phy_rx_symbol_handler_impl.cpp needs
+# the jbpf runtime symbols (hook list section, epoch tracking, etc).
+# Plain form (no PRIVATE keyword) to match the existing target_link_libraries
+# call above - CMake forbids mixing keyword and plain on the same target.
+if (ENABLE_JBPF)
+    target_link_libraries(ocudu_upper_phy jbpf)
+endif (ENABLE_JBPF)
+
 add_library(log_likelihood_ratio log_likelihood_ratio.cpp)
 target_link_libraries(log_likelihood_ratio ocuduvec)
 
