@@ -32,7 +32,7 @@ protected:
     f1u_allocator      = std::make_unique<dummy_gtpu_teid_pool>();
     ngu_session_mngr   = std::make_unique<dummy_ngu_session_manager>();
     cu_up_mngr_pdcp_if = std::make_unique<dummy_cu_up_manager_pdcp_interface>();
-    e1ap               = std::make_unique<dummy_e1ap>();
+    e1ap               = std::make_unique<dummy_e1ap>(cu_up_e1_index_t{0});
 
     // create DUT object
     ue_inactivity_timer = timers_factory.create_timer();
@@ -114,12 +114,11 @@ generate_pdu_session_res_to_setup_item(pdu_session_id_t psi, drb_id_t drb_id, qo
   pdu_session_setup_item.security_ind.integrity_protection_ind = integrity_protection_indication_t::not_needed;
   pdu_session_setup_item.security_ind.confidentiality_protection_ind =
       confidentiality_protection_indication_t::not_needed;
-  pdu_session_setup_item.pdu_session_res_dl_ambr = 330000000;
-  pdu_session_setup_item.ng_ul_up_tnl_info.tp_address =
-      transport_layer_address::create_from_bitstring("01111111000000000000000000000001");
-  pdu_session_setup_item.ng_ul_up_tnl_info.gtp_teid = int_to_gtpu_teid(0x12345678);
-  pdu_session_setup_item.ng_ul_up_tnl_info          = {transport_layer_address::create_from_string("0.0.0.0"),
-                                                       int_to_gtpu_teid(0)};
+  pdu_session_setup_item.pdu_session_res_dl_ambr      = 330000000;
+  pdu_session_setup_item.ng_ul_up_tnl_info.tp_address = transport_layer_address::create_from_string("127.0.0.1");
+  pdu_session_setup_item.ng_ul_up_tnl_info.gtp_teid   = int_to_gtpu_teid(0x12345678);
+  pdu_session_setup_item.ng_ul_up_tnl_info            = {transport_layer_address::create_from_string("0.0.0.0"),
+                                                         int_to_gtpu_teid(0)};
 
   e1ap_drb_to_setup_item_ng_ran drb_to_setup_item;
   drb_to_setup_item.drb_id                      = drb_id;
@@ -211,6 +210,18 @@ generate_pdu_session_res_to_modify_item_to_setup_drb(pdu_session_id_t           
 
   pdu_session_modify_item.drb_to_setup_list_ng_ran.emplace(drb_to_setup_item.drb_id, drb_to_setup_item);
 
+  return pdu_session_modify_item;
+}
+
+inline e1ap_pdu_session_res_to_modify_item
+generate_pdu_session_res_to_modify_item_with_ng_ul_up_tnl_info(pdu_session_id_t   psi,
+                                                               const std::string& peer_addr,
+                                                               uint32_t           peer_teid)
+{
+  e1ap_pdu_session_res_to_modify_item pdu_session_modify_item;
+  pdu_session_modify_item.pdu_session_id = psi;
+  pdu_session_modify_item.ng_ul_up_tnl_info =
+      up_transport_layer_info(transport_layer_address::create_from_string(peer_addr), int_to_gtpu_teid(peer_teid));
   return pdu_session_modify_item;
 }
 

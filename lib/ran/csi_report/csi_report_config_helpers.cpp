@@ -3,7 +3,6 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/csi_report/csi_report_config_helpers.h"
-#include "ocudu/ran/csi_report/csi_report_on_puxch_utils.h"
 
 using namespace ocudu;
 
@@ -21,6 +20,14 @@ csi_report_configuration ocudu::create_csi_report_configuration(const csi_meas_c
           csi_meas.csi_res_cfg_list[csi_rep_cfg.res_for_channel_meas].csi_rs_res_set_list)
           .nzp_csi_rs_res_set_list[0];
   csi_rep.nof_csi_rs_resources = csi_meas.nzp_csi_rs_res_set_list[nzp_csi_set_id].nzp_csi_rs_res.size();
+
+  // Select the given number of reported Resource Sets if group based beamforming is disabled and the number of resource
+  // sets to report is present.
+  if (!csi_rep_cfg.is_group_based_beam_reporting_enabled && csi_rep_cfg.nof_reported_rs.has_value()) {
+    csi_rep.nof_reported_rs = csi_rep_cfg.nof_reported_rs.value();
+  } else {
+    csi_rep.nof_reported_rs = 1;
+  }
 
   // Enable indicators
   switch (csi_rep_cfg.report_qty_type) {
@@ -78,13 +85,15 @@ bool ocudu::is_valid(const csi_report_configuration& config)
     return false;
   }
 
-  // The PMI codebook type is not supported.
-  if (std::holds_alternative<std::monostate>(config.pmi_codebook)) {
+  // PMI codebook is not supported if the measurement is for cri-RSRP or ssb-Index-RSRP.
+  if (std::holds_alternative<std::monostate>(config.pmi_codebook) &&
+      (config.quantities != csi_report_quantities::cri_rsrp) &&
+      (config.quantities != csi_report_quantities::ssb_index_rsrp)) {
     return false;
   }
 
   if (!std::holds_alternative<pmi_codebook_one_port>(config.pmi_codebook)) {
-    unsigned nof_csi_rs_ports = csi_report_get_nof_csi_rs_antenna_ports(config.pmi_codebook);
+    unsigned nof_csi_rs_ports = get_precoding_codebook_antenna_ports(config.pmi_codebook);
 
     // The RI restriction set size is too small to cover all possible ranks given the number of CSI-RS ports.
     if (config.ri_restriction.size() < nof_csi_rs_ports) {

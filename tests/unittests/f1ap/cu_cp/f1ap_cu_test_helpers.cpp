@@ -8,9 +8,9 @@
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/rrc_nr/dl_ccch_msg.h"
 #include "ocudu/asn1/rrc_nr/dl_ccch_msg_ies.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_configuration_update.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_factory.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/nr_cgi.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/support/async/async_test_utils.h"
@@ -35,6 +35,7 @@ f1ap_cu_test::f1ap_cu_test(const f1ap_configuration& f1ap_cfg)
   tmp.json_log_enabled   = true;
 
   f1ap = create_f1ap(tmp, f1ap_pdu_notifier, du_processor_notifier, timers, ctrl_worker);
+  du_processor_notifier.connect_f1ap(f1ap.get());
 }
 
 f1ap_cu_test::~f1ap_cu_test()
@@ -48,7 +49,7 @@ f1ap_cu_test::test_ue& f1ap_cu_test::create_ue(gnb_du_ue_f1ap_id_t du_ue_id)
   f1ap_message msg = test_helpers::generate_init_ul_rrc_message_transfer(
       du_ue_id, to_rnti(0x4601), plmn_identity::test_value(), byte_buffer::create({0x1, 0x2, 0x3, 0x4}).value());
   f1ap->handle_message(msg);
-  ue_index_t ue_index = *du_processor_notifier.last_created_ue_index;
+  cu_cp_ue_index_t ue_index = *du_processor_notifier.last_created_ue_index;
   test_ues.emplace(ue_index, test_ue{ue_index});
   test_ues[ue_index].ue_index = ue_index;
   test_ues[ue_index].du_ue_id = du_ue_id;
@@ -77,7 +78,7 @@ f1ap_cu_test::test_ue& f1ap_cu_test::run_ue_context_setup()
   ocudu_assert(t.ready(), "The procedure should have completed by now");
 
   // Create test UE using identifiers allocated from precedure.
-  ue_index_t ue_index = t.get().ue_index;
+  cu_cp_ue_index_t ue_index = t.get().ue_index;
   test_ues.emplace(ue_index, test_ue{ue_index});
   test_ues[ue_index].ue_index = ue_index;
   test_ues[ue_index].cu_ue_id = cu_ue_id;
@@ -87,7 +88,7 @@ f1ap_cu_test::test_ue& f1ap_cu_test::run_ue_context_setup()
 
 bool f1ap_cu_test::was_rrc_reject_sent()
 {
-  // Make sure that the last message was a UEContextReleaseCommand.
+  // Make sure that the last message was an UEContextReleaseCommand.
   if (f1ap_pdu_notifier.last_f1ap_msg.pdu.type().value != asn1::f1ap::f1ap_pdu_c::types::init_msg) {
     return false;
   }

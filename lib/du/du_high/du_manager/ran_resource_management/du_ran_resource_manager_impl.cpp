@@ -76,6 +76,8 @@ du_ran_resource_manager_impl::du_ran_resource_manager_impl(span<const du_cell_co
   logger(ocudulog::fetch_basic_logger("DU-MNG")),
   test_cfg(test_cfg_),
   pucch_res_mng(scheduler_cfg.ue.max_pucchs_per_slot),
+  pdsch_res_mng(cell_cfg_list, test_cfg),
+  pusch_res_mng(cell_cfg_list, test_cfg),
   bearer_res_mng(srbs, qos, logger),
   srs_res_mng(build_srs_res_mng(cell_cfg_list)),
   meas_cfg_mng(cell_cfg_list),
@@ -86,32 +88,36 @@ du_ran_resource_manager_impl::du_ran_resource_manager_impl(span<const du_cell_co
     const auto&           cell     = cell_cfg_list[cell_idx_uint];
     const du_cell_index_t cell_idx = to_du_cell_index(cell_idx_uint);
     pucch_res_mng.add_cell(cell_idx, cell.ran);
-    unsigned sr_limit  = pucch_res_mng.get_nof_free_sr_configs(cell_idx);
-    unsigned csi_limit = 0;
-    unsigned srs_limit = 0;
 
-    unsigned   max_nof_ues = sr_limit;
     const bool is_periodic_csi_report =
         cell.ran.init_bwp.csi.has_value() and cell.ran.init_bwp.csi->csi_report_slot_offset.has_value();
-    if (is_periodic_csi_report) {
-      csi_limit   = pucch_res_mng.get_nof_free_csi_configs(cell_idx);
-      max_nof_ues = std::min(max_nof_ues, csi_limit);
-    }
-    if (cell.ran.init_bwp.srs_cfg.srs_type_enabled == srs_type::periodic) {
-      srs_limit   = srs_res_mng->get_nof_srs_free_res_offsets(cell_idx);
-      max_nof_ues = std::min(max_nof_ues, srs_limit);
-    }
+    const bool is_periodic_srs = cell.ran.init_bwp.srs_cfg.srs_type_enabled == srs_type::periodic;
 
     logger.info("The upper-bound on the number of UEs supported by cell {{pci={}, du_cell_index={}}} is {} (the actual "
                 "number might be lower than that). This is determined by the lowest of the following limits: SR ({}), "
                 "CSI ({}) and SRS ({}).",
                 cell.ran.pci,
                 fmt::underlying(cell_idx),
-                max_nof_ues,
-                sr_limit,
-                is_periodic_csi_report ? fmt::to_string(csi_limit) : "n/a",
-                cell.ran.init_bwp.srs_cfg.srs_type_enabled == srs_type::periodic ? fmt::to_string(srs_limit) : "n/a");
+                get_max_nof_setup_ues(cell_idx),
+                pucch_res_mng.get_nof_free_sr_configs(cell_idx),
+                is_periodic_csi_report ? fmt::to_string(pucch_res_mng.get_nof_free_csi_configs(cell_idx)) : "n/a",
+                is_periodic_srs ? fmt::to_string(srs_res_mng->get_nof_srs_free_res_offsets(cell_idx)) : "n/a");
   }
+}
+
+unsigned du_ran_resource_manager_impl::get_max_nof_setup_ues(du_cell_index_t cell_index) const
+{
+  const auto& cell = cell_cfg_list[cell_index];
+
+  // The number of supported UEs is bounded by the lowest of the available SR, CSI and SRS resources.
+  unsigned max_nof_ues = pucch_res_mng.get_nof_free_sr_configs(cell_index);
+  if (cell.ran.init_bwp.csi.has_value() and cell.ran.init_bwp.csi->csi_report_slot_offset.has_value()) {
+    max_nof_ues = std::min(max_nof_ues, pucch_res_mng.get_nof_free_csi_configs(cell_index));
+  }
+  if (cell.ran.init_bwp.srs_cfg.srs_type_enabled == srs_type::periodic) {
+    max_nof_ues = std::min(max_nof_ues, srs_res_mng->get_nof_srs_free_res_offsets(cell_index));
+  }
+  return max_nof_ues;
 }
 
 expected<ue_ran_resource_configurator, std::string>
@@ -130,11 +136,11 @@ du_ran_resource_manager_impl::create_ue_resource_configurator(du_ue_index_t   ue
   // Note: In case of lack of RAN resource availability, the return will be error type.
   error_type<std::string> err = allocate_cell_resources(ue_index, pcell_index, SERVING_PCELL_IDX);
   if (not err.has_value()) {
-    logger.info("Failed to create a configuration for ue={}. Cause: {}", static_cast<unsigned>(ue_index), err.error());
+    logger.info("Failed to create a configuration for ue={}. Cause: {}", ue_index, err.error());
   }
 
-  // Initialize correct defaults for UE RAN resources dependent on UE capabilities.
-  ue_res.ue_cap_manager.handle_ue_creation(ue_res.cg_cfg);
+  // Initialize UE with DRX disabled.
+  drx_res_mng.handle_ue_creation(ue_res.cg_cfg.cell_group);
 
   // Allocate CFRA resources when TC-RNTI was not yet assigned (e.g. during for Handover).
   if (not has_tc_rnti) {
@@ -199,9 +205,18 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
   // > Process UE NR capabilities and update UE dedicated configuration only if test mode is not configured.
   if (not test_cfg.test_ue.has_value() or test_cfg.test_ue->rnti == rnti_t::INVALID_RNTI) {
     if (reestablished_ue_caps != nullptr) {
-      u.ue_cap_manager.update(ue_mcg, *reestablished_ue_caps);
+      u.ue_cap_manager.update(*reestablished_ue_caps);
     }
-    u.ue_cap_manager.update(ue_mcg, upd_req.ue_cap_rat_list);
+    if (not upd_req.ue_cap_rat_list.empty()) {
+      u.ue_cap_manager.update(upd_req.ue_cap_rat_list);
+    } else if (not upd_req.ho_prep_info.empty()) {
+      u.ue_cap_manager.update_from_ho_prep_info(upd_req.ho_prep_info);
+    }
+  }
+  if (u.ue_cap_manager.summary().has_value()) {
+    pdsch_res_mng.update_resources(ue_mcg.cell_group, *u.ue_cap_manager.summary());
+    pusch_res_mng.update_resources(ue_mcg.cell_group, *u.ue_cap_manager.summary());
+    drx_res_mng.handle_ue_cap_update(ue_mcg.cell_group, u.ue_cap_manager.summary());
   }
 
   // > Update UE SRBs and DRBs.
@@ -224,8 +239,7 @@ void du_ran_resource_manager_impl::deallocate_context(du_ue_index_t ue_index)
   du_ue_resource_config& ue_mcg = ue_res.cg_cfg;
 
   ra_res_alloc.deallocate_cfra_resources(ue_mcg);
-
-  ue_res.ue_cap_manager.release(ue_mcg);
+  drx_res_mng.handle_ue_removal(ue_mcg.cell_group);
 
   for (auto p : ue_mcg.cell_group.cells) {
     deallocate_cell_resources(ue_index, p.first);
@@ -282,6 +296,9 @@ error_type<std::string> du_ran_resource_manager_impl::allocate_cell_resources(du
           fmt::format("Unable to allocate dedicated PUCCH resources for cell={}", fmt::underlying(cell_index)));
     }
 
+    pdsch_res_mng.alloc_resources(ue_res.cell_group);
+    pusch_res_mng.alloc_resources(ue_res.cell_group);
+
   } else {
     ocudu_assert(not ue_res.cell_group.cells.contains(serv_cell_index), "Reallocation of SCell detected");
     ue_res.cell_group.cells.emplace(serv_cell_index, ue_cell_config{});
@@ -304,6 +321,8 @@ void du_ran_resource_manager_impl::deallocate_cell_resources(du_ue_index_t ue_in
                  "Double deallocation of same UE cell resources detected");
     pucch_res_mng.dealloc_resources(ue_res.cell_group);
     srs_res_mng->dealloc_resources(ue_res.cell_group);
+    pdsch_res_mng.dealloc_resources(ue_res.cell_group);
+    pusch_res_mng.dealloc_resources(ue_res.cell_group);
     ue_res.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.cell_index = INVALID_DU_CELL_INDEX;
   } else {
     // TODO: Remove of SCell params.
@@ -312,6 +331,6 @@ void du_ran_resource_manager_impl::deallocate_cell_resources(du_ue_index_t ue_in
 }
 
 du_ran_resource_manager_impl::ue_resource_context::ue_resource_context(du_ran_resource_manager_impl& parent) :
-  ue_cap_manager(parent.cell_cfg_list, parent.drx_res_mng, parent.logger, parent.test_cfg)
+  ue_cap_manager(parent.cell_cfg_list, parent.logger)
 {
 }

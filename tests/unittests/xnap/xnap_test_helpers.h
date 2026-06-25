@@ -40,7 +40,10 @@ class dummy_xnc_gateway : public xnc_connection_gateway
 public:
   dummy_xnc_gateway() : logger(ocudulog::fetch_basic_logger("TEST")) {}
 
-  async_task<bool> connect_to_peer(transport_layer_address peer_addr) override { return launch_no_op_task(true); }
+  async_task<bool> connect_to_peer(std::vector<transport_layer_address> peer_addrs) override
+  {
+    return launch_no_op_task(true);
+  }
 
   void attach_cu_cp(cu_cp_xnc_handler& xnc_handler_) override { logger.info("CU-CP attached to XN-C gateway"); }
 
@@ -59,7 +62,7 @@ public:
 
   void set_xnap_handover_request_outcome(bool success) { ho_request_outcome = success; }
 
-  async_task<bool> on_new_rrc_handover_command(ue_index_t ue_index, byte_buffer command) override
+  async_task<bool> on_new_rrc_handover_command(cu_cp_ue_index_t ue_index, byte_buffer command) override
   {
     logger.info("Received a new RRC Handover Command for UE index {}", ue_index);
     last_handover_command = std::move(command);
@@ -69,26 +72,26 @@ public:
     });
   }
 
-  ue_index_t request_new_ue_index_allocation(const nr_cell_global_id_t& cgi, const plmn_identity& plmn) override
+  cu_cp_ue_index_t request_new_ue_index_allocation(const nr_cell_global_id_t& cgi, const plmn_identity& plmn) override
   {
     if (ho_request_outcome) {
-      ue_index_t ue_index = ue_mng.add_ue(du_index_t::min);
-      if (ue_index == ue_index_t::invalid) {
+      cu_cp_ue_index_t ue_index = ue_mng.add_ue(cu_cp_du_index_t::min);
+      if (ue_index == cu_cp_ue_index_t::invalid) {
         logger.error("Failed to create UE");
-        return ue_index_t::invalid;
+        return cu_cp_ue_index_t::invalid;
       }
       if (ue_mng.ue_admission_limit_reached()) {
         ue_mng.remove_ue(ue_index);
         logger.error("Failed to create UE. UE not servable");
-        return ue_index_t::invalid;
+        return cu_cp_ue_index_t::invalid;
       }
 
       return ue_index;
     }
-    return ue_index_t::invalid;
+    return cu_cp_ue_index_t::invalid;
   }
 
-  bool on_handover_request_received(ue_index_t                        ue_index,
+  bool on_handover_request_received(cu_cp_ue_index_t                  ue_index,
                                     const plmn_identity&              selected_plmn,
                                     const security::security_context& sec_ctxt) override
   {
@@ -103,7 +106,7 @@ public:
     return true;
   }
 
-  bool schedule_async_task(ue_index_t ue_index, async_task<void> task) override
+  bool schedule_async_task(cu_cp_ue_index_t ue_index, async_task<void> task) override
   {
     ocudu_assert(ue_mng.find_ue_task_scheduler(ue_index) != nullptr, "UE task scheduler must be present");
     return ue_mng.find_ue_task_scheduler(ue_index)->schedule_async_task(std::move(task));
@@ -151,18 +154,23 @@ public:
     });
   }
 
-  void on_xn_handover_execution(ue_index_t                                    ue_index,
+  void on_xn_handover_execution(cu_cp_ue_index_t                              ue_index,
                                 const xnap_handover_target_execution_context& xnap_ho_target_execution_ctxt) override
   {
     logger.info("Requested XN handover execution for UE index {}", ue_index);
   }
 
-  void on_handover_cancel_received(ue_index_t ue_index) override
+  void on_handover_success_received(cu_cp_ue_index_t source_ue_index, peer_xnap_ue_id_t winner_peer_xnap_ue_id) override
+  {
+    logger.info("HandoverSuccess received for source UE index {}", source_ue_index);
+  }
+
+  void on_handover_cancel_received(cu_cp_ue_index_t ue_index) override
   {
     logger.info("Received a handover cancel for UE index {}", ue_index);
   }
 
-  void on_ue_context_release_received(ue_index_t ue_index) override
+  void on_ue_context_release_received(cu_cp_ue_index_t ue_index) override
   {
     logger.info("Received a UE context release for UE index {}", ue_index);
   }
@@ -188,7 +196,7 @@ protected:
   bool run_xn_setup(const xnap_configuration& peer_cfg);
 
   /// \brief Helper method to successfully create UE instance in ue manager.
-  ue_index_t create_ue(rnti_t rnti = rnti_t::MIN_CRNTI);
+  cu_cp_ue_index_t create_ue(rnti_t rnti = rnti_t::MIN_CRNTI);
 
   /// \brief Manually tick timers.
   template <typename T>

@@ -10,10 +10,10 @@
 #include "du_configuration_handler.h"
 #include "du_processor.h"
 #include "du_processor_config.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_configuration_update.h"
 #include "ocudu/f1ap/f1ap_message_notifier.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/nr_cgi.h"
 #include <string>
 
@@ -25,7 +25,7 @@ public:
   du_processor_impl(du_processor_config_t        du_processor_config_,
                     du_processor_cu_cp_notifier& cu_cp_notifier_,
                     f1ap_message_notifier&       f1ap_pdu_notifier_,
-                    common_task_scheduler&       common_task_sched_,
+                    async_task_scheduler&        common_task_sched_,
                     ue_manager&                  ue_mng_);
   ~du_processor_impl() override = default;
 
@@ -97,11 +97,11 @@ private:
   std::unique_ptr<f1ap_du_processor_notifier> f1ap_ev_notifier;
 
   // F1AP to RRC UE adapters.
-  std::unordered_map<ue_index_t, f1ap_rrc_ul_ccch_adapter>            f1ap_rrc_ccch_adapters;
-  std::unordered_map<ue_index_t, f1ap_rrc_ul_dcch_adapter_collection> f1ap_rrc_dcch_adapters;
+  std::unordered_map<cu_cp_ue_index_t, f1ap_rrc_ul_ccch_adapter>            f1ap_rrc_ccch_adapters;
+  std::unordered_map<cu_cp_ue_index_t, f1ap_rrc_ul_dcch_adapter_collection> f1ap_rrc_dcch_adapters;
 
   // RRC UE to F1AP adapters.
-  std::unordered_map<ue_index_t, rrc_ue_f1ap_pdu_adapter> rrc_ue_f1ap_adapters;
+  std::unordered_map<cu_cp_ue_index_t, rrc_ue_f1ap_pdu_adapter> rrc_ue_f1ap_adapters;
 
   // Components
   std::unique_ptr<f1ap_cu> f1ap;

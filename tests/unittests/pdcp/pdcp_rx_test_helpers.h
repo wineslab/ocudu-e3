@@ -20,18 +20,18 @@
 namespace ocudu {
 
 struct rohc_test_params {
-  const char*                      name;
-  std::optional<rohc::rohc_config> config;
+  const char*                name;
+  std::optional<rohc_config> config;
 };
 
 rohc_test_params cfg_rohc_disabled{.name = "rohc_disabled", .config = std::nullopt};
-rohc_test_params cfg_rohc_uncompressed{.name = "rohc_uncompressed", .config = rohc::rohc_config{}};
-rohc_test_params cfg_rohc_compressed{
-    .name   = "rohc_v1_RTP_UDP_IP_v1_UDP_IP_v1_IP",
-    .config = rohc::rohc_config{.profiles = rohc::rohc_profile_config()
-                                                .set_profile(rohc::rohc_profile::profile0x0001, true)
-                                                .set_profile(rohc::rohc_profile::profile0x0002, true)
-                                                .set_profile(rohc::rohc_profile::profile0x0004, true)}};
+rohc_test_params cfg_rohc_uncompressed{.name = "rohc_uncompressed", .config = rohc_config{}};
+rohc_test_params cfg_rohc_compressed{.name = "rohc_v1_RTP_UDP_IP_v1_UDP_IP_v1_IP",
+                                     .config =
+                                         rohc_config{.profiles = rohc_profile_config()
+                                                                     .set_profile(rohc_profile::profile0x0001, true)
+                                                                     .set_profile(rohc_profile::profile0x0002, true)
+                                                                     .set_profile(rohc_profile::profile0x0004, true)}};
 
 /// Dummy operator to avoid Valgrind warnings.
 inline std::ostream& operator<<(std::ostream& os, const rohc_test_params& params)
@@ -89,7 +89,7 @@ public:
   }
 
   /// PDCP RX upper layer data notifier
-  void on_new_sdu(byte_buffer sdu) override
+  void on_new_sdu(byte_buffer sdu, bool integrity_verified) override
   {
     sdu_queue.push(std::move(sdu));
     sdu_counter++;
@@ -113,15 +113,17 @@ protected:
 
   /// \brief Initializes fixture according to size sequence number size
   /// \param sn_size_ size of the sequence number
-  void init(std::tuple<pdcp_sn_size, unsigned, rohc_test_params> cfg_param,
-            pdcp_rb_type                                         rb_type_     = pdcp_rb_type::drb,
-            pdcp_rlc_mode                                        rlc_mode_    = pdcp_rlc_mode::am,
-            pdcp_t_reordering                                    t_reordering = pdcp_t_reordering::ms10,
-            pdcp_max_count max_count = {pdcp_rx_default_max_count_notify, pdcp_rx_default_max_count_hard})
+  void init(pdcp_sn_size      sn_size_     = pdcp_sn_size::size12bits,
+            unsigned          algo_        = 2,
+            rohc_test_params  rohc_params  = cfg_rohc_disabled,
+            pdcp_rb_type      rb_type_     = pdcp_rb_type::drb,
+            pdcp_rlc_mode     rlc_mode_    = pdcp_rlc_mode::am,
+            pdcp_t_reordering t_reordering = pdcp_t_reordering::ms10,
+            pdcp_max_count    max_count    = {pdcp_rx_default_max_count_notify, pdcp_rx_default_max_count_hard})
   {
-    sn_size            = std::get<pdcp_sn_size>(cfg_param);
-    algo               = std::get<unsigned>(cfg_param);
-    header_compression = std::get<rohc_test_params>(cfg_param).config;
+    sn_size            = sn_size_;
+    algo               = algo_;
+    header_compression = rohc_params.config;
     logger.info(
         "Creating PDCP RX ({} bit nia={} nea={}, {})", pdcp_sn_size_to_uint(sn_size), algo, algo, header_compression);
 
@@ -213,7 +215,7 @@ protected:
 
   pdcp_sn_size                        sn_size = {};
   unsigned                            algo    = {};
-  std::optional<rohc::rohc_config>    header_compression;
+  std::optional<rohc_config>          header_compression;
   pdcp_rx_config                      config = {};
   timer_manager                       timers;
   std::unique_ptr<pdcp_rx_test_frame> test_frame;

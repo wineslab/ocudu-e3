@@ -7,8 +7,8 @@
 
 #pragma once
 
-#include "ocudu/phy/upper/dmrs_mapping.h"
 #include "ocudu/phy/upper/signal_processors/pusch/dmrs_pusch_estimator.h"
+#include "ocudu/ran/dmrs/dmrs.h"
 #include "ocudu/ran/sch/modulation_scheme.h"
 
 namespace ocudu {
@@ -42,7 +42,7 @@ public:
     /// OFDM symbols containing DM-RS: boolean mask.
     symbol_slot_mask dmrs_symb_pos;
     /// DM-RS configuration type.
-    dmrs_type dmrs_config_type;
+    dmrs_config_type dmrs_type;
     /// Number of DM-RS CDM groups without data.
     unsigned nof_cdm_groups_without_data;
     /// Scrambling identifier, see parameter \f$n_{ID}\f$ in TS38.211 Section 6.3.1.1. Range is {0, ..., 1023}.
@@ -57,6 +57,16 @@ public:
     bool enable_transform_precoding;
     /// Receive antenna port indices the PUSCH transmission is mapped to.
     static_vector<uint8_t, MAX_PORTS> rx_ports;
+    /// \brief Random Access Preamble Index (RAPID) associated with msgA on PUSCH (Release 16). Possible values
+    /// are {0, ..., 63}.
+    ///
+    /// During 2-step RACH, the PUSCH carrying msgA is alternatively scrambled using an initialization value that
+    /// depends on the sequence index of the detected RACH preamble.
+    ///
+    /// The presence of this parameter indicates the PUSCH is a msgA and the scrambling sequence is initialized as:
+    /// \f$c_{init} = n_{RNTI} \cdot 2^{16} + n_{RAPID} \cdot 2^{10} + n_{ID}\f$
+    /// as specified in TS 38.211, Section 6.3.1.1.
+    std::optional<unsigned> n_rapid;
   };
 
   /// Default destructor.

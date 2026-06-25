@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_cell_repository.h"
-#include "../logging/scheduler_metrics_handler.h"
+#include "../logging/cell_metrics_handler.h"
 
 using namespace ocudu;
 
@@ -34,6 +34,7 @@ private:
 
 ue_cell_repository::ue_cell_repository(const cell_configuration& cell_cfg, cell_metrics_handler* cell_metrics) :
   cell_idx(cell_cfg.cell_index),
+  metrics(cell_metrics),
   logger(ocudulog::fetch_basic_logger("SCHED")),
   cell_harqs(MAX_NOF_DU_UES,
              cell_cfg.ntn_cs_koffset > 0 ? MAX_NOF_HARQS : MAX_NOF_HARQS_NON_NTN,
@@ -59,10 +60,10 @@ void ue_cell_repository::deactivate()
   cell_harqs.stop();
 }
 
-ue_cell& ue_cell_repository::add_ue(const ue_configuration&   ue_cfg,
-                                    serv_cell_index_t         serv_cell_index,
-                                    ue_drx_controller&        drx,
-                                    std::optional<slot_point> msg3_slot_rx)
+ue_cell& ue_cell_repository::add_ue(const ue_configuration& ue_cfg,
+                                    serv_cell_index_t       serv_cell_index,
+                                    ue_pcell_state*         ue_pcell_fsm,
+                                    ue_drx_controller&      drx)
 {
   ocudu_assert(not ues.contains(ue_cfg.ue_index), "UE with duplicate index being added to the cell UE repository");
   const auto& ue_cell_cfg = ue_cfg.ue_cell_cfg(serv_cell_index);
@@ -77,15 +78,14 @@ ue_cell& ue_cell_repository::add_ue(const ue_configuration&   ue_cfg,
   ues.emplace(ue_cfg.ue_index,
               ue_cfg.ue_index,
               ue_cfg.crnti,
-              serv_cell_index,
               ue_cell_cfg,
               cell_harqs,
               ue_shared_context{drx},
-              ue_cell_components{&channel_states[ue_cfg.ue_index],
+              ue_cell_components{ue_pcell_fsm,
+                                 &channel_states[ue_cfg.ue_index],
                                  &ue_mcs_calculators[ue_cfg.ue_index],
                                  &pusch_pwr_controllers[ue_cfg.ue_index],
                                  &pucch_pwr_controllers[ue_cfg.ue_index]},
-              msg3_slot_rx,
               logger);
   auto res = rnti_to_ue_index_lookup.insert(std::make_pair(ue_cfg.crnti, ue_cfg.ue_index));
   ocudu_assert(res.second, "UE with duplicate RNTI being added to the cell UE repository");

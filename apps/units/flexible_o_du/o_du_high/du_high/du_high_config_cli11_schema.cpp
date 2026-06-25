@@ -160,7 +160,7 @@ static void configure_cli11_pdcch_common_args(CLI::App& app, pdcch_common_unit_c
   add_option(app,
              "--ss1_n_candidates",
              common_params.ss1_n_candidates,
-             "Number of PDCCH candidates per aggregation level for SearchSpace#1. Default: {0, 0, 1, 0, 0}")
+             "Number of PDCCH candidates per aggregation level for SearchSpace#1. Default: {0, 0, 2, 0, 0}")
       ->default_function(get_vector_default_function(span<const uint8_t>(common_params.ss1_n_candidates)))
       ->capture_default_str()
       ->check(CLI::IsMember({0, 1, 2, 3, 4, 5, 6, 8}));
@@ -233,7 +233,7 @@ static void configure_cli11_pdcch_dedicated_args(CLI::App& app, pdcch_dedicated_
              ded_params.al_cqi_offset,
              "Offset to apply to the CQI value used in the PDCCH aggregation level calculation.")
       ->capture_default_str()
-      ->check(CLI::Range(-15, 15));
+      ->check(CLI::Range(-15.0f, 15.0f));
 }
 
 static void configure_cli11_pdcch_args(CLI::App& app, du_high_unit_pdcch_config& pdcch_params)
@@ -504,10 +504,14 @@ static void configure_cli11_ssb_args(CLI::App& app, du_high_unit_ssb_config& ssb
       app,
       "--pss_to_sss_epre_db",
       [&ssb_params](const std::string& value) {
-        unsigned temp_value = CLI::detail::lexical_cast(value, temp_value);
+        unsigned temp_value = 0;
+        if (!CLI::detail::lexical_cast(value, temp_value)) {
+          report_fatal_error("Invalid --pss_to_sss_epre_db value '{}'", value);
+        }
+
         if (temp_value == 0) {
           ssb_params.pss_to_sss_epre = ocudu::ssb_pss_to_sss_epre::dB_0;
-        } else if (temp_value == 3) {
+        } else {
           ssb_params.pss_to_sss_epre = ocudu::ssb_pss_to_sss_epre::dB_3;
         }
       },
@@ -1063,6 +1067,17 @@ static void configure_cli11_pusch_args(CLI::App& app, du_high_unit_pusch_config&
                  "Fractional path-loss compensation factor in PUSCH power control")
       ->capture_default_str()
       ->check(CLI::IsMember({0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}));
+  app.add_option("--ema_alpha_cl_pw_control_sinr",
+                 pusch_params.ema_alpha_cl_pw_control_sinr,
+                 "Smoothing factor alpha for EMA filter of PUSCH closed-loop power control SINR")
+      ->capture_default_str()
+      ->check([](const std::string& value) -> std::string {
+        const float alpha = std::stof(value);
+        if (alpha <= 0.0f or alpha >= 1.0f) {
+          return "Must be in the open interval (0, 1)";
+        }
+        return "";
+      });
   app.add_option("--enable_transform_precoding",
                  pusch_params.enable_transform_precoding,
                  "Enable transform precoding for PUSCH.")
@@ -1263,6 +1278,32 @@ static void configure_cli11_pucch_args(CLI::App& app, du_high_unit_pucch_config&
   app.add_option("--target_sinr_f3", pucch_params.pucch_f3_sinr_target_dB, "Target PUCCH F3 SINR in dB")
       ->capture_default_str()
       ->check(CLI::Range(-15.0, 10.0));
+  app.add_option("--ema_alpha_cl_pw_control_sinr",
+                 pucch_params.ema_alpha_cl_pw_control_sinr,
+                 "Smoothing factor alpha for EMA filter of PUCCH closed-loop power control SINR")
+      ->capture_default_str()
+      ->check([](const std::string& value) -> std::string {
+        const float alpha = std::stof(value);
+        if (alpha <= 0.0f or alpha >= 1.0f) {
+          return "Must be in the open interval (0, 1)";
+        }
+        return "";
+      });
+  add_option(
+      app,
+      "--repetition_sinr_thresholds",
+      pucch_params.repetition_sinr_thresholds,
+      "Thresholds (in dB) used to map UE SINR to PUCCH repetition factor. Up to 3 entries: [max SINR for 2 reps, "
+      "max SINR for 4 reps, max SINR for 8 reps]. An empty list disables PUCCH repetition.")
+      ->capture_default_str()
+      ->expected(0, 3);
+  add_option(app,
+             "--repetition_factors",
+             pucch_params.repetition_factors,
+             "Repetition factor configured for each PUCCH resource within a HARQ-ACK PUCCH resource set. Allowed "
+             "values: {1, 2, 4, 8}.")
+      ->capture_default_str()
+      ->check(CLI::IsMember({1, 2, 4, 8}));
 }
 
 static void configure_cli11_srs_args(CLI::App& app, du_high_unit_srs_config& srs_params)
@@ -1331,7 +1372,7 @@ static void configure_cli11_srs_args(CLI::App& app, du_high_unit_srs_config& srs
       ->capture_default_str()
       ->check(CLI::IsMember({1, 2, 3, 5, 6, 10, 15, 30}));
   add_option(app,
-             "p0",
+             "--p0",
              srs_params.p0,
              "P0 value for SRS. Value in dBm. Valid values must be multiple of 2 and "
              "within the [-202, 24] interval.  Default: -84")
@@ -1360,15 +1401,15 @@ static void configure_cli11_si_sched_info(CLI::App& app, du_high_unit_sib_config
              "Mapping of SIB types to SI-messages. SIB numbers should not be repeated")
       ->default_function(get_vector_default_function(span<const uint8_t>(si_sched_info.sib_mapping_info)))
       ->capture_default_str()
-      ->check(CLI::IsMember({2, 3, 4, 5, 6, 7, 8, 19}));
+      ->check(CLI::IsMember({2, 3, 4, 5, 6, 7, 8, 16, 19}));
   add_option(
       app, "--si_window_position", si_sched_info.si_window_position, "SI window position of the associated SI-message")
       ->capture_default_str()
       ->check(CLI::Range(1, 256));
 }
 
-static void configure_cli11_ra_prioritization_info(CLI::App&                                                app,
-                                                   du_high_unit_prach_config::ra_prioritization_slice_info& ra_info)
+static void configure_cli11_ra_prioritization_info(CLI::App&                                               app,
+                                                   du_high_unit_rach_config::ra_prioritization_slice_info& ra_info)
 {
   add_option(app,
              "--power_ramp_step_high_priority",
@@ -1385,7 +1426,55 @@ static void configure_cli11_ra_prioritization_info(CLI::App&                    
   add_option(app, "--nsag_ids", ra_info.nsag_ids, "NSAGs associated with this prioritized RA configuration.");
 }
 
-static void configure_cli11_prach_args(CLI::App& app, du_high_unit_prach_config& prach_params)
+static void configure_cli11_two_step_rach_args(CLI::App& app, du_high_unit_rach_config::two_step_info& two_step_params)
+{
+  add_option(app,
+             "--cb_preambles_per_ssb_per_shared_ro",
+             two_step_params.cb_preambles_per_ssb_per_shared_ro,
+             "Number of CB preambles per SSB per shared RACH occasion for 2-step RA")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 60));
+  add_option(app,
+             "--msgA_rsrp_thres_dbm",
+             two_step_params.msga_rsrp_thres_dbm,
+             "RSRP threshold in dBm above which the UE selects 2-step RA over 4-step RA")
+      ->capture_default_str()
+      ->check(CLI::Range(-156, -29));
+  add_option(app,
+             "--msgB_response_window_slots",
+             two_step_params.msgb_response_window_slots,
+             "MsgB response window length in slots")
+      ->capture_default_str()
+      ->check(CLI::IsMember({1, 2, 4, 8, 10, 20, 40, 80, 160, 320}));
+  add_option(app,
+             "--td_offset",
+             two_step_params.td_offset,
+             "Time-domain offset in slots from the PRACH slot to the MsgA PUSCH slot")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 32));
+  add_option(app,
+             "--pusch_td_res_index",
+             two_step_params.pusch_td_res_index,
+             "Index into the PUSCH-TimeDomainAllocationResource table for MsgA PUSCH scheduling")
+      ->capture_default_str();
+  add_option(app, "--mcs", two_step_params.mcs, "MCS index for MsgA PUSCH transmission")
+      ->capture_default_str()
+      ->check(CLI::Range(0, 28));
+  add_option(
+      app, "--nof_prbs_per_msgA_po", two_step_params.nof_prbs_per_msga_po, "Number of PRBs per MsgA PUSCH occasion")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 32));
+  add_option(app,
+             "--prb_start",
+             two_step_params.prb_start,
+             "Frequency offset in PRBs of the lowest MsgA PUSCH occasion from PRB 0")
+      ->capture_default_str();
+  add_option(app, "--po_fdm", two_step_params.po_fdm, "Number of MsgA PUSCH occasions FDMed in one time instance")
+      ->capture_default_str()
+      ->check(CLI::IsMember({1, 2, 4, 8}));
+}
+
+static void configure_cli11_prach_args(CLI::App& app, du_high_unit_rach_config& prach_params)
 {
   add_option(app,
              "--prach_config_index",
@@ -1461,8 +1550,16 @@ static void configure_cli11_prach_args(CLI::App& app, du_high_unit_prach_config&
   add_option(app, "--ports", prach_params.ports, "List of antenna ports")
       ->default_function(get_vector_default_function(span<const uint8_t>(prach_params.ports)))
       ->capture_default_str();
-  add_option(app, "--nof_ssb_per_ro", prach_params.nof_ssb_per_ro, "Number of SSBs per RACH occasion")
-      ->check(CLI::IsMember({1}));
+  add_option_function<std::string>(
+      app,
+      "--nof_ssb_per_ro",
+      [&prach_params](const std::string& value) {
+        if (value == "1") {
+          prach_params.nof_ssb_per_ro = ssb_per_rach_occasions::one;
+        }
+      },
+      "Number of SSBs per RACH occasion")
+      ->check(CLI::IsMember({"1"}));
   add_option(app,
              "--nof_cb_preambles_per_ssb",
              prach_params.nof_cb_preambles_per_ssb,
@@ -1497,6 +1594,15 @@ static void configure_cli11_prach_args(CLI::App& app, du_high_unit_prach_config&
         }
       },
       "List of configurations for slice-based RA prioritization");
+  auto      two_step_rach_cfg = std::make_shared<du_high_unit_rach_config::two_step_info>();
+  CLI::App* two_step_subcmd =
+      add_subcommand(app, "two_step", "Two-step RACH (MsgA/MsgB) configuration")->configurable();
+  configure_cli11_two_step_rach_args(*two_step_subcmd, *two_step_rach_cfg);
+  two_step_subcmd->parse_complete_callback([&prach_params, two_step_subcmd, cfg = std::move(two_step_rach_cfg)]() {
+    if (two_step_subcmd->count() != 0) {
+      prach_params.two_step.emplace(*cfg);
+    }
+  });
 }
 
 static void configure_cli11_sib2_config_args(CLI::App& app, du_high_unit_sib_config::sib2_config& sib2_cfg)
@@ -2396,6 +2502,19 @@ static void configure_cli11_test_ue_mode_args(CLI::App& app, du_high_unit_test_m
              "Delay before the UL and DL HARQs are automatically ACKed. This feature should only be used if the UL "
              "PHY is not operational")
       ->capture_default_str();
+  add_option(app,
+             "--attach_detach_duration_ms",
+             test_params.attach_detach_duration_ms,
+             "Duration in milliseconds of active traffic after all UEs are established before they are released and "
+             "recreated. When set, UEs cycle indefinitely through attach, traffic, and detach. Unset disables cycling.")
+      ->capture_default_str()
+      ->check(CLI::Range(100, 10000));
+  add_option(app,
+             "--attach_detach_guard_duration_ms",
+             test_params.attach_detach_guard_duration_ms,
+             "Guard period duration in milliseconds between a release cycle and the next creation cycle.")
+      ->capture_default_str()
+      ->check(CLI::Range(100, 60000));
   add_option(app, "--pdsch_active", test_params.pdsch_active, "PDSCH enabled")->capture_default_str();
   add_option(app, "--pusch_active", test_params.pusch_active, "PUSCH enabled")->capture_default_str();
   add_option(app, "--cqi", test_params.cqi, "Channel Quality Information (CQI) to be forwarded to test UE.")
@@ -2492,6 +2611,8 @@ static void configure_cli11_metrics_layers_args(CLI::App& app, du_high_unit_metr
 {
   add_option(app, "--enable_sched", metrics_params.enable_scheduler, "Enable DU scheduler metrics")
       ->capture_default_str();
+  add_option(app, "--enable_sched_ue", metrics_params.enable_scheduler_ue, "Enable DU per-UE scheduler metrics")
+      ->capture_default_str();
   add_option(app, "--enable_rlc", metrics_params.enable_rlc, "Enable RLC metrics")->capture_default_str();
   add_option(app, "--enable_mac", metrics_params.enable_mac, "Enable MAC metrics")->capture_default_str();
   add_option(
@@ -2558,9 +2679,50 @@ static void configure_cli11_qos_args(CLI::App& app, du_high_unit_qos_config& qos
   CLI::App* f1u_du_subcmd = add_subcommand(app, "f1u_du", "F1-U parameters at DU side");
   configure_cli11_f1u_du_args(*f1u_du_subcmd, qos_params.f1u_du);
 
+  // MAC section (scheduler-facing parameters per 5QI).
+  static du_high_unit_triggered_ul_grant_config trig_cfg;
+  CLI::App* mac_subcmd = add_subcommand(app, "mac", "MAC scheduler parameters")->configurable();
+  CLI::App* trig_ul_subcmd =
+      add_subcommand(*mac_subcmd, "triggered_ul_grant", "Proactive UL grant triggered by DL allocation")
+          ->configurable();
+  add_option(
+      *trig_ul_subcmd, "--delay_slots", trig_cfg.delay_slots, "Minimium slots delay between DL PDCCH and UL PDCCH")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 15));
+  add_option(*trig_ul_subcmd, "--grant_size", trig_cfg.grant_size, "Injected UL pending bytes to the BSR")
+      ->capture_default_str()
+      ->check(CLI::PositiveNumber);
+  trig_ul_subcmd->parse_complete_callback([&qos_params]() { qos_params.mac.triggered_ul_grant.emplace(trig_cfg); });
+
   // Mark the application that these subcommands need to be present.
   app.needs(rlc_subcmd);
   app.needs(f1u_du_subcmd);
+}
+
+static void configure_cli11_custom_freq_band_args(CLI::App& app, du_high_unit_custom_band_config& cfg)
+{
+  add_option(app, "--band_nr", cfg.band_nr, "NR band number")->required();
+  add_option(app, "--dl_freq_min", cfg.dl_freq_min, "DL frequency range start in MHz")->required();
+  add_option(app, "--dl_freq_max", cfg.dl_freq_max, "DL frequency range end in MHz")->required();
+  add_option(app, "--ul_freq_min", cfg.ul_freq_min, "UL frequency range start in MHz (omit for TDD)");
+  add_option(app, "--ul_freq_max", cfg.ul_freq_max, "UL frequency range end in MHz (omit for TDD)");
+  app.add_option_function<unsigned>(
+         "--f_raster",
+         [&cfg](unsigned val) { cfg.f_raster = band_helper::to_delta_freq_raster(val); },
+         "ARFCN raster in kHz")
+      ->required()
+      ->check(CLI::IsMember({15u, 30u, 60u, 100u, 120u}));
+  app.add_option_function<unsigned>(
+         "--ssb_scs",
+         [&cfg](unsigned val) { cfg.ssb_scs = to_subcarrier_spacing(std::to_string(val)); },
+         "SSB subcarrier spacing in kHz")
+      ->required()
+      ->check(CLI::IsMember({15u, 30u, 120u, 240u}));
+  add_option(app, "--ssb_case_c", cfg.ssb_case_c, "SSB pattern case C (true for n77/n78/n79-like TDD)");
+  add_option(app, "--min_40mhz_bw", cfg.min_40mhz_bw, "Minimum 40 MHz BW constraint");
+  add_option(app, "--delta_gscn", cfg.delta_gscn, "GSCN step for SSB candidate search")
+      ->check(CLI::IsMember({1u, 3u, 7u, 16u}));
+  add_option(app, "--ntn", cfg.ntn, "Non-Terrestrial Network band");
 }
 
 void ocudu::configure_cli11_with_du_high_config_schema(CLI::App& app, du_high_parsed_config& parsed_cfg)
@@ -2671,6 +2833,20 @@ void ocudu::configure_cli11_with_du_high_config_schema(CLI::App& app, du_high_pa
   };
   app.add_option_function<std::vector<std::string>>("--srbs", srb_lambda, "Configures signaling radio bearers.");
 
+  // Custom frequency bands section.
+  auto custom_freq_bands_lambda = [&parsed_cfg](const std::vector<std::string>& values) {
+    parsed_cfg.config.custom_freq_bands.resize(values.size());
+    for (unsigned i = 0, e = values.size(); i != e; ++i) {
+      CLI::App subapp("Custom frequency band parameters", "Custom frequency band config, item #" + std::to_string(i));
+      subapp.config_formatter(create_yaml_config_parser());
+      subapp.allow_config_extras(CLI::config_extras_mode::capture);
+      configure_cli11_custom_freq_band_args(subapp, parsed_cfg.config.custom_freq_bands[i]);
+      std::istringstream ss(values[i]);
+      subapp.parse_from_stream(ss);
+    }
+  };
+  add_option_cell(app, "--custom_freq_bands", custom_freq_bands_lambda, "User-defined non-standard NR frequency bands");
+
   // Test mode section.
   CLI::App* test_mode_subcmd = add_subcommand(app, "test_mode", "Test mode configuration")->configurable();
   configure_cli11_test_mode_args(*test_mode_subcmd, parsed_cfg.config.test_mode_cfg);
@@ -2733,7 +2909,47 @@ static void derive_auto_params(du_high_unit_config& config)
   }
 }
 
+static band_helper::custom_band_config to_custom_band_config(const du_high_unit_custom_band_config& src)
+{
+  // Derive ARFCN step from f_raster and frequency region.
+  // delta_F_global: 5 kHz below 3 GHz, 15 kHz for 3-24.5 GHz, 60 kHz for FR2.
+  const double f_raster_khz = static_cast<double>(band_helper::delta_freq_raster_to_khz(src.f_raster));
+  const double dl_freq_hz   = src.dl_freq_min * 1e6;
+  double       delta_f_global_khz;
+  if (dl_freq_hz < band_helper::N_REF_OFFSET_3_GHZ_24_5_GHZ) {
+    delta_f_global_khz = 5.0;
+  } else if (dl_freq_hz < band_helper::N_REF_OFFSET_24_5_GHZ_100_GHZ) {
+    delta_f_global_khz = 15.0;
+  } else {
+    delta_f_global_khz = 60.0;
+  }
+  const arfcn_t step = arfcn_t(static_cast<uint32_t>(f_raster_khz / delta_f_global_khz));
+
+  const bool is_tdd = !src.ul_freq_min.has_value();
+
+  band_helper::custom_band_config dst;
+  dst.band          = uint_to_nr_band(src.band_nr);
+  dst.delta_f_rast  = src.f_raster;
+  dst.dl_nref_first = band_helper::freq_to_nr_arfcn(src.dl_freq_min * 1e6);
+  dst.dl_nref_step  = step;
+  dst.dl_nref_last  = band_helper::freq_to_nr_arfcn(src.dl_freq_max * 1e6);
+  dst.ul_nref_first = is_tdd ? arfcn_t(0) : band_helper::freq_to_nr_arfcn(*src.ul_freq_min * 1e6);
+  dst.ul_nref_step  = is_tdd ? arfcn_t(0) : step;
+  dst.ul_nref_last  = is_tdd ? arfcn_t(0) : band_helper::freq_to_nr_arfcn(*src.ul_freq_max * 1e6);
+  dst.ssb_scs       = src.ssb_scs;
+  dst.ssb_case_c    = src.ssb_case_c;
+  dst.min_40mhz_bw  = src.min_40mhz_bw;
+  dst.delta_gscn    = src.delta_gscn;
+  dst.ntn           = src.ntn;
+  return dst;
+}
+
 void ocudu::autoderive_du_high_parameters_after_parsing(CLI::App& app, du_high_unit_config& unit_cfg)
 {
+  static_vector<band_helper::custom_band_config, band_helper::max_nof_custom_bands> raster_bands;
+  for (const auto& cb : unit_cfg.custom_freq_bands) {
+    raster_bands.push_back(to_custom_band_config(cb));
+  }
+  band_helper::register_custom_bands(raster_bands);
   derive_auto_params(unit_cfg);
 }

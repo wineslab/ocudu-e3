@@ -5,10 +5,10 @@
 #include "cell_meas_manager_impl.h"
 #include "cell_meas_manager_helpers.h"
 #include "ocudu/cu_cp/cell_meas_manager_config.h"
+#include "ocudu/ran/plmn_identity.h"
 #include "ocudu/rrc/meas_types.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <set>
-#include <unordered_set>
 #include <utility>
 
 using namespace ocudu;
@@ -28,7 +28,7 @@ cell_meas_manager::cell_meas_manager(const cell_meas_manager_cfg&         cfg_,
 }
 
 std::optional<rrc_meas_cfg>
-cell_meas_manager::get_measurement_config(ue_index_t                         ue_index,
+cell_meas_manager::get_measurement_config(cu_cp_ue_index_t                   ue_index,
                                           nr_cell_identity                   serving_nci,
                                           const std::optional<rrc_meas_cfg>& current_meas_config,
                                           bool                               cond_meas,
@@ -96,6 +96,10 @@ cell_meas_manager::get_measurement_config(ue_index_t                         ue_
 
     // Add meas obj id to lookup.
     for (const auto& nci : ssb_freq_to_ncis.at(ssb_freq)) {
+      if (cond_meas && nci == serving_nci) {
+        // Skip the serving cell as is not a CHO candidate target.
+        continue;
+      }
       ue_meas_context.nci_to_meas_obj_id.emplace(nci, meas_obj_to_add.meas_obj_id);
       if (cond_meas) {
         const auto&          ncell_cfg = cfg.cells.at(nci);
@@ -258,7 +262,7 @@ static std::optional<uint8_t> get_ssb_rsrp(const rrc_meas_result_nr& meas_result
   return rsrp;
 }
 
-static std::optional<pci_t> find_strongest_neighbor(ue_index_t              ue_index,
+static std::optional<pci_t> find_strongest_neighbor(cu_cp_ue_index_t        ue_index,
                                                     const rrc_meas_results& meas_results,
                                                     ocudulog::basic_logger& logger,
                                                     std::optional<uint8_t>  periodic_ho_rsrp_offset = std::nullopt)
@@ -300,7 +304,7 @@ static std::optional<pci_t> find_strongest_neighbor(ue_index_t              ue_i
   return strongest_neighbor;
 }
 
-void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_results& meas_results)
+void cell_meas_manager::report_measurement(cu_cp_ue_index_t ue_index, const rrc_meas_results& meas_results)
 {
   logger.debug("ue={}: Received measurement result with meas_id={}", ue_index, fmt::underlying(meas_results.meas_id));
 
@@ -346,7 +350,9 @@ void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_r
               ue_index,
               ncell_cfg.serving_cell_cfg.nci.gnb_id(ncell_cfg.serving_cell_cfg.gnb_id_bit_length),
               ncell_cfg.serving_cell_cfg.nci,
-              strongest_neighbor.value());
+              strongest_neighbor.value(),
+              ncell_cfg.serving_cell_cfg.plmn,
+              ncell_cfg.serving_cell_cfg.tac);
           return;
         }
       }
@@ -359,11 +365,14 @@ void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_r
       if (serv_cell.meas_result_best_neigh_cell.has_value()) {
         // Report this cell.
         if (serv_cell.meas_result_best_neigh_cell.value().pci.has_value()) {
+          const cell_meas_config& cell_cfg = cfg.cells.at(meas_ctxt.nci);
           mobility_mng_notifier.on_neighbor_better_than_spcell(
               ue_index,
               meas_ctxt.nci.gnb_id(meas_ctxt.gnb_id_bit_length),
               meas_ctxt.nci,
-              serv_cell.meas_result_best_neigh_cell.value().pci.value());
+              serv_cell.meas_result_best_neigh_cell.value().pci.value(),
+              cell_cfg.serving_cell_cfg.plmn,
+              cell_cfg.serving_cell_cfg.tac);
           return;
         }
       }
@@ -373,8 +382,13 @@ void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_r
     std::optional<pci_t> strongest_neighbor = find_strongest_neighbor(ue_index, meas_results, logger);
     if (strongest_neighbor.has_value()) {
       // Report cell.
-      mobility_mng_notifier.on_neighbor_better_than_spcell(
-          ue_index, meas_ctxt.nci.gnb_id(meas_ctxt.gnb_id_bit_length), meas_ctxt.nci, strongest_neighbor.value());
+      const cell_meas_config& cell_cfg = cfg.cells.at(meas_ctxt.nci);
+      mobility_mng_notifier.on_neighbor_better_than_spcell(ue_index,
+                                                           meas_ctxt.nci.gnb_id(meas_ctxt.gnb_id_bit_length),
+                                                           meas_ctxt.nci,
+                                                           strongest_neighbor.value(),
+                                                           cell_cfg.serving_cell_cfg.plmn,
+                                                           cell_cfg.serving_cell_cfg.tac);
       return;
     }
   }
@@ -435,7 +449,7 @@ static expected<nr_cell_identity, std::string> find_nci(const cell_meas_manager_
 }
 
 static expected<cell_measurement_positioning_info, std::string> generate_measurement_objects_for_positioning(
-    ue_index_t                                                  ue_index,
+    cu_cp_ue_index_t                                            ue_index,
     ue_manager&                                                 ue_mng,
     const cell_meas_manager_cfg&                                cfg,
     const std::map<nr_cell_identity, serving_cell_meas_config>& nci_to_serving_cell_meas_config,
@@ -546,7 +560,7 @@ static expected<cell_measurement_positioning_info, std::string> generate_measure
   return pos_info;
 }
 
-void cell_meas_manager::store_measurement_results(ue_index_t ue_index, const rrc_meas_results& meas_results)
+void cell_meas_manager::store_measurement_results(cu_cp_ue_index_t ue_index, const rrc_meas_results& meas_results)
 {
   if (ue_mng.find_ue(ue_index) == nullptr) {
     logger.info("ue={}: Not storing positioning measurement. Cause: UE not found", ue_index);

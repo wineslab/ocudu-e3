@@ -87,7 +87,7 @@ TEST(fapi_to_phy_ssb_conversion_test, valid_pdu_conversion_success)
               builder.set_carrier_parameters(scs)
                   .set_cell_parameters(pci)
                   .set_nr_power_parameters(beta_pss)
-                  .set_ssb_parameters(ssb_id_t(ssb_idx), subcarrier_offset, offset_pointA, pattern_case, lmax);
+                  .set_ssb_parameters(ssb_idx, subcarrier_offset, offset_pointA, pattern_case, lmax);
 
               uint32_t mib_payload = generate_bch_payload(subcarrier_offset,
                                                           dmrs_type_a_position,
@@ -110,14 +110,7 @@ TEST(fapi_to_phy_ssb_conversion_test, valid_pdu_conversion_success)
               ASSERT_EQ(pdu.slot.sfn(), sfn);
               ASSERT_EQ(pdu.slot.slot_index(), slot.slot_index());
               ASSERT_EQ(pdu.phys_cell_id, pci);
-              switch (beta_pss) {
-                case ssb_pss_to_sss_epre::dB_0:
-                  ASSERT_EQ(pdu.beta_pss, 0.0);
-                  break;
-                case ssb_pss_to_sss_epre::dB_3:
-                  ASSERT_EQ(pdu.beta_pss, 3.0);
-                  break;
-              }
+              ASSERT_EQ(pdu.beta_pss, beta_pss);
               ASSERT_EQ(pdu.ssb_idx, ssb_idx);
               ASSERT_EQ(pdu.L_max, lmax);
               ASSERT_EQ(pdu.subcarrier_offset, subcarrier_offset);

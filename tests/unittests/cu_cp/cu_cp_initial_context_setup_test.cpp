@@ -113,6 +113,24 @@ public:
     return true;
   }
 
+  [[nodiscard]] bool send_security_mode_complete_zero_mac_i()
+  {
+    // Inject corrupted Security Mode Complete with zero MAC-I
+    f1ap_message ul_rrc_msg_transfer = test_helpers::generate_ul_rrc_message_transfer(
+        du_ue_id, ue_ctx->cu_ue_id.value(), srb_id_t::srb1, make_byte_buffer("00032a0000000000").value());
+    get_du(du_idx).push_ul_pdu(ul_rrc_msg_transfer);
+    return true;
+  }
+
+  [[nodiscard]] bool send_security_mode_complete_bad_mac_i()
+  {
+    // Inject corrupted Security Mode Complete with bad MAC-I
+    f1ap_message ul_rrc_msg_transfer = test_helpers::generate_ul_rrc_message_transfer(
+        du_ue_id, ue_ctx->cu_ue_id.value(), srb_id_t::srb1, make_byte_buffer("00032a0012345678").value());
+    get_du(du_idx).push_ul_pdu(ul_rrc_msg_transfer);
+    return true;
+  }
+
   [[nodiscard]] bool send_ue_capability_info_and_await_registration_accept_and_initial_context_setup_response()
   {
     // Inject UL RRC Message Transfer (containing UE Capability Info)
@@ -293,7 +311,7 @@ TEST_F(cu_cp_initial_context_setup_test, when_security_mode_command_fails_then_i
 
   // Inject Security Mode Failure
   f1ap_message ul_rrc_msg_transfer = test_helpers::generate_ul_rrc_message_transfer(
-      du_ue_id, ue_ctx->cu_ue_id.value(), srb_id_t::srb1, make_byte_buffer("00033200c1bf019d").value());
+      du_ue_id, ue_ctx->cu_ue_id.value(), srb_id_t::srb1, make_byte_buffer("0003320000000000").value());
   get_du(du_idx).push_ul_pdu(ul_rrc_msg_transfer);
 
   // Wait for NGAP Initial Context Setup Failure
@@ -312,6 +330,43 @@ TEST_F(cu_cp_initial_context_setup_test, when_ue_capability_enquiry_fails_then_i
   ASSERT_TRUE(send_security_mode_complete_and_await_ue_capability_enquiry());
 
   // Fail UE Capability Enquiry (UE doesn't respond)
+  ASSERT_FALSE(tick_until(this->get_cu_cp_cfg().rrc.rrc_procedure_guard_time_ms, [&]() { return false; }, false));
+
+  // Wait for NGAP Initial Context Setup Failure
+  ASSERT_TRUE(await_initial_context_setup_failure());
+}
+
+TEST_F(cu_cp_initial_context_setup_test, when_security_mode_complete_with_zero_mac_i_then_failure_expected)
+{
+  // Inject Initial Context Setup Request
+  ASSERT_TRUE(send_initial_context_setup_request());
+
+  // Wait for F1AP UE Context Setup Request (containing Security Mode Command) and inject UE Context Setup Response
+  ASSERT_TRUE(send_ue_context_setup_request_and_await_response());
+
+  // Inject corrupted Security Mode Complete with zero MAC-I
+  ASSERT_TRUE(send_security_mode_complete_zero_mac_i());
+
+  // The zero MAC-I PDU is rejected by RRC and cancels the transaction immediately. No need to wait for a timeout.
+
+  // Wait for NGAP Initial Context Setup Failure
+  ASSERT_TRUE(await_initial_context_setup_failure());
+}
+
+TEST_F(cu_cp_initial_context_setup_test, when_security_mode_complete_with_bad_mac_i_then_failure_expected)
+{
+  // Inject Initial Context Setup Request
+  ASSERT_TRUE(send_initial_context_setup_request());
+
+  // Wait for F1AP UE Context Setup Request (containing Security Mode Command) and inject UE Context Setup Response
+  ASSERT_TRUE(send_ue_context_setup_request_and_await_response());
+
+  // Inject corrupted Security Mode Complete with bad MAC-I
+  ASSERT_TRUE(send_security_mode_complete_bad_mac_i());
+
+  // The bad MAC-I PDU is dropped by PDCP. Wait for procedure timeout.
+
+  // Fail the procedure
   ASSERT_FALSE(tick_until(this->get_cu_cp_cfg().rrc.rrc_procedure_guard_time_ms, [&]() { return false; }, false));
 
   // Wait for NGAP Initial Context Setup Failure

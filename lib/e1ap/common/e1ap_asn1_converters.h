@@ -7,14 +7,12 @@
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/e1ap/e1ap_ies.h"
 #include "ocudu/e1ap/common/e1ap_types.h"
-#include "ocudu/pdcp/pdcp_config.h"
-#include "ocudu/ran/bcd_helper.h"
 #include "ocudu/ran/cause/e1ap_cause.h"
 #include "ocudu/ran/cu_types.h"
 #include "ocudu/ran/nr_cgi.h"
 #include "ocudu/ran/qos/qos_prio_level.h"
 #include "ocudu/ran/s_nssai.h"
-#include "ocudu/sdap/sdap_config.h"
+#include "ocudu/ran/sdap/sdap_config.h"
 #include "ocudu/security/security.h"
 #include "ocudu/support/error_handling.h"
 #include <string>
@@ -885,6 +883,7 @@ inline e1ap_pdcp_config e1ap_asn1_to_pdcp_config(const asn1::e1ap::pdcp_cfg_s& a
             rohc_config.rohc_params.continue_rohc = false;
           }
         }
+        break;
       default:
         report_fatal_error("Cannot convert E1AP ASN.1 ROHC type {} to common type",
                            fmt::underlying(asn1_pdcp_cfg.rohc_params.type().value));

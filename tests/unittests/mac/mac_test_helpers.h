@@ -51,10 +51,15 @@ inline mac_cell_creation_request make_default_mac_cell_config(const cell_config_
 class dummy_ue_rlf_notifier : public mac_ue_radio_link_notifier
 {
 public:
-  bool rlf_detected      = false;
-  bool crnti_ce_detected = false;
+  bool                         rlf_detected      = false;
+  bool                         crnti_ce_detected = false;
+  std::optional<mac_rlf_cause> last_cause;
 
-  void on_rlf_detected() override { rlf_detected = true; }
+  void on_rlf_detected(mac_rlf_cause cause) override
+  {
+    rlf_detected = true;
+    last_cause   = cause;
+  }
 
   void on_crnti_ce_received() override { crnti_ce_detected = true; }
 };
@@ -104,6 +109,7 @@ public:
   void handle_srs_indication(const srs_indication& srs) override {}
   void handle_ul_phr_indication(const ul_phr_indication_message& phr_ind) override {}
   void handle_dl_mac_ce_indication(const dl_mac_ce_indication& mac_ce) override {}
+  void handle_crnti_ce_received(du_ue_index_t ue_index) override {}
   void handle_paging_information(const sched_paging_information& pi) override {}
   const sched_result& slot_indication(slot_point_extended sl_tx, du_cell_index_t cell_index) override
   {

@@ -12,10 +12,9 @@
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/rrc/rrc_test_messages.h"
 #include "tests/unittests/cu_cp/test_doubles/mock_xnc_cu_cp.h"
-#include "tests/unittests/xnap/xnap_test_helpers.h"
 #include "ocudu/cu_cp/cu_cp.h"
 #include "ocudu/cu_cp/cu_cp_configuration.h"
-#include "ocudu/cu_cp/cu_cp_location_reporting_types.h"
+#include "ocudu/ran/cu_cp_location_reporting_types.h"
 #include "ocudu/ran/plmn_identity.h"
 #include <optional>
 #include <unordered_map>
@@ -142,6 +141,9 @@ public:
       std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive = std::nullopt,
       bool                                                      rrc_inactive_supported      = true,
       std::optional<location_report_request>                    location_reporting_request  = std::nullopt);
+  /// Get a Location Report, if one is awaited for.
+  std::optional<ngap_message>
+  get_location_report_if_required(std::optional<location_report_request> location_reporting_request);
   /// Finishes the registration for a given UE.
   [[nodiscard]] bool finish_ue_registration(unsigned du_idx, unsigned cu_up_idx, gnb_du_ue_f1ap_id_t du_ue_id);
   /// Requests PDU Session Resource Setup

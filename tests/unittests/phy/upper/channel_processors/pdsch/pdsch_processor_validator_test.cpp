@@ -17,24 +17,23 @@ using namespace ocudu;
 namespace {
 
 // Valid PDSCH configuration used as a base for the test cases.
-const pdsch_processor::pdu_t base_pdu = {.context                     = std::nullopt,
-                                         .slot                        = {0, 19},
-                                         .rnti                        = 1,
-                                         .bwp_size_rb                 = 52,
-                                         .bwp_start_rb                = 0,
-                                         .cp                          = cyclic_prefix::NORMAL,
-                                         .codewords                   = {{modulation_scheme::QPSK, 0}},
-                                         .n_id                        = 1,
-                                         .ref_point                   = pdsch_processor::pdu_t::CRB0,
-                                         .dmrs_symbol_mask            = {0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0},
-                                         .dmrs                        = dmrs_type::TYPE1,
-                                         .scrambling_id               = 0,
-                                         .n_scid                      = 0,
+const pdsch_processor::pdu_t base_pdu = {.context          = std::nullopt,
+                                         .slot             = {0, 19},
+                                         .rnti             = 1,
+                                         .bwp_size_rb      = 52,
+                                         .bwp_start_rb     = 0,
+                                         .cp               = cyclic_prefix::NORMAL,
+                                         .codewords        = {{modulation_scheme::QPSK, 0, ldpc_base_graph_type::BG1}},
+                                         .n_id             = 1,
+                                         .ref_point        = pdsch_processor::pdu_t::CRB0,
+                                         .dmrs_symbol_mask = {0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0},
+                                         .dmrs             = dmrs_config_type::type1,
+                                         .scrambling_id    = 0,
+                                         .n_scid           = 0,
                                          .nof_cdm_groups_without_data = 1,
                                          .freq_alloc                  = rb_allocation::make_type1(0, 52),
                                          .start_symbol_index          = 2,
                                          .nof_symbols                 = 12,
-                                         .ldpc_base_graph             = ldpc_base_graph_type::BG1,
                                          .tbs_lbrm                    = units::bytes(3168),
                                          .reserved                    = {},
                                          .ptrs                        = std::nullopt,
@@ -100,7 +99,7 @@ const std::vector<test_case_t> pdsch_processor_validator_test_data = {
      R"(The symbol allocation \(i\.e\., \[2, 15\)\) exceeds the slot size \(i\.e\., 14\)\.)"},
     {[] {
        pdsch_processor::pdu_t pdu = base_pdu;
-       pdu.dmrs                   = dmrs_type::TYPE2;
+       pdu.dmrs                   = dmrs_config_type::type2;
        return pdu;
      },
      R"(Only DM-RS Type 1 is currently supported.)"},

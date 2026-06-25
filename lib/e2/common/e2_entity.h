@@ -12,6 +12,7 @@
 #include "ocudu/support/async/fifo_async_task_scheduler.h"
 #include "ocudu/support/async/manual_event.h"
 #include "ocudu/support/timers.h"
+#include <atomic>
 
 namespace ocudu {
 
@@ -25,15 +26,20 @@ public:
   void          start() override;
   void          stop() override;
   e2_interface& get_e2_interface() override { return *e2ap; }
+  bool          is_ric_connected() const override { return ric_connected.load(); }
 
   void on_e2_disconnection() override;
 
 private:
+  async_task<void> disconnect_ric();
+  void             reconnect_to_ric();
+
   ocudulog::basic_logger&  logger;
   const e2ap_configuration cfg;
 
   // Handler for E2AP tasks.
   task_executor&            task_exec;
+  timer_factory             timers;
   fifo_async_task_scheduler main_ctrl_loop;
 
   // Timeout timer that triggers on_timeout() on the aggregator, ensuring the setup coroutine does not block
@@ -45,6 +51,15 @@ private:
   std::unique_ptr<e2_subscription_manager>   subscription_mngr = nullptr;
   std::unique_ptr<e2_interface>              e2ap              = nullptr;
   std::vector<std::unique_ptr<e2sm_handler>> e2sm_handlers;
+
+  // Set to true by stop() before the disconnect coroutine is dispatched.
+  // Both ric_connection_setup_routine and ric_reconnection_routine check this flag at
+  // each loop iteration to exit promptly when stop() is called.
+  std::atomic<bool> stopped{false};
+
+  // Set to true once E2 Setup succeeds; cleared on disconnection.
+  // Used to decide whether to send E2 REMOVAL REQUEST during graceful shutdown.
+  std::atomic<bool> ric_connected{false};
 };
 
 } // namespace ocudu

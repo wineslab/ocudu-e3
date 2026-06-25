@@ -17,6 +17,13 @@ inline expected<uint8_t> get_transaction_id(const asn1::e2ap::init_msg_s& out)
   switch (out.value.type().value) {
     case e2ap_elem_procs_o::init_msg_c::types_opts::e2setup_request:
       return out.value.e2setup_request()->transaction_id;
+    case e2ap_elem_procs_o::init_msg_c::types_opts::e2_removal_request: {
+      const auto& ies = *out.value.e2_removal_request();
+      if (ies.size() > 0) {
+        return ies[0].value().transaction_id();
+      }
+      break;
+    }
     default:
       break;
   }
@@ -30,7 +37,8 @@ inline expected<uint8_t> get_transaction_id(const asn1::e2ap::successful_outcome
   switch (out.value.type().value) {
     case e2ap_elem_procs_o::successful_outcome_c::types_opts::e2setup_resp:
       return out.value.e2setup_resp()->transaction_id;
-      break;
+    case e2ap_elem_procs_o::successful_outcome_c::types_opts::e2_removal_resp:
+      return out.value.e2_removal_resp()->transaction_id;
     default:
       break;
   }
@@ -44,6 +52,8 @@ inline expected<uint8_t> get_transaction_id(const asn1::e2ap::unsuccessful_outco
   switch (out.value.type().value) {
     case e2ap_elem_procs_o::unsuccessful_outcome_c::types_opts::e2setup_fail:
       return out.value.e2setup_fail()->transaction_id;
+    case e2ap_elem_procs_o::unsuccessful_outcome_c::types_opts::e2_removal_fail:
+      return out.value.e2_removal_fail()->transaction_id;
     default:
       break;
   }
@@ -65,6 +75,29 @@ inline expected<uint8_t> get_transaction_id(const asn1::e2ap::e2ap_pdu_c& pdu)
       break;
   }
   return make_unexpected(default_error_t{});
+}
+
+/// Returns a human-readable string for an E2AP cause value.
+inline const char* get_cause_str(const asn1::e2ap::cause_c& cause)
+{
+  using namespace asn1::e2ap;
+  switch (cause.type()) {
+    case cause_c::types_opts::ric_request:
+      return cause.ric_request().to_string();
+    case cause_c::types_opts::ric_service:
+      return cause.ric_service().to_string();
+    case cause_c::types_opts::e2_node:
+      return cause.e2_node().to_string();
+    case cause_c::types_opts::transport:
+      return cause.transport().to_string();
+    case cause_c::types_opts::protocol:
+      return cause.protocol().to_string();
+    case cause_c::types_opts::misc:
+      return cause.misc().to_string();
+    default:
+      break;
+  }
+  return "unknown";
 }
 
 /// Extracts message type.

@@ -30,6 +30,7 @@ public:
                         pdcch_resource_allocator& pdcch_sched_,
                         scheduler_event_logger&   ev_logger_,
                         cell_metrics_handler&     metrics_handler_);
+  ~ra_scheduler();
 
   /// Enqueue RACH indication coming from lower layers.
   /// \note Potentially called from a different executor than the cell scheduler executor.
@@ -38,6 +39,9 @@ public:
   /// Handle UL CRC ACKing/NACKing a Msg3 HARQ process.
   /// \note Potentially called from a different executor than the cell scheduler executor.
   void handle_crc_indication(const ul_crc_indication& crc_ind);
+
+  /// Save an upcoming CFRA UE Ids.
+  void handle_cfra_mapping_update(du_ue_index_t ue_index, rnti_t crnti);
 
   /// Allocate pending RARs + Msg3s
   void run_slot(cell_resource_allocator& res_alloc);
@@ -48,6 +52,7 @@ public:
 private:
   class msg3_harq_timeout_notifier;
   class msgb_harq_timeout_notifier;
+  class cached_bwp_info;
 
   struct pending_rar_failed_attempts_t {
     unsigned pdcch = 0;
@@ -80,7 +85,8 @@ private:
     unique_ue_harq_entity harq_ent;
   };
   struct msg3_alloc_candidate {
-    unsigned     pusch_td_res_index;
+    uint8_t      pusch_td_res_index;
+    rnti_t       rnti_to_alloc;
     crb_interval crbs;
   };
 
@@ -152,19 +158,25 @@ private:
   /// Try scheduling pending RARs for the provided slot.
   void schedule_pending_rars(cell_resource_allocator& res_alloc, slot_point pdcch_slot);
 
-  /// Find and allocate DL and UL resources for pending RAR and associated Msg3 grants.
-  /// \return The number of allocated Msg3 grants.
-  unsigned schedule_rar(pending_rar_alloc& rar, cell_resource_allocator& res_alloc, slot_point pdcch_slot);
+  /// Find and allocate DL and UL resources for the pending RAR pointed to by \c rar_it and its Msg3 grants. The
+  /// allocated UEs are removed from the RAR's tc_rntis.
+  /// \return Iterator to the next pending RAR to process: the RAR is erased (so the returned iterator points to the
+  /// following RAR) when all its Msg3 grants were allocated, otherwise the iterator advances past the kept RAR.
+  std::vector<pending_rar_alloc>::iterator schedule_rar(std::vector<pending_rar_alloc>::iterator rar_it,
+                                                        cell_resource_allocator&                 res_alloc,
+                                                        slot_point                               pdcch_slot);
+
+  /// Returns true if an RAR UL grant can be scheduled for the given UE in the given slot.
+  bool can_allocate_rar_ul_grant(rnti_t crnti, const cell_slot_resource_allocator& slot_alloc) const;
 
   /// Schedule RAR grant and associated Msg3 grants in the provided scheduling resources.
   /// \param res_alloc Cell Resource Allocator.
-  /// \param pending_rar pending RAR with an associated RA-RNTI that is going to be scheduled.
   /// \param pdcch_slot Slot where the PDCCH is going to be scheduled.
   /// \param rar_crbs CRBs of the RAR to be scheduled.
   /// \param pdsch_time_res_index Index of PDSCH time domain resource.
-  /// \param msg3_candidates List of Msg3s with respective resource information (e.g. RBs and symbols) to allocate.
+  /// \param msg3_candidates List of Msg3s with respective resource information (e.g. RBs and symbols, and the RNTI to
+  /// allocate) to schedule.
   void fill_rar_grant(cell_resource_allocator&         res_alloc,
-                      const pending_rar_alloc&         pending_rar,
                       slot_point                       pdcch_slot,
                       crb_interval                     rar_crbs,
                       unsigned                         pdsch_time_res_index,
@@ -180,6 +192,9 @@ private:
   void schedule_pending_msgbs(cell_resource_allocator& res_alloc, slot_point pdcch_slot);
 
   sch_prbs_tbs get_nof_pdsch_prbs_required(unsigned time_res_idx, unsigned nof_ul_grants) const;
+
+  /// Reserve space in the resource grid for the MsgA PUSCH so it is not taken by other UL grants.
+  void reserve_msga_pusch_rbs(cell_resource_allocator& res_alloc);
 
   // Set the max number of slots the scheduler can look ahead in the resource grid (with respect to the current slot) to
   // find PDSCH space for RAR.
@@ -197,9 +212,10 @@ private:
   // -- Derived from args.
 
   /// RA window size in number of slots.
-  const unsigned ra_win_nof_slots;
-  crb_interval   ra_crb_lims;
-  const bool     prach_format_is_long;
+  const unsigned           ra_win_nof_slots;
+  const crb_interval       ra_crb_lims;
+  const interval<unsigned> cfra_preambles;
+  const bool               prach_format_is_long;
   /// Duration of a single PRACH occasion in slots.
   const unsigned prach_occasion_duration_slots;
   /// Bitmap of CRBs that might be used for PUCCH transmissions, to avoid scheduling MSG3-PUSCH over them.
@@ -224,6 +240,9 @@ private:
   std::vector<msg3_param_cached_data> msg3_data;
   sch_mcs_description                 msg3_mcs_config;
 
+  /// Pre-cached information for the initial BWP.
+  std::unique_ptr<cached_bwp_info> cached_init_bwp_info;
+
   // -- State.
 
   // Currently managed HARQ processes for Random Access in this cell (Msg3 UL retx + MsgB DL retx).
@@ -244,6 +263,12 @@ private:
 
   // List of pending MsgBs (2-step RACH responses) to be scheduled.
   std::vector<pending_msgb_alloc> pending_msgbs;
+
+  // Marks whether the next slot indication is the first.
+  bool first_slot_flag = true;
+
+  // Circular map of RNTIs associated with CFRA.
+  std::vector<std::atomic<rnti_t>> pending_cfra_ues;
 };
 
 } // namespace ocudu

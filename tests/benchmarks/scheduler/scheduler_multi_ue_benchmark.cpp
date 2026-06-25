@@ -84,8 +84,7 @@ public:
     std::get<pucch_f2_params>(pucch_resources.f2_or_f3_or_f4_params).max_code_rate = max_pucch_code_rate::dot_35;
     pucch_resources.nof_cell_csi_resources                                         = 4;
     pucch_resources.nof_cell_sr_resources                                          = 2;
-    pucch_resources.res_set_0_size                                                 = 3;
-    pucch_resources.res_set_1_size                                                 = 6;
+    pucch_resources.res_set_size                                                   = 6;
 
     cell_cfgs = {cell_cfg_msg.ran};
 
@@ -174,14 +173,11 @@ public:
             f2.harqs.resize(pucch.uci_bits.harq_ack_nof_bits, mac_harq_ack_report_status::ack);
           }
           if (pucch.csi_rep_cfg.has_value()) {
-            f2.csi =
-                csi_report_data{std::nullopt,
-                                4,
-                                std::nullopt,
-                                csi_report_pmi{csi_report_pmi::typeI_single_panel_4ports_mode1{0, std::nullopt, 0}},
-                                15,
-                                std::nullopt,
-                                true};
+            f2.csi = csi_report_data{.ri                    = 4,
+                                     .pmi                   = precoding_matrix_indicator{pmi_typeI_single_panel{
+                                         pmi_codebook_single_panel_config::two_one, 0, std::nullopt, std::nullopt, 0}},
+                                     .first_tb_wideband_cqi = 15,
+                                     .valid                 = true};
           }
           pdu.pdu = f2;
           ind.ucis.push_back(pdu);
@@ -197,13 +193,11 @@ public:
             pusch_pdu.harqs.resize(ul_grant.uci->harq.value().harq_ack_nof_bits, mac_harq_ack_report_status::ack);
           }
           pusch_pdu.csi =
-              csi_report_data{std::nullopt,
-                              4,
-                              std::nullopt,
-                              csi_report_pmi{csi_report_pmi::typeI_single_panel_4ports_mode1{0, std::nullopt, 0}},
-                              15,
-                              std::nullopt,
-                              true};
+              csi_report_data{.ri                    = 4,
+                              .pmi                   = precoding_matrix_indicator{pmi_typeI_single_panel{
+                                  pmi_codebook_single_panel_config::two_one, 0, std::nullopt, std::nullopt, 0}},
+                              .first_tb_wideband_cqi = 15,
+                              .valid                 = true};
           ind.ucis.push_back(pdu);
         }
       }

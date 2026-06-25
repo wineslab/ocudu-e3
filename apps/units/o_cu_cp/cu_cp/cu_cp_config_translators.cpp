@@ -45,23 +45,23 @@ static std::map<five_qi_t, ocucp::cu_cp_qos_config> generate_cu_cp_qos_config(co
 
     // Header compression
     if (qos.pdcp.rohc.rohc_type != cu_cp_unit_pdcp_rohc_type::none) {
-      out_pdcp.header_compression.emplace(rohc::rohc_config{});
+      out_pdcp.header_compression.emplace(rohc_config{});
       auto& rohc_cfg   = *out_pdcp.header_compression;
       rohc_cfg.max_cid = qos.pdcp.rohc.max_cid;
       if (qos.pdcp.rohc.rohc_type == cu_cp_unit_pdcp_rohc_type::rohc) {
-        rohc_cfg.rohc_type = rohc::rohc_type_t::rohc;
-        rohc_cfg.profiles.set_profile(rohc::rohc_profile::profile0x0001, qos.pdcp.rohc.profile0x0001)
-            .set_profile(rohc::rohc_profile::profile0x0002, qos.pdcp.rohc.profile0x0002)
-            .set_profile(rohc::rohc_profile::profile0x0003, qos.pdcp.rohc.profile0x0003)
-            .set_profile(rohc::rohc_profile::profile0x0004, qos.pdcp.rohc.profile0x0004)
-            .set_profile(rohc::rohc_profile::profile0x0006, qos.pdcp.rohc.profile0x0006)
-            .set_profile(rohc::rohc_profile::profile0x0101, qos.pdcp.rohc.profile0x0101)
-            .set_profile(rohc::rohc_profile::profile0x0102, qos.pdcp.rohc.profile0x0102)
-            .set_profile(rohc::rohc_profile::profile0x0103, qos.pdcp.rohc.profile0x0103)
-            .set_profile(rohc::rohc_profile::profile0x0104, qos.pdcp.rohc.profile0x0104);
+        rohc_cfg.rohc_type = rohc_type_t::rohc;
+        rohc_cfg.profiles.set_profile(rohc_profile::profile0x0001, qos.pdcp.rohc.profile0x0001)
+            .set_profile(rohc_profile::profile0x0002, qos.pdcp.rohc.profile0x0002)
+            .set_profile(rohc_profile::profile0x0003, qos.pdcp.rohc.profile0x0003)
+            .set_profile(rohc_profile::profile0x0004, qos.pdcp.rohc.profile0x0004)
+            .set_profile(rohc_profile::profile0x0006, qos.pdcp.rohc.profile0x0006)
+            .set_profile(rohc_profile::profile0x0101, qos.pdcp.rohc.profile0x0101)
+            .set_profile(rohc_profile::profile0x0102, qos.pdcp.rohc.profile0x0102)
+            .set_profile(rohc_profile::profile0x0103, qos.pdcp.rohc.profile0x0103)
+            .set_profile(rohc_profile::profile0x0104, qos.pdcp.rohc.profile0x0104);
       } else if (qos.pdcp.rohc.rohc_type == cu_cp_unit_pdcp_rohc_type::uplink_only_rohc) {
-        rohc_cfg.rohc_type = rohc::rohc_type_t::uplink_only_rohc;
-        rohc_cfg.profiles.set_profile(rohc::rohc_profile::profile0x0006, qos.pdcp.rohc.profile0x0006);
+        rohc_cfg.rohc_type = rohc_type_t::uplink_only_rohc;
+        rohc_cfg.profiles.set_profile(rohc_profile::profile0x0006, qos.pdcp.rohc.profile0x0006);
       } else {
         report_error("Invalid ROHC type: {}, type={}\n", qos.five_qi, to_string(qos.pdcp.rohc.rohc_type));
       }
@@ -382,7 +382,9 @@ ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config&
       std::vector<ocucp::plmn_item> plmn_list;
       for (const auto& plmn_item : supported_ta.plmn_list) {
         expected<plmn_identity> plmn = plmn_identity::parse(plmn_item.plmn_id);
-        ocudu_assert(plmn.has_value(), "Invalid PLMN: {}", plmn_item.plmn_id);
+        if (!plmn.has_value()) {
+          report_error("Invalid PLMN: {}\n", plmn_item.plmn_id);
+        }
         plmn_list.push_back({plmn.value(), {}});
         for (const auto& elem : plmn_item.tai_slice_support_list) {
           plmn_list.back().slice_support_list.push_back(
@@ -400,7 +402,9 @@ ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config&
       std::vector<ocucp::plmn_item> plmn_list;
       for (const auto& plmn_item : supported_ta.plmn_list) {
         expected<plmn_identity> plmn = plmn_identity::parse(plmn_item.plmn_id);
-        ocudu_assert(plmn.has_value(), "Invalid PLMN: {}", plmn_item.plmn_id);
+        if (!plmn.has_value()) {
+          report_error("Invalid PLMN: {}\n", plmn_item.plmn_id);
+        }
         plmn_list.push_back({plmn.value(), {}});
         for (const auto& elem : plmn_item.tai_slice_support_list) {
           plmn_list.back().slice_support_list.push_back(
@@ -416,12 +420,21 @@ ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config&
   out_cfg.xnap.procedure_timeout  = std::chrono::milliseconds{cu_cfg.xnap_config.procedure_timeout};
   out_cfg.xnap.reconnect_timer    = std::chrono::milliseconds{cu_cfg.xnap_config.reconnect_timer};
   out_cfg.xnap.no_connection_init = cu_cfg.xnap_config.no_connection_init;
-  for (const auto& xnap : cu_cfg.xnap_config.connections) {
-    ocucp::cu_cp_configuration::xnap_config xn_config{};
-    // TODO: support multiple XNAP peer addresses configuration for SCTP multihoming.
-    xn_config.peer_addr = transport_layer_address::create_from_string(xnap.peer_addrs.front());
-    xn_config.peer_addr.set_port(XNAP_PORT);
-    out_cfg.xnap.xnaps.push_back(xn_config);
+  uint32_t peer_idx               = 0;
+  uint16_t gw_idx                 = 0;
+  for (const auto& gw_cfg : cu_cfg.xnap_config.gateways) {
+    for (const auto& peer : gw_cfg.connections) {
+      ocucp::cu_cp_configuration::xnap_config xn_config{};
+      for (const auto& addr_str : peer.peer_addrs) {
+        transport_layer_address addr = transport_layer_address::create_from_string(addr_str);
+        addr.set_port(XNAP_PORT);
+        xn_config.peer_addrs.push_back(addr);
+      }
+      out_cfg.xnap.xnaps.push_back(xn_config);
+      out_cfg.xnap.peer_to_gateway[uint_to_xnc_peer_index(peer_idx)] = uint_to_xnc_gateway_index(gw_idx);
+      ++peer_idx;
+    }
+    ++gw_idx;
   }
 
   out_cfg.rrc.force_reestablishment_fallback = cu_cfg.rrc_config.force_reestablishment_fallback;
@@ -485,8 +498,17 @@ ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config&
 
     meas_cfg_item.serving_cell_cfg.gnb_id_bit_length = app_cfg_item.gnb_id_bit_length.value();
     meas_cfg_item.serving_cell_cfg.pci               = app_cfg_item.pci;
-    meas_cfg_item.serving_cell_cfg.band              = app_cfg_item.band;
-    meas_cfg_item.serving_cell_cfg.ssb_arfcn         = app_cfg_item.ssb_arfcn;
+    if (app_cfg_item.plmn_id.has_value()) {
+      expected<plmn_identity> plmn = plmn_identity::parse(app_cfg_item.plmn_id.value());
+      if (!plmn.has_value()) {
+        report_error("External cell (nci={:#x}) has invalid PLMN: {}\n", nci, app_cfg_item.plmn_id.value());
+      }
+      meas_cfg_item.serving_cell_cfg.plmn = plmn.value();
+    }
+
+    meas_cfg_item.serving_cell_cfg.tac       = app_cfg_item.tac;
+    meas_cfg_item.serving_cell_cfg.band      = app_cfg_item.band;
+    meas_cfg_item.serving_cell_cfg.ssb_arfcn = app_cfg_item.ssb_arfcn;
     if (app_cfg_item.ssb_scs.has_value()) {
       meas_cfg_item.serving_cell_cfg.ssb_scs.emplace() =
           to_subcarrier_spacing(std::to_string(app_cfg_item.ssb_scs.value()));

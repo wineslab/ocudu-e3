@@ -13,6 +13,7 @@
 #include "tests/unittests/scheduler/test_utils/dummy_test_components.h"
 #include "tests/unittests/scheduler/test_utils/indication_generators.h"
 #include "tests/unittests/scheduler/test_utils/scheduler_test_suite.h"
+#include "ocudu/ran/prach/prach_time_mapping.h"
 #include "ocudu/ran/prach/ra_helper.h"
 #include "ocudu/scheduler/config/time_domain_resource_helper.h"
 #include <algorithm>
@@ -75,11 +76,16 @@ public:
 
   void handle_rach_indication(rach_indication_message ind)
   {
-    // For TDD cells, advance the simulator to a fully UL slot so the PRACH slot is valid.
-    if (cell_cfg.is_tdd()) {
-      run_slot_until([this]() { return cell_cfg.is_fully_ul_enabled(next_slot_rx()); });
-      ind.slot_rx = next_slot_rx();
-    }
+    // Advance the simulator to a slot that has a valid PRACH occasion. The ra_scheduler only
+    // prereserves MsgA PUSCH for slots whose corresponding PRACH slot is a valid occasion per
+    // the configured PRACH config index; injecting a PRACH at an arbitrary slot would miss the
+    // prereservation and fail the sanity check in handle_msga_occasion.
+    const prach_helper::preamble_slot_mapping prach_mapper{
+        cell_cfg.band(),
+        cell_cfg.init_bwp.ul.cfg().scs,
+        cell_cfg.init_bwp.ul.rach_common()->rach_cfg_generic.prach_config_index};
+    run_slot_until([this, &prach_mapper]() { return prach_mapper.has_prach_occasion(next_slot_rx()); });
+    ind.slot_rx = next_slot_rx();
     ra_sch.handle_rach_indication(ind);
     tracker.on_new_rach_ind(ind);
   }
@@ -122,11 +128,11 @@ public:
 
       const bool has_ra_dl_pdcch =
           std::any_of(dl_res.dl_pdcchs.begin(), dl_res.dl_pdcchs.end(), [](const pdcch_dl_information& pdcch) {
-            return pdcch.dci.type == dci_dl_rnti_config_type::ra_f1_0;
+            return pdcch.dci.type() == dci_dl_rnti_config_type::ra_f1_0;
           });
       const bool has_msg3_retx_pdcch =
           std::any_of(dl_res.ul_pdcchs.begin(), dl_res.ul_pdcchs.end(), [](const pdcch_ul_information& pdcch) {
-            return pdcch.dci.type == dci_ul_rnti_config_type::tc_rnti_f0_0;
+            return pdcch.dci.type() == dci_ul_rnti_config_type::tc_rnti_f0_0;
           });
       const bool has_msg3_pusch =
           std::any_of(ul_res.puschs.begin(), ul_res.puschs.end(), [](const ul_sched_info& pusch) {
@@ -549,6 +555,30 @@ public:
     }
     return false;
   }
+
+  /// Returns the pre-reserved MsgA PUSCH grant spanning all FDM occasions.
+  grant_info get_msga_pusch_grant() const
+  {
+    const auto&    rach_cfg  = *cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common;
+    const auto&    msga      = rach_cfg.two_step_rach_cfg->pusch;
+    const auto&    ul_bwp    = cell_cfg.params.ul_cfg_common.init_ul_bwp;
+    const auto&    td_alloc  = ul_bwp.pusch_cfg_common->pusch_td_alloc_list[msga.pusch_td_res_index];
+    const unsigned crb_start = ul_bwp.generic_params.crbs.start() + msga.prb_start;
+    return grant_info{ul_bwp.generic_params.scs,
+                      td_alloc.symbols,
+                      crb_interval{crb_start, crb_start + msga.po_fdm * msga.nof_prbs_per_msgA_po}};
+  }
+
+  /// Scans the lookahead grid and returns the nearest slot where the MsgA PUSCH grant is pre-reserved.
+  std::optional<slot_point> find_msga_preresv_slot(const grant_info& grant) const
+  {
+    for (unsigned i = 1; i <= res_grid.max_ul_slot_alloc_delay; ++i) {
+      if (res_grid[i].ul_res_grid.collides(grant)) {
+        return res_grid[i].slot;
+      }
+    }
+    return std::nullopt;
+  }
 };
 
 TEST_P(ra_scheduler_two_step_rach_test, when_two_step_rach_enqueued_then_msga_pusch_is_scheduled)
@@ -645,11 +675,155 @@ TEST_P(ra_scheduler_two_step_rach_test, when_mixed_crc_outcomes_both_rar_types_s
   ASSERT_EQ(tracker.nof_msg3_newtxs(), 1) << "FallbackRAR preamble must have a Msg3 PUSCH";
 }
 
+/// The MsgA PUSCH resources must be blocked in the UL resource grid before any PRACH preamble is detected,
+/// so that the UE PUSCH scheduler cannot steal them.
+TEST_P(ra_scheduler_two_step_rach_test, msga_pusch_rbs_are_pre_reserved_before_preamble_detection)
+{
+  const grant_info grant = get_msga_pusch_grant();
+
+  // No RACH indication has been sent. The scheduler must still pre-reserve the MsgA PUSCH resources.
+  ASSERT_TRUE(run_slot_until([&]() { return find_msga_preresv_slot(grant).has_value(); }, 400))
+      << "MsgA PUSCH pre-reservation not found within lookahead grid";
+}
+
 INSTANTIATE_TEST_SUITE_P(two_step_rach,
                          ra_scheduler_two_step_rach_test,
                          ::testing::Values(two_step_test_params{2},
                                            two_step_test_params{4},
                                            two_step_test_params{10, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU)},
                                            two_step_test_params{4, create_tdd_pattern(tdd_fr1_30khz::DSUU)}));
+
+/// Test fixture for CFRA-specific RA scheduler behaviour.
+///
+/// The cell is configured with 4 dedicated CFRA preambles (IDs [60, 64)), leaving 60 preambles for CBRA.
+class ra_scheduler_cfra_test : public ra_scheduler_setup, public ::testing::Test
+{
+  static constexpr unsigned NOF_CB_PREAMBLES = 60;
+
+public:
+  ra_scheduler_cfra_test() : ra_scheduler_setup(make_cfra_sched_req(), false, false) {}
+
+  static sched_cell_configuration_request_message make_cfra_sched_req()
+  {
+    cell_config_builder_params bparams;
+    auto                       req = sched_config_helper::make_default_sched_cell_configuration_request(bparams);
+    req.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common->nof_cb_preambles_per_ssb = NOF_CB_PREAMBLES;
+    return req;
+  }
+
+  rach_indication_message create_cfra_rach_indication(rnti_t tc_rnti) const
+  {
+    const unsigned cfra_preamble_id =
+        cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common->nof_cb_preambles_per_ssb;
+    auto preamble = test_helper::create_preamble(cfra_preamble_id, tc_rnti);
+    return test_helper::create_rach_indication(next_slot_rx(), {preamble});
+  }
+
+  void send_cfra_crc(rnti_t tc_rnti, bool success)
+  {
+    ul_crc_indication crc_ind;
+    crc_ind.cell_index = cell_cfg.cell_index;
+    crc_ind.sl_rx      = res_grid[0].slot;
+    auto& pdu          = crc_ind.crcs.emplace_back();
+    pdu.rnti           = tc_rnti;
+    pdu.ue_index       = cfra_ue_index;
+    pdu.harq_id        = to_harq_id(0);
+    pdu.tb_crc_success = success;
+    handle_crc_indication(crc_ind);
+  }
+
+  const du_ue_index_t cfra_ue_index = to_du_ue_index(5);
+};
+
+/// Verify that a Msg3 CRC with a valid UE index (CFRA path) is accepted by the RA scheduler.
+TEST_F(ra_scheduler_cfra_test, cfra_msg3_crc_with_valid_ue_index_is_accepted)
+{
+  const rnti_t tc_rnti = to_rnti(0x4601);
+  ra_sch.handle_cfra_mapping_update(cfra_ue_index, tc_rnti);
+  handle_rach_indication(create_cfra_rach_indication(tc_rnti));
+
+  for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_acked() == 0;
+       ++slot_count) {
+    run_slot();
+    if (not res_grid[0].result.ul.puschs.empty()) {
+      send_cfra_crc(tc_rnti, true);
+    }
+  }
+
+  ASSERT_EQ(tracker.nof_msg3_acked(), 1);
+}
+
+/// Verify the Msg3 retransmission flow for a CFRA UE: CRC KO triggers retx, CRC OK completes the procedure.
+TEST_F(ra_scheduler_cfra_test, cfra_msg3_crc_ko_causes_retx_then_ok_completes)
+{
+  const rnti_t tc_rnti = to_rnti(0x4601);
+  ra_sch.handle_cfra_mapping_update(cfra_ue_index, tc_rnti);
+  handle_rach_indication(create_cfra_rach_indication(tc_rnti));
+
+  // NACK the first Msg3 new-tx.
+  for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_newtxs() == 0;
+       ++slot_count) {
+    run_slot();
+    if (not res_grid[0].result.ul.puschs.empty()) {
+      send_cfra_crc(tc_rnti, false);
+    }
+  }
+  ASSERT_GE(tracker.nof_msg3_newtxs(), 1);
+  ASSERT_EQ(tracker.nof_msg3_acked(), 0);
+
+  // ACK the retx.
+  for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_acked() == 0;
+       ++slot_count) {
+    run_slot();
+    if (not res_grid[0].result.ul.puschs.empty()) {
+      send_cfra_crc(tc_rnti, true);
+    }
+  }
+
+  ASSERT_GE(tracker.nof_msg3_retxs(), 1);
+  ASSERT_EQ(tracker.nof_msg3_acked(), 1);
+}
+
+/// Verify that a CRC with a valid but unregistered UE index is filtered by the RA scheduler.
+///
+/// Because the RNTI is not in pending_cfra_ues for that ue_index, is_ra_crc() returns false and
+/// the Msg3 HARQ is not freed.  A retransmission must therefore be scheduled.
+TEST_F(ra_scheduler_cfra_test, non_cfra_crc_with_valid_ue_index_is_filtered)
+{
+  const rnti_t tc_rnti            = to_rnti(0x4601);
+  const auto   unrelated_ue_index = to_du_ue_index(10);
+  ra_sch.handle_cfra_mapping_update(cfra_ue_index, tc_rnti);
+  handle_rach_indication(create_cfra_rach_indication(tc_rnti));
+
+  // Wait for the Msg3 new-tx.
+  for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_newtxs() == 0;
+       ++slot_count) {
+    run_slot();
+  }
+  ASSERT_GE(tracker.nof_msg3_newtxs(), 1) << "Msg3 new-tx was not scheduled";
+
+  // Send a CRC with a valid but unregistered UE index directly to the RA scheduler, bypassing the tracker.
+  // pending_cfra_ues[unrelated_ue_index] is INVALID_RNTI, so is_ra_crc() must reject it.
+  {
+    ul_crc_indication bad_crc;
+    bad_crc.cell_index = cell_cfg.cell_index;
+    bad_crc.sl_rx      = res_grid[0].slot;
+    auto& pdu          = bad_crc.crcs.emplace_back();
+    pdu.rnti           = tc_rnti;
+    pdu.ue_index       = unrelated_ue_index;
+    pdu.harq_id        = to_harq_id(0);
+    pdu.tb_crc_success = true;
+    ra_sch.handle_crc_indication(bad_crc);
+  }
+  // Send a valid NACK to give the HARQ real feedback and trigger a retransmission.
+  // If the bad CRC above was wrongly accepted, the HARQ would already be freed and no retx would appear.
+  send_cfra_crc(tc_rnti, false);
+
+  // The HARQ must not have been freed by the filtered CRC — a retransmission must be scheduled.
+  for (unsigned i = 0, max_slots = 1000; i < max_slots and tracker.nof_msg3_retxs() == 0; ++i) {
+    run_slot();
+  }
+  ASSERT_GE(tracker.nof_msg3_retxs(), 1) << "Filtered CRC must not free the HARQ — retx expected";
+}
 
 } // namespace

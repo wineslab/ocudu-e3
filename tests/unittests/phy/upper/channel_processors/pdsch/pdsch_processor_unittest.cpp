@@ -11,6 +11,7 @@
 #include "ocudu/ocuduvec/compare.h"
 #include "ocudu/phy/upper/channel_processors/pdsch/factories.h"
 #include "ocudu/phy/upper/channel_processors/pdsch/pdsch_processor.h"
+#include "ocudu/phy/upper/dmrs_mapping.h"
 #include "ocudu/ran/precoding/precoding_codebooks.h"
 #include "ocudu/ran/sch/sch_segmentation.h"
 #include "fmt/ostream.h"
@@ -23,12 +24,6 @@ namespace ocudu {
 static std::ostream& operator<<(std::ostream& os, cyclic_prefix value)
 {
   fmt::print(os, value.to_string());
-  return os;
-}
-
-static std::ostream& operator<<(std::ostream& os, const dmrs_type& value)
-{
-  fmt::print(os, "{}", value.to_string());
   return os;
 }
 
@@ -47,7 +42,7 @@ static bool operator==(const span<const uint8_t> lhs, const span<const uint8_t> 
 
 namespace {
 
-using PdschProcessorParams = std::tuple<unsigned, cyclic_prefix, dmrs_type>;
+using PdschProcessorParams = std::tuple<unsigned, cyclic_prefix, dmrs_config_type>;
 
 class PdschProcessorFixture : public testing::TestWithParam<PdschProcessorParams>
 {
@@ -60,9 +55,9 @@ protected:
     dmrs_type_value = std::get<2>(GetParam());
   }
 
-  unsigned      nof_layers;
-  cyclic_prefix cp;
-  dmrs_type     dmrs_type_value;
+  unsigned         nof_layers;
+  cyclic_prefix    cp;
+  dmrs_config_type dmrs_type_value;
 
   static float get_power()
   {
@@ -84,10 +79,10 @@ protected:
   static std::uniform_int_distribution<unsigned> dist_mod;
 };
 
-static const std::array<modulation_scheme, 5> modulations = {modulation_scheme::QPSK,
-                                                             modulation_scheme::QAM16,
-                                                             modulation_scheme::QAM64,
-                                                             modulation_scheme::QAM256};
+const std::array<modulation_scheme, 5> modulations = {modulation_scheme::QPSK,
+                                                      modulation_scheme::QAM16,
+                                                      modulation_scheme::QAM64,
+                                                      modulation_scheme::QAM256};
 
 std::mt19937                            PdschProcessorFixture::rgen;
 std::uniform_int_distribution<uint8_t>  PdschProcessorFixture::dist_payload(0, UINT8_MAX);
@@ -134,8 +129,9 @@ TEST_P(PdschProcessorFixture, UnitTest)
   pdu.cp           = cp;
   for (unsigned codeword = 0; codeword != nof_codewords; ++codeword) {
     pdu.codewords.emplace_back();
-    pdu.codewords.back().modulation = modulations[dist_mod(rgen)];
-    pdu.codewords.back().rv         = dist_rv(rgen);
+    pdu.codewords.back().modulation      = modulations[dist_mod(rgen)];
+    pdu.codewords.back().rv              = dist_rv(rgen);
+    pdu.codewords.back().ldpc_base_graph = static_cast<ldpc_base_graph_type>(dist_bool(rgen));
   }
   pdu.n_id             = 0;
   pdu.precoding        = precoding_configuration::make_wideband(make_identity(nof_layers));
@@ -153,15 +149,14 @@ TEST_P(PdschProcessorFixture, UnitTest)
   pdu.freq_alloc                 = rb_allocation::make_custom({1, 2, 3, 4}, vrb_to_prb::create_non_interleaved_other());
   pdu.start_symbol_index         = dist_start_symb(rgen);
   pdu.nof_symbols                = get_nsymb_per_slot(cp) - pdu.start_symbol_index;
-  pdu.ldpc_base_graph            = static_cast<ldpc_base_graph_type>(dist_bool(rgen));
   pdu.tbs_lbrm                   = units::bytes(50);
   pdu.reserved                   = {};
   pdu.ratio_pdsch_dmrs_to_sss_dB = get_power();
   pdu.ratio_pdsch_data_to_sss_dB = get_power();
 
   // Generate reserved element pattern for DM-RS.
-  re_pattern dmrs_reserved_pattern = pdu.dmrs.get_dmrs_pattern(
-      pdu.bwp_start_rb, pdu.bwp_size_rb, pdu.nof_cdm_groups_without_data, pdu.dmrs_symbol_mask);
+  re_pattern dmrs_reserved_pattern = get_dmrs_pattern(
+      pdu.dmrs, pdu.bwp_start_rb, pdu.bwp_size_rb, pdu.nof_cdm_groups_without_data, pdu.dmrs_symbol_mask);
 
   // Create overall reserved pattern.
   re_pattern_list reserved = pdu.reserved;
@@ -212,15 +207,17 @@ TEST_P(PdschProcessorFixture, UnitTest)
 
   // Validate encoder.
   {
-    // Calculate rate match buffer size.
-    units::bits Nref = ldpc::compute_N_ref(
-        pdu.tbs_lbrm, compute_nof_codeblocks(units::bytes(data.size()).to_bits(), pdu.ldpc_base_graph));
-
     ASSERT_EQ(encoder_spy->get_nof_entries(), nof_codewords);
     const auto& entries = encoder_spy->get_entries();
     for (unsigned codeword = 0; codeword != nof_codewords; ++codeword) {
       const auto& entry = entries[codeword];
-      ASSERT_EQ(entry.config.base_graph, pdu.ldpc_base_graph);
+
+      // Calculate rate match buffer size.
+      units::bits Nref = ldpc::compute_N_ref(
+          pdu.tbs_lbrm,
+          compute_nof_codeblocks(units::bytes(data.size()).to_bits(), pdu.codewords[codeword].ldpc_base_graph));
+
+      ASSERT_EQ(entry.config.base_graph, pdu.codewords[codeword].ldpc_base_graph);
       ASSERT_EQ(entry.config.rv, pdu.codewords[codeword].rv);
       ASSERT_EQ(entry.config.mod, pdu.codewords[codeword].modulation);
       ASSERT_EQ(entry.config.Nref, Nref.value());
@@ -287,6 +284,6 @@ INSTANTIATE_TEST_SUITE_P(PdschProcessorUnittest,
                          PdschProcessorFixture,
                          testing::Combine(testing::Values(1, 2),
                                           testing::Values(cyclic_prefix::NORMAL, cyclic_prefix::EXTENDED),
-                                          testing::Values(dmrs_type::options::TYPE1)));
+                                          testing::Values(dmrs_config_type::type1)));
 
 } // namespace

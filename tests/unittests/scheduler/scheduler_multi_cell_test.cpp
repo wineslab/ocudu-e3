@@ -9,6 +9,7 @@
 #include "tests/unittests/scheduler/test_utils/scheduler_test_simulator.h"
 #include "ocudu/ran/duplex_mode.h"
 #include "ocudu/scheduler/config/ran_cell_config_helper.h"
+#include "ocudu/support/enum_utils.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -160,7 +161,7 @@ public:
 TEST_P(multi_cell_scheduler_tester, test_ssb_allocation_for_multiple_cells)
 {
   const auto ssb_period_slots =
-      ssb_periodicity_to_value(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period) *
+      to_value(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period) *
       get_nof_slots_per_subframe(cell_cfg_builder_params_list[to_du_cell_index(0)].scs_common);
 
   std::vector<bool> is_ssb_scheduled_atleast_once(cell_cfg_builder_params_list.size(), false);
@@ -182,8 +183,8 @@ TEST_P(multi_cell_scheduler_tester, test_ssb_allocation_for_multiple_cells)
 TEST_P(multi_cell_scheduler_tester, test_sib1_allocation_for_multiple_cells)
 {
   const auto sib1_period_slots =
-      std::max(ssb_periodicity_to_value(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period),
-               sib1_rtx_periodicity_to_value(sched_cfg.si.sib1_retx_period)) *
+      std::max<unsigned>(to_value(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period),
+                         to_value(sched_cfg.si.sib1_retx_period)) *
       get_nof_slots_per_subframe(cell_cfg_builder_params_list[to_du_cell_index(0)].scs_common);
 
   std::vector<bool> is_sib1_scheduled_atleast_once(cell_cfg_builder_params_list.size(), false);
@@ -225,11 +226,12 @@ TEST_P(multi_cell_scheduler_tester, test_rar_scheduling_for_ues_in_different_cel
   for (unsigned slot_count = 0; slot_count < test_run_nof_slots; ++slot_count) {
     for (unsigned cell_idx = 0; cell_idx < cell_cfg_builder_params_list.size(); ++cell_idx) {
       if (last_sched_result(to_du_cell_index(cell_idx)) != nullptr and not is_rar_scheduled[cell_idx]) {
-        is_rar_scheduled[cell_idx] = std::any_of(last_sched_result(to_du_cell_index(cell_idx))->dl.dl_pdcchs.begin(),
-                                                 last_sched_result(to_du_cell_index(cell_idx))->dl.dl_pdcchs.end(),
-                                                 [](const pdcch_dl_information& dl_pdcch) {
-                                                   return dl_pdcch.dci.type == ocudu::dci_dl_rnti_config_type::ra_f1_0;
-                                                 });
+        is_rar_scheduled[cell_idx] =
+            std::any_of(last_sched_result(to_du_cell_index(cell_idx))->dl.dl_pdcchs.begin(),
+                        last_sched_result(to_du_cell_index(cell_idx))->dl.dl_pdcchs.end(),
+                        [](const pdcch_dl_information& dl_pdcch) {
+                          return dl_pdcch.dci.type() == ocudu::dci_dl_rnti_config_type::ra_f1_0;
+                        });
       }
     }
     run_slot();

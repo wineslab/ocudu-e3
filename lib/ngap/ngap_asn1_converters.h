@@ -6,13 +6,14 @@
 
 #include "ngap_asn1_utils.h"
 #include "ocudu/asn1/ngap/ngap_ies.h"
-#include "ocudu/cu_cp/cu_cp_location_reporting_types.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/cu_cp/inter_cu_handover_messages.h"
 #include "ocudu/ngap/ngap_handover.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/cause/ngap_cause.h"
+#include "ocudu/ran/cu_cp_location_reporting_types.h"
+#include "ocudu/ran/cu_cp_pdu_session.h"
 #include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/five_g_s_tmsi.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/ran/tai.h"
 #include "ocudu/ran/up_transport_layer_info.h"
@@ -65,7 +66,7 @@ inline asn1::ngap::security_result_s cu_cp_security_result_to_ngap_security_resu
 /// \param[in] cu_cp_qos_flow The CU-CP Associated QoS Flow.
 /// \return The NGAP Associated QoS Flow Item.
 inline asn1::ngap::associated_qos_flow_item_s
-cu_cp_assoc_qos_flow_to_ngap_assoc_qos_flow_item(cu_cp_associated_qos_flow cu_cp_qos_flow)
+cu_cp_assoc_qos_flow_to_ngap_assoc_qos_flow_item(ngap_associated_qos_flow cu_cp_qos_flow)
 {
   asn1::ngap::associated_qos_flow_item_s asn1_assoc_qos_item;
 
@@ -74,7 +75,7 @@ cu_cp_assoc_qos_flow_to_ngap_assoc_qos_flow_item(cu_cp_associated_qos_flow cu_cp
   if (cu_cp_qos_flow.qos_flow_map_ind.has_value()) {
     asn1_assoc_qos_item.qos_flow_map_ind_present = true;
 
-    if (cu_cp_qos_flow.qos_flow_map_ind.value() == cu_cp_qos_flow_map_ind::ul) {
+    if (cu_cp_qos_flow.qos_flow_map_ind.value() == ngap_qos_flow_map_ind::ul) {
       asn1_assoc_qos_item.qos_flow_map_ind.value =
           asn1::ngap::associated_qos_flow_item_s::qos_flow_map_ind_opts::options::ul;
     } else {
@@ -90,7 +91,7 @@ cu_cp_assoc_qos_flow_to_ngap_assoc_qos_flow_item(cu_cp_associated_qos_flow cu_cp
 /// \param[in] cu_cp_qos_flow_info The CU-CP QoS Flow Per TNL Info.
 /// \return The NGAP QoS Flow Per TNL Info.
 inline asn1::ngap::qos_flow_per_tnl_info_s
-cu_cp_qos_flow_per_tnl_info_to_ngap_qos_flow_per_tnl_info(const cu_cp_qos_flow_per_tnl_information& cu_cp_qos_flow_info)
+cu_cp_qos_flow_per_tnl_info_to_ngap_qos_flow_per_tnl_info(const ngap_qos_flow_per_tnl_information& cu_cp_qos_flow_info)
 {
   asn1::ngap::qos_flow_per_tnl_info_s ngap_qos_flow_info;
 
@@ -266,8 +267,8 @@ inline std::string asn1_cause_to_string(const asn1::ngap::cause_c& cause)
 /// \param[in] cu_cp_resp The CU-CP Initial Context Setup Response message.
 /// \return True on success, otherwise false.
 template <typename template_asn1_item>
-inline bool pdu_session_res_setup_response_item_to_asn1(template_asn1_item&                              asn1_resp,
-                                                        const cu_cp_pdu_session_res_setup_response_item& resp)
+inline bool pdu_session_res_setup_response_item_to_asn1(template_asn1_item&                             asn1_resp,
+                                                        const ngap_pdu_session_res_setup_response_item& resp)
 {
   asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
 
@@ -318,7 +319,7 @@ inline bool pdu_session_res_setup_response_item_to_asn1(template_asn1_item&     
 /// \return True on success, otherwise false.
 template <typename template_asn1_item>
 inline bool pdu_session_res_modify_response_item_to_asn1(template_asn1_item& asn1_resp,
-                                                         const cu_cp_pdu_session_resource_modify_response_item& resp)
+                                                         const ngap_pdu_session_resource_modify_response_item& resp)
 {
   asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
 
@@ -357,7 +358,7 @@ inline bool pdu_session_res_modify_response_item_to_asn1(template_asn1_item& asn
 /// \return True on success, otherwise false.
 template <typename template_asn1_item>
 inline bool pdu_session_res_failed_to_modify_item_to_asn1(template_asn1_item& asn1_resp,
-                                                          const cu_cp_pdu_session_resource_failed_to_modify_item& resp)
+                                                          const ngap_pdu_session_resource_failed_to_modify_item& resp)
 {
   asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
 
@@ -380,8 +381,8 @@ inline bool pdu_session_res_failed_to_modify_item_to_asn1(template_asn1_item& as
 /// \param[in] cu_cp_resp The CU-CP Initial Context Setup Response message.
 /// \return True on success, otherwise false.
 template <typename template_asn1_item>
-inline bool pdu_session_res_setup_failed_item_to_asn1(template_asn1_item&                            asn1_resp,
-                                                      const cu_cp_pdu_session_res_setup_failed_item& resp)
+inline bool pdu_session_res_setup_failed_item_to_asn1(template_asn1_item&                           asn1_resp,
+                                                      const ngap_pdu_session_res_setup_failed_item& resp)
 {
   asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
 
@@ -632,7 +633,7 @@ inline void asn1_to_source_to_target_transport_container(
 
       // Fill Associated QoS flow list.
       for (const auto& asn1_assoc_qos_flow : asn1_drbs_to_qos_flow_map.associated_qos_flow_list) {
-        cu_cp_associated_qos_flow assoc_qos_flow;
+        ngap_associated_qos_flow assoc_qos_flow;
 
         // Fill QoS flow ID.
         assoc_qos_flow.qos_flow_id = uint_to_qos_flow_id(asn1_assoc_qos_flow.qos_flow_id);
@@ -641,10 +642,10 @@ inline void asn1_to_source_to_target_transport_container(
         if (asn1_assoc_qos_flow.qos_flow_map_ind_present) {
           if (asn1_assoc_qos_flow.qos_flow_map_ind ==
               asn1::ngap::associated_qos_flow_item_s::qos_flow_map_ind_opts::options::ul) {
-            assoc_qos_flow.qos_flow_map_ind = cu_cp_qos_flow_map_ind::ul;
+            assoc_qos_flow.qos_flow_map_ind = ngap_qos_flow_map_ind::ul;
           } else if (asn1_assoc_qos_flow.qos_flow_map_ind ==
                      asn1::ngap::associated_qos_flow_item_s::qos_flow_map_ind_opts::options::dl) {
-            assoc_qos_flow.qos_flow_map_ind = cu_cp_qos_flow_map_ind::dl;
+            assoc_qos_flow.qos_flow_map_ind = ngap_qos_flow_map_ind::dl;
           }
         }
 
@@ -885,16 +886,16 @@ inline bool target_to_source_transport_container_to_asn1(byte_buffer& asn1_conta
   return true;
 }
 
-/// \brief Convert NGAP ASN.1 to \c cu_cp_five_g_s_tmsi.
+/// \brief Convert NGAP ASN.1 to \c five_g_s_tmsi_t.
 /// \param[in] asn1_ue_id The ASN.1 type ue paging ID.
-/// \return The common type cu_cp_five_g_s_tmsi.
-inline cu_cp_five_g_s_tmsi ngap_asn1_to_ue_paging_id(const asn1::ngap::ue_paging_id_c& asn1_ue_id)
+/// \return The common type five_g_s_tmsi_t.
+inline five_g_s_tmsi_t ngap_asn1_to_ue_paging_id(const asn1::ngap::ue_paging_id_c& asn1_ue_id)
 {
   ocudu_assert(asn1_ue_id.type() == asn1::ngap::ue_paging_id_c::types_opts::five_g_s_tmsi, "Invalid UE paging ID type");
 
-  return cu_cp_five_g_s_tmsi{asn1_ue_id.five_g_s_tmsi().amf_set_id.to_number(),
-                             asn1_ue_id.five_g_s_tmsi().amf_pointer.to_number(),
-                             asn1_ue_id.five_g_s_tmsi().five_g_tmsi.to_number()};
+  return five_g_s_tmsi_t{asn1_ue_id.five_g_s_tmsi().amf_set_id.to_number(),
+                         asn1_ue_id.five_g_s_tmsi().amf_pointer.to_number(),
+                         asn1_ue_id.five_g_s_tmsi().five_g_tmsi.to_number()};
 }
 
 /// \brief Convert NGAP ASN.1 to \c gbr_qos_flow_information.

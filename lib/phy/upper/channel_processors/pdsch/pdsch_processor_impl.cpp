@@ -86,13 +86,16 @@ const bit_buffer& pdsch_processor_impl::encode(span<const uint8_t> data,
 
   span<uint8_t> tmp_codeword = temp_unpacked_codeword;
 
+  // LDPC base graph for the codeword.
+  ldpc_base_graph_type ldpc_base_graph = pdu.codewords.front().ldpc_base_graph;
+
   // Calculate rate match buffer size.
-  units::bits Nref = ldpc::compute_N_ref(
-      pdu.tbs_lbrm, compute_nof_codeblocks(units::bytes(data.size()).to_bits(), pdu.ldpc_base_graph));
+  units::bits Nref =
+      ldpc::compute_N_ref(pdu.tbs_lbrm, compute_nof_codeblocks(units::bytes(data.size()).to_bits(), ldpc_base_graph));
 
   // Prepare encoder configuration.
   pdsch_encoder::configuration encoder_config;
-  encoder_config.base_graph     = pdu.ldpc_base_graph;
+  encoder_config.base_graph     = ldpc_base_graph;
   encoder_config.rv             = rv;
   encoder_config.mod            = modulation;
   encoder_config.Nref           = Nref.value();
@@ -125,6 +128,7 @@ void pdsch_processor_impl::modulate(resource_grid_writer& grid, span<const bit_b
   modulator_config.freq_allocation = pdu.freq_alloc;
   modulator_config.time_alloc      = {pdu.start_symbol_index, pdu.start_symbol_index + pdu.nof_symbols};
   modulator_config.dmrs_symb_pos   = pdu.dmrs_symbol_mask;
+  modulator_config.dmrs_type       = pdu.dmrs;
   modulator_config.nof_cdm_groups_without_data = pdu.nof_cdm_groups_without_data;
   modulator_config.n_id                        = pdu.n_id;
   modulator_config.scaling                     = convert_dB_to_amplitude(-pdu.ratio_pdsch_data_to_sss_dB);

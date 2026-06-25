@@ -7,7 +7,10 @@
 #include "asn1_ntn_config_helpers.h"
 #include "ocudu/asn1/asn1_diff_utils.h"
 #include "ocudu/ran/band_helper.h"
+#include "ocudu/ran/frequency_range.h"
+#include "ocudu/support/enum_utils.h"
 #include "ocudu/support/error_handling.h"
+#include "ocudu/support/math/math_utils.h"
 
 using namespace ocudu;
 using namespace ocudu::odu;
@@ -465,7 +468,7 @@ static void ssb_per_rach_occasion_and_cb_preambles_per_ssb_to_asn1(const float  
                                                                    rach_cfg_common_s& out_cfg)
 {
   out_cfg.ssb_per_rach_occasion_and_cb_preambs_per_ssb_present = true;
-  if (nof_ssb_per_ro == 1 / 8) {
+  if (nof_ssb_per_ro == 1.0f / 8) {
     auto& nof_cb_preambles_per_ssb_opt = out_cfg.ssb_per_rach_occasion_and_cb_preambs_per_ssb.set_one_eighth();
     switch (nof_cb_preambles_per_ssb) {
       case 4:
@@ -519,7 +522,7 @@ static void ssb_per_rach_occasion_and_cb_preambles_per_ssb_to_asn1(const float  
       default:
         report_fatal_error("Invalid nof. contention based preambles per SSB value {}", nof_cb_preambles_per_ssb);
     }
-  } else if (nof_ssb_per_ro == 1 / 4) {
+  } else if (nof_ssb_per_ro == 1.0f / 4) {
     auto& nof_cb_preambles_per_ssb_opt = out_cfg.ssb_per_rach_occasion_and_cb_preambs_per_ssb.set_one_fourth();
     switch (nof_cb_preambles_per_ssb) {
       case 4:
@@ -573,7 +576,7 @@ static void ssb_per_rach_occasion_and_cb_preambles_per_ssb_to_asn1(const float  
       default:
         report_fatal_error("Invalid nof. contention based preambles per SSB value {}", nof_cb_preambles_per_ssb);
     }
-  } else if (nof_ssb_per_ro == 1 / 2) {
+  } else if (nof_ssb_per_ro == 1.0f / 2) {
     auto& nof_cb_preambles_per_ssb_opt = out_cfg.ssb_per_rach_occasion_and_cb_preambs_per_ssb.set_one_half();
     switch (nof_cb_preambles_per_ssb) {
       case 4:
@@ -843,6 +846,41 @@ asn1::rrc_nr::bwp_ul_common_s ocudu::odu::make_asn1_rrc_initial_up_bwp(const ul_
   pusch.p0_nominal_with_grant_present = true;
   pusch.p0_nominal_with_grant         = pusch_cfg.p0_nominal_with_grant.value();
 
+  // > msgA-ConfigCommon-r16 OPTIONAL (extension, 2-step RACH)
+  if (rach_cfg.two_step_rach_cfg.has_value()) {
+    const rach_config_common_two_step& two_step = *rach_cfg.two_step_rach_cfg;
+    init_ul_bwp.ext                             = true;
+    init_ul_bwp.msg_a_cfg_common_r16.set_present();
+    msg_a_cfg_common_r16_s& msg_a_cfg = init_ul_bwp.msg_a_cfg_common_r16->set_setup();
+
+    rach_cfg_common_two_step_ra_r16_s& rach_two_step                 = msg_a_cfg.rach_cfg_common_two_step_ra_r16;
+    rach_two_step.msg_a_cb_preambs_per_ssb_per_shared_ro_r16_present = true;
+    rach_two_step.msg_a_cb_preambs_per_ssb_per_shared_ro_r16         = two_step.cb_preambles_per_ssb_per_shared_ro;
+    rach_two_step.msg_a_rsrp_thres_r16_present                       = true;
+    rach_two_step.msg_a_rsrp_thres_r16                               = two_step.msgA_rsrp_thres.count();
+    rach_two_step.rach_cfg_generic_two_step_ra_r16.msg_b_resp_win_r16_present = true;
+    bool two_step_success = asn1::number_to_enum(rach_two_step.rach_cfg_generic_two_step_ra_r16.msg_b_resp_win_r16,
+                                                 two_step.msgB_response_window_slots);
+    ocudu_assert(two_step_success, "Invalid msgB-ResponseWindow value");
+
+    msg_a_cfg.msg_a_pusch_cfg_r16_present               = true;
+    msg_a_pusch_cfg_r16_s& msg_a_pusch_cfg              = msg_a_cfg.msg_a_pusch_cfg_r16;
+    msg_a_pusch_cfg.msg_a_pusch_res_group_a_r16_present = true;
+    msg_a_pusch_res_r16_s& pusch_res                    = msg_a_pusch_cfg.msg_a_pusch_res_group_a_r16;
+    pusch_res.nrof_msg_a_po_per_slot_r16.value          = msg_a_pusch_res_r16_s::nrof_msg_a_po_per_slot_r16_opts::one;
+    pusch_res.msg_a_mcs_r16                             = two_step.pusch.mcs.value();
+    pusch_res.msg_a_pusch_time_domain_offset_r16        = two_step.pusch.td_offset;
+    pusch_res.msg_a_pusch_time_domain_alloc_r16_present = true;
+    pusch_res.msg_a_pusch_time_domain_alloc_r16         = two_step.pusch.pusch_td_res_index + 1;
+    pusch_res.nrof_prbs_per_msg_a_po_r16                = two_step.pusch.nof_prbs_per_msgA_po;
+    pusch_res.freq_start_msg_a_pusch_r16                = two_step.pusch.prb_start;
+    two_step_success = asn1::number_to_enum(pusch_res.nrof_msg_a_po_fdm_r16, two_step.pusch.po_fdm);
+    ocudu_assert(two_step_success, "Invalid nrofMsgA-PO-FDM value");
+    // Leave msgA-DMRS-AddPosition and msgA-PUSCH-DMRS-CDM-Group absent (spec defaults apply).
+    pusch_res.msg_a_dmrs_cfg_r16.msg_a_pusch_nrof_ports_r16_present = true;
+    pusch_res.msg_a_dmrs_cfg_r16.msg_a_pusch_nrof_ports_r16         = 0;
+  }
+
   // pucch-ConfigCommon SetupRelease { PUCCH-ConfigCommon } OPTIONAL, -- Need M
   const pucch_config_common& pucch_cfg = cfg.init_ul_bwp.pucch_cfg_common.value();
   init_ul_bwp.pucch_cfg_common_present = true;
@@ -1018,7 +1056,7 @@ static void make_asn1_rrc_qcl_info(asn1::rrc_nr::qcl_info_s& out, const qcl_info
   }
   if (cfg.ref_sig.type == ocudu::qcl_info::reference_signal::reference_signal_type::ssb) {
     auto& ssb = out.ref_sig.set_ssb();
-    ssb       = cfg.ref_sig.ssb;
+    ssb       = cfg.ref_sig.ssb.value();
   } else if (cfg.ref_sig.type == ocudu::qcl_info::reference_signal::reference_signal_type::csi_rs) {
     auto& csi_rs = out.ref_sig.set_csi_rs();
     csi_rs       = cfg.ref_sig.csi_rs;
@@ -1293,7 +1331,7 @@ make_asn1_rrc_rlm_resource(const radio_link_monitoring_config::radio_link_monito
   }
 
   if (std::holds_alternative<ssb_id_t>(cfg.detection_resource)) {
-    rlm_res.detection_res.set_ssb_idx() = std::get<ssb_id_t>(cfg.detection_resource);
+    rlm_res.detection_res.set_ssb_idx() = std::get<ssb_id_t>(cfg.detection_resource).value();
   } else {
     rlm_res.detection_res.set_csi_rs_idx() = std::get<nzp_csi_rs_res_id_t>(cfg.detection_resource);
   }
@@ -1361,12 +1399,9 @@ static bool calculate_bwp_dl_dedicated_diff(asn1::rrc_nr::bwp_dl_ded_s&   out,
 asn1::rrc_nr::pucch_res_set_s ocudu::odu::make_asn1_rrc_pucch_resource_set(const pucch_resource_set& cfg)
 {
   pucch_res_set_s pucch_res_set;
-  pucch_res_set.pucch_res_set_id = static_cast<uint8_t>(cfg.pucch_res_set_id);
-  for (const auto& it : cfg.pucch_res_id_list) {
-    pucch_res_set.res_list.push_back(it.ue_res_id);
-  }
-  if (cfg.max_payload_size.has_value()) {
-    pucch_res_set.max_payload_size = cfg.max_payload_size.value();
+  pucch_res_set.pucch_res_set_id = static_cast<uint8_t>(cfg.id);
+  for (const auto& it : cfg.resources) {
+    pucch_res_set.res_list.push_back(it.ded().ue_res_id);
   }
   return pucch_res_set;
 }
@@ -1431,48 +1466,46 @@ static void make_asn1_rrc_pucch_formats_common_param(asn1::rrc_nr::pucch_format_
 asn1::rrc_nr::pucch_res_s ocudu::odu::make_asn1_rrc_pucch_resource(const pucch_resource& cfg)
 {
   pucch_res_s pucch_res;
-  pucch_res.pucch_res_id                = cfg.res_id.ue_res_id;
+  pucch_res.pucch_res_id                = cfg.res_id.ded().ue_res_id;
   pucch_res.start_prb                   = cfg.starting_prb;
   pucch_res.intra_slot_freq_hop_present = cfg.second_hop_prb.has_value();
   pucch_res.second_hop_prb_present      = cfg.second_hop_prb.has_value();
   if (cfg.second_hop_prb.has_value()) {
     pucch_res.second_hop_prb = cfg.second_hop_prb.value();
   }
-  switch (cfg.format) {
+  switch (cfg.format()) {
     case pucch_format::FORMAT_0: {
-      const auto& f0            = std::get<pucch_format_0_cfg>(cfg.format_params);
+      const auto& f0            = std::get<pucch_resource::f0_config>(cfg.format_params);
       auto&       format0       = pucch_res.format.set_format0();
       format0.init_cyclic_shift = f0.initial_cyclic_shift;
-      format0.nrof_symbols      = cfg.nof_symbols;
-      format0.start_symbol_idx  = cfg.starting_sym_idx;
+      format0.start_symbol_idx  = cfg.syms.start();
+      format0.nrof_symbols      = cfg.syms.length();
     } break;
     case pucch_format::FORMAT_1: {
-      const auto& f1            = std::get<pucch_format_1_cfg>(cfg.format_params);
+      const auto& f1            = std::get<pucch_resource::f1_config>(cfg.format_params);
       auto&       format1       = pucch_res.format.set_format1();
       format1.init_cyclic_shift = f1.initial_cyclic_shift;
-      format1.nrof_symbols      = cfg.nof_symbols;
-      format1.start_symbol_idx  = cfg.starting_sym_idx;
+      format1.start_symbol_idx  = cfg.syms.start();
+      format1.nrof_symbols      = cfg.syms.length();
       format1.time_domain_occ   = f1.time_domain_occ;
     } break;
     case pucch_format::FORMAT_2: {
-      const auto& f2           = std::get<pucch_format_2_3_cfg>(cfg.format_params);
-      auto&       format2      = pucch_res.format.set_format2();
-      format2.start_symbol_idx = cfg.starting_sym_idx;
-      format2.nrof_symbols     = cfg.nof_symbols;
-      format2.nrof_prbs        = f2.nof_prbs;
+      auto& format2            = pucch_res.format.set_format2();
+      format2.start_symbol_idx = cfg.syms.start();
+      format2.nrof_symbols     = cfg.syms.length();
+      format2.nrof_prbs        = cfg.prbs().length();
     } break;
     case pucch_format::FORMAT_3: {
-      const auto& f3           = std::get<pucch_format_2_3_cfg>(cfg.format_params);
-      auto&       format3      = pucch_res.format.set_format3();
-      format3.start_symbol_idx = cfg.starting_sym_idx;
-      format3.nrof_symbols     = cfg.nof_symbols;
-      format3.nrof_prbs        = f3.nof_prbs;
+      auto& format3            = pucch_res.format.set_format3();
+      format3.start_symbol_idx = cfg.syms.start();
+      format3.nrof_symbols     = cfg.syms.length();
+      format3.nrof_prbs        = cfg.prbs().length();
     } break;
     case pucch_format::FORMAT_4: {
-      const auto& f4           = std::get<pucch_format_4_cfg>(cfg.format_params);
+      const auto& f4           = std::get<pucch_resource::f4_config>(cfg.format_params);
       auto&       format4      = pucch_res.format.set_format4();
-      format4.start_symbol_idx = cfg.starting_sym_idx;
-      format4.nrof_symbols     = cfg.nof_symbols;
+      format4.start_symbol_idx = cfg.syms.start();
+      format4.nrof_symbols     = cfg.syms.length();
       switch (f4.occ_index) {
         case pucch_f4_occ_idx::n0:
           format4.occ_idx = pucch_format4_s::occ_idx_opts::n0;
@@ -1501,7 +1534,7 @@ asn1::rrc_nr::pucch_res_s ocudu::odu::make_asn1_rrc_pucch_resource(const pucch_r
       }
     } break;
     default:
-      ocudu_assertion_failure("Invalid PDCCH resource format={}", fmt::underlying(cfg.format));
+      ocudu_assertion_failure("Invalid PUCCH resource format={}", fmt::underlying(cfg.format()));
   }
   return pucch_res;
 }
@@ -1513,7 +1546,7 @@ ocudu::odu::make_asn1_rrc_sr_resource(const scheduling_request_resource_config& 
   sr_res_cfg.sched_request_res_id           = cfg.sr_res_id;
   sr_res_cfg.sched_request_id               = cfg.sr_id;
   sr_res_cfg.res_present                    = true;
-  sr_res_cfg.res                            = cfg.pucch_res_id.ue_res_id;
+  sr_res_cfg.res                            = cfg.pucch_res_id.ded().ue_res_id;
   sr_res_cfg.periodicity_and_offset_present = true;
   switch (cfg.period) {
     case sr_periodicity::sym_2:
@@ -1589,7 +1622,7 @@ calculate_pucch_config_diff(asn1::rrc_nr::pucch_cfg_s& out, const pucch_config& 
       src.pucch_res_set,
       dest.pucch_res_set,
       [](const pucch_resource_set& res_set) { return make_asn1_rrc_pucch_resource_set(res_set); },
-      [](const pucch_resource_set& res_set) { return static_cast<uint8_t>(res_set.pucch_res_set_id); });
+      [](const pucch_resource_set& res_set) { return static_cast<uint8_t>(res_set.id); });
 
   // PUCCH Resource.
   calculate_addmodremlist_diff(
@@ -1598,13 +1631,31 @@ calculate_pucch_config_diff(asn1::rrc_nr::pucch_cfg_s& out, const pucch_config& 
       src.pucch_res_list,
       dest.pucch_res_list,
       [](const pucch_resource& res) { return make_asn1_rrc_pucch_resource(res); },
-      [](const pucch_resource& res) {
-        // NOTE: For safety, we use an ID composed of both UE and cell PUCCH resource IDs. We cannot compare
-        // only by using the UE PUCCH resource ID. This is because the UE PUCCH resource ID always uses index {0
-        // , ..., max_UE_PUCCH_resources - 1}; therefore, even if we changed the configuration, this index
-        // wouldn't change and the function would not detect the change of configuration.
-        return (static_cast<uint64_t>(res.res_id.ue_res_id) << 32U) + static_cast<uint64_t>(res.res_id.cell_res_id);
-      });
+      [](const pucch_resource& res) { return res.res_id.ded().ue_res_id; });
+
+  // PUCCH Resource extension (\c pucch-RepetitionNrofSlots-r17): mirror res_to_add_mod_list in size and order.
+  // Only emit the ext list if at least one resource has a non-default repetition factor.
+  const bool any_repetition = std::any_of(dest.pucch_res_list.begin(), dest.pucch_res_list.end(), [](const auto& r) {
+    return r.rep_factor != pucch_repetition_factor::n1;
+  });
+  if (any_repetition and out.res_to_add_mod_list.size() > 0) {
+    out.res_to_add_mod_list_ext_v1610.set_present();
+    auto* ext_list = out.res_to_add_mod_list_ext_v1610.get();
+    for (const auto& asn1_res : out.res_to_add_mod_list) {
+      const auto* const it =
+          std::find_if(dest.pucch_res_list.begin(), dest.pucch_res_list.end(), [&](const pucch_resource& r) {
+            return r.res_id.ded().ue_res_id == asn1_res.pucch_res_id;
+          });
+      pucch_res_ext_v1610_s ext{};
+      if (it != dest.pucch_res_list.end() and it->rep_factor != pucch_repetition_factor::n1) {
+        ext.pucch_repeat_nrof_slots_r17_present = true;
+        ext.pucch_repeat_nrof_slots_r17.value =
+            static_cast<pucch_res_ext_v1610_s::pucch_repeat_nrof_slots_r17_opts::options>(
+                log2_ceil(static_cast<unsigned>(it->rep_factor)));
+      }
+      ext_list->push_back(ext);
+    }
+  }
 
   if ((dest.format_1_common_param.has_value() && not src.format_1_common_param.has_value()) ||
       (dest.format_1_common_param.has_value() && src.format_1_common_param.has_value() &&
@@ -1819,7 +1870,7 @@ ocudu::odu::make_asn1_rrc_pusch_pathloss_ref_rs(const pusch_config::pusch_power_
     csi_rs_idx       = *nzp_csi_res;
   } else if (const auto* ssb_id = std::get_if<ssb_id_t>(&cfg.rs)) {
     auto& ssb_idx = ploss_ref_rs.ref_sig.set_ssb_idx();
-    ssb_idx       = *ssb_id;
+    ssb_idx       = ssb_id->value();
   }
   return ploss_ref_rs;
 }
@@ -2305,7 +2356,7 @@ static srs_res_set_s make_asn1_rrc_srs_res_set(const srs_config::srs_resource_se
     srs_res_set.pathloss_ref_rs_present = true;
     if (const auto* ssb_id = std::get_if<ssb_id_t>(&cfg.pathloss_ref_rs.value())) {
       auto& ssb_idx = srs_res_set.pathloss_ref_rs.set_ssb_idx();
-      ssb_idx       = *ssb_id;
+      ssb_idx       = ssb_id->value();
     } else if (const auto* csi_rs_res = std::get_if<nzp_csi_rs_res_id_t>(&cfg.pathloss_ref_rs.value())) {
       auto& csi_res_idx = srs_res_set.pathloss_ref_rs.set_csi_rs_idx();
       csi_res_idx       = *csi_rs_res;
@@ -2517,7 +2568,7 @@ static srs_res_s make_asn1_rrc_srs_res(const srs_config::srs_resource& cfg)
     }
     if (const auto* ssb_id = std::get_if<ssb_id_t>(&cfg.spatial_relation_info.value().reference_signal)) {
       auto& ssb_idx = res.spatial_relation_info.ref_sig.set_ssb_idx();
-      ssb_idx       = *ssb_id;
+      ssb_idx       = ssb_id->value();
     } else if (const auto* nzp_csi_res =
                    std::get_if<nzp_csi_rs_res_id_t>(&cfg.spatial_relation_info.value().reference_signal)) {
       auto& csi_rs_idx = res.spatial_relation_info.ref_sig.set_csi_rs_idx();
@@ -3383,16 +3434,20 @@ bool ocudu::odu::calculate_reconfig_with_sync_diff(asn1::rrc_nr::recfg_with_sync
   out.sp_cell_cfg_common.ul_cfg_common_present = true;
   out.sp_cell_cfg_common.ul_cfg_common         = make_asn1_rrc_ul_cfg_common(du_cell_cfg.ran.ul_cfg_common);
 
-  n_ta_offset ta_offset                                  = band_helper::get_ta_offset(du_cell_cfg.ran.dl_carrier.band);
-  out.sp_cell_cfg_common.n_timing_advance_offset_present = true;
-  if (ta_offset == n_ta_offset::n0) {
-    out.sp_cell_cfg_common.n_timing_advance_offset.value = serving_cell_cfg_common_s::n_timing_advance_offset_opts::n0;
-  } else if (ta_offset == n_ta_offset::n25600) {
-    out.sp_cell_cfg_common.n_timing_advance_offset.value =
-        serving_cell_cfg_common_s::n_timing_advance_offset_opts::n25600;
-  } else if (ta_offset == n_ta_offset::n39936) {
-    out.sp_cell_cfg_common.n_timing_advance_offset.value =
-        serving_cell_cfg_common_s::n_timing_advance_offset_opts::n39936;
+  // n-TimingAdvanceOffset only covers FR1 offsets, FR2 value n13792 is not present in this enum and should be skipped.
+  if (band_helper::get_freq_range(du_cell_cfg.ran.dl_carrier.band) == frequency_range::FR1) {
+    const n_ta_offset ta_offset = band_helper::get_ta_offset(du_cell_cfg.ran.dl_carrier.band);
+    out.sp_cell_cfg_common.n_timing_advance_offset_present = true;
+    if (ta_offset == n_ta_offset::n0) {
+      out.sp_cell_cfg_common.n_timing_advance_offset.value =
+          serving_cell_cfg_common_s::n_timing_advance_offset_opts::n0;
+    } else if (ta_offset == n_ta_offset::n25600) {
+      out.sp_cell_cfg_common.n_timing_advance_offset.value =
+          serving_cell_cfg_common_s::n_timing_advance_offset_opts::n25600;
+    } else if (ta_offset == n_ta_offset::n39936) {
+      out.sp_cell_cfg_common.n_timing_advance_offset.value =
+          serving_cell_cfg_common_s::n_timing_advance_offset_opts::n39936;
+    }
   }
 
   // As per \c ssb-PositionsInBurst, in \c ServingCellConfigCommon, TS 38.331, the length of \c ssb-PositionsInBurst
@@ -3413,7 +3468,7 @@ bool ocudu::odu::calculate_reconfig_with_sync_diff(asn1::rrc_nr::recfg_with_sync
 
   out.sp_cell_cfg_common.ssb_periodicity_serving_cell_present = true;
   asn1::number_to_enum(out.sp_cell_cfg_common.ssb_periodicity_serving_cell,
-                       ssb_periodicity_to_value(du_cell_cfg.ran.ssb_cfg.ssb_period));
+                       to_value(du_cell_cfg.ran.ssb_cfg.ssb_period));
 
   out.sp_cell_cfg_common.dmrs_type_a_position.value = du_cell_cfg.ran.dmrs_typeA_pos == dmrs_typeA_position::pos2
                                                           ? serving_cell_cfg_common_s::dmrs_type_a_position_opts::pos2
@@ -3491,10 +3546,10 @@ void odu::calculate_meas_gap_config_diff(meas_gap_cfg_s&                       o
                                          const std::optional<meas_gap_config>& dest)
 {
   out = {};
-  out.gap_fr1.set_present();
+  out.gap_ue.set_present();
   out.ext =
-      calculate_setup_release(*out.gap_fr1, src, dest, [](const meas_gap_config& cfg) { return make_gap_cfg(cfg); });
+      calculate_setup_release(*out.gap_ue, src, dest, [](const meas_gap_config& cfg) { return make_gap_cfg(cfg); });
   if (not out.ext) {
-    out.gap_fr1.reset();
+    out.gap_ue.reset();
   }
 }

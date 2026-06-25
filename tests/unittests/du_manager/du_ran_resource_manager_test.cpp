@@ -114,25 +114,25 @@ protected:
     constexpr unsigned    nof_sr_f1_res_per_ue  = 1U;
     constexpr unsigned    nof_csi_f2_res_per_ue = 1U;
     bool                  pucch_checker =
-        pucch_cfg.pucch_res_list.size() == du_cfg.ran.init_bwp.pucch.resources.res_set_0_size.value() +
-                                               du_cfg.ran.init_bwp.pucch.resources.res_set_1_size.value() +
+        pucch_cfg.pucch_res_list.size() == du_cfg.ran.init_bwp.pucch.resources.res_set_size.value() +
+                                               du_cfg.ran.init_bwp.pucch.resources.res_set_size.value() +
                                                nof_sr_f1_res_per_ue + nof_csi_f2_res_per_ue;
 
     // Check whether the SR resource point to the correct one (we give a range where the SR resource is located), each
     // UE can have different values within this range.
     pucch_checker = pucch_checker and
-                    pucch_cfg.sr_res_list.front().pucch_res_id.cell_res_id >=
-                        du_cfg.ran.init_bwp.pucch.resources.res_set_0_size.value() and
-                    pucch_cfg.sr_res_list.front().pucch_res_id.cell_res_id <
-                        du_cfg.ran.init_bwp.pucch.resources.res_set_0_size.value() +
+                    pucch_cfg.sr_res_list.front().pucch_res_id.ded().cell_res_id >=
+                        du_cfg.ran.init_bwp.pucch.resources.res_set_size.value() and
+                    pucch_cfg.sr_res_list.front().pucch_res_id.ded().cell_res_id <
+                        du_cfg.ran.init_bwp.pucch.resources.res_set_size.value() +
                             du_cfg.ran.init_bwp.pucch.resources.nof_cell_sr_resources;
 
     // We always put the CSI PUCCH resource at the end of the list.
     if (csi_pucch_res.has_value()) {
       pucch_checker =
-          pucch_checker and csi_pucch_res.value() >= du_cfg.ran.init_bwp.pucch.resources.res_set_0_size.value() +
+          pucch_checker and csi_pucch_res.value() >= du_cfg.ran.init_bwp.pucch.resources.res_set_size.value() +
                                                          du_cfg.ran.init_bwp.pucch.resources.nof_cell_sr_resources +
-                                                         du_cfg.ran.init_bwp.pucch.resources.res_set_1_size.value();
+                                                         du_cfg.ran.init_bwp.pucch.resources.res_set_size.value();
     }
 
     return pucch_checker;
@@ -227,8 +227,9 @@ TEST_P(du_ran_resource_manager_tester, when_multiple_ues_are_created_then_they_u
                       *cell_cfg_list[0].ran.tdd_cfg, sr_res_list[0].offset % slots_per_frame, cyclic_prefix::NORMAL)
                       .length() == NOF_OFDM_SYM_PER_SLOT_NORMAL_CP);
     }
-    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset)), 0);
-    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset));
+    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset)),
+              0);
+    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset));
 
     // Check if PUCCH config is correctly updated.
     const serving_cell_config serving_cell_cfg = ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg;
@@ -242,7 +243,8 @@ TEST_P(du_ran_resource_manager_tester, when_multiple_ues_are_created_then_they_u
       csi_pucch_res.emplace(std::get<csi_report_config::periodic_or_semi_persistent_report_on_pucch>(
                                 serving_cell_cfg.csi_meas_cfg.value().csi_report_cfg_list[0].report_cfg_type)
                                 .pucch_csi_res_list.front()
-                                .pucch_res_id.cell_res_id);
+                                .pucch_res_id.ded()
+                                .cell_res_id);
     }
     ASSERT_TRUE(verify_pucch_cfg(
         ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg.value(),
@@ -270,7 +272,8 @@ TEST_P(du_ran_resource_manager_tester, when_multiple_ues_are_created_then_they_u
   const unsigned      rem_pucch_resource = ues[ue_idx_to_rem]
                                           ->cell_group.cells.at(SERVING_PCELL_IDX)
                                           .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list[0]
-                                          .pucch_res_id.cell_res_id;
+                                          .pucch_res_id.ded()
+                                          .cell_res_id;
   const unsigned rem_sr_offset = ues[ue_idx_to_rem]
                                      ->cell_group.cells.at(SERVING_PCELL_IDX)
                                      .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list[0]
@@ -284,7 +287,8 @@ TEST_P(du_ran_resource_manager_tester, when_multiple_ues_are_created_then_they_u
             ue_res->value()
                 .cell_group.cells.at(SERVING_PCELL_IDX)
                 .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list[0]
-                .pucch_res_id.cell_res_id);
+                .pucch_res_id.ded()
+                .cell_res_id);
   ASSERT_EQ(rem_sr_offset,
             ue_res->value()
                 .cell_group.cells.at(SERVING_PCELL_IDX)
@@ -301,11 +305,10 @@ INSTANTIATE_TEST_SUITE_P(du_ran_resource_manager_tester,
 namespace du_test_multiple_pucch_cfg {
 
 struct pucch_cfg_builder_params {
-  unsigned nof_res_f1_harq = 3;
-  unsigned nof_res_f2_harq = 6;
-  unsigned nof_harq_cfg    = 1;
-  unsigned nof_res_sr      = 2;
-  unsigned nof_res_csi     = 1;
+  unsigned nof_res_harq = 6;
+  unsigned nof_harq_cfg = 1;
+  unsigned nof_res_sr   = 2;
+  unsigned nof_res_csi  = 1;
 };
 
 struct pucch_cnt_builder_params {
@@ -335,8 +338,7 @@ static du_cell_config make_custom_du_cell_config(const pucch_cfg_builder_params&
 {
   du_cell_config du_cfg                 = config_helpers::make_default_du_cell_config();
   auto&          pucch_params           = du_cfg.ran.init_bwp.pucch.resources;
-  pucch_params.res_set_0_size           = pucch_params_.nof_res_f1_harq;
-  pucch_params.res_set_1_size           = pucch_params_.nof_res_f2_harq;
+  pucch_params.res_set_size             = pucch_params_.nof_res_harq;
   pucch_params.nof_cell_sr_resources    = pucch_params_.nof_res_sr;
   pucch_params.nof_cell_csi_resources   = pucch_params_.nof_res_csi;
   pucch_params.nof_cell_res_set_configs = pucch_params_.nof_harq_cfg;
@@ -351,7 +353,7 @@ static const auto* get_pucch_resource_with_id(const pucch_config& pucch_cfg, uns
 {
   return std::find_if(pucch_cfg.pucch_res_list.begin(),
                       pucch_cfg.pucch_res_list.end(),
-                      [res_id](const pucch_resource& res) { return res.res_id.cell_res_id == res_id; });
+                      [res_id](const pucch_resource& res) { return res.res_id.ded().cell_res_id == res_id; });
 }
 
 class du_ran_res_mng_multiple_cfg_tester : public du_ran_resource_manager_tester_base,
@@ -373,19 +375,19 @@ protected:
   interval<unsigned, true> get_pucch_res_id_interval(const pucch_config& pucch_cfg, pucch_format format) const
   {
     const unsigned pucch_res_set_id = format == pucch_format::FORMAT_1 ? 0U : 1U;
-    const auto&    pucch_res_set    = pucch_cfg.pucch_res_set[pucch_res_set_id].pucch_res_id_list;
+    const auto&    pucch_res_set    = pucch_cfg.pucch_res_set[pucch_res_set_id].resources;
     const unsigned expected_pucch_res_set_size =
-        format == pucch_format::FORMAT_1 ? cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_0_size.value()
-                                         : cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_1_size.value();
+        format == pucch_format::FORMAT_1 ? cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_size.value()
+                                         : cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_size.value();
     if (expected_pucch_res_set_size != pucch_res_set.size()) {
       return {};
     }
 
-    const auto* pucch_res_id_start_it = get_pucch_resource_with_id(pucch_cfg, pucch_res_set.front().cell_res_id);
-    const auto* pucch_res_id_stop_it  = get_pucch_resource_with_id(pucch_cfg, pucch_res_set.back().cell_res_id);
+    const auto* pucch_res_id_start_it = get_pucch_resource_with_id(pucch_cfg, pucch_res_set.front().ded().cell_res_id);
+    const auto* pucch_res_id_stop_it  = get_pucch_resource_with_id(pucch_cfg, pucch_res_set.back().ded().cell_res_id);
     if (pucch_res_id_start_it != pucch_cfg.pucch_res_list.end() and
         pucch_res_id_stop_it != pucch_cfg.pucch_res_list.end()) {
-      return {pucch_res_id_start_it->res_id.cell_res_id, pucch_res_id_stop_it->res_id.cell_res_id};
+      return {pucch_res_id_start_it->res_id.ded().cell_res_id, pucch_res_id_stop_it->res_id.ded().cell_res_id};
     }
 
     return {};
@@ -396,8 +398,8 @@ protected:
   interval<unsigned, true> get_expected_pucch_res_id_interval(unsigned ue_idx, pucch_format format) const
   {
     const unsigned expected_nof_pucch_res = format == pucch_format::FORMAT_1
-                                                ? cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_0_size.value()
-                                                : cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_1_size.value();
+                                                ? cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_size.value()
+                                                : cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_size.value();
 
     if (expected_nof_pucch_res == 0) {
       return interval<unsigned, true>{};
@@ -407,7 +409,7 @@ protected:
     const unsigned f2_res_idx_offset =
         format == pucch_format::FORMAT_1
             ? 0U
-            : cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_0_size.value() * nof_harq_cfgs +
+            : cell_cfg_list[0].ran.init_bwp.pucch.resources.res_set_size.value() * nof_harq_cfgs +
                   cell_cfg_list[0].ran.init_bwp.pucch.resources.nof_cell_sr_resources;
     return {f2_res_idx_offset + (ue_idx % nof_harq_cfgs) * expected_nof_pucch_res,
             f2_res_idx_offset + (ue_idx % nof_harq_cfgs) * expected_nof_pucch_res + expected_nof_pucch_res - 1};
@@ -494,14 +496,15 @@ TEST_P(du_ran_res_mng_multiple_cfg_tester, test_correct_resource_creation_indexi
                       *cell_cfg_list[0].ran.tdd_cfg, sr_res_list[0].offset % slots_per_frame, cyclic_prefix::NORMAL)
                       .length() == NOF_OFDM_SYM_PER_SLOT_NORMAL_CP);
     }
-    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset)), 0);
-    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset));
+    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset)),
+              0);
+    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset));
 
     // Check if the CSI has been assigned to the UE.
     ASSERT_TRUE(has_ue_csi_cfg(ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg));
     const auto& ue_csi_cfg = get_ue_csi_cfg(ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg);
     ASSERT_FALSE(ue_csi_cfg.pucch_csi_res_list.empty());
-    const unsigned ue_csi_pucch_res_id = ue_csi_cfg.pucch_csi_res_list.front().pucch_res_id.cell_res_id;
+    const unsigned ue_csi_pucch_res_id = ue_csi_cfg.pucch_csi_res_list.front().pucch_res_id.ded().cell_res_id;
     const unsigned ue_csi_pucch_offset = ue_csi_cfg.report_slot_offset;
     ASSERT_EQ(csi_period, csi_report_periodicity_to_uint(ue_csi_cfg.report_slot_period));
     // Make sure the CSI is in a fully-UL slot.
@@ -548,7 +551,8 @@ TEST_P(du_ran_res_mng_multiple_cfg_tester, test_correct_resource_creation_indexi
   const unsigned      rem_sr_pucch_resource = ues[ue_idx_to_rem]
                                              ->cell_group.cells.at(SERVING_PCELL_IDX)
                                              .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list[0]
-                                             .pucch_res_id.cell_res_id;
+                                             .pucch_res_id.ded()
+                                             .cell_res_id;
   const unsigned rem_sr_offset = ues[ue_idx_to_rem]
                                      ->cell_group.cells.at(SERVING_PCELL_IDX)
                                      .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list[0]
@@ -556,7 +560,8 @@ TEST_P(du_ran_res_mng_multiple_cfg_tester, test_correct_resource_creation_indexi
   const unsigned rem_csi_pucch_resource_id =
       get_ue_csi_cfg(ues[ue_idx_to_rem]->cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg)
           .pucch_csi_res_list.front()
-          .pucch_res_id.cell_res_id;
+          .pucch_res_id.ded()
+          .cell_res_id;
   const unsigned rem_csi_offset =
       get_ue_csi_cfg(ues[ue_idx_to_rem]->cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg).report_slot_offset;
 
@@ -573,7 +578,8 @@ TEST_P(du_ran_res_mng_multiple_cfg_tester, test_correct_resource_creation_indexi
               ue_res->value()
                   .cell_group.cells.at(SERVING_PCELL_IDX)
                   .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list[0]
-                  .pucch_res_id.cell_res_id);
+                  .pucch_res_id.ded()
+                  .cell_res_id);
     ASSERT_EQ(rem_sr_offset,
               ue_res->value()
                   .cell_group.cells.at(SERVING_PCELL_IDX)
@@ -587,23 +593,23 @@ TEST_P(du_ran_res_mng_multiple_cfg_tester, test_correct_resource_creation_indexi
     ASSERT_EQ(rem_csi_pucch_resource_id,
               get_ue_csi_cfg(ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg)
                   .pucch_csi_res_list.front()
-                  .pucch_res_id.cell_res_id);
+                  .pucch_res_id.ded()
+                  .cell_res_id);
     ASSERT_EQ(rem_csi_offset,
               get_ue_csi_cfg(ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg).report_slot_offset);
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(different_f1_f2_resources,
+INSTANTIATE_TEST_SUITE_P(different_pucch_resources,
                          du_ran_res_mng_multiple_cfg_tester,
                          // clang-format off
-                         //                                   nof:  f1  |  f2  | harq | sr | csi
-                         //                                   nof:  f1  |  f2  | cfg  | sr | csi
-                         ::testing::Values(pucch_cfg_builder_params{ 3,     6,     1,    4,   1 },
-                                           pucch_cfg_builder_params{ 3,     6,     3,    6,   3 },
-                                           pucch_cfg_builder_params{ 8,     8,     5,    4,   7 },
-                                           pucch_cfg_builder_params{ 8,     3,     1,    1,   1 },
-                                           pucch_cfg_builder_params{ 5,     7,     7,    4,   9 },
-                                           pucch_cfg_builder_params{ 8,     8,     8,    4,   10 })
+                         //                                   nof: harq | harq cfg | sr | csi
+                         ::testing::Values(pucch_cfg_builder_params{ 6,        1,    4,   1 },
+                                           pucch_cfg_builder_params{ 6,        3,    6,   3 },
+                                           pucch_cfg_builder_params{ 8,        5,    4,   7 },
+                                           pucch_cfg_builder_params{ 3,        1,    1,   1 },
+                                           pucch_cfg_builder_params{ 7,        7,    4,   9 },
+                                           pucch_cfg_builder_params{ 8,        8,    4,  10 })
                          // clang-format on
 );
 
@@ -626,8 +632,12 @@ make_custom_du_cell_config_for_pucch_cnt(const pucch_cnt_builder_params&        
     csi_params.csi_rs_period        = static_cast<csi_resource_periodicity>(csi_period_slots);
 
     // Ensure CSI offsets remain within the selected period.
-    csi_params.meas_csi_slot_offset     = csi_params.meas_csi_slot_offset % csi_period_slots;
-    csi_params.zp_csi_slot_offset       = csi_params.zp_csi_slot_offset % csi_period_slots;
+    for (unsigned& offset : csi_params.meas_csi_slot_offsets) {
+      offset = offset % csi_period_slots;
+    }
+    for (unsigned& offset : csi_params.zp_csi_slot_offsets) {
+      offset = offset % csi_period_slots;
+    }
     csi_params.tracking_csi_slot_offset = csi_params.tracking_csi_slot_offset % csi_period_slots;
     if (csi_params.tracking_csi_slot_offset + 1 >= csi_period_slots) {
       csi_params.tracking_csi_slot_offset = csi_period_slots > 1 ? csi_period_slots - 2 : 0;
@@ -685,15 +695,16 @@ TEST_P(du_ran_res_mng_pucch_cnt_tester, test_du_pucch_cnt)
                                   .cell_group.cells.at(SERVING_PCELL_IDX)
                                   .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list;
     ASSERT_FALSE(sr_res_list.empty());
-    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset)), 0);
-    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset));
+    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset)),
+              0);
+    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset));
     unsigned sr_offset = sr_res_list[0].offset;
 
     // Check if the CSI has been assigned to the UE.
     ASSERT_TRUE(has_ue_csi_cfg(ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg));
     const auto& ue_csi_cfg = get_ue_csi_cfg(ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg);
     ASSERT_FALSE(ue_csi_cfg.pucch_csi_res_list.empty());
-    const unsigned csi_pucch_res_id = ue_csi_cfg.pucch_csi_res_list.front().pucch_res_id.cell_res_id;
+    const unsigned csi_pucch_res_id = ue_csi_cfg.pucch_csi_res_list.front().pucch_res_id.ded().cell_res_id;
     const unsigned csi_offset       = ue_csi_cfg.report_slot_offset;
     ASSERT_EQ(csi_offsets.count(std::make_pair(csi_pucch_res_id, csi_offset)), 0);
     csi_offsets.insert(std::make_pair(csi_pucch_res_id, csi_offset));
@@ -784,8 +795,9 @@ TEST_P(du_ran_res_mng_pucch_cnt_sr_only_tester, test_du_pucch_cnt_sr_only)
                                   .cell_group.cells.at(SERVING_PCELL_IDX)
                                   .serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list;
     ASSERT_FALSE(sr_res_list.empty());
-    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset)), 0);
-    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.cell_res_id, sr_res_list[0].offset));
+    ASSERT_EQ(sr_offsets.count(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset)),
+              0);
+    sr_offsets.insert(std::make_pair(sr_res_list[0].pucch_res_id.ded().cell_res_id, sr_res_list[0].offset));
     unsigned sr_offset = sr_res_list[0].offset;
 
     ocudu_assert(sr_offset < static_cast<unsigned>(pucch_cnts.size()),
@@ -834,8 +846,8 @@ static du_cell_config make_custom_pucch_srs_cell_config(bool pucch_has_more_res_
 {
   du_cell_config du_cfg                 = config_helpers::make_default_du_cell_config();
   auto&          pucch_params           = du_cfg.ran.init_bwp.pucch.resources;
-  pucch_params.res_set_0_size           = 6U;
-  pucch_params.res_set_1_size           = 6U;
+  pucch_params.res_set_size             = 6U;
+  pucch_params.res_set_size             = 6U;
   pucch_params.nof_cell_sr_resources    = pucch_has_more_res_than_srs ? 10U : 1U;
   pucch_params.nof_cell_csi_resources   = pucch_has_more_res_than_srs ? 10U : 1U;
   pucch_params.nof_cell_res_set_configs = 1U;

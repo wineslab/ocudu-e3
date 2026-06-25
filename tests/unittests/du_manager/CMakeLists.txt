@@ -69,7 +69,8 @@ gtest_discover_tests(du_manager_procedure_test)
 add_executable(du_ran_resource_manager_test
         du_ran_resource_manager_test.cpp
         du_drx_resource_manager_test.cpp
-        decode_ue_nr_cap_container_test.cpp)
+        decode_ue_nr_cap_container_test.cpp
+        du_meas_config_manager_test.cpp)
 target_include_directories(du_ran_resource_manager_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(du_ran_resource_manager_test du_manager_test_helpers sched_test_doubles gtest ocudu_gtest_main)
 gtest_discover_tests(du_ran_resource_manager_test)
@@ -93,3 +94,13 @@ add_executable(cbs_encoder_test cbs/cbs_encoder_test.cpp)
 target_include_directories(cbs_encoder_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(cbs_encoder_test ocudu_cbs_encoder ocudu_support gtest ocudu_gtest_main)
 gtest_discover_tests(cbs_encoder_test)
+
+add_executable(sib19_ntn_test sib19_ntn_test.cpp)
+target_include_directories(sib19_ntn_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(sib19_ntn_test du_manager_converters ocudu_du_manager ocudu_support ocudulog gtest gtest_main)
+gtest_discover_tests(sib19_ntn_test)
+
+add_executable(sib19_value_tag_test sib19_value_tag_test.cpp)
+target_include_directories(sib19_value_tag_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(sib19_value_tag_test ocudu_du_high du_manager_converters ocudu_du_manager ocudu_support ocudulog gtest gtest_main)
+gtest_discover_tests(sib19_value_tag_test)

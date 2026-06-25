@@ -3,16 +3,17 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_up_processor_test_helpers.h"
+#include "lib/cu_cp/cu_up_processor/cu_up_processor_config.h"
+#include "lib/cu_cp/cu_up_processor/cu_up_processor_factory.h"
 #include "ocudu/cu_cp/cu_cp_configuration_helpers.h"
-#include "ocudu/support/async/async_test_utils.h"
 
 using namespace ocudu;
 using namespace ocucp;
 
-class dummy_task_sched final : public common_task_scheduler
+class dummy_task_sched final : public async_task_scheduler
 {
 public:
-  bool schedule_async_task(async_task<void> task) override { return task_sched.schedule(std::move(task)); }
+  bool schedule(async_task<void> task) override { return task_sched.schedule(std::move(task)); }
 
 private:
   fifo_async_task_scheduler task_sched{32};
@@ -33,7 +34,7 @@ cu_up_processor_test::cu_up_processor_test() :
   ocudulog::init();
 
   // create and start CU-UP processor
-  cu_up_processor_config_t cu_up_cfg = {"ocucp", cu_up_index_t::min, cu_cp_cfg, cu_cp_logger};
+  cu_up_processor_config_t cu_up_cfg = {"ocucp", cu_cp_cu_up_index_t::min, cu_cp_cfg, cu_cp_logger};
 
   cu_up_processor_obj = create_cu_up_processor(std::move(cu_up_cfg), e1ap_notifier, cu_cp_notifier, *common_task_sched);
 }

@@ -107,18 +107,19 @@ class e1ap_cu_up_manager_connection_notifier
 public:
   virtual ~e1ap_cu_up_manager_connection_notifier() = default;
 
-  virtual void on_connection_loss() = 0;
+  virtual void on_connection_loss(cu_up_e1_index_t e1_index) = 0;
 };
 
 /// Combined entry point for E1AP handling.
 class e1ap_interface : public e1ap_message_handler,
                        public e1ap_control_message_handler,
-                       public e1ap_event_handler,
                        public e1ap_connection_manager,
                        public e1ap_statistics_handler
 {
 public:
-  virtual ~e1ap_interface() = default;
+  ~e1ap_interface() override = default;
+
+  virtual cu_up_e1_index_t get_e1_index() const = 0;
 };
 
 /// Combined exit point of the E1AP to CU-UP manager.

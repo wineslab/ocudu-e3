@@ -3,7 +3,6 @@
 
 #include "ocudu/fapi_adaptor/uci_part2_correspondence_generator.h"
 #include "ocudu/ran/csi_report/csi_report_on_pusch_helpers.h"
-#include "ocudu/ran/csi_report/csi_report_on_puxch_utils.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -11,26 +10,46 @@ using namespace fapi_adaptor;
 
 static constexpr unsigned NUM_CSI_RESOURCES = 1;
 
+namespace ocudu {
+
+inline std::ostream& operator<<(std::ostream& os, const pmi_codebook_config& pmi)
+{
+  return os << to_string(pmi);
+}
+
+inline std::ostream& operator<<(std::ostream& os, const csi_report_quantities& csi)
+{
+  return os << to_string(csi);
+}
+
+} // namespace ocudu
+
+inline std::ostream& operator<<(std::ostream& os, const pmi_codebook_config& pmi)
+{
+  return os << to_string(pmi);
+}
+
 namespace {
 
 class uci_part2_correspondence_generator_test
   : public ::testing::TestWithParam<std::tuple<pmi_codebook_config, csi_report_quantities>>
 {
 protected:
-  unsigned              nof_csi_rs_resources = NUM_CSI_RESOURCES;
-  pmi_codebook_config   codebook             = std::get<0>(GetParam());
-  csi_report_quantities quantities           = std::get<1>(GetParam());
+  unsigned nof_csi_rs_resources = NUM_CSI_RESOURCES;
 };
 
 } // namespace
 
 TEST_P(uci_part2_correspondence_generator_test, correct_generation_test)
 {
+  pmi_codebook_config   codebook   = std::get<0>(GetParam());
+  csi_report_quantities quantities = std::get<1>(GetParam());
+
   std::unique_ptr<uci_part2_correspondence_mapper>     mapper;
   std::unique_ptr<uci_part2_correspondence_repository> repository;
   std::tie(mapper, repository) = generate_uci_part2_correspondence(NUM_CSI_RESOURCES);
 
-  unsigned            nof_csi_rs_ports = csi_report_get_nof_csi_rs_antenna_ports(codebook);
+  unsigned            nof_csi_rs_ports = get_precoding_codebook_antenna_ports(codebook);
   ri_restriction_type ri_restiction(nof_csi_rs_ports);
   ri_restiction.fill(0, nof_csi_rs_ports);
 
@@ -39,6 +58,7 @@ TEST_P(uci_part2_correspondence_generator_test, correct_generation_test)
   report_cfg.pmi_codebook         = codebook;
   report_cfg.ri_restriction       = ri_restiction;
   report_cfg.quantities           = quantities;
+  report_cfg.nof_reported_rs      = 1;
 
   uci_part2_size_description part2_correspondence = get_csi_report_pusch_size(report_cfg).part2_correspondence;
 

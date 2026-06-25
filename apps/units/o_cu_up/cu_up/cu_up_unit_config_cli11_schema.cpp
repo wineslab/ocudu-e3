@@ -9,6 +9,7 @@
 #include "apps/units/o_cu_up/cu_up/cu_up_unit_config.h"
 #include "apps/units/o_cu_up/cu_up/cu_up_unit_pcap_config.h"
 #include "ocudu/ran/cu_up_constants.h"
+#include "ocudu/ran/plmn_identity.h"
 #include "ocudu/support/cli11_utils.h"
 #include "ocudu/support/config_parsers.h"
 
@@ -39,6 +40,11 @@ static void configure_cli11_ngu_gtpu_args(CLI::App& app, cu_up_unit_ngu_gtpu_con
       ->capture_default_str();
   add_option(
       app, "--rate_limiter_period", gtpu_cfg.rate_limiter_period, "GTP-U RX rate limiter period (in milliseconds)")
+      ->capture_default_str();
+  add_option(app,
+             "--teid_release_linger_time",
+             gtpu_cfg.gtpu_teid_release_linger_time,
+             "Error indication suppression time for released TEIDs (in milliseconds)")
       ->capture_default_str();
   add_option(app, "--ignore_ue_ambr", gtpu_cfg.ignore_ue_ambr, "Ignore GTP-U DL UE-AMBR rate limiter")
       ->capture_default_str();
@@ -138,6 +144,13 @@ static void configure_cli11_cu_up_args(CLI::App& app, cu_up_unit_config& cu_up_p
   add_option(app, "--max_nof_ues", cu_up_params.max_nof_ues, "Maximum number of Bearer Contexts allowed by the CU-UP")
       ->capture_default_str()
       ->check(CLI::Range(static_cast<uint32_t>(1), MAX_NOF_CU_UP_UES));
+
+  auto plmn_is_valid = [](const std::string& value) -> std::string {
+    return plmn_identity::parse(value).has_value() ? "" : "Invalid PLMN format";
+  };
+  add_option(app, "--plmn_list", cu_up_params.plmn_list, "List of supported PLMN IDs (e.g. \"00101\")")
+      ->capture_default_str()
+      ->check(plmn_is_valid);
 }
 
 static void configure_cli11_log_args(CLI::App& app, cu_up_unit_logger_config& log_params)

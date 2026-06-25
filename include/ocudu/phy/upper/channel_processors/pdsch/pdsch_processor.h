@@ -11,10 +11,10 @@
 #include "ocudu/phy/support/rb_allocation.h"
 #include "ocudu/phy/support/re_pattern.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
-#include "ocudu/phy/upper/channel_coding/ldpc/ldpc.h"
-#include "ocudu/phy/upper/dmrs_mapping.h"
+#include "ocudu/ran/dmrs/dmrs.h"
 #include "ocudu/ran/pdsch/pdsch_context.h"
 #include "ocudu/ran/ptrs/ptrs.h"
+#include "ocudu/ran/sch/ldpc_base_graph.h"
 #include "ocudu/ran/sch/modulation_scheme.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/support/shared_transport_block.h"
@@ -46,6 +46,8 @@ public:
     modulation_scheme modulation;
     /// Redundancy version index.
     unsigned rv;
+    /// LDPC base graph to use for CW generation.
+    ldpc_base_graph_type ldpc_base_graph;
   };
 
   /// Parameters for the Phase Tracking Reference Signals (PT-RS).
@@ -104,7 +106,7 @@ public:
     /// Indicates which symbol in the slot transmit DMRS.
     symbol_slot_mask dmrs_symbol_mask;
     /// Indicates the DM-RS type.
-    dmrs_type dmrs;
+    dmrs_config_type dmrs;
     /// \brief Parameter \f$N^{n_{SCID}}_{ID}\f$ TS38.211 Section 7.4.1.1.1.
     ///
     /// It is equal to:
@@ -132,8 +134,6 @@ public:
     // ...
     // Ignore CBGs.
     // ...
-    /// LDPC base graph to use for CW generation.
-    ldpc_base_graph_type ldpc_base_graph;
     /// \brief Transport block size for limited buffer rate match.
     ///
     /// Parameter \f$TBS_{LBRM}\f$ from 3GPP TS38.212 Section 5.4.2.1, for computing the size of the circular buffer.

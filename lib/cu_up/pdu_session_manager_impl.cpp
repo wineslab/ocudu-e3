@@ -223,7 +223,7 @@ drb_setup_result pdu_session_manager_impl::handle_drb_to_setup_item(pdu_session&
       new_drb->qos_flows[qos_flow.qos_flow_id] = std::make_unique<qos_flow_context>(qos_flow);
       auto& new_qos_flow                       = new_drb->qos_flows[qos_flow.qos_flow_id];
       logger.log_debug("Created QoS flow with {} and {}", new_qos_flow->qos_flow_id, new_qos_flow->five_qi);
-      sdap_config sdap_cfg = make_sdap_drb_config(drb_to_setup.sdap_cfg);
+      sdap_config sdap_cfg = {make_sdap_drb_config(drb_to_setup.sdap_cfg)};
       new_session.sdap->add_mapping(
           qos_flow.qos_flow_id, drb_to_setup.drb_id, sdap_cfg, new_qos_flow->sdap_to_pdcp_adapter);
       flow_result.success = true;
@@ -594,6 +594,17 @@ pdu_session_manager_impl::modify_pdu_session(const e1ap_pdu_session_res_to_modif
     pdu_session->drbs.erase(drb_iter);
 
     logger.log_info("Removed {} for {}", drb_to_rem, session.pdu_session_id);
+  }
+
+  // > Update N3 UL UP tunnel endpoint (e.g. after Xn path switch provides new UPF address/TEID).
+  if (session.ng_ul_up_tnl_info.has_value()) {
+    const auto& ul_tnl = session.ng_ul_up_tnl_info.value();
+    logger.log_info("{}: Updating N3 UL tunnel endpoint to addr={} teid={}",
+                    session.pdu_session_id,
+                    ul_tnl.tp_address,
+                    ul_tnl.gtp_teid);
+    pdu_session->gtpu->get_tx_lower_layer_interface()->update_tx_endpoint(
+        ul_tnl.tp_address.to_string(), n3_config.upf_port, ul_tnl.gtp_teid.value());
   }
 
   pdu_session_result.success = true;

@@ -8,6 +8,7 @@
 #include "ocudu/mac/mac_cell_group_config.h"
 #include "ocudu/mac/mac_sdu_handler.h"
 #include "ocudu/mac/phr_config.h"
+#include "ocudu/ran/harq_id.h"
 #include "ocudu/ran/logical_channel/lcid.h"
 #include "ocudu/ran/physical_cell_group.h"
 #include "ocudu/ran/rnti.h"
@@ -20,6 +21,9 @@ namespace ocudu {
 
 class unique_timer;
 
+/// Cause of a radio link failure detected in the MAC.
+enum class mac_rlf_cause { max_consecutive_harq_kos, max_consecutive_crc_kos, max_consecutive_csi_dtx };
+
 /// Interface used to notify detected radio link failures in the MAC (e.g. due to max KOs reached) for a given UE.
 class mac_ue_radio_link_notifier
 {
@@ -27,7 +31,7 @@ public:
   virtual ~mac_ue_radio_link_notifier() = default;
 
   /// \brief Notifies that a radio link failure has been detected for a given UE.
-  virtual void on_rlf_detected() = 0;
+  virtual void on_rlf_detected(mac_rlf_cause cause) = 0;
 
   /// \brief Notifies that a MAC C-RNTI CE was received with old C-RNTI set to equal to the given UE.
   ///
@@ -63,6 +67,8 @@ struct mac_ue_create_request {
   std::optional<slot_point>               ul_ccch_slot_rx;
   /// RA preamble to be used within a Contention-free RA procedure context.
   std::optional<unsigned> cfra_preamble_index;
+  /// Number of DL HARQ processes configured for the UE on its PCell. Used by MAC to dimension DL HARQ buffers.
+  unsigned pdsch_harqs_per_cell = MAX_NOF_HARQS;
 
   // Scheduler-only params.
   sched_ue_config_request sched_cfg;

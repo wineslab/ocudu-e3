@@ -12,12 +12,13 @@ using namespace ocudu;
 
 static void fill_cu_up_ngu_gtpu_section(YAML::Node& node, const cu_up_unit_ngu_gtpu_config& config)
 {
-  auto gtpu_node                   = node["gtpu"];
-  gtpu_node["queue_size"]          = config.gtpu_queue_size;
-  gtpu_node["batch_size"]          = config.gtpu_batch_size;
-  gtpu_node["reordering_timer"]    = config.gtpu_reordering_timer_ms;
-  gtpu_node["rate_limiter_period"] = config.rate_limiter_period.count();
-  gtpu_node["ignore_ue_ambr"]      = config.ignore_ue_ambr;
+  auto gtpu_node                        = node["gtpu"];
+  gtpu_node["queue_size"]               = config.gtpu_queue_size;
+  gtpu_node["batch_size"]               = config.gtpu_batch_size;
+  gtpu_node["reordering_timer"]         = config.gtpu_reordering_timer_ms;
+  gtpu_node["rate_limiter_period"]      = config.rate_limiter_period.count();
+  gtpu_node["teid_release_linger_time"] = config.gtpu_teid_release_linger_time.count();
+  gtpu_node["ignore_ue_ambr"]           = config.ignore_ue_ambr;
 }
 
 static void fill_cu_up_ngu_socket_entry(YAML::Node& node, const cu_up_unit_ngu_socket_config& config)
@@ -92,6 +93,9 @@ static void fill_cu_up_log_section(YAML::Node node, const cu_up_unit_logger_conf
 static void fill_cu_up_section(YAML::Node node, const cu_up_unit_config& config)
 {
   node["warn_on_drop"] = config.warn_on_drop;
+  if (!config.plmn_list.empty()) {
+    node["plmn_list"] = config.plmn_list;
+  }
 }
 
 static void fill_cu_up_f1_qos_section(YAML::Node node, const cu_cp_unit_f1u_config& config)

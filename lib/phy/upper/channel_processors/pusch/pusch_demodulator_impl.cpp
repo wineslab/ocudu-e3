@@ -9,7 +9,6 @@
 #include "ocudu/ocuduvec/simd.h"
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_codeword_buffer.h"
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_demodulator_notifier.h"
-#include "ocudu/support/transform_optional.h"
 
 #if defined(__SSE3__)
 #include <immintrin.h>
@@ -260,13 +259,19 @@ void pusch_demodulator_impl::demodulate(pusch_codeword_buffer&              code
   // Number of receive antenna ports.
   auto nof_rx_ports = static_cast<unsigned>(config.rx_ports.size());
 
-  // Initialize sequence.
-  unsigned c_init = config.rnti * pow2(15) + config.n_id;
+  // Initialize scrambling sequence. When msgA is sent over PUSCH, an alternative scrambling sequence is used, as per
+  // TS 38.211 Section 6.3.1.1 Release 16.
+  unsigned c_init  = config.rnti * pow2(15) + config.n_id;
+  bool     is_msgA = config.n_rapid.has_value();
+  if (is_msgA) {
+    c_init = config.rnti * pow2(16) + *config.n_rapid * pow2(10) + config.n_id;
+  }
+
   descrambler->init(c_init);
 
   // Prepare PRB active RE mask.
   re_prb_mask active_re_per_prb      = ~re_prb_mask();
-  re_prb_mask active_re_per_prb_dmrs = ~config.dmrs_config_type.get_dmrs_prb_mask(config.nof_cdm_groups_without_data);
+  re_prb_mask active_re_per_prb_dmrs = ~get_dmrs_prb_mask(config.dmrs_type, config.nof_cdm_groups_without_data);
 
   // Prepare RE mask.
   re_symbol_mask_type re_mask      = config.rb_mask.kronecker_product<NOF_SUBCARRIERS_PER_RB>(active_re_per_prb);

@@ -3,10 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_processor_test_messages.h"
-#include "lib/f1ap/asn1_helpers.h"
-#include "lib/f1ap/cu_cp/f1ap_asn1_helpers.h"
 #include "lib/f1ap/cu_cp/procedures/f1_setup_procedure.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "ocudu/asn1/f1ap/common.h"
+#include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/f1ap/f1ap_message.h"
 
 using namespace ocudu;
@@ -56,7 +56,7 @@ void ocudu::ocucp::generate_f1_setup_request_with_too_many_cells(du_setup_reques
 
   f1_setup_req->gnb_du_served_cells_list_present = true;
 
-  for (int du_cell_idx_int = du_cell_index_to_uint(du_cell_index_t::min); du_cell_idx_int < MAX_NOF_DU_CELLS + 1;
+  for (int du_cell_idx_int = static_cast<uint16_t>(MIN_DU_CELL_INDEX); du_cell_idx_int < MAX_NOF_DU_CELLS + 1;
        du_cell_idx_int++) {
     f1_setup_req->gnb_du_served_cells_list.push_back({});
     f1_setup_req->gnb_du_served_cells_list.back().load_info_obj(ASN1_F1AP_ID_GNB_DU_SERVED_CELLS_ITEM);
@@ -70,8 +70,9 @@ void ocudu::ocucp::generate_f1_setup_request_with_too_many_cells(du_setup_reques
   setup_request = create_du_setup_request(f1setup_msg.pdu.init_msg().value.f1_setup_request()).value();
 }
 
-ue_rrc_context_creation_request
-ocudu::ocucp::generate_ue_rrc_context_creation_request(ue_index_t ue_index, rnti_t c_rnti, nr_cell_identity nrcell_id)
+ue_rrc_context_creation_request ocudu::ocucp::generate_ue_rrc_context_creation_request(cu_cp_ue_index_t ue_index,
+                                                                                       rnti_t           c_rnti,
+                                                                                       nr_cell_identity nrcell_id)
 {
   ue_rrc_context_creation_request req = {};
   req.ue_index                        = ue_index;

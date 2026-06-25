@@ -5,12 +5,12 @@
 #pragma once
 
 #include "../cu_cp_controller/cu_cp_controller.h"
+#include "../cu_cp_controller/node_connection_notifier.h"
 #include "../cu_cp_impl_interface.h"
 #include "../du_processor/du_processor.h"
 #include "ocudu/support/ocudu_assert.h"
 
-namespace ocudu {
-namespace ocucp {
+namespace ocudu::ocucp {
 
 /// Adapter between DU processor and CU-CP
 class du_processor_cu_cp_adapter : public du_processor_cu_cp_notifier
@@ -33,19 +33,19 @@ public:
     return meas_config_handler->handle_cell_config_update_request(nci, serv_cell_cfg);
   }
 
-  void on_rrc_ue_created(ue_index_t ue_index, rrc_ue_interface& rrc_ue) override
+  void on_rrc_ue_created(cu_cp_ue_index_t ue_index, rrc_ue_interface& rrc_ue) override
   {
     ocudu_assert(cu_cp_handler != nullptr, "CU-CP handler must not be nullptr");
     cu_cp_handler->handle_rrc_ue_creation(ue_index, rrc_ue);
   }
 
-  byte_buffer on_target_cell_sib1_required(du_index_t du_index, nr_cell_global_id_t cgi) override
+  byte_buffer on_target_cell_sib1_required(cu_cp_du_index_t du_index, nr_cell_global_id_t cgi) override
   {
     ocudu_assert(cu_cp_handler != nullptr, "CU-CP handler must not be nullptr");
     return cu_cp_handler->handle_target_cell_sib1_required(du_index, cgi);
   }
 
-  async_task<void> on_ue_removal_required(ue_index_t ue_index) override
+  async_task<void> on_ue_removal_required(cu_cp_ue_index_t ue_index) override
   {
     ocudu_assert(ue_removal_handler != nullptr, "CU-CP UE Removal handler must not be nullptr");
     return ue_removal_handler->handle_ue_removal_request(ue_index);
@@ -80,7 +80,7 @@ class du_processor_cu_cp_connection_adapter final : public du_connection_notifie
 public:
   void connect_node_connection_handler(cu_cp_controller& cu_ctrl_) { cu_ctrl = &cu_ctrl_; }
 
-  bool on_du_setup_request(du_index_t du_index, const std::set<plmn_identity>& plmn_ids) override
+  bool on_du_setup_request(cu_cp_du_index_t du_index, const std::set<plmn_identity>& plmn_ids) override
   {
     ocudu_assert(cu_ctrl != nullptr, "CU-CP controller must not be nullptr");
     return cu_ctrl->handle_du_setup_request(du_index, plmn_ids);
@@ -90,5 +90,4 @@ private:
   cu_cp_controller* cu_ctrl = nullptr;
 };
 
-} // namespace ocucp
-} // namespace ocudu
+} // namespace ocudu::ocucp

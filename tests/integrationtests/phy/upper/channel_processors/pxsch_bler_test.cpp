@@ -30,9 +30,9 @@ static constexpr subcarrier_spacing scs                         = subcarrier_spa
 static constexpr uint16_t           rnti                        = 0x1234;
 static constexpr unsigned           bwp_start_rb                = 0;
 static constexpr unsigned           nof_ofdm_symbols            = 14;
-static const symbol_slot_mask       dmrs_symbol_mask            = {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
+static const symbol_slot_mask       dmrs_mask                   = {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
 static constexpr unsigned           nof_ldpc_iterations         = 10;
-static constexpr dmrs_type          dmrs                        = dmrs_type::TYPE1;
+static constexpr dmrs_config_type   dmrs                        = dmrs_config_type::type1;
 static constexpr unsigned           nof_cdm_groups_without_data = 2;
 static constexpr cyclic_prefix      cy_prefix                   = cyclic_prefix::NORMAL;
 static constexpr unsigned           rv                          = 0;
@@ -131,7 +131,7 @@ public:
   ~pxsch_bler_test() { teardown(); }
 
 private:
-  std::shared_ptr<resource_grid_factory> create_grid_factory()
+  static std::shared_ptr<resource_grid_factory> create_grid_factory()
   {
     std::shared_ptr<channel_precoder_factory> precod_factory = create_channel_precoder_factory("auto");
     report_fatal_error_if_not(precod_factory, "Failed to create channel precoding factory.");
@@ -212,7 +212,7 @@ private:
     tbs_config.n_prb                        = freq_allocation.length();
     tbs_config.nof_layers                   = nof_layers;
     tbs_config.nof_symb_sh                  = nof_ofdm_symbols;
-    tbs_config.nof_dmrs_prb = dmrs.nof_dmrs_per_rb() * dmrs_symbol_mask.count() * nof_cdm_groups_without_data;
+    tbs_config.nof_dmrs_prb = get_nof_re_per_prb(dmrs) * dmrs_mask.count() * nof_cdm_groups_without_data;
     units::bytes tbs        = tbs_calculator_calculate(tbs_config);
 
     // Select LDPC base graph.
@@ -279,7 +279,7 @@ private:
     pdsch_config.cp                          = cy_prefix;
     pdsch_config.n_id                        = n_id;
     pdsch_config.ref_point                   = pdsch_processor::pdu_t::PRB0;
-    pdsch_config.dmrs_symbol_mask            = dmrs_symbol_mask;
+    pdsch_config.dmrs_symbol_mask            = dmrs_mask;
     pdsch_config.dmrs                        = dmrs;
     pdsch_config.scrambling_id               = scrambling_id;
     pdsch_config.n_scid                      = n_scid;
@@ -287,13 +287,13 @@ private:
     pdsch_config.freq_alloc                  = freq_alloc;
     pdsch_config.start_symbol_index          = 0;
     pdsch_config.nof_symbols                 = nof_ofdm_symbols;
-    pdsch_config.ldpc_base_graph             = ldpc_base_graph;
     pdsch_config.tbs_lbrm                    = tbs_lbrm_default;
     pdsch_config.reserved                    = {};
     pdsch_config.ratio_pdsch_data_to_sss_dB  = 0.0F;
     pdsch_config.ratio_pdsch_dmrs_to_sss_dB  = get_sch_to_dmrs_ratio_dB(nof_cdm_groups_without_data);
     pdsch_config.precoding                   = precoding_configuration::make_wideband(make_identity(nof_layers));
-    pdsch_config.codewords.emplace_back(pdsch_processor::codeword_description{mcs_descr.modulation, rv});
+    pdsch_config.codewords.emplace_back(
+        pdsch_processor::codeword_description{mcs_descr.modulation, rv, ldpc_base_graph});
 
     static_vector<uint8_t, MAX_PORTS> rx_ports(nof_rx_ports);
     std::iota(rx_ports.begin(), rx_ports.end(), 0U);
@@ -311,7 +311,7 @@ private:
     pusch_config.n_id               = n_id;
     pusch_config.nof_tx_layers      = nof_layers;
     pusch_config.rx_ports           = rx_ports;
-    pusch_config.dmrs_symbol_mask   = dmrs_symbol_mask;
+    pusch_config.dmrs_symbol_mask   = dmrs_mask;
     pusch_config.dmrs               = pusch_processor::dmrs_configuration{.dmrs                        = dmrs,
                                                                           .scrambling_id               = scrambling_id,
                                                                           .n_scid                      = n_scid,
@@ -320,11 +320,9 @@ private:
     pusch_config.start_symbol_index = 0;
     pusch_config.nof_symbols        = nof_ofdm_symbols;
     pusch_config.tbs_lbrm           = tbs_lbrm_default;
-    pusch_config.dc_position        = {};
-
-    if (enable_dc_position) {
-      pusch_config.dc_position = {bwp_size_rb * NOF_SUBCARRIERS_PER_RB / 2};
-    }
+    pusch_config.dc_position =
+        enable_dc_position ? std::optional(bwp_size_rb * NOF_SUBCARRIERS_PER_RB / 2) : std::nullopt;
+    pusch_config.n_rapid = std::nullopt;
 
     // Resize data to accomodate the transport block.
     tx_data.resize(tbs.value());

@@ -15,6 +15,7 @@
 #include "ocudu/support/async/execute_on_blocking.h"
 #include "ocudu/support/executors/execute_until_success.h"
 #include "ocudu/support/rtsan.h"
+#include <algorithm>
 
 using namespace ocudu;
 
@@ -44,7 +45,7 @@ mac_cell_processor::mac_cell_processor(const mac_cell_creation_request& cell_cfg
                                                  cell_cfg.scs_common,
                                                  band_helper::get_freq_range(cell_cfg.dl_carrier.band)),
                   cell_cfg.dl_carrier.nof_ant,
-                  ctrl_exec_),
+                  cell_cfg.max_harq_buffers),
   // The PDU pool has to be large enough to fit the maximum number of RARs and Paging PDUs per slot for all possible K0
   // values.
   pdu_pool(MAX_DL_PDU_LENGTH,
@@ -209,7 +210,7 @@ async_task<bool> mac_cell_processor::add_ue(const mac_ue_create_request& request
   // > Allocate DL HARQ resources for the new UE.
   // Note: This may call a large allocation, and therefore, should be done out of the cell thread to avoid causing
   // lates.
-  dl_harq_buffers.allocate_ue_buffers(request.ue_index, MAX_NOF_HARQS);
+  dl_harq_buffers.allocate_ue_buffers(request.ue_index, request.pdsch_harqs_per_cell);
 
   // > Create a MAC UE DL context.
   mac_dl_ue_context ue_inst(request);
@@ -229,7 +230,13 @@ async_task<bool> mac_cell_processor::add_ue(const mac_ue_create_request& request
           return false;
         }
 
-        return ue_mng.add_ue(std::move(ue_inst));
+        const du_ue_index_t ue_idx = ue_inst.get_ue_index();
+        const rnti_t        rnti   = ue_inst.get_rnti();
+        if (ue_mng.add_ue(std::move(ue_inst))) {
+          logger.debug("ue={} rnti={} proc=\"MAC UE Creation\": MAC UE DL context created successfully.", ue_idx, rnti);
+          return true;
+        }
+        return false;
       },
       [this, ue_index = request.ue_index]() {
         logger.warning("ue={}: Postponed UE creation. Cause: Task queue is full", fmt::underlying(ue_index));
@@ -415,19 +422,19 @@ void mac_cell_processor::handle_slot_indication_impl(slot_point_extended      sl
 /// Encodes DL DCI.
 static dci_payload encode_dci(const pdcch_dl_information& pdcch)
 {
-  switch (pdcch.dci.type) {
+  switch (pdcch.dci.type()) {
     case dci_dl_rnti_config_type::si_f1_0:
-      return dci_1_0_si_rnti_pack(pdcch.dci.si_f1_0);
+      return dci_1_0_si_rnti_pack(pdcch.dci.as_si_rnti_f1_0());
     case dci_dl_rnti_config_type::ra_f1_0:
-      return dci_1_0_ra_rnti_pack(pdcch.dci.ra_f1_0);
+      return dci_1_0_ra_rnti_pack(pdcch.dci.as_ra_rnti_f1_0());
     case dci_dl_rnti_config_type::c_rnti_f1_0:
-      return dci_1_0_c_rnti_pack(pdcch.dci.c_rnti_f1_0);
+      return dci_1_0_c_rnti_pack(pdcch.dci.as_c_rnti_f1_0());
     case dci_dl_rnti_config_type::tc_rnti_f1_0:
-      return dci_1_0_tc_rnti_pack(pdcch.dci.tc_rnti_f1_0);
+      return dci_1_0_tc_rnti_pack(pdcch.dci.as_tc_rnti_f1_0());
     case dci_dl_rnti_config_type::p_rnti_f1_0:
-      return dci_1_0_p_rnti_pack(pdcch.dci.p_rnti_f1_0);
+      return dci_1_0_p_rnti_pack(pdcch.dci.as_p_rnti_f1_0());
     case dci_dl_rnti_config_type::c_rnti_f1_1:
-      return dci_1_1_pack(pdcch.dci.c_rnti_f1_1);
+      return dci_1_1_pack(pdcch.dci.as_c_rnti_f1_1());
     default:
       ocudu_terminate("Invalid DCI format");
   }
@@ -436,13 +443,13 @@ static dci_payload encode_dci(const pdcch_dl_information& pdcch)
 /// Encodes UL DCI.
 static dci_payload encode_dci(const pdcch_ul_information& pdcch)
 {
-  switch (pdcch.dci.type) {
+  switch (pdcch.dci.type()) {
     case dci_ul_rnti_config_type::c_rnti_f0_0:
-      return dci_0_0_c_rnti_pack(pdcch.dci.c_rnti_f0_0);
+      return dci_0_0_c_rnti_pack(pdcch.dci.as_c_rnti_f0_0());
     case dci_ul_rnti_config_type::tc_rnti_f0_0:
-      return dci_0_0_tc_rnti_pack(pdcch.dci.tc_rnti_f0_0);
+      return dci_0_0_tc_rnti_pack(pdcch.dci.as_tc_rnti_f0_0());
     case dci_ul_rnti_config_type::c_rnti_f0_1:
-      return dci_0_1_pack(pdcch.dci.c_rnti_f0_1);
+      return dci_0_1_pack(pdcch.dci.as_c_rnti_f0_1());
     default:
       ocudu_terminate("Invalid DCI format");
   }

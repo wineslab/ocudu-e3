@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_repository.h"
+#include "../logging/cell_metrics_handler.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/scheduler/resource_grid_util.h"
 
@@ -115,12 +116,31 @@ void ue_repository::rem_cell(du_cell_index_t cell_index)
 
 void ue_repository::add_ue(const ue_configuration&   ue_cfg,
                            bool                      starts_in_fallback,
-                           std::optional<slot_point> ul_ccch_slot_rx)
+                           std::optional<slot_point> ul_ccch_slot_rx,
+                           bool                      cfra_enabled)
 {
   ocudu_assert(not ues.contains(ue_cfg.ue_index), "UE with duplicate index being added to the repository");
 
   // Create UE components.
-  const du_ue_index_t      ue_index  = ue_cfg.ue_index;
+  const du_ue_index_t ue_index = ue_cfg.ue_index;
+
+  ue_pcell_state st;
+  st.msg3_rx_slot = ul_ccch_slot_rx.value_or(slot_point{});
+  if (starts_in_fallback) {
+    if (st.msg3_rx_slot.valid()) {
+      // RACH-created UE: ConRes CE pending + RRC Setup/Reestablishment/Resume pending.
+      st.config_st = ue_config_state::pending_initial_conf;
+      st.conres_st = ue_conres_state::pending_conres_ce;
+    } else if (cfra_enabled) {
+      // F1AP-created UE that is expecting a CFRA. Defer UCI/SRS scheduling until Msg3 is ACKed.
+      st.conres_st = ue_conres_state::pending_cfra;
+    } else {
+      // F1AP-created UE: already RRC connected but waiting for C-RNTI CE.
+      st.conres_st = ue_conres_state::pending_conres_crnti_ce;
+    }
+  }
+  ue_fsms.emplace(ue_index, st);
+
   const rnti_t             rnti      = ue_cfg.crnti;
   const auto&              pcell_cmn = ue_cfg.pcell_common_cfg();
   const subcarrier_spacing scs       = pcell_cmn.params.dl_cfg_common.init_dl_bwp.generic_params.scs;
@@ -142,14 +162,9 @@ void ue_repository::add_ue(const ue_configuration&   ue_cfg,
     const auto&           cell_cfg   = ue_cfg.ue_cell_cfg(static_cast<serv_cell_index_t>(i));
     const du_cell_index_t cell_index = cell_cfg.cell_cfg_common.cell_index;
     auto&                 ue_cc      = cell_ues[cell_index]->add_ue(
-        ue_cfg, static_cast<serv_cell_index_t>(i), ue_drx_controllers[ue_index], ul_ccch_slot_rx);
+        ue_cfg, static_cast<serv_cell_index_t>(i), &ue_fsms[ue_index], ue_drx_controllers[ue_index]);
     cell_lookup.du_cells.emplace(cell_index, &ue_cc);
     cell_lookup.ue_cells.push_back(&ue_cc);
-  }
-
-  // Set the UE carriers as fallback or normal operation.
-  for (auto& ue_cc : cell_lookup.ue_cells) {
-    ue_cc->set_fallback_state(starts_in_fallback, false, false);
   }
 
   // Add UE in the repository.
@@ -160,7 +175,7 @@ void ue_repository::add_ue(const ue_configuration&   ue_cfg,
   ocudu_assert(res.second, "UE with duplicate RNTI being added to the repository");
 }
 
-void ue_repository::reconfigure_ue(const ue_configuration& new_cfg, bool reestablished_)
+void ue_repository::reconfigure_ue(const ue_configuration& new_cfg, sched_ue_config_request::causes cause)
 {
   ocudu_assert(
       ues.contains(new_cfg.ue_index), "ue={} : UE not found in the repository", fmt::underlying(new_cfg.ue_index));
@@ -168,9 +183,13 @@ void ue_repository::reconfigure_ue(const ue_configuration& new_cfg, bool reestab
   auto& u      = ues[new_cfg.ue_index];
   auto& lc_mng = u.logical_channels();
 
-  // UE enters fallback mode when a Reconfiguration takes place.
-  u.get_pcell().set_fallback_state(true, true, reestablished_);
-  lc_mng.set_fallback_state(true);
+  // UE enters fallback mode when a RRC Reconfiguration takes place.
+  if (cause != sched_ue_config_request::causes::not_rrc_proc) {
+    update_ue_fsm(new_cfg.ue_index,
+                  cause == sched_ue_config_request::causes::rrc_reconf_after_reest
+                      ? ue_fsm_config_event::reest_reconf_initiated
+                      : ue_fsm_config_event::ue_ctx_setup_received);
+  }
 
   // Configure Logical Channels.
   lc_mng.configure(new_cfg.logical_channels());
@@ -198,8 +217,10 @@ void ue_repository::reconfigure_ue(const ue_configuration& new_cfg, bool reestab
     const du_cell_index_t cell_index = ue_cc_cfg.cell_cfg_common.cell_index;
     if (not prev_cell_lookup.du_cells.contains(cell_index)) {
       // New cell being instantiated.
-      auto& ue_cc = cell_ues[cell_index]->add_ue(
-          new_cfg, static_cast<serv_cell_index_t>(i), ue_drx_controllers[new_cfg.ue_index], std::nullopt);
+      auto& ue_cc = cell_ues[cell_index]->add_ue(new_cfg,
+                                                 static_cast<serv_cell_index_t>(i),
+                                                 i == 0 ? &ue_fsms[new_cfg.ue_index] : nullptr,
+                                                 ue_drx_controllers[new_cfg.ue_index]);
       new_lookup.du_cells.emplace(cell_index, &ue_cc);
       new_lookup.ue_cells.push_back(&ue_cc);
     } else {
@@ -216,14 +237,25 @@ void ue_repository::reconfigure_ue(const ue_configuration& new_cfg, bool reestab
   u.handle_reconfiguration_request(new_cfg);
 }
 
-void ue_repository::ue_config_applied(du_ue_index_t ue_index)
+bool ue_repository::ue_config_applied(du_ue_index_t ue_index)
 {
-  ocudu_assert(ues.contains(ue_index), "ue={} : UE not found in the repository", fmt::underlying(ue_index));
-  auto& u = ues[ue_index];
+  return update_ue_fsm(ue_index, ue_fsm_config_event::config_applied);
+}
 
-  // The UE gets out of fallback mode once it has applied the new configuration.
-  u.get_pcell().set_fallback_state(false, false, false);
-  u.logical_channels().set_fallback_state(false);
+bool ue_repository::crnti_ce_received(du_ue_index_t ue_index)
+{
+  return update_ue_fsm(ue_index, ue_fsm_config_event::crnti_ce_received);
+}
+
+bool ue_repository::cfra_msg3_acked(du_ue_index_t ue_index)
+{
+  return update_ue_fsm(ue_index, ue_fsm_config_event::cfra_msg3_acked);
+}
+
+bool ue_repository::handle_conres_ce_outcome(du_ue_index_t ue_index, bool success)
+{
+  return update_ue_fsm(ue_index,
+                       success ? ue_fsm_config_event::conres_ce_acked : ue_fsm_config_event::conres_ce_timeout);
 }
 
 void ue_repository::schedule_ue_rem(ue_config_delete_event ev)
@@ -268,6 +300,11 @@ void ue_repository::rem_ue(const ue& u)
   const rnti_t        crnti  = u.crnti;
   const du_ue_index_t ue_idx = u.ue_index;
 
+  // Remove UE from the cell metrics on its primary cell.
+  if (cell_metrics_handler* cell_metrics = cell_ues[u.get_pcell().cell_index]->get_metrics()) {
+    cell_metrics->handle_ue_deletion(ue_idx);
+  }
+
   // Remove UE from the cell-specific repositories.
   for (auto& ue_cc : ue_cell_lookups[ue_idx].ue_cells) {
     // Reset HARQ processes.
@@ -279,6 +316,7 @@ void ue_repository::rem_ue(const ue& u)
 
   // Remove UE components.
   ue_drx_controllers.erase(ue_idx);
+  ue_fsms.erase(ue_idx);
 
   // Remove UE from RNTI->UE lookup.
   auto it = rnti_to_ue_index_lookup.find(crnti);
@@ -322,4 +360,117 @@ void ue_repository::handle_cell_deactivation(du_cell_index_t cell_index)
 
   // Stop cell activity.
   cell_ues[cell_index]->deactivate();
+}
+
+bool ue_repository::update_ue_fsm(du_ue_index_t ue_index, ue_fsm_config_event ev)
+{
+  using events = ue_fsm_config_event;
+  ocudu_assert(ues.contains(ue_index), "ue={} : UE not found in the repository", ue_index);
+  auto& fsm    = ue_fsms[ue_index];
+  auto& u      = ues[ue_index];
+  auto& ue_cc  = u.get_pcell();
+  auto& cfg_st = fsm.config_st;
+  auto& con_st = fsm.conres_st;
+
+  const bool was_in_fallback = is_in_fallback(cfg_st, con_st);
+
+  switch (ev) {
+    case events::conres_ce_acked:
+      if (con_st != ue_conres_state::pending_conres_ce) {
+        logger.warning("ue={} rnti={}: Invalid event={} in conres_state={}",
+                       ue_index,
+                       ue_cc.rnti(),
+                       to_string(ev),
+                       to_string(con_st));
+        return false;
+      }
+      con_st = ue_conres_state::conres_completed;
+      logger.debug("ue={} rnti={}: ConRes CE ACKed", ue_index, ue_cc.rnti());
+      break;
+    case events::conres_ce_timeout:
+      if (con_st != ue_conres_state::pending_conres_ce) {
+        logger.warning("ue={} rnti={}: Invalid event={} in conres_state={}",
+                       ue_index,
+                       ue_cc.rnti(),
+                       to_string(ev),
+                       to_string(con_st));
+        return false;
+      }
+      // Timeout before ConRes CE could be ACKed: deactivate UE.
+      con_st = ue_conres_state::conres_completed;
+      u.deactivate();
+      return true;
+    case events::crnti_ce_received:
+      if (con_st != ue_conres_state::pending_conres_crnti_ce) {
+        // C-RNTI CE not relevant for contention resolution in this context.
+        return false;
+      }
+      con_st = ue_conres_state::conres_completed;
+      logger.debug("ue={} rnti={}: C-RNTI CE received, contention resolution completed", ue_index, ue_cc.rnti());
+      break;
+    case events::cfra_msg3_acked:
+      if (con_st != ue_conres_state::pending_cfra) {
+        return false;
+      }
+      con_st = ue_conres_state::conres_completed;
+      logger.debug("ue={} rnti={}: CFRA Msg3 ACKed, UCI/SRS scheduling activated", ue_index, ue_cc.rnti());
+      break;
+    case events::ue_ctx_setup_received:
+      if (cfg_st == ue_config_state::pending_reconf) {
+        // Already waiting for reconf complete: no-op.
+        return false;
+      }
+      if (cfg_st == ue_config_state::pending_initial_conf) {
+        // During RRC Resume, UEContextSetup is triggered before the DL
+        return false;
+      }
+      if (cfg_st != ue_config_state::config_applied) {
+        logger.warning("ue={} rnti={}: Invalid event={} in config_state={}",
+                       ue_index,
+                       ue_cc.rnti(),
+                       to_string(ev),
+                       to_string(cfg_st));
+        return false;
+      }
+      cfg_st = ue_config_state::pending_reconf;
+      if (not was_in_fallback) {
+        u.logical_channels().set_fallback_state(true);
+        ue_cc.harqs.cancel_retxs();
+        logger.debug("ue={} rnti={}: Entering fallback mode", ue_index, ue_cc.rnti());
+      }
+      return true;
+    case events::reest_reconf_initiated:
+      if (cfg_st != ue_config_state::pending_initial_conf and cfg_st != ue_config_state::config_applied) {
+        logger.warning("ue={} rnti={}: Invalid event={} in config_state={}",
+                       ue_index,
+                       ue_cc.rnti(),
+                       to_string(ev),
+                       to_string(cfg_st));
+        return false;
+      }
+      cfg_st = ue_config_state::pending_reest_reconf;
+      if (not was_in_fallback) {
+        u.logical_channels().set_fallback_state(true);
+        ue_cc.harqs.cancel_retxs();
+        logger.debug("ue={} rnti={}: Entering fallback mode", ue_index, ue_cc.rnti());
+      }
+      return true;
+    case events::config_applied:
+      if (cfg_st == ue_config_state::config_applied) {
+        // No pending config: no-op.
+        return false;
+      }
+      cfg_st = ue_config_state::config_applied;
+      logger.debug("ue={} rnti={}: Config applied", ue_index, ue_cc.rnti());
+      break;
+  }
+
+  // Check whether the UE just exited fallback mode (both states at their terminal values).
+  if (was_in_fallback and not is_in_fallback(cfg_st, con_st)) {
+    ue_cc.harqs.cancel_retxs();
+    u.logical_channels().set_fallback_state(false);
+    logger.debug("ue={} rnti={}: Leaving fallback mode", ue_index, ue_cc.rnti());
+  }
+
+  return true;
 }

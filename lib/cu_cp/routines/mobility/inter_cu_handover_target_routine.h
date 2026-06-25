@@ -5,7 +5,10 @@
 #pragma once
 
 #include "../../cell_meas_manager/cell_meas_manager_impl.h"
+#include "../../du_processor/du_processor.h"
 #include "../../ue_manager/ue_manager_impl.h"
+#include "ocudu/e1ap/cu_cp/e1ap_cu_cp.h"
+#include "ocudu/ngap/ngap.h"
 #include "ocudu/ngap/ngap_handover.h"
 #include "ocudu/support/async/async_task.h"
 
@@ -32,15 +35,16 @@ struct cu_cp_inter_cu_handover_request {
   // TODO: Add optional fields.
 
   // Common fields.
-  ue_index_t                                                            ue_index;
+  cu_cp_ue_index_t                                                      ue_index;
   std::variant<ngap_cause_t, xnap_cause_t>                              cause;
   nr_cell_global_id_t                                                   target_cell_id;
   security::security_context                                            security_context;
   guami_t                                                               guami;
-  cu_cp_aggregate_maximum_bit_rate                                      ue_ambr;
+  aggregate_maximum_bit_rate_t                                          ue_ambr;
   slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item> pdu_session_res_setup_list;
   byte_buffer                                                           rrc_handover_preparation_information;
   std::optional<location_report_request>                                location_report_request_type;
+  bool                                                                  is_conditional_handover = false;
 
   void from_ngap_handover_request(const ngap_handover_request& ng_handover_request)
   {
@@ -89,8 +93,9 @@ struct cu_cp_inter_cu_handover_request {
     location_report_request_type = xnap_request.ue_context_info_ho_request.location_report_info;
 
     // Fill XNAP handover specific fields.
-    amf_ue_id = xnap_request.ue_context_info_ho_request.amf_ue_id;
-    amf_addr  = xnap_request.ue_context_info_ho_request.amf_addr;
+    amf_ue_id               = xnap_request.ue_context_info_ho_request.amf_ue_id;
+    amf_addr                = xnap_request.ue_context_info_ho_request.amf_addr;
+    is_conditional_handover = xnap_request.is_conditional_handover;
   }
 };
 
@@ -99,10 +104,11 @@ class inter_cu_handover_target_routine
 public:
   inter_cu_handover_target_routine(const cu_cp_inter_cu_handover_request& request_,
                                    e1ap_bearer_context_manager&           e1ap_bearer_ctxt_mng_,
-                                   f1ap_ue_context_manager&               f1ap_ue_ctxt_mng_,
+                                   du_processor&                          du_proc_,
                                    cu_cp_ue_removal_handler&              ue_removal_handler_,
                                    ue_manager&                            ue_mng_,
                                    cell_meas_manager&                     cell_meas_mng_,
+                                   ngap_location_reporting_handler&       ngap_loc_report_handler_,
                                    const security_indication_t&           default_security_indication_,
                                    ocudulog::basic_logger&                logger_);
 
@@ -118,11 +124,12 @@ private:
 
   const cu_cp_inter_cu_handover_request request;
 
-  e1ap_bearer_context_manager& e1ap_bearer_ctxt_mng; // to trigger bearer context modification at CU-UP.
-  f1ap_ue_context_manager&     f1ap_ue_ctxt_mng;     // to trigger UE context creation.
-  cu_cp_ue_removal_handler&    ue_removal_handler;   // to trigger UE removal if the UE Context Setup fails.
-  ue_manager&                  ue_mng;
-  cell_meas_manager&           cell_meas_mng;
+  e1ap_bearer_context_manager&     e1ap_bearer_ctxt_mng; // to trigger bearer context modification at CU-UP.
+  du_processor&                    du_proc; // to trigger UE context creation and access RRC-DU for measConfig packing.
+  cu_cp_ue_removal_handler&        ue_removal_handler; // to trigger UE removal if the UE Context Setup fails.
+  ue_manager&                      ue_mng;
+  cell_meas_manager&               cell_meas_mng;
+  ngap_location_reporting_handler& ngap_loc_report_handler;
 
   ocudulog::basic_logger& logger;
 

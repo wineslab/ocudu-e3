@@ -8,15 +8,15 @@
 using namespace ocudu;
 using namespace ocudu::ocucp;
 
-e1ap_ue_context* e1ap_ue_context_list::add_ue(ue_index_t ue_index, gnb_cu_cp_ue_e1ap_id_t cu_cp_ue_e1ap_id)
+e1ap_ue_context* e1ap_ue_context_list::add_ue(cu_cp_ue_index_t ue_index, gnb_cu_cp_ue_e1ap_id_t cu_cp_ue_e1ap_id)
 {
-  ocudu_assert(ue_index != ue_index_t::invalid, "Invalid ue_index={}", fmt::underlying(ue_index));
+  ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", fmt::underlying(ue_index));
   ocudu_assert(cu_cp_ue_e1ap_id != gnb_cu_cp_ue_e1ap_id_t::invalid,
                "Invalid cu_cp_ue_e1ap_id={}",
                fmt::underlying(cu_cp_ue_e1ap_id));
 
   if (ue_index_to_ue_e1ap_id.find(ue_index) != ue_index_to_ue_e1ap_id.end()) {
-    logger.error("ue={}: UE already exists", ue_index);
+    logger.error("ue={} cu_cp_ue_e1ap_id={}: UE already exists", ue_index, fmt::underlying(cu_cp_ue_e1ap_id));
     return nullptr;
   }
 
@@ -29,13 +29,15 @@ e1ap_ue_context* e1ap_ue_context_list::add_ue(ue_index_t ue_index, gnb_cu_cp_ue_
   }
   ue_index_to_ue_e1ap_id.emplace(ue_index, cu_cp_ue_e1ap_id);
 
-  logger.info("{}: Created new E1AP UE context", ret.first->second.ue_ids);
+  logger.info("{} cu_cp_ue_e1ap_id={}: Created new E1AP UE context",
+              ret.first->second.ue_ids,
+              fmt::underlying(cu_cp_ue_e1ap_id));
   return &ret.first->second;
 }
 
-void e1ap_ue_context_list::remove_ue(ue_index_t ue_index)
+void e1ap_ue_context_list::remove_ue(cu_cp_ue_index_t ue_index)
 {
-  ocudu_assert(ue_index != ue_index_t::invalid, "Invalid ue_index={}", ue_index);
+  ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
 
   auto id_it = ue_index_to_ue_e1ap_id.find(ue_index);
   if (id_it == ue_index_to_ue_e1ap_id.end()) {
@@ -96,10 +98,10 @@ gnb_cu_cp_ue_e1ap_id_t e1ap_ue_context_list::allocate_gnb_cu_cp_ue_e1ap_id()
   return gnb_cu_cp_ue_e1ap_id_t::invalid;
 }
 
-void e1ap_ue_context_list::update_ue_index(ue_index_t new_ue_index, ue_index_t old_ue_index)
+void e1ap_ue_context_list::update_ue_index(cu_cp_ue_index_t new_ue_index, cu_cp_ue_index_t old_ue_index)
 {
-  ocudu_assert(new_ue_index != ue_index_t::invalid, "Invalid new_ue_index={}", new_ue_index);
-  ocudu_assert(old_ue_index != ue_index_t::invalid, "Invalid old_ue_index={}", old_ue_index);
+  ocudu_assert(new_ue_index != cu_cp_ue_index_t::invalid, "Invalid new_ue_index={}", new_ue_index);
+  ocudu_assert(old_ue_index != cu_cp_ue_index_t::invalid, "Invalid old_ue_index={}", old_ue_index);
   // no need to update if the ue indexes are equal
   if (new_ue_index == old_ue_index) {
     return;

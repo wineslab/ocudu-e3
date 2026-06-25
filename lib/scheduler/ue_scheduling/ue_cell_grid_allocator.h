@@ -40,6 +40,8 @@ struct ue_retx_dl_grant_request {
   vrb_bitmap& used_dl_vrbs;
   /// Whether interleaving VRB-to-PRB mapping is enabled.
   bool interleaving_enabled;
+  /// Maximum number of RBs the slice allows for this grant (caps adaptive retx search).
+  unsigned max_rbs = MAX_NOF_PRBS;
 };
 
 /// Request to reserve space for control channels of a UL grant.
@@ -66,6 +68,8 @@ struct ue_retx_ul_grant_request {
   vrb_bitmap& used_ul_vrbs;
   /// Symbols that can be used for PUSCH allocation.
   ofdm_symbol_range allowed_symbols;
+  /// Maximum number of RBs the slice allows for this grant (caps adaptive retx search).
+  unsigned max_rbs = MAX_NOF_PRBS;
 };
 
 /// \brief Status of a UE grant allocation, and action for the scheduler policy to follow afterwards.
@@ -258,6 +262,10 @@ private:
 
   std::vector<dl_grant_info> dl_grants;
   std::vector<ul_grant_info> ul_grants;
+
+  // Vector of k1 values to be used for DL slot (for DCI 1_1 and 1_0, respectively). For FDD, this vector has size 1.
+  std::vector<static_vector<uint8_t, 8>> k1s_per_dl_slot;
+  std::vector<static_vector<uint8_t, 8>> k1s_per_dl_slot_dci_1_0;
 };
 
 } // namespace ocudu

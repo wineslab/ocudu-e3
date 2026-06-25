@@ -5,6 +5,7 @@
 #include "ue_configuration.h"
 #include "../support/pdsch/pdsch_default_time_allocation.h"
 #include "../support/pdsch/pdsch_resource_allocation.h"
+#include "../support/pucch/pucch_k1_helper.h"
 #include "../support/pusch/pusch_default_time_allocation.h"
 #include "../support/pusch/pusch_resource_allocation.h"
 #include "sched_config_params.h"
@@ -14,19 +15,6 @@
 #include <algorithm>
 
 using namespace ocudu;
-
-span<const uint8_t> search_space_info::get_k1_candidates() const
-{
-  // TS38.213, clause 9.2.3 - For DCI format 1_0, the PDSCH-to-HARQ-timing-indicator field values map to
-  // {1, 2, 3, 4, 5, 6, 7, 8}. For DCI format 1_1, if present, the PDSCH-to-HARQ-timing-indicator field values map to
-  // values for a set of number of slots provided by dl-DataToUL-ACK as defined in Table 9.2.3-1.
-  // Note: Tested UEs do not support k1 < 4.
-  static constexpr std::array<uint8_t, 5> f1_0_list = {4, 5, 6, 7, 8};
-  if (get_dl_dci_format() == ocudu::dci_dl_format::f1_0) {
-    return f1_0_list;
-  }
-  return bwp->ul.ded()->pucch_cfg->dl_data_to_ul_ack;
-}
 
 void search_space_info::update_pdcch_candidates(
     const std::vector<std::array<pdcch_candidate_list, NOF_AGGREGATION_LEVELS>>& candidates)
@@ -277,10 +265,11 @@ static dci_size_config get_dci_size_config(const ue_cell_configuration& ue_cell_
   }
 
   // Fill out parameters for Format 1_1.
-  dci_sz_cfg.nof_dl_bwp_rrc            = ue_cell_cfg.bwps().size() - (ue_cell_cfg.has_bwp_id(to_bwp_id(0)) ? 1 : 0);
-  dci_sz_cfg.nof_dl_time_domain_res    = ue_cell_cfg.search_space(ss_id).pdsch_time_domain_list.size();
-  dci_sz_cfg.nof_aperiodic_zp_csi      = 0;
-  dci_sz_cfg.nof_pdsch_ack_timings     = ss_info.get_k1_candidates().size();
+  dci_sz_cfg.nof_dl_bwp_rrc         = ue_cell_cfg.bwps().size() - (ue_cell_cfg.has_bwp_id(to_bwp_id(0)) ? 1 : 0);
+  dci_sz_cfg.nof_dl_time_domain_res = ue_cell_cfg.search_space(ss_id).pdsch_time_domain_list.size();
+  dci_sz_cfg.nof_aperiodic_zp_csi   = 0;
+  dci_sz_cfg.nof_pdsch_ack_timings =
+      get_k1_candidates(ss_info.get_dl_dci_format(), ue_cell_cfg.cell_cfg_common.dl_data_to_ul_ack).size();
   dci_sz_cfg.dynamic_prb_bundling      = false;
   dci_sz_cfg.rm_pattern_group1         = false;
   dci_sz_cfg.rm_pattern_group2         = false;
@@ -623,8 +612,7 @@ ue_cell_configuration::ue_cell_configuration(rnti_t                             
   crnti(crnti_),
   cell_cfg_common(cell_cfg_common_),
   multi_cells_configured(multi_cells_configured_),
-  nof_dl_ports(ue_cell_params_->csi_meas_cfg.has_value() ? compute_nof_dl_ports(*ue_cell_params_->csi_meas_cfg.value())
-                                                         : 1)
+  nof_dl_ports(ue_cell_params_->csi_meas_cfg.has_value() ? compute_nof_dl_ports(*ue_cell_params_->csi_meas_cfg) : 1)
 {
   // Apply UE-dedicated Config.
   reconfigure(ue_cell_params_, meas_gap_cfg_);
@@ -651,8 +639,8 @@ void ue_cell_configuration::reconfigure(const ue_cell_config_ptr&             ue
   search_spaces = {};
 
   // Recompute param lookup tables.
-  for (const bwp_config_ptr& bwp : cell_ded->bwps) {
-    configure_bwp_cfg(to_bwp_id(0), *bwp);
+  for (const sched_bwp_config& bwp : cell_ded->bwps) {
+    configure_bwp_cfg(to_bwp_id(0), bwp);
   }
 
   // Compute DCI sizes
@@ -668,8 +656,8 @@ void ue_cell_configuration::reconfigure(const ue_cell_config_ptr&             ue
   }
 
   // Generate PDCCH candidates.
-  for (const bwp_config_ptr& bwp : cell_ded->bwps.unsorted()) {
-    generate_crnti_monitored_pdcch_candidates(search_spaces, *bwp, crnti);
+  for (const sched_bwp_config& bwp : cell_ded->bwps.unsorted()) {
+    generate_crnti_monitored_pdcch_candidates(search_spaces, bwp, crnti);
   }
 }
 
@@ -689,7 +677,7 @@ void ue_cell_configuration::configure_bwp_cfg(bwp_id_t bwpid, const sched_bwp_co
 
     ss.cfg     = &ss_cfg->cfg();
     ss.coreset = &ss_cfg->cs();
-    ss.bwp     = cell_ded->bwps[bwpid];
+    ss.bwp     = &cell_ded->bwps[bwpid];
     // DL
     ss.update_pdsch_time_domain_list(*this);
     ss.dl_crb_lims = pdsch_helper::get_ra_crb_limits(

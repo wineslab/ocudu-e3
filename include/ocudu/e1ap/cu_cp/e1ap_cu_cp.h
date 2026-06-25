@@ -4,14 +4,15 @@
 
 #pragma once
 
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/e1ap/common/e1_setup_messages.h"
 #include "ocudu/e1ap/common/e1ap_common.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp_bearer_context_update.h"
+#include "ocudu/e1ap/cu_cp/inactivity_notification.h"
+#include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_ue_context_release.h"
 #include "ocudu/support/async/async_task.h"
 
-namespace ocudu {
-namespace ocucp {
+namespace ocudu::ocucp {
 
 /// Handle E1AP interface management procedures as defined in TS 38.463 section 8.2.
 class e1ap_connection_manager
@@ -55,7 +56,7 @@ public:
 };
 
 struct bearer_creation_complete_message {
-  ue_index_t ue_index;
+  cu_cp_ue_index_t ue_index;
 };
 
 /// Scheduler of E1AP async tasks using common signalling.
@@ -87,7 +88,7 @@ public:
 
   /// \brief Remove the context of an UE.
   /// \param[in] ue_index The index of the UE to remove.
-  virtual void remove_bearer_context(ue_index_t ue_index) = 0;
+  virtual void remove_bearer_context(cu_cp_ue_index_t ue_index) = 0;
 };
 
 /// Methods used by E1AP to notify the NGAP.
@@ -107,10 +108,10 @@ public:
   virtual ~e1ap_ue_handler() = default;
 
   /// \brief Update the context of an UE.
-  virtual void update_ue_context(ue_index_t ue_index, ue_index_t old_ue_index) = 0;
+  virtual void update_ue_context(cu_cp_ue_index_t ue_index, cu_cp_ue_index_t old_ue_index) = 0;
 
   /// Cancel pending tasks for a UE.
-  virtual void cancel_ue_tasks(ue_index_t ue_index) = 0;
+  virtual void cancel_ue_tasks(cu_cp_ue_index_t ue_index) = 0;
 };
 
 /// \brief Interface to query statistics from the E1AP interface.
@@ -134,7 +135,7 @@ public:
   /// \param[in] ue_index The index of the UE.
   /// \param[in] task The task to schedule.
   /// \returns True if the task was successfully scheduled, false otherwise.
-  virtual bool schedule_async_task(ue_index_t ue_index, async_task<void> task) = 0;
+  virtual bool schedule_async_task(cu_cp_ue_index_t ue_index, async_task<void> task) = 0;
 
   /// \brief Notifies about the reception of a Bearer Context Release Request message.
   /// \param[in] msg The received Bearer Context Release Request message.
@@ -142,11 +143,11 @@ public:
 
   /// \brief Notifies about the reception of a Bearer Context Inactivity Notification message.
   /// \param[in] msg The received Bearer Context Inactivity Notification message.
-  virtual void on_bearer_context_inactivity_notification_received(const cu_cp_inactivity_notification& msg) = 0;
+  virtual void on_bearer_context_inactivity_notification_received(const e1ap_inactivity_notification& msg) = 0;
 
   /// \brief Notifies about the reception of a DL Data Notification message.
   /// \param[in] ue_index The index of the UE.
-  virtual void on_dl_data_notification_received(ue_index_t ue_index) = 0;
+  virtual void on_dl_data_notification_received(cu_cp_ue_index_t ue_index) = 0;
 
   /// \brief Notify the CU-CP to release a UE.
   /// \param[in] request The release request.
@@ -154,7 +155,7 @@ public:
 
   /// \brief Notifies about the reception of an E1 Release Request message.
   /// \param[in] cu_up_index The index of the CU-UP processor.
-  virtual void on_e1_release_request_received(cu_up_index_t cu_up_index) = 0;
+  virtual void on_e1_release_request_received(cu_cp_cu_up_index_t cu_up_index) = 0;
 
   /// \brief Indicates that there was some loss of transaction information for some UEs.
   /// \return Asynchronous task that handles the event
@@ -184,5 +185,4 @@ public:
   virtual e1ap_statistics_handler&             get_e1ap_statistics_handler()             = 0;
 };
 
-} // namespace ocucp
-} // namespace ocudu
+} // namespace ocudu::ocucp

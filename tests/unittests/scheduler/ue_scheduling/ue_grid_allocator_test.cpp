@@ -4,7 +4,7 @@
 
 #include "../test_utils/dummy_test_components.h"
 #include "lib/scheduler/config/sched_config_manager.h"
-#include "lib/scheduler/logging/scheduler_metrics_handler.h"
+#include "lib/scheduler/logging/cell_metrics_handler.h"
 #include "lib/scheduler/logging/scheduler_result_logger.h"
 #include "lib/scheduler/pdcch_scheduling/pdcch_resource_allocator_impl.h"
 #include "lib/scheduler/pucch_scheduling/pucch_allocator_impl.h"
@@ -142,7 +142,10 @@ protected:
   {
     auto ev = cfg_mng.add_ue(ue_creation_req);
     report_fatal_error_if_not(ev.valid(), "UE creation failed");
-    ues.add_ue(ev.next_config(), ue_creation_req.starts_in_fallback, std::nullopt);
+    ues.add_ue(ev.next_config(),
+               ue_creation_req.starts_in_fallback,
+               ue_creation_req.ul_ccch_slot_rx,
+               ue_creation_req.cfra_enabled);
     for (const auto& lc_cfg : *ue_creation_req.cfg.lc_config_list) {
       slice_ues.add_logical_channel(ues[ue_creation_req.ue_index], lc_cfg.lcid, lc_cfg.lc_group);
     }
@@ -225,10 +228,9 @@ protected:
   sched_cfg_dummy_notifier                mac_notif;
   scheduler_ue_metrics_dummy_notifier     metrics_notif;
   scheduler_ue_metrics_dummy_configurator metrics_ue_handler;
-  scheduler_metrics_handler               metrics;
 
   cell_config_builder_params cfg_builder_params;
-  sched_config_manager       cfg_mng{scheduler_config{sched_cfg, mac_notif}, metrics};
+  sched_config_manager       cfg_mng{scheduler_config{sched_cfg, mac_notif}};
   const cell_configuration&  cell_cfg;
 
   cell_resource_allocator res_grid{cell_cfg};
@@ -551,7 +553,7 @@ TEST_P(ue_grid_allocator_default_cfg_test, successfully_allocates_pdsch_with_gbr
   (*cfg_req.lc_config_list)[3].qos->arp_priority = arp_prio_level_t::max();
   (*cfg_req.lc_config_list)[3].qos->gbr_qos_info = gbr_qos_flow_information{128000, 128000, 128000, 128000};
   ue_config_update_event ev                      = cfg_mng.update_ue(reconf_msg);
-  ues.reconfigure_ue(ev.next_config(), false);
+  ues.reconfigure_ue(ev.next_config(), sched_ue_config_request::causes::other_rrc_proc);
   ues.ue_config_applied(ev.get_ue_index());
 
   // Add LCID to the bearers of the UE belonging to this slice.

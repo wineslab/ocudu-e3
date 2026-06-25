@@ -12,7 +12,7 @@ ue_manager::ue_manager(const ue_manager_config& config, const ue_manager_depende
   max_nof_ues(config.max_nof_ues),
   n3_config(config.n3_config),
   test_mode_config(config.test_mode_config),
-  e1ap(dependencies.e1ap),
+  e1aps(dependencies.e1aps),
   f1u_gw(dependencies.f1u_gw),
   ngu_session_mngr(dependencies.ngu_session_mngr),
   cu_up_mngr_pdcp_if(dependencies.cu_up_mngr_pdcp_if),
@@ -61,18 +61,44 @@ async_task<void> ue_manager::remove_all_ues()
   });
 }
 
+async_task<void> ue_manager::remove_e1_ues(cu_up_e1_index_t e1_index)
+{
+  // Routine to stop all UEs
+  auto ue_it = ue_db.begin();
+  return launch_async([this, ue_it, e1_index](coro_context<async_task<void>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+
+    // Remove all UEs.
+    while (ue_it != ue_db.end()) {
+      if (ue_it->second->get_e1_index() == e1_index) {
+        CORO_AWAIT(schedule_and_wait_ue_removal((ue_it++)->first));
+      } else {
+        ue_it++;
+      }
+    }
+
+    CORO_RETURN();
+  });
+}
+
 ue_context* ue_manager::find_ue(cu_up_ue_index_t ue_index)
 {
   ocudu_assert(ue_index < max_nof_ues, "Invalid ue_index={}", fmt::underlying(ue_index));
   return ue_db.find(ue_index) != ue_db.end() ? ue_db[ue_index].get() : nullptr;
 }
 
-ue_context* ue_manager::add_ue(const ue_context_cfg& ue_cfg)
+ue_context* ue_manager::add_ue(cu_up_e1_index_t e1_index, const ue_context_cfg& ue_cfg)
 {
   if (ue_db.size() >= max_nof_ues) {
     logger.error("Can't add new UE. Max number of UEs reached.");
     return nullptr;
   }
+
+  // Find E1AP for this bearer context.
+  if (cu_up_e1_index_to_uint(e1_index) >= e1aps.size()) {
+    return nullptr;
+  }
+  std::reference_wrapper<e1ap_interface> e1ap = e1aps[cu_up_e1_index_to_uint(e1_index)];
 
   cu_up_ue_index_t new_idx = get_next_ue_index();
   if (new_idx == INVALID_CU_UP_UE_INDEX) {

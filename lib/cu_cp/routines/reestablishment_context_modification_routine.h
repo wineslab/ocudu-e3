@@ -5,22 +5,21 @@
 #pragma once
 
 #include "../cu_cp_impl_interface.h"
-#include "../du_processor/du_processor.h"
 #include "../up_resource_manager/up_resource_manager_impl.h"
 #include "ocudu/cu_cp/ue_task_scheduler.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp_bearer_context_update.h"
+#include "ocudu/f1ap/cu_cp/f1ap_cu.h"
 #include "ocudu/support/async/async_task.h"
 
-namespace ocudu {
-namespace ocucp {
+namespace ocudu::ocucp {
 
 /// \brief Handles the modification of an existing PDU session resources.
 /// TODO Add seqdiag
 class reestablishment_context_modification_routine
 {
 public:
-  reestablishment_context_modification_routine(ue_index_t                            ue_index_,
+  reestablishment_context_modification_routine(cu_cp_ue_index_t                      ue_index_,
                                                const ocudu::security::sec_as_config& security_cfg_,
                                                e1ap_bearer_context_manager&          e1ap_bearer_ctxt_mng_,
                                                f1ap_ue_context_manager&              f1ap_ue_ctxt_mng_,
@@ -48,7 +47,7 @@ private:
                                             up_resource_manager&                         up_resource_manager,
                                             bool                                         reestablish_pdcp);
 
-  ue_index_t                      ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                ue_index = cu_cp_ue_index_t::invalid;
   security::sec_as_config         security_cfg;
   e1ap_bearer_context_manager&    e1ap_bearer_ctxt_mng; // to trigger bearer context setup at CU-UP
   f1ap_ue_context_manager&        f1ap_ue_ctxt_mng;     // to trigger UE context modification at DU
@@ -65,12 +64,11 @@ private:
   rrc_reconfiguration_procedure_request    rrc_reconfig_args;
 
   // (sub-)routine results
-  cu_cp_pdu_session_resource_modify_response response_msg;                     // Final routine result.
-  f1ap_ue_context_modification_response      ue_context_modification_response; // to inform DU about the new DRBs
+  ngap_pdu_session_resource_modify_response response_msg;                     // Final routine result.
+  f1ap_ue_context_modification_response     ue_context_modification_response; // to inform DU about the new DRBs
   e1ap_bearer_context_modification_response
        bearer_context_modification_response; // to inform CU-UP about the new TEID for UL F1u traffic
   bool rrc_reconfig_result = false;          // the final UE reconfiguration
 };
 
-} // namespace ocucp
-} // namespace ocudu
+} // namespace ocudu::ocucp

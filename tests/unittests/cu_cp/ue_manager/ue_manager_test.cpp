@@ -16,7 +16,7 @@ using namespace ocucp;
 /// Test allocation of multiple UE indexes.
 TEST_F(ue_manager_test, when_multiple_ue_indexes_allocated_then_ue_indexes_valid)
 {
-  du_index_t du_index = du_index_t::min;
+  cu_cp_du_index_t du_index = cu_cp_du_index_t::min;
 
   // Reduce log level to avoid flooding the log.
   ue_mng_logger.set_level(ocudulog::basic_levels::warning);
@@ -24,7 +24,7 @@ TEST_F(ue_manager_test, when_multiple_ue_indexes_allocated_then_ue_indexes_valid
 
   for (unsigned it = 0; it < cu_cp_cfg.admission.max_nof_ues; it++) {
     // Check that the ue index is valid.
-    ASSERT_NE(ue_mng.add_ue(du_index), ue_index_t::invalid);
+    ASSERT_NE(ue_mng.add_ue(du_index), cu_cp_ue_index_t::invalid);
     ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   }
 }
@@ -32,7 +32,7 @@ TEST_F(ue_manager_test, when_multiple_ue_indexes_allocated_then_ue_indexes_valid
 /// Test allocation of unsupported number of UE indexes.
 TEST_F(ue_manager_test, when_more_than_max_ue_created_then_ue_is_not_servable)
 {
-  du_index_t du_index = du_index_t::min;
+  cu_cp_du_index_t du_index = cu_cp_du_index_t::min;
 
   // Reduce log level to avoid flooding the log.
   ue_mng_logger.set_level(ocudulog::basic_levels::warning);
@@ -40,8 +40,8 @@ TEST_F(ue_manager_test, when_more_than_max_ue_created_then_ue_is_not_servable)
 
   for (unsigned it = 0; it < cu_cp_cfg.admission.max_nof_ues; it++) {
     // Check that the ue index is valid
-    ue_index_t ue_index = ue_mng.add_ue(du_index);
-    ASSERT_NE(ue_index, ue_index_t::invalid);
+    cu_cp_ue_index_t ue_index = ue_mng.add_ue(du_index);
+    ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
     ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   }
 
@@ -50,18 +50,18 @@ TEST_F(ue_manager_test, when_more_than_max_ue_created_then_ue_is_not_servable)
   test_logger.set_level(ocudulog::basic_levels::debug);
 
   // Allocate additional ue index
-  ASSERT_NE(ue_mng.add_ue(du_index), ue_index_t::invalid);
+  ASSERT_NE(ue_mng.add_ue(du_index), cu_cp_ue_index_t::invalid);
   ASSERT_TRUE(ue_mng.ue_admission_limit_reached());
 }
 
 /// Test successful creation of a DU UE.
 TEST_F(ue_manager_test, when_valid_du_context_added_at_creation_then_ue_added)
 {
-  du_index_t             du_index    = du_index_t::min;
-  rnti_t                 rnti        = to_rnti(0x4601);
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
-  ue_index_t             ue_index    = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  rnti_t           rnti        = to_rnti(0x4601);
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
+  cu_cp_ue_index_t ue_index    = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -72,7 +72,7 @@ TEST_F(ue_manager_test, when_valid_du_context_added_at_creation_then_ue_added)
   ASSERT_NE(ue_mng.find_ue(ue->get_ue_index()), nullptr);
 
   // Check that the UE index is valid.
-  ASSERT_NE(ue->get_ue_index(), ue_index_t::invalid);
+  ASSERT_NE(ue->get_ue_index(), cu_cp_ue_index_t::invalid);
 
   // Check that the gNB-DU ID has been set.
   ASSERT_NE(ue->get_du_id(), gnb_du_id_t::invalid);
@@ -96,15 +96,15 @@ TEST_F(ue_manager_test, when_valid_du_context_added_at_creation_then_ue_added)
 /// Test successful creation of a DU UE.
 TEST_F(ue_manager_test, when_du_context_valid_then_ue_updated)
 {
-  du_index_t du_index = du_index_t::min;
+  cu_cp_du_index_t du_index = cu_cp_du_index_t::min;
 
-  ue_index_t ue_index = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
 
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
-  rnti_t                 rnti        = to_rnti(0x4601);
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
+  rnti_t          rnti        = to_rnti(0x4601);
+  du_cell_index_t pcell_index = MIN_DU_CELL_INDEX;
   ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
 
   auto* ue = ue_mng.find_ue(ue_index);
@@ -114,7 +114,7 @@ TEST_F(ue_manager_test, when_du_context_valid_then_ue_updated)
   ASSERT_NE(ue_mng.find_ue(ue->get_ue_index()), nullptr);
 
   // Check that the UE index is valid.
-  ASSERT_NE(ue->get_ue_index(), ue_index_t::invalid);
+  ASSERT_NE(ue->get_ue_index(), cu_cp_ue_index_t::invalid);
 
   // Check that the gNB-DU ID has been set.
   ASSERT_NE(ue->get_du_id(), gnb_du_id_t::invalid);
@@ -138,11 +138,11 @@ TEST_F(ue_manager_test, when_du_context_valid_then_ue_updated)
 /// Test finding invalid UE index.
 TEST_F(ue_manager_test, when_ue_index_invalid_then_ue_not_found)
 {
-  du_index_t             du_index    = du_index_t::min;
-  rnti_t                 rnti        = to_rnti(0x4601);
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
-  ue_index_t             ue_index    = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  rnti_t           rnti        = to_rnti(0x4601);
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
+  cu_cp_ue_index_t ue_index    = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -152,17 +152,17 @@ TEST_F(ue_manager_test, when_ue_index_invalid_then_ue_not_found)
   ASSERT_NE(ue, nullptr);
 
   // Check that ue with invalid UE index is not found.
-  ASSERT_EQ(ue_mng.find_ue(ue_index_t::invalid), nullptr);
+  ASSERT_EQ(ue_mng.find_ue(cu_cp_ue_index_t::invalid), nullptr);
 }
 
 /// Test duplicate UE creation.
 TEST_F(ue_manager_test, when_rnti_already_exits_then_ue_not_added)
 {
-  du_index_t             du_index    = du_index_t::min;
-  rnti_t                 rnti        = to_rnti(0x4601);
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
-  ue_index_t             ue_index    = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  rnti_t           rnti        = to_rnti(0x4601);
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
+  cu_cp_ue_index_t ue_index    = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -180,11 +180,11 @@ TEST_F(ue_manager_test, when_rnti_already_exits_then_ue_not_added)
 /// Test successful removal of a DU UE
 TEST_F(ue_manager_test, when_ue_exists_then_removal_successful)
 {
-  du_index_t             du_index    = du_index_t::min;
-  rnti_t                 rnti        = to_rnti(0x4601);
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
-  ue_index_t             ue_index    = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  rnti_t           rnti        = to_rnti(0x4601);
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
+  cu_cp_ue_index_t ue_index    = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -199,8 +199,8 @@ TEST_F(ue_manager_test, when_ue_exists_then_removal_successful)
 /// Test creation of multiple DU UEs.
 TEST_F(ue_manager_test, when_multiple_ues_added_then_ues_exist)
 {
-  du_index_t             du_index    = du_index_t::min;
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
 
   // Reduce log level to avoid flooding the log.
   ue_mng_logger.set_level(ocudulog::basic_levels::warning);
@@ -209,9 +209,9 @@ TEST_F(ue_manager_test, when_multiple_ues_added_then_ues_exist)
   for (unsigned it = to_value(rnti_t::MIN_CRNTI);
        it < unsigned(to_value(rnti_t::MIN_CRNTI) + cu_cp_cfg.admission.max_nof_ues);
        it++) {
-    rnti_t     rnti     = to_rnti(it);
-    ue_index_t ue_index = ue_mng.add_ue(du_index);
-    ASSERT_NE(ue_index, ue_index_t::invalid);
+    rnti_t           rnti     = to_rnti(it);
+    cu_cp_ue_index_t ue_index = ue_mng.add_ue(du_index);
+    ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
     ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
     ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
     ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -222,7 +222,7 @@ TEST_F(ue_manager_test, when_multiple_ues_added_then_ues_exist)
     ASSERT_NE(ue_mng.find_ue(ue->get_ue_index()), nullptr);
 
     // Check that the UE index is valid.
-    ASSERT_NE(ue->get_ue_index(), ue_index_t::invalid);
+    ASSERT_NE(ue->get_ue_index(), cu_cp_ue_index_t::invalid);
 
     // Check that the PCI has been set.
     ASSERT_EQ(ue->get_pci(), MIN_PCI);
@@ -247,8 +247,8 @@ TEST_F(ue_manager_test, when_multiple_ues_added_then_ues_exist)
 /// Test creation of an unservable UE once the admission limit is reached.
 TEST_F(ue_manager_test, when_more_than_max_ues_added_then_ue_created_but_not_servable)
 {
-  du_index_t             du_index    = du_index_t::min;
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
 
   // Reduce log level to avoid flooding the log.
   ue_mng_logger.set_level(ocudulog::basic_levels::warning);
@@ -257,9 +257,9 @@ TEST_F(ue_manager_test, when_more_than_max_ues_added_then_ue_created_but_not_ser
   for (unsigned it = to_value(rnti_t::MIN_CRNTI);
        it < unsigned(to_value(rnti_t::MIN_CRNTI) + cu_cp_cfg.admission.max_nof_ues);
        it++) {
-    rnti_t     rnti     = to_rnti(it);
-    ue_index_t ue_index = ue_mng.add_ue(du_index);
-    ASSERT_NE(ue_index, ue_index_t::invalid);
+    rnti_t           rnti     = to_rnti(it);
+    cu_cp_ue_index_t ue_index = ue_mng.add_ue(du_index);
+    ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
     ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
     ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
     ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -270,7 +270,7 @@ TEST_F(ue_manager_test, when_more_than_max_ues_added_then_ue_created_but_not_ser
     ASSERT_NE(ue_mng.find_ue(ue->get_ue_index()), nullptr);
 
     // Check that the UE index is valid.
-    ASSERT_NE(ue->get_ue_index(), ue_index_t::invalid);
+    ASSERT_NE(ue->get_ue_index(), cu_cp_ue_index_t::invalid);
 
     // Check that the PCI has been set.
     ASSERT_EQ(ue->get_pci(), MIN_PCI);
@@ -292,8 +292,8 @@ TEST_F(ue_manager_test, when_more_than_max_ues_added_then_ue_created_but_not_ser
   // Check that the maximum number of DU UEs has been reached.
   ASSERT_EQ(ue_mng.get_nof_du_ues(du_index), cu_cp_cfg.admission.max_nof_ues);
 
-  ue_index_t ue_index = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_TRUE(ue_mng.ue_admission_limit_reached());
 
   // Check that the UE context has been created even though the UE is not servable.
@@ -303,11 +303,11 @@ TEST_F(ue_manager_test, when_more_than_max_ues_added_then_ue_created_but_not_ser
 /// Test inactive and i-rnti handling.
 TEST_F(ue_manager_test, when_ue_is_set_inactive_then_i_rnti_returned)
 {
-  du_index_t             du_index    = du_index_t::min;
-  rnti_t                 rnti        = to_rnti(0x4601);
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
-  ue_index_t             ue_index    = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  rnti_t           rnti        = to_rnti(0x4601);
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
+  cu_cp_ue_index_t ue_index    = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -325,11 +325,11 @@ TEST_F(ue_manager_test, when_ue_is_set_inactive_then_i_rnti_returned)
 
 TEST_F(ue_manager_test, when_ue_is_set_inactive_then_its_found_by_i_rnti)
 {
-  du_index_t             du_index    = du_index_t::min;
-  rnti_t                 rnti        = to_rnti(0x4601);
-  ocucp::du_cell_index_t pcell_index = ocucp::du_cell_index_t::min;
-  ue_index_t             ue_index    = ue_mng.add_ue(du_index);
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_du_index_t du_index    = cu_cp_du_index_t::min;
+  rnti_t           rnti        = to_rnti(0x4601);
+  du_cell_index_t  pcell_index = MIN_DU_CELL_INDEX;
+  cu_cp_ue_index_t ue_index    = ue_mng.add_ue(du_index);
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.update_ue_context(ue_index, gnb_du_id_t::min, MIN_PCI, rnti, pcell_index));
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
@@ -344,8 +344,8 @@ TEST_F(ue_manager_test, when_ue_is_set_inactive_then_its_found_by_i_rnti)
   ASSERT_TRUE(i_rntis->full_i_rnti.value() < i_rntis->full_i_rnti.max());
 
   // Find by full-i-rnti.
-  ASSERT_NE(ue_mng.get_ue_index(i_rntis->full_i_rnti), ue_index_t::invalid);
+  ASSERT_NE(ue_mng.get_ue_index(i_rntis->full_i_rnti), cu_cp_ue_index_t::invalid);
 
   // Find by short-i-rnti.
-  ASSERT_NE(ue_mng.get_ue_index(i_rntis->short_i_rnti), ue_index_t::invalid);
+  ASSERT_NE(ue_mng.get_ue_index(i_rntis->short_i_rnti), cu_cp_ue_index_t::invalid);
 }

@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_configuration_manager.h"
+#include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/plmn_identity.h"
 
 using namespace ocudu;
@@ -135,7 +137,7 @@ du_configuration_manager::add_du_config(const du_setup_request& req)
   ctxt.rrc_version               = req.gnb_du_rrc_version;
   ctxt.served_cells.resize(req.gnb_du_served_cells_list.size());
   for (unsigned i = 0; i != ctxt.served_cells.size(); ++i) {
-    ctxt.served_cells[i] = create_du_cell_config(uint_to_du_cell_index(i), req.gnb_du_served_cells_list[i]);
+    ctxt.served_cells[i] = create_du_cell_config(to_du_cell_index(i), req.gnb_du_served_cells_list[i]);
   }
   return &ctxt;
 }
@@ -177,18 +179,17 @@ du_configuration_manager::handle_du_config_update(const du_configuration_context
   // > Add new cells.
   for (const auto& cell_to_add : req.served_cells_to_add) {
     // Allocate cell index.
-    du_cell_index_t cell_idx = du_cell_index_t::invalid;
+    du_cell_index_t cell_idx = INVALID_DU_CELL_INDEX;
     for (unsigned i = 0; i != MAX_NOF_DU_CELLS; ++i) {
-      if (std::none_of(
-              du_context.served_cells.begin(), du_context.served_cells.end(), [i](const du_cell_configuration& item) {
-                return item.cell_index == uint_to_du_cell_index(i);
-              })) {
-        cell_idx = uint_to_du_cell_index(i);
+      if (std::none_of(du_context.served_cells.begin(),
+                       du_context.served_cells.end(),
+                       [i](const du_cell_configuration& item) { return item.cell_index == to_du_cell_index(i); })) {
+        cell_idx = to_du_cell_index(i);
         break;
       }
     }
     // Note: Existence of a free cell index should be guaranteed during validation.
-    ocudu_assert(cell_idx != du_cell_index_t::invalid, "Failed to allocate cell index");
+    ocudu_assert(cell_idx != INVALID_DU_CELL_INDEX, "Failed to allocate cell index");
 
     du_context.served_cells.push_back(create_du_cell_config(cell_idx, cell_to_add));
   }

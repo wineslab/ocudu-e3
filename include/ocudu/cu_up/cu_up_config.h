@@ -12,6 +12,7 @@
 #include "ocudu/f1u/cu_up/f1u_gateway.h"
 #include "ocudu/gtpu/gtpu_config.h"
 #include "ocudu/gtpu/gtpu_gateway.h"
+#include "ocudu/gtpu/gtpu_teid_pool.h"
 #include "ocudu/pcap/dlt_pcap.h"
 #include "ocudu/ran/gnb_cu_up_id.h"
 #include "ocudu/support/timers.h"
@@ -32,13 +33,22 @@ struct network_interface_config {
 };
 
 struct n3_interface_config {
-  int                       upf_port = GTPU_PORT;      // TS 29.281 Sec. 4.4.2.3 Encapsulated T-PDUs
-  std::chrono::milliseconds gtpu_reordering_timer;     // N3 reordering timer
-  std::chrono::milliseconds gtpu_rate_limiting_period; // N3 token bucket rate limiting period.
-  bool                      gtpu_ignore_ue_ambr;       // Ignore DL UE-AMBR.
-  uint32_t                  gtpu_queue_size;           // GTP-U queue size in PDUs.
-  uint32_t                  gtpu_batch_size;           // Maximum number of GTP-U PDUs processed in a batch.
-  bool                      warn_on_drop;
+  /// TS 29.281 Sec. 4.4.2.3 Encapsulated T-PDUs.
+  int upf_port = GTPU_PORT;
+  /// N3 reordering timer.
+  std::chrono::milliseconds gtpu_reordering_timer;
+  /// N3 token bucket rate limiting period.
+  std::chrono::milliseconds gtpu_rate_limiting_period;
+  /// Error indication suppression time for released TEIDs.
+  std::chrono::milliseconds gtpu_teid_release_linger_time;
+  /// Ignore DL UE-AMBR.
+  bool gtpu_ignore_ue_ambr;
+  /// GTP-U queue size in PDUs.
+  uint32_t gtpu_queue_size;
+  /// Maximum number of GTP-U PDUs processed in a batch.
+  uint32_t gtpu_batch_size;
+  /// Warn whenever a PDU is dropped.
+  bool warn_on_drop;
 };
 
 struct cu_up_test_mode_config {
@@ -72,8 +82,8 @@ struct cu_up_config {
   std::string cu_up_name = "ocuup_01";
   /// E1AP configuration.
   e1ap_configuration e1ap;
-  /// Full PLMN as string (without possible filler digit) e.g. "00101".
-  std::string plmn = "00101";
+  /// List of supported PLMNs (1..12). Must be populated before use.
+  std::vector<std::string> plmns;
   /// CU-UP statistics report period in seconds.
   std::chrono::seconds statistics_report_period;
 };
@@ -82,6 +92,8 @@ struct cu_up_config {
 struct cu_up_dependencies {
   /// Executor mapper.
   cu_up_executor_mapper* exec_mapper = nullptr;
+  /// F1-U TEID pool.
+  gtpu_teid_pool* f1u_teid_allocator = nullptr;
   /// F1-U gateway.
   f1u_cu_up_gateway* f1u_gateway = nullptr;
   /// Time manager.
@@ -91,7 +103,7 @@ struct cu_up_dependencies {
   /// PDCP metrics notifier.
   pdcp_metrics_notifier* pdcp_metric_notifier = nullptr;
   /// E1AP connection client.
-  e1_connection_client* e1_conn_client = nullptr;
+  std::vector<e1_connection_client*> e1_conn_clients;
   /// NG-U gateways
   std::vector<gtpu_gateway*> ngu_gws;
   /// Optional notifier invoked once after a successful E1 Setup.

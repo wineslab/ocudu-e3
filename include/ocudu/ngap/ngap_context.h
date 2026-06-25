@@ -4,23 +4,23 @@
 
 #pragma once
 
-#include "ocudu/cu_cp/cu_cp_configuration.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/gnb_id.h"
 #include "ocudu/ran/guami.h"
 #include "ocudu/ran/plmn_identity.h"
+#include "ocudu/ran/supported_tracking_area.h"
 #include <chrono>
 #include <string>
+#include <vector>
 
-namespace ocudu {
-
-namespace ocucp {
+namespace ocudu::ocucp {
 
 /// \brief NGAP context
 struct ngap_context_t {
   gnb_id_t                             gnb_id = {0, 22};
   std::string                          ran_node_name;
   std::string                          amf_name;
-  amf_index_t                          amf_index;
+  cu_cp_amf_index_t                    amf_index;
   std::vector<supported_tracking_area> supported_tas;
   std::vector<guami_t>                 served_guami_list;
   uint16_t                             default_paging_drx = 256; // default paging drx
@@ -41,6 +41,4 @@ struct ngap_context_t {
   }
 };
 
-} // namespace ocucp
-
-} // namespace ocudu
+} // namespace ocudu::ocucp

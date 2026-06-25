@@ -20,7 +20,7 @@ struct cu_up_manager_impl_config {
   gnb_cu_up_id_t                        cu_up_id;
   std::string                           cu_up_name;
   uint32_t                              max_nof_ues;
-  std::string                           plmn;
+  std::vector<std::string>              plmns;
   std::map<five_qi_t, cu_up_qos_config> qos;
   n3_interface_config                   n3_cfg;
   cu_up_test_mode_config                test_mode_cfg;
@@ -28,17 +28,17 @@ struct cu_up_manager_impl_config {
 
 /// CU-UP manager implementation dependencies.
 struct cu_up_manager_impl_dependencies {
-  std::atomic<bool>&         stop_command;
-  e1ap_interface&            e1ap;
-  gtpu_demux&                ngu_demux;
-  ngu_session_manager&       ngu_session_mngr;
-  gtpu_teid_pool&            n3_teid_allocator;
-  gtpu_teid_pool&            f1u_teid_allocator;
-  cu_up_executor_mapper&     exec_mapper;
-  f1u_cu_up_gateway&         f1u_gateway;
-  timer_manager&             timers;
-  dlt_pcap&                  gtpu_pcap;
-  fifo_async_task_scheduler& cu_up_task_scheduler;
+  std::atomic<bool>&                                  stop_command;
+  std::vector<std::reference_wrapper<e1ap_interface>> e1aps;
+  gtpu_demux&                                         ngu_demux;
+  ngu_session_manager&                                ngu_session_mngr;
+  gtpu_teid_pool&                                     n3_teid_allocator;
+  gtpu_teid_pool&                                     f1u_teid_allocator;
+  cu_up_executor_mapper&                              exec_mapper;
+  f1u_cu_up_gateway&                                  f1u_gateway;
+  timer_manager&                                      timers;
+  dlt_pcap&                                           gtpu_pcap;
+  fifo_async_task_scheduler&                          cu_up_task_scheduler;
 };
 
 class cu_up_manager_impl final : public cu_up_manager
@@ -55,7 +55,7 @@ public:
 
   async_task<void> handle_bearer_context_release_command(const e1ap_bearer_context_release_command& msg) override;
 
-  void handle_e1ap_connection_drop() override;
+  void handle_e1ap_connection_drop(cu_up_e1_index_t e1_index) override;
 
   async_task<void> handle_e1_reset(const e1ap_reset& msg) override;
 
@@ -63,15 +63,11 @@ public:
 
   void schedule_ue_async_task(cu_up_ue_index_t ue_index, async_task<void> task) override;
 
-  // cu_up_e1ap_connection_notifier
-  void on_e1ap_connection_establish() override { e1ap_connected = true; }
-  void on_e1ap_connection_drop() override { e1ap_connected = false; }
-  bool e1ap_is_connected() override { return e1ap_connected; }
-
   size_t get_nof_ues() override { return ue_mng->get_nof_ues(); }
 
   // PDCP event handlers.
   void handle_pdcp_protocol_failure(cu_up_ue_index_t ue_index) override;
+  void handle_pdcp_integrity_failure(cu_up_ue_index_t ue_index) override;
   void handle_pdcp_max_count_reached(cu_up_ue_index_t ue_index) override;
   void handle_pdcp_resume_required(cu_up_ue_index_t ue_index) override;
 
@@ -87,25 +83,24 @@ private:
   async_task<void> disable_test_mode();
   async_task<void> reestablish_test_mode();
 
-  gnb_cu_up_id_t cu_up_id;
-  std::string    cu_up_name;
-  std::string    plmn;
+  gnb_cu_up_id_t           cu_up_id;
+  std::string              cu_up_name;
+  std::vector<std::string> plmns;
 
-  std::atomic<bool>&                    stop_command;
-  e1ap_interface&                       e1ap;
-  std::map<five_qi_t, cu_up_qos_config> qos;
-  const network_interface_config        net_cfg;
-  const n3_interface_config             n3_cfg;
-  const cu_up_test_mode_config          test_mode_cfg;
-  gtpu_demux&                           ngu_demux;
-  cu_up_executor_mapper&                exec_mapper;
-  timer_manager&                        timers;
+  std::atomic<bool>&                                  stop_command;
+  std::vector<std::reference_wrapper<e1ap_interface>> e1aps;
+  std::map<five_qi_t, cu_up_qos_config>               qos;
+  const network_interface_config                      net_cfg;
+  const n3_interface_config                           n3_cfg;
+  const cu_up_test_mode_config                        test_mode_cfg;
+  gtpu_demux&                                         ngu_demux;
+  cu_up_executor_mapper&                              exec_mapper;
+  timer_manager&                                      timers;
 
   // Logger
   ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("CU-UP", false);
 
   // Components
-  std::atomic<bool>           e1ap_connected = {false};
   std::unique_ptr<ue_manager> ue_mng;
 
   unique_timer statistics_report_timer;

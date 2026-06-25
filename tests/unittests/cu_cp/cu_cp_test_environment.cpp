@@ -77,11 +77,14 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   for (const auto& [amf_index, amf_config] : amf_configs) {
     cu_cp_cfg.ngap.ngaps.push_back(cu_cp_configuration::ngap_config{&*amf_config.amf_stub, amf_config.supported_tas});
   }
-  // Fill XNAP config.
+  // Fill XNAP config. Each peer test stub becomes its own XnAP gateway; record the peer-gateway mapping.
   for (const auto& [_, peer] : xnc_peers) {
+    const auto peer_idx = uint_to_xnc_peer_index(cu_cp_cfg.xnap.xnaps.size());
+    const auto gw_idx   = uint_to_xnc_gateway_index(cu_cp_cfg.xnap.xnc_gws.size());
+    cu_cp_cfg.xnap.xnc_gws.push_back(peer.get());
+    cu_cp_cfg.xnap.peer_to_gateway[peer_idx] = gw_idx;
     cu_cp_cfg.xnap.xnaps.push_back(
-        cu_cp_configuration::xnap_config{.peer_addr = transport_layer_address::create_from_string("127.0.0.1")});
-    cu_cp_cfg.xnap.xnc_gw = peer.get();
+        cu_cp_configuration::xnap_config{.peer_addrs = {transport_layer_address::create_from_string("127.0.0.1")}});
     next_xnc_peer_idx++;
   }
 
@@ -148,6 +151,8 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
         cell_cfg_3.serving_cell_cfg.gnb_id_bit_length = gnb_id2.bit_length;
         cell_cfg_3.serving_cell_cfg.nci               = nci3;
         cell_cfg_3.serving_cell_cfg.pci               = 3;
+        cell_cfg_3.serving_cell_cfg.plmn              = plmn_identity::test_value();
+        cell_cfg_3.serving_cell_cfg.tac               = 7;
         cell_cfg_3.serving_cell_cfg.ssb_arfcn         = 632628;
         cell_cfg_3.serving_cell_cfg.band              = nr_band::n78;
         cell_cfg_3.serving_cell_cfg.ssb_scs           = subcarrier_spacing::kHz15;
@@ -165,6 +170,8 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
           cell_cfg_4.serving_cell_cfg.gnb_id_bit_length = gnb_id3.bit_length;
           cell_cfg_4.serving_cell_cfg.nci               = nci4;
           cell_cfg_4.serving_cell_cfg.pci               = 4;
+          cell_cfg_4.serving_cell_cfg.plmn              = plmn_identity::test_value();
+          cell_cfg_4.serving_cell_cfg.tac               = 7;
           cell_cfg_4.serving_cell_cfg.ssb_arfcn         = 621300;
           cell_cfg_4.serving_cell_cfg.band              = nr_band::n78;
           cell_cfg_4.serving_cell_cfg.ssb_scs           = subcarrier_spacing::kHz30;
@@ -358,8 +365,8 @@ void cu_cp_test_environment::enqueue_procedure_outcome_pdus_and_start_cu_cp()
   }
 
   // Attach XN-C handler before starting CU-CP (matching real app startup order).
-  if (not xnc_peers.empty()) {
-    cu_cp_cfg.xnap.xnc_gw->attach_cu_cp(get_cu_cp().get_xnc_handler());
+  for (auto* gateway : cu_cp_cfg.xnap.xnc_gws) {
+    gateway->attach_cu_cp(get_cu_cp().get_xnc_handler());
   }
 
   // Start CU-CP.
@@ -681,7 +688,7 @@ bool cu_cp_test_environment::setup_ue_security_and_ue_capabilies(
 
   // Wait for Initial Context Setup Response.
   result = this->wait_for_ngap_tx_pdu(ngap_pdu);
-  report_fatal_error_if_not(result, "Failed to receive Initial Context Setup Response");
+  report_fatal_error_if_not(result, "Failed to receive first NGAP PDU after ICS");
   report_fatal_error_if_not(test_helpers::is_valid_initial_context_setup_response(ngap_pdu), "Invalid init ctxt setup");
 
   // Wait for UE Radio Capability Info Indication.
@@ -690,9 +697,30 @@ bool cu_cp_test_environment::setup_ue_security_and_ue_capabilies(
   report_fatal_error_if_not(test_helpers::is_valid_ue_radio_capability_info_indication(ngap_pdu),
                             "Invalid UE Radio Capability Info Indication");
 
+  // Do not wait for Location Report, as tests may check its contents.
   return true;
 }
 
+std::optional<ngap_message> cu_cp_test_environment::get_location_report_if_required(
+    std::optional<location_report_request> location_reporting_request)
+{
+  ngap_message ngap_pdu;
+  // Wait for location report, if required.
+  if (location_reporting_request.has_value()) {
+    using event_type = location_report_request::event_type;
+    if (location_reporting_request->location_reporting_type == event_type::direct ||
+        location_reporting_request->location_reporting_type == event_type::change_of_serve_cell ||
+        location_reporting_request->location_reporting_type ==
+            event_type::change_of_serving_cell_and_ue_presence_in_the_area_of_interest) {
+      bool result = this->wait_for_ngap_tx_pdu(ngap_pdu);
+      report_fatal_error_if_not(result, "Failed to transmit Location Report");
+      report_fatal_error_if_not(test_helpers::is_valid_location_report(ngap_pdu), "Invalid Location Report");
+
+      return ngap_pdu;
+    }
+  }
+  return std::nullopt;
+}
 bool cu_cp_test_environment::finish_ue_registration(unsigned du_idx, unsigned cu_up_idx, gnb_du_ue_f1ap_id_t du_ue_id)
 {
   ngap_message ngap_pdu;
@@ -1030,6 +1058,9 @@ bool cu_cp_test_environment::attach_ue(
                                               std::move(location_reporting_request))) {
     return false;
   }
+
+  get_location_report_if_required(location_reporting_request);
+
   if (not finish_ue_registration(du_idx, cu_up_idx, du_ue_id)) {
     return false;
   }

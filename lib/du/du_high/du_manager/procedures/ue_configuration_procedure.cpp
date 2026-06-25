@@ -278,8 +278,10 @@ async_task<mac_ue_reconfiguration_response> ue_configuration_procedure::update_m
   }
 
   // Create Scheduler UE Reconfig Request that will be embedded in the MAC configuration request.
-  mac_ue_reconf_req.sched_cfg               = create_scheduler_ue_config_request(*ue, *ue->resources);
-  mac_ue_reconf_req.sched_cfg.reestablished = ue->reestablished_cfg_pending != nullptr;
+  mac_ue_reconf_req.sched_cfg       = create_scheduler_ue_config_request(*ue, *ue->resources);
+  mac_ue_reconf_req.sched_cfg.cause = ue->reestablished_cfg_pending != nullptr
+                                          ? sched_ue_config_request::causes::rrc_reconf_after_reest
+                                          : sched_ue_config_request::causes::other_rrc_proc;
 
   return du_params.mac.mgr.get_ue_configurator().handle_ue_reconfiguration_request(mac_ue_reconf_req);
 }
@@ -479,7 +481,8 @@ bool ue_configuration_procedure::changed_detected() const
 {
   return !request.drbs_to_setup.empty() || !request.drbs_to_mod.empty() || !request.srbs_to_setup.empty() ||
          !request.drbs_to_rem.empty() || !request.scells_to_setup.empty() || !request.scells_to_rem.empty() ||
-         !request.ho_prep_info.empty() || request.full_config_required || request.cho_trigger.has_value();
+         !request.ho_prep_info.empty() || request.full_config_required || request.cho_trigger.has_value() ||
+         !request.ue_cap_rat_list.empty() || !request.meas_cfg.empty();
 }
 
 bool ue_configuration_procedure::handle_conditional_mobility_request()

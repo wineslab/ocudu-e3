@@ -13,6 +13,7 @@
 #include "ocudu/ran/cause/f1ap_cause_converters.h"
 #include "ocudu/ran/positioning/positioning_information_exchange.h"
 #include "ocudu/ran/srs/srs_configuration.h"
+#include "ocudu/support/enum_utils.h"
 #include <variant>
 
 using namespace ocudu;
@@ -253,8 +254,7 @@ static void fill_asn1_positioning_information_request(asn1::f1ap::positioning_in
         asn1::string_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_subcarrier_spacing,
                              to_string(ssb_info_item.ssb_cfg.ssb_subcarrier_spacing));
         asn1_ssb_info_item.ssb_cfg.ssb_tx_pwr = ssb_info_item.ssb_cfg.ssb_tx_pwr;
-        asn1::number_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_periodicity,
-                             ssb_periodicity_to_value(ssb_info_item.ssb_cfg.ssb_period));
+        asn1::number_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_periodicity, to_value(ssb_info_item.ssb_cfg.ssb_period));
         asn1_ssb_info_item.ssb_cfg.ssb_half_frame_offset = ssb_info_item.ssb_cfg.ssb_half_frame_offset;
         asn1_ssb_info_item.ssb_cfg.ssb_sfn_offset        = ssb_info_item.ssb_cfg.ssb_sfn_offset;
         if (ssb_info_item.ssb_cfg.ssb_burst_position.has_value()) {
@@ -463,7 +463,7 @@ fill_positioning_information_response(const asn1::f1ap::positioning_info_resp_s&
             srs_config::srs_pos_resource::srs_spatial_relation_pos::ssb ssb;
             ssb.pci_nr = asn1_pos_srs_res.spatial_relation_pos.ssb_pos().pci_nr;
             if (asn1_pos_srs_res.spatial_relation_pos.ssb_pos().ssb_idx_present) {
-              ssb.ssb_idx = ssb_id_t(asn1_pos_srs_res.spatial_relation_pos.ssb_pos().ssb_idx);
+              ssb.ssb_idx = asn1_pos_srs_res.spatial_relation_pos.ssb_pos().ssb_idx;
             }
             pos_srs_res.spatial_relation_info->reference_signal = ssb;
           } else {

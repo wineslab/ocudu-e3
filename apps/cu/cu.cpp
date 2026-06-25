@@ -38,6 +38,7 @@
 #include "ocudu/gateways/udp_network_gateway.h"
 #include "ocudu/gtpu/gtpu_demux_factory.h"
 #include "ocudu/gtpu/gtpu_gateway.h"
+#include "ocudu/gtpu/gtpu_teid_pool_factory.h"
 #include "ocudu/support/backtrace.h"
 #include "ocudu/support/config_parsers.h"
 #include "ocudu/support/cpu_features.h"
@@ -53,6 +54,7 @@
 #include "ocudu/support/versioning/build_info.h"
 #include "ocudu/support/versioning/version.h"
 #include "ocudu/xnap/gateways/xnc_network_gateway_factory.h"
+#include <algorithm>
 #include <atomic>
 #include <thread>
 
@@ -178,6 +180,18 @@ static void autoderive_cu_up_parameters_after_parsing(cu_appconfig&            c
     f1u_socket_appconfig sock_cfg;
     cu_config.f1u_cfg.f1u_socket_cfg.push_back(sock_cfg);
   }
+  // If no PLMN list is configured, derive it from the CU-CP supported TAs.
+  if (o_cu_up_cfg.cu_up_cfg.plmn_list.empty()) {
+    for (const auto& ta : cu_cp_cfg.amf_config.amf.supported_tas) {
+      for (const auto& plmn_item : ta.plmn_list) {
+        if (std::find(o_cu_up_cfg.cu_up_cfg.plmn_list.begin(),
+                      o_cu_up_cfg.cu_up_cfg.plmn_list.end(),
+                      plmn_item.plmn_id) == o_cu_up_cfg.cu_up_cfg.plmn_list.end()) {
+          o_cu_up_cfg.cu_up_cfg.plmn_list.push_back(plmn_item.plmn_id);
+        }
+      }
+    }
+  }
 }
 
 int main(int argc, char** argv)
@@ -262,9 +276,9 @@ int main(int argc, char** argv)
     fill_cu_appconfig_in_yaml_schema(node, cu_cfg);
     o_cu_cp_app_unit->dump_config(node);
     o_cu_up_app_unit->dump_config(node);
-    config_logger.debug("Input configuration (all values): \n{}", YAML::Dump(node));
+    config_logger.debug("CU input configuration (all values): \n{}", YAML::Dump(node));
   } else {
-    config_logger.info("Input configuration (only non-default values): \n{}", app.config_to_str(false, false));
+    config_logger.info("CU input configuration (only non-default values): \n{}", app.config_to_str(false, false));
   }
 
   app_services::application_tracer app_tracer;
@@ -340,19 +354,15 @@ int main(int argc, char** argv)
       o_cu_up_app_unit->get_o_cu_up_unit_config(), workers.get_cu_up_pcap_executors(), cleanup_signal_dispatcher);
   auto on_pcap_close_init = make_scope_exit([&cu_logger]() { cu_logger.info("Closing PCAP files..."); });
 
-  // Create XN-C GW (TODO cleanup port and PPID args with factory)
-  cu_cp_unit_config                              cp_unit_cfg = o_cu_cp_app_unit->get_o_cu_cp_unit_config().cucp_cfg;
-  std::unique_ptr<ocucp::xnc_connection_gateway> xnc_gw;
-  if (!cp_unit_cfg.xnap_config.connections.empty()) {
+  // Create XN-C GWs. (TODO cleanup port and PPID args with factory)
+  cu_cp_unit_config cp_unit_cfg = o_cu_cp_app_unit->get_o_cu_cp_unit_config().cucp_cfg;
+  std::vector<std::unique_ptr<ocucp::xnc_connection_gateway>> xnc_gws;
+  for (const auto& gw_cfg : cp_unit_cfg.xnap_config.gateways) {
     sctp_network_gateway_config xnc_sctp_cfg = {};
     xnc_sctp_cfg.if_name                     = "XN-C";
     xnc_sctp_cfg.non_blocking_mode           = true;
-    for (const auto& xnap_cfg : cp_unit_cfg.xnap_config.connections) {
-      xnc_sctp_cfg.bind_addresses.insert(
-          xnc_sctp_cfg.bind_addresses.end(), xnap_cfg.bind_addrs.begin(), xnap_cfg.bind_addrs.end());
-    }
-
-    fill_sctp_network_gateway_config_socket_params(xnc_sctp_cfg, cp_unit_cfg.xnap_config.sctp);
+    xnc_sctp_cfg.bind_addresses              = gw_cfg.bind_addrs;
+    fill_sctp_network_gateway_config_socket_params(xnc_sctp_cfg, gw_cfg.sctp);
     xnc_sctp_cfg.bind_port = XNAP_PORT;
     xnc_sctp_cfg.ppid      = XNAP_PPID;
     xnc_sctp_gateway_config xnc_server_cfg({xnc_sctp_cfg,
@@ -361,7 +371,7 @@ int main(int argc, char** argv)
                                             workers.get_cu_cp_executor_mapper().ctrl_executor(),
                                             *cu_cp_dlt_pcaps.xnap});
 
-    xnc_gw = create_xnc_connection_gateway(xnc_server_cfg);
+    xnc_gws.push_back(create_xnc_connection_gateway(xnc_server_cfg));
   }
 
   // Create F1-C GW (TODO cleanup port and PPID args with factory)
@@ -379,10 +389,19 @@ int main(int argc, char** argv)
   std::unique_ptr<ocucp::f1c_connection_server> cu_f1c_gw = ocudu::create_f1c_gateway_server(f1c_server_cfg);
 
   // Create F1-U GW.
+
+  // Create F1-U TEID allocator (CU-UP)
+  gtpu_allocator_creation_request cu_f1u_alloc_msg = {
+      .max_nof_teids = o_cu_up_app_unit->get_o_cu_up_unit_config().cu_up_cfg.max_nof_ues * MAX_NOF_PDU_SESSIONS,
+      .teid_release_linger_time = GTPU_DEFAULT_TEID_RELEASE_LINGER_TIME,
+      .timers                   = *cu_timers};
+  std::unique_ptr<gtpu_teid_pool> cu_f1u_teid_allocator = create_gtpu_allocator(cu_f1u_alloc_msg);
+
   // > Create GTP-U Demux.
   gtpu_demux_creation_request cu_f1u_gtpu_msg   = {};
   cu_f1u_gtpu_msg.cfg.name                      = "CU-NR-U-DEMUX";
   cu_f1u_gtpu_msg.cfg.warn_on_drop              = true;
+  cu_f1u_gtpu_msg.teid_linger_checker           = cu_f1u_teid_allocator.get();
   cu_f1u_gtpu_msg.gtpu_pcap                     = cu_up_dlt_pcaps.f1u.get();
   std::unique_ptr<gtpu_demux> cu_f1u_gtpu_demux = create_gtpu_demux(cu_f1u_gtpu_msg);
   // > Create UDP gateway(s).
@@ -440,11 +459,13 @@ int main(int argc, char** argv)
 
   // Create O-CU-CP dependencies.
   o_cu_cp_unit_dependencies o_cucp_deps;
-  o_cucp_deps.executor_mapper        = &workers.get_cu_cp_executor_mapper();
-  o_cucp_deps.timers                 = cu_timers;
-  o_cucp_deps.ngap_pcap              = cu_cp_dlt_pcaps.ngap.get();
-  o_cucp_deps.broker                 = epoll_broker.get();
-  o_cucp_deps.xnc_gw                 = xnc_gw.get();
+  o_cucp_deps.executor_mapper = &workers.get_cu_cp_executor_mapper();
+  o_cucp_deps.timers          = cu_timers;
+  o_cucp_deps.ngap_pcap       = cu_cp_dlt_pcaps.ngap.get();
+  o_cucp_deps.broker          = epoll_broker.get();
+  for (auto& gw : xnc_gws) {
+    o_cucp_deps.xnc_gws.push_back(gw.get());
+  }
   o_cucp_deps.e2_gw                  = e2_gw_cu_cp.get();
   o_cucp_deps.metrics_notifier       = &metrics_notifier_forwarder;
   o_cucp_deps.remote_metrics_gateway = remote_server_gateway;
@@ -458,8 +479,9 @@ int main(int argc, char** argv)
 
   // Create O-CU-UP dependencies.
   o_cu_up_unit_dependencies o_cuup_unit_deps;
-  o_cuup_unit_deps.workers                = &workers;
-  o_cuup_unit_deps.e1ap_conn_client       = e1_gw.get();
+  o_cuup_unit_deps.workers = &workers;
+  o_cuup_unit_deps.e1ap_conn_client.push_back(e1_gw.get());
+  o_cuup_unit_deps.f1u_teid_allocator     = cu_f1u_teid_allocator.get();
   o_cuup_unit_deps.f1u_gateway            = cu_f1u_conn.get();
   o_cuup_unit_deps.gtpu_pcap              = cu_up_dlt_pcaps.n3.get();
   o_cuup_unit_deps.timers                 = cu_timers;
@@ -499,9 +521,9 @@ int main(int argc, char** argv)
   // Connect E1AP to O-CU-CP.
   e1_gw->attach_cu_cp(o_cucp_obj.get_cu_cp().get_e1_handler());
 
-  if (xnc_gw != nullptr) {
-    // Connect XN-C to O-CU-CP and start listening for new XN-C connection requests.
-    xnc_gw->attach_cu_cp(o_cucp_obj.get_cu_cp().get_xnc_handler());
+  // Connect each XN-C gateway to O-CU-CP and start listening for new XN-C connection requests.
+  for (auto& gw : xnc_gws) {
+    gw->attach_cu_cp(o_cucp_obj.get_cu_cp().get_xnc_handler());
   }
 
   // Start O-CU-CP.
@@ -529,8 +551,11 @@ int main(int argc, char** argv)
   metrics_mngr.start();
 
   {
-    app_services::application_message_banners app_banner(
-        app_name, cu_cfg.log_cfg.filename == "stdout" ? std::string_view() : cu_cfg.log_cfg.filename);
+    app_services::application_message_banners app_banner(app_name,
+                                                         cu_cfg.log_cfg.filename == "stdout" ? std::string_view()
+                                                                                             : cu_cfg.log_cfg.filename,
+                                                         ocudulog::fetch_basic_logger("CU"),
+                                                         cu_cfg.log_cfg.all_level);
 
     auto exec_metrics_session = exec_metrics_service.service
                                     ? exec_metrics_service.service->create_session(workers.get_metrics_executor())

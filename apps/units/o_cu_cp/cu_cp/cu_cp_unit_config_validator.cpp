@@ -4,8 +4,8 @@
 
 #include "cu_cp_unit_config_validator.h"
 #include "ocudu/adt/span.h"
-#include "ocudu/pdcp/pdcp_t_reordering.h"
 #include "ocudu/ran/nr_cgi.h"
+#include "ocudu/ran/pdcp/pdcp_t_reordering.h"
 #include "ocudu/rlc/rlc_config.h"
 #include <map>
 #include <set>
@@ -207,9 +207,9 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
 
     // Check if cell is an external managed cell.
     if (nci.gnb_id(gnb_id.bit_length) != gnb_id) {
-      if (!cell.gnb_id_bit_length.has_value() || !cell.pci.has_value() || !cell.band.has_value() ||
-          !cell.ssb_arfcn.has_value() || !cell.ssb_scs.has_value() || !cell.ssb_period.has_value() ||
-          !cell.ssb_offset.has_value() || !cell.ssb_duration.has_value()) {
+      if (!cell.gnb_id_bit_length.has_value() || !cell.pci.has_value() || !cell.plmn_id.has_value() ||
+          !cell.tac.has_value() || !cell.band.has_value() || !cell.ssb_arfcn.has_value() || !cell.ssb_scs.has_value() ||
+          !cell.ssb_period.has_value() || !cell.ssb_offset.has_value() || !cell.ssb_duration.has_value()) {
         // Collect internal and external cells to help the user diagnose misconfiguration.
         std::vector<std::string> internal_cells;
         std::vector<std::string> external_cells;
@@ -221,11 +221,21 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
             external_cells.push_back(fmt::format("{:#x}", c.nr_cell_id));
           }
         }
+        std::string valid_nci_str;
+        if (!internal_cells.empty()) {
+          valid_nci_str = fmt::format("{}", fmt::join(internal_cells, ", "));
+        } else {
+          uint64_t nci_base = static_cast<uint64_t>(gnb_id.id) << (36U - gnb_id.bit_length);
+          valid_nci_str =
+              fmt::format("none configured yet, possible nr_cell_ids: {:#x}, {:#x}", nci_base, nci_base | 1U);
+        }
         fmt::print("cell={:#x} is detected as external because its gnb_id part of nr_cell_id differs from this "
                    "CU-CP's gnb_id={:#x}, but some parameters required for external cells are missing.\n"
                    "If this cell is correctly assigned to a different CU-CP - fix the missing parameters:\n"
                    "  - gnb_id_bit_length: {}\n"
                    "  - pci: {}\n"
+                   "  - plmn: {}\n"
+                   "  - tac: {}\n"
                    "  - band: {}\n"
                    "  - ssb_arfcn: {}\n"
                    "  - ssb_scs: {}\n"
@@ -240,6 +250,8 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                    gnb_id.id,
                    cell.gnb_id_bit_length.has_value() ? fmt::format("{}", cell.gnb_id_bit_length.value()) : "[MISSING]",
                    cell.pci.has_value() ? fmt::format("{}", cell.pci.value()) : "[MISSING]",
+                   cell.plmn_id.has_value() ? fmt::format("{}", cell.plmn_id.value()) : "[MISSING]",
+                   cell.tac.has_value() ? fmt::format("{}", cell.tac.value()) : "[MISSING]",
                    cell.band.has_value() ? fmt::format("n{}", static_cast<unsigned>(cell.band.value())) : "[MISSING]",
                    cell.ssb_arfcn.has_value() ? fmt::format("{}", cell.ssb_arfcn.value()) : "[MISSING]",
                    cell.ssb_scs.has_value() ? fmt::format("{}", cell.ssb_scs.value()) : "[MISSING]",
@@ -248,7 +260,7 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                    cell.ssb_duration.has_value() ? fmt::format("{}", cell.ssb_duration.value()) : "[MISSING]",
                    gnb_id.id,
                    gnb_id.bit_length,
-                   fmt::join(internal_cells, ", "),
+                   valid_nci_str,
                    fmt::join(external_cells, ", "));
         return false;
       }
@@ -270,6 +282,8 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                    "CU-CP's gnb_id={:#x}, but some parameters that are only valid for external cells are configured.\n"
                    "If this cell is correctly assigned to this CU-CP - remove the following parameters:\n"
                    "  - pci: {}\n"
+                   "  - plmn_id: {}\n"
+                   "  - tac: {}\n"
                    "  - band: {}\n"
                    "  - ssb_arfcn: {}\n"
                    "  - ssb_scs: {}\n"
@@ -283,6 +297,8 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                    cell.nr_cell_id,
                    gnb_id.id,
                    cell.pci.has_value() ? fmt::format("{} [REMOVE]", cell.pci.value()) : "not set",
+                   cell.plmn_id.has_value() ? fmt::format("{} [REMOVE]", cell.plmn_id.value()) : "not set",
+                   cell.tac.has_value() ? fmt::format("{} [REMOVE]", cell.tac.value()) : "not set",
                    cell.band.has_value() ? fmt::format("n{} [REMOVE]", static_cast<unsigned>(cell.band.value()))
                                          : "not set",
                    cell.ssb_arfcn.has_value() ? fmt::format("{} [REMOVE]", cell.ssb_arfcn.value()) : "not set",
@@ -682,6 +698,46 @@ static bool validate_amf_appconfig(const cu_cp_unit_amf_config&                 
   return true;
 }
 
+/// Validates the XnAP configuration:
+/// - checks that no peer address is listed under more than one peer
+/// - checks that no bind address is listed under more than one gateway.
+/// Uses string-level comparison: equivalent representations (IPv4 vs IPv4-mapped IPv6) or hostnames resolving to the
+/// same address are not detected here — those errors will surface at SCTP bind/connect time.
+static bool validate_xnap_appconfig(const cu_cp_unit_xnap_config& config)
+{
+  std::set<std::string> seen_peer_addrs;
+  for (const auto& gw : config.gateways) {
+    for (const auto& peer : gw.connections) {
+      for (const auto& addr : peer.peer_addrs) {
+        if (addr.empty()) {
+          fmt::print("XnAP peer address cannot be empty\n");
+          return false;
+        }
+        if (!seen_peer_addrs.insert(addr).second) {
+          fmt::print("XnAP peer address {} is listed under more than one peer\n", addr);
+          return false;
+        }
+      }
+    }
+  }
+
+  std::set<std::string> seen_bind_addrs;
+  for (const auto& gw : config.gateways) {
+    for (const auto& addr : gw.bind_addrs) {
+      if (addr.empty()) {
+        fmt::print("XnAP bind address cannot be empty\n");
+        return false;
+      }
+      if (!seen_bind_addrs.insert(addr).second) {
+        fmt::print("XnAP bind address {} is listed under more than one gateway\n", addr);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 /// Validates the given CU-CP configuration. Returns true on success, otherwise false.
 static bool validate_cu_cp_appconfig(const gnb_id_t gnb_id, const cu_cp_unit_config& config)
 {
@@ -700,6 +756,10 @@ static bool validate_cu_cp_appconfig(const gnb_id_t gnb_id, const cu_cp_unit_con
   }
 
   if (!validate_qos_appconfig(config.qos_cfg)) {
+    return false;
+  }
+
+  if (!validate_xnap_appconfig(config.xnap_config)) {
     return false;
   }
 

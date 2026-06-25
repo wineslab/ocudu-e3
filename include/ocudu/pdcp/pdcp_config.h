@@ -4,11 +4,13 @@
 
 #pragma once
 
-#include "ocudu/pdcp/pdcp_t_reordering.h"
-#include "ocudu/ran/pdcp_sn_size.h"
-#include "ocudu/rohc/rohc_config.h"
+#include "ocudu/ran/pdcp/pdcp_discard_timer.h"
+#include "ocudu/ran/pdcp/pdcp_rlc_mode.h"
+#include "ocudu/ran/pdcp/pdcp_sn_size.h"
+#include "ocudu/ran/pdcp/pdcp_t_reordering.h"
+#include "ocudu/ran/rohc/rohc_config.h"
 #include "ocudu/support/timers.h"
-#include "fmt/std.h"
+#include "fmt/format.h"
 #include <cstdint>
 
 namespace ocudu {
@@ -17,9 +19,6 @@ class pdcp_metrics_notifier;
 
 /// PDCP NR SRB or DRB information.
 enum class pdcp_rb_type { srb, drb };
-
-/// PDCP NR RLC mode information.
-enum class pdcp_rlc_mode { um, am };
 
 /// \brief Returns the value range of the sequence numbers.
 /// \param sn_size Length of the sequence number field in bits.
@@ -68,61 +67,6 @@ constexpr uint16_t pdcp_max_sdu_size = 9000;
 /// PDCP security direction.
 enum class pdcp_security_direction { uplink, downlink };
 
-/// PDCP NR discard timer values.
-/// This timer is configured only for DRBs. In the transmitter, a new timer is started upon reception of an SDU from
-/// upper layer.
-/// See TS 38.322 for timer description and TS 38.331 for valid timer durations.
-enum class pdcp_discard_timer {
-  ms10     = 10,
-  ms20     = 20,
-  ms30     = 30,
-  ms40     = 40,
-  ms50     = 50,
-  ms60     = 60,
-  ms75     = 75,
-  ms100    = 100,
-  ms150    = 150,
-  ms200    = 200,
-  ms250    = 250,
-  ms300    = 300,
-  ms500    = 500,
-  ms750    = 750,
-  ms1500   = 1500,
-  infinity = -1
-};
-
-constexpr bool pdcp_discard_timer_from_int(pdcp_discard_timer& discard_timer, int num)
-{
-  switch (num) {
-    case 10:
-    case 20:
-    case 30:
-    case 40:
-    case 50:
-    case 60:
-    case 75:
-    case 100:
-    case 150:
-    case 200:
-    case 250:
-    case 300:
-    case 500:
-    case 750:
-    case 1500:
-    case -1:
-      discard_timer = static_cast<pdcp_discard_timer>(num);
-      return true;
-    default:
-      return false;
-  }
-}
-
-/// Convert PDCP NR discard timer from enum to integer.
-constexpr int16_t pdcp_discard_timer_to_int(pdcp_discard_timer discard_timer)
-{
-  return static_cast<int16_t>(discard_timer);
-}
-
 /// Reordering timeout for serialization of TX PDUs after parallelized crypto operations.
 constexpr uint32_t pdcp_tx_crypto_reordering_timeout_ms = 40;
 
@@ -148,7 +92,7 @@ struct pdcp_custom_config_tx : public pdcp_custom_config_base {
 };
 
 struct pdcp_custom_config_rx : public pdcp_custom_config_base {
-  // Empty
+  bool warn_on_drop = false;
 };
 
 /// \brief Non-standard configurable parameters for PDCP.
@@ -166,11 +110,11 @@ struct pdcp_custom_config {
 /// \brief Configurable parameters for PDCP that are common for both TX and RX.
 /// Ref: 3GPP TS 38.331 version 15.2.1.
 struct pdcp_config_common {
-  pdcp_rb_type                     rb_type;
-  pdcp_rlc_mode                    rlc_mode;
-  pdcp_sn_size                     sn_size;
-  pdcp_security_direction          direction;
-  std::optional<rohc::rohc_config> header_compression;
+  pdcp_rb_type               rb_type;
+  pdcp_rlc_mode              rlc_mode;
+  pdcp_sn_size               sn_size;
+  pdcp_security_direction    direction;
+  std::optional<rohc_config> header_compression;
 };
 
 struct pdcp_tx_config : pdcp_config_common {
@@ -190,11 +134,11 @@ struct pdcp_rx_config : pdcp_config_common {
 /// Parameters and valid values for them are taken from the RRC-NR PDCP-Config Information Element.
 /// Ref: 3GPP TS 38.331 version 15.2.1.
 struct pdcp_config {
-  pdcp_rb_type                     rb_type;
-  pdcp_rlc_mode                    rlc_mode;
-  std::optional<rohc::rohc_config> header_compression;
-  bool                             integrity_protection_required;
-  bool                             ciphering_required;
+  pdcp_rb_type               rb_type;
+  pdcp_rlc_mode              rlc_mode;
+  std::optional<rohc_config> header_compression;
+  bool                       integrity_protection_required;
+  bool                       ciphering_required;
   struct {
     pdcp_sn_size                      sn_size;
     pdcp_security_direction           direction;
@@ -301,58 +245,6 @@ struct formatter<ocudu::pdcp_rb_type> {
 };
 
 template <>
-struct formatter<ocudu::pdcp_rlc_mode> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::pdcp_rlc_mode mode, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"UM", "AM"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(mode)]);
-  }
-};
-
-template <>
-struct formatter<ocudu::pdcp_t_reordering> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::pdcp_t_reordering t_reordering, FormatContext& ctx) const
-  {
-    if (t_reordering == ocudu::pdcp_t_reordering::infinity) {
-      return format_to(ctx.out(), "infinity");
-    }
-    return format_to(ctx.out(), "{}", ocudu::pdcp_t_reordering_to_int(t_reordering));
-  }
-};
-
-template <>
-struct formatter<ocudu::pdcp_discard_timer> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::pdcp_discard_timer discard_timer, FormatContext& ctx) const
-  {
-    if (discard_timer == ocudu::pdcp_discard_timer::infinity) {
-      return format_to(ctx.out(), "infinity");
-    }
-    return format_to(ctx.out(), "{}", ocudu::pdcp_discard_timer_to_int(discard_timer));
-  }
-};
-
-template <>
 struct formatter<ocudu::pdcp_custom_config_tx> {
   template <typename ParseContext>
   auto parse(ParseContext& ctx)
@@ -383,7 +275,11 @@ struct formatter<ocudu::pdcp_custom_config_rx> {
   template <typename FormatContext>
   auto format(ocudu::pdcp_custom_config_rx cfg, FormatContext& ctx) const
   {
-    return format_to(ctx.out(), "count_notify={} count_max={}", cfg.max_count.notify, cfg.max_count.hard);
+    return format_to(ctx.out(),
+                     "count_notify={} count_max={} warn_on_drop={}",
+                     cfg.max_count.notify,
+                     cfg.max_count.hard,
+                     cfg.warn_on_drop);
   }
 };
 

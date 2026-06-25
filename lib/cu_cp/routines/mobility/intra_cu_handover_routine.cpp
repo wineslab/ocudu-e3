@@ -6,7 +6,7 @@
 #include "../pdu_session_routine_helpers.h"
 #include "handover_reconfiguration_routine.h"
 #include "mobility_helpers.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 
 using namespace ocudu;
 using namespace ocudu::ocucp;
@@ -21,12 +21,12 @@ static bool verify_ho_request(const cu_cp_intra_cu_handover_request& request,
     return false;
   }
 
-  if (request.target_du_index == du_index_t::invalid) {
+  if (request.target_du_index == cu_cp_du_index_t::invalid) {
     logger.warning("Target DU index must not be invalid");
     return false;
   }
 
-  if (request.source_ue_index == ue_index_t::invalid) {
+  if (request.source_ue_index == cu_cp_ue_index_t::invalid) {
     logger.warning("Source UE index must not be invalid");
     return false;
   }
@@ -90,7 +90,7 @@ void intra_cu_handover_routine::operator()(coro_context<async_task<cu_cp_intra_c
   {
     // Allocate UE index at target DU.
     target_ue_index = ue_mng.add_ue(request.target_du_index);
-    if (target_ue_index == ue_index_t::invalid) {
+    if (target_ue_index == cu_cp_ue_index_t::invalid) {
       logger.warning("ue={}: \"{}\" failed to allocate UE index at target DU", request.source_ue_index, name());
       CORO_EARLY_RETURN(response_msg);
     }
@@ -209,7 +209,7 @@ void intra_cu_handover_routine::operator()(coro_context<async_task<cu_cp_intra_c
 
         ue_context_release_command.ue_index             = target_ue->get_ue_index();
         ue_context_release_command.cause                = ngap_cause_radio_network_t::unspecified;
-        ue_context_release_command.requires_rrc_release = false;
+        ue_context_release_command.requires_rrc_message = false;
         CORO_AWAIT(cu_cp_handler.handle_ue_context_release_command(ue_context_release_command));
         logger.debug("ue={}: \"{}\" removed target UE context", ue_context_release_command.ue_index, name());
 

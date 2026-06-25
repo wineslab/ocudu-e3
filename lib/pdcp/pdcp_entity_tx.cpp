@@ -72,9 +72,9 @@ pdcp_entity_tx::pdcp_entity_tx(uint32_t                        ue_index,
     }
     if (cfg.header_compression.has_value()) {
       const auto& header_compression = *cfg.header_compression;
-      if (header_compression.rohc_type == rohc::rohc_type_t::uplink_only_rohc) {
-        for (auto profile : rohc::all_rohc_profiles) {
-          if (profile != rohc::rohc_profile::profile0x0006 && header_compression.profiles.is_profile_enabled(profile)) {
+      if (header_compression.rohc_type == rohc_type_t::uplink_only_rohc) {
+        for (auto profile : all_rohc_profiles) {
+          if (profile != rohc_profile::profile0x0006 && header_compression.profiles.is_profile_enabled(profile)) {
             logger.log_error(
                 "Invalid ROHC profile for {}. profiles={}", header_compression.rohc_type, header_compression.profiles);
             break;
@@ -234,6 +234,7 @@ void pdcp_entity_tx::handle_sdu(byte_buffer buf)
       } else {
         logger.log_debug("Dropping SDU. SDU buffer is full");
       }
+      metrics.add_lost_sdus(1);
       return;
     }
     logger.log_debug("Buffered SDU. Entity is paused. buffer_size={}", sdu_buffer.size());
@@ -558,6 +559,59 @@ void pdcp_entity_tx::handle_status_report(byte_buffer_chain status)
   dec.unpack(fmc, 32);
   logger.log_info("Status report. fmc={}", fmc);
 
+  // Validate FMC field.
+  if (fmc > st.tx_next) {
+    logger.log_error("Invalid status report, FMC > TX_NEXT. st={} fmc={}", st, fmc);
+    upper_cn.on_protocol_failure();
+    return;
+  }
+
+  // Validate bitmap length.
+  // > If FMC == TX_NEXT, bitmap must be zero length.
+  unsigned bitmap_length = buf.length() - 5;
+  if (fmc == st.tx_next && bitmap_length != 0) {
+    logger.log_error("Invalid status report, bitmap non-zero for equal FMC and TX_NEXT. st={} fmc={} bitmap_length={}",
+                     st,
+                     fmc,
+                     bitmap_length);
+    upper_cn.on_protocol_failure();
+  }
+
+  // > Compute how many bytes the bitmap length can have in the maximum case.
+  uint32_t delta                   = st.tx_next - fmc - 1;
+  uint32_t max_possible_bithlength = (delta + 7) / 8; // round up division by 8.
+  if (bitmap_length > max_possible_bithlength) {
+    logger.log_error("Invalid status report, bitmap length too large. tx_next={} fmc={} bitmap_length={}",
+                     st.tx_next,
+                     fmc,
+                     bitmap_length);
+    upper_cn.on_protocol_failure();
+    return;
+  }
+
+  // Validate tail of bitmap.
+  if (bitmap_length != 0) {
+    uint8_t bitlength_without_padding = delta % 8;
+    uint8_t tail                      = buf.back();
+    uint8_t res                       = (tail << bitlength_without_padding);
+    if (res) {
+      logger.log_error("Invalid status report, bits set in padding of bitmap. tx_next={} fmc={} tail={:b} "
+                       "bitlength={}",
+                       st.tx_next,
+                       fmc,
+                       tail,
+                       bitlength_without_padding);
+      upper_cn.on_protocol_failure();
+      return;
+    }
+  }
+
+  if (fmc < st.tx_next_ack) {
+    // Do not return if FMC < TX_NEXT_ACK.
+    // Perhaps the PDCP status PDU arrived out-of-order and PDUs were acked in the meanttime.
+    logger.log_warning("Invalid status report, FMC < TX_NEXT_ACK. fmc={} st={}", fmc, st);
+  }
+
   // Discard any SDU with COUNT < FMC.
   for (uint32_t count = st.tx_next_ack; count < fmc; count++) {
     discard_pdu(count);
@@ -657,42 +711,46 @@ void pdcp_entity_tx::apply_security(pdcp_tx_buffer_info buf_info)
   uint32_t tx_count = buf_info.count;
 
   // Apply deciphering and integrity check
-  security::security_result result = apply_ciphering_and_integrity_protection(std::move(buf_info.buf), tx_count);
+  security::security_status status = apply_ciphering_and_integrity_protection(buf_info.buf, tx_count);
 
-  if (!result.buf.has_value()) {
-    auto handle_failure = [this, sec_err = result.buf.error(), count = result.count]() {
-      switch (sec_err) {
-        case ocudu::security::security_error::integrity_failure:
+  if (not is_success(status)) {
+    auto handle_failure = [this, status = status, count = tx_count, token = std::move(buf_info.token)]() {
+      switch (status) {
+        case security::security_status::integrity_failure:
           logger.log_warning("Applying integrity failed, dropping PDU. count={}", count);
           upper_cn.on_protocol_failure();
           break;
-        case ocudu::security::security_error::ciphering_failure:
+        case security::security_status::ciphering_failure:
           logger.log_warning("Applying ciphering failed, dropping PDU. count={}", count);
           upper_cn.on_protocol_failure();
           break;
-        case ocudu::security::security_error::buffer_failure:
+        case security::security_status::buffer_failure:
           logger.log_error("Buffer error when ciphering and applying integrity, dropping PDU. count={}", count);
           upper_cn.on_protocol_failure();
           break;
-        case ocudu::security::security_error::engine_failure:
+        case security::security_status::engine_failure:
           logger.log_error("Engine error when ciphering and applying integrity, dropping PDU. count={}", count);
+          upper_cn.on_protocol_failure();
+          break;
+        case security::security_status::success:
+        case security::security_status::success_unprotected:
+          logger.log_error("Unexpected error handling, dropping PDU. count={} status={}", count, status);
           upper_cn.on_protocol_failure();
           break;
       }
     };
     if (not ue_dl_executor.execute(std::move(handle_failure))) {
-      logger.log_warning("Dropped PDU with security error, UE executor queue is full. count={} sec_err={}",
-                         tx_count,
-                         result.buf.error());
+      logger.log_warning(
+          "Dropped PDU with security error, UE executor queue is full. count={} status={}", tx_count, status);
     }
     return;
   }
-  logger.log_debug(result.buf.value().begin(), result.buf.value().end(), "Security applied. count={}", tx_count);
+  logger.log_debug(buf_info.buf.begin(), buf_info.buf.end(), "Security applied. count={}", tx_count);
 
   pdcp_tx_buffer_info pdu_info{.is_retx = buf_info.is_retx,
                                .retx_id = buf_info.retx_id,
                                .count   = tx_count,
-                               .buf     = std::move(result.buf.value()),
+                               .buf     = std::move(buf_info.buf),
                                .token   = std::move(buf_info.token)};
 
   auto post           = std::chrono::high_resolution_clock::now();
@@ -710,7 +768,7 @@ void pdcp_entity_tx::apply_security(pdcp_tx_buffer_info buf_info)
   }
 }
 
-security::security_result pdcp_entity_tx::apply_ciphering_and_integrity_protection(byte_buffer buf, uint32_t count)
+security::security_status pdcp_entity_tx::apply_ciphering_and_integrity_protection(byte_buffer& buf, uint32_t count)
 {
   // obtain the thread-specific ID of the worker
   uint32_t worker_idx = execution_context::get_current_worker_index();
@@ -722,7 +780,7 @@ security::security_result pdcp_entity_tx::apply_ciphering_and_integrity_protecti
     logger.log_error("Worker index exceeds number of crypto workers. worker_idx={} max_nof_crypto_workers={}",
                      worker_idx,
                      max_nof_crypto_workers);
-    return {.buf = make_unexpected(ocudu::security::security_error::engine_failure), .count = count};
+    return security::security_status::engine_failure;
   }
 
   logger.log_debug("Using sec_engine with worker_idx={}. count={} pdu_len={}", worker_idx, count, buf.length());
@@ -734,12 +792,12 @@ security::security_result pdcp_entity_tx::apply_ciphering_and_integrity_protecti
       security::sec_mac mac = {};
       if (not buf.append(mac)) {
         logger.log_warning("Failed to append MAC-I to PDU. count={}", count);
-        return {.buf = make_unexpected(ocudu::security::security_error::buffer_failure), .count = count};
+        return security::security_status::buffer_failure;
       }
-      return {.buf = std::move(buf), .count = count};
+      return security::security_status::success_unprotected;
     }
     logger.log_error("Empty engine for DRB bearer. count={}", count);
-    return {.buf = make_unexpected(ocudu::security::security_error::engine_failure), .count = count};
+    return security::security_status::engine_failure;
   }
 
   // TS 38.323, section 5.8: Ciphering
@@ -752,16 +810,16 @@ security::security_result pdcp_entity_tx::apply_ciphering_and_integrity_protecti
   // and the data part of the PDU before ciphering.
 
   unsigned                  hdr_size = cfg.sn_size == pdcp_sn_size::size12bits ? 2 : 3;
-  security::security_result result   = sec_engine->encrypt_and_protect_integrity(std::move(buf), hdr_size, count);
-  if (!result.buf.has_value()) {
-    logger.log_warning("Failed to apply security on PDU. count={}", result.count);
+  security::security_status status   = sec_engine->encrypt_and_protect_integrity(buf, hdr_size, count);
+  if (not is_success(status)) {
+    logger.log_warning("Failed to apply security on PDU. count={} status={}", count, status);
   }
-  return {std::move(result.buf.value())};
+  return status;
 }
 
 void pdcp_entity_tx::init_header_compression()
 {
-  if (cfg.header_compression.has_value() && cfg.header_compression->rohc_type == rohc::rohc_type_t::rohc) {
+  if (cfg.header_compression.has_value() && cfg.header_compression->rohc_type == rohc_type_t::rohc) {
     rohc_comp = rohc_comp_factory.create_rohc_compressor(*cfg.header_compression);
     if (rohc_comp == nullptr) {
       logger.log_error("Failed to create ROHC compressor. {}", cfg);
@@ -794,8 +852,13 @@ void pdcp_entity_tx::configure_security(security::sec_128_as_config sec_cfg,
 {
   ocudu_assert((is_srb() && sec_cfg.domain == security::sec_domain::rrc) ||
                    (!is_srb() && sec_cfg.domain == security::sec_domain::up),
-               "Invalid sec_domain={} for {} in {}",
+               "Invalid PDCP TX sec_domain={} for {} in {}",
                sec_cfg.domain,
+               rb_type,
+               rb_id);
+  ocudu_assert(integrity_enabled_ != security::integrity_enabled::smc_transition,
+               "Invalid PDCP TX integrity={} for {} in {}",
+               integrity_enabled_,
                rb_type,
                rb_id);
   // The 'NULL' integrity protection algorithm (nia0) is used only for SRBs and for the UE in limited service mode,
@@ -814,7 +877,7 @@ void pdcp_entity_tx::configure_security(security::sec_128_as_config sec_cfg,
   }
 
   // Evaluate and store integrity indication
-  if (integrity_enabled_ == security::integrity_enabled::on) {
+  if (integrity_enabled_ != security::integrity_enabled::off) {
     if (!sec_cfg.k_128_int.has_value()) {
       logger.log_error("Cannot enable integrity protection: Integrity key is not configured.");
       return;
@@ -1223,7 +1286,8 @@ bool pdcp_entity_tx::prepend_control_pdu_header(byte_buffer& buf, pdcp_control_p
 
 uint32_t pdcp_entity_tx::get_pdu_size(const byte_buffer& sdu) const
 {
-  return pdcp_data_header_size(sn_size) + sdu.length() + (integrity_enabled == security::integrity_enabled::on ? 4 : 0);
+  return pdcp_data_header_size(sn_size) + sdu.length() +
+         (integrity_enabled == security::integrity_enabled::off ? 0 : 4);
 }
 
 /*

@@ -5,8 +5,12 @@
 
 set -e
 
+# shellcheck source=common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
 install_uhd_dependencies_debian_ubuntu() {
     local mode="${1:?}"
+    local -x DEBIAN_FRONTEND=noninteractive
     local -a pkgs=()
 
     local -a build_pkgs=(
@@ -16,12 +20,64 @@ install_uhd_dependencies_debian_ubuntu() {
         python3-mako python3-numpy python3-setuptools python3-requests
     )
     local -a run_pkgs=(
-        cpufrequtils inetutils-tools libboost-all-dev libncurses5-dev libusb-1.0-0 libusb-1.0-0-dev
+        inetutils-tools libboost-all-dev libncurses5-dev libusb-1.0-0 libusb-1.0-0-dev
         libusb-dev python3-dev python3-requests
     )
     local -a extra_pkgs=(
-        cpufrequtils inetutils-tools libncurses5-dev libusb-1.0-0 libusb-1.0-0-dev
+        inetutils-tools libncurses5-dev libusb-1.0-0 libusb-1.0-0-dev
         libusb-dev python3-dev
+    )
+    local -a optional_pkgs=()
+
+    case "$mode" in
+        all)
+            pkgs+=( "${build_pkgs[@]}" "${extra_pkgs[@]}" )
+            optional_pkgs+=(cpufrequtils)
+            ;;
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            optional_pkgs+=(cpufrequtils)
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    if ((${#pkgs[@]})); then
+        apt-get update
+        local -a install_pkgs=( "${pkgs[@]}" )
+        for pkg in "${optional_pkgs[@]}"; do
+            if apt-cache policy "$pkg" | awk '$1 == "Candidate:" && $2 != "(none)" { found = 1 } END { exit !found }'; then
+                install_pkgs+=("$pkg")
+            fi
+        done
+        install_ubuntu_pkgs "${install_pkgs[@]}"
+    fi
+
+    if [[ "$mode" == "all" || "$mode" == "run" ]]; then
+        uhd_images_downloader
+    fi
+}
+
+install_uhd_dependencies_arch() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    local -a build_pkgs=(
+        curl ca-certificates xz
+        cmake base-devel pkgconf
+        boost boost-libs libusb
+        python-mako python-numpy python-setuptools python-requests
+    )
+    local -a run_pkgs=(
+        boost boost-libs libusb python python-requests
+    )
+    local -a extra_pkgs=(
+        boost boost-libs libusb python
     )
 
     case "$mode" in
@@ -40,11 +96,87 @@ install_uhd_dependencies_debian_ubuntu() {
             ;;
     esac
 
-    if ((${#pkgs[@]})); then
-        DEBIAN_FRONTEND=noninteractive apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
-        apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+    install_arch_pkgs "${pkgs[@]}"
+
+    if [[ "$mode" == "all" || "$mode" == "run" ]]; then
+        uhd_images_downloader
     fi
+}
+
+install_uhd_dependencies_fedora() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    local -a build_pkgs=(
+        curl ca-certificates xz cmake make boost-devel libusb1-devel
+        python3-mako python3-numpy python3-setuptools python3-requests
+    )
+    local -a run_pkgs=(
+        boost-atomic boost-chrono boost-container boost-date-time
+        boost-filesystem boost-serialization boost-thread
+        libusb1 python3-requests
+    )
+    local -a extra_pkgs=(
+        kernel-tools iputils ncurses-devel libusb1-devel python3-devel
+    )
+
+    case "$mode" in
+        all)
+            pkgs+=( "${build_pkgs[@]}" "${extra_pkgs[@]}" )
+            ;;
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    install_fedora_pkgs "${pkgs[@]}"
+
+    if [[ "$mode" == "all" || "$mode" == "run" ]]; then
+        uhd_images_downloader
+    fi
+}
+
+install_uhd_dependencies_rhel() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    local -a build_pkgs=(
+        ca-certificates xz
+        cmake gcc gcc-c++ make pkgconf-pkg-config
+        boost-devel libusbx-devel
+        python3-mako python3-numpy python3-setuptools python3-requests
+    )
+    local -a run_pkgs=(
+        boost-devel libusbx libusbx-devel python3-devel python3-requests
+    )
+    local -a extra_pkgs=(
+        boost-devel libusbx libusbx-devel python3-devel
+    )
+
+    case "$mode" in
+        all)
+            pkgs+=( "${build_pkgs[@]}" "${extra_pkgs[@]}" )
+            ;;
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    install_rhel_pkgs "${pkgs[@]}"
 
     if [[ "$mode" == "all" || "$mode" == "run" ]]; then
         uhd_images_downloader
@@ -68,6 +200,15 @@ main() {
     case "$ID" in
         debian|ubuntu)
             install_uhd_dependencies_debian_ubuntu "$mode"
+            ;;
+        fedora)
+            install_uhd_dependencies_fedora "$mode"
+            ;;
+        rhel)
+            install_uhd_dependencies_rhel "$mode"
+            ;;
+        arch)
+            install_uhd_dependencies_arch "$mode"
             ;;
         *)
             echo "OS $ID not supported"

@@ -13,6 +13,7 @@
 #include "ocudu/du/du_high/du_manager/cbs/cbs_encoder.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/sib/system_info_config.h"
+#include "ocudu/support/enum_utils.h"
 
 using namespace ocudu;
 using namespace odu;
@@ -253,9 +254,10 @@ static asn1::rrc_nr::serving_cell_cfg_common_sib_s make_asn1_rrc_cell_serving_ce
 
     // We assume the SSB bitmap has been checked in the validator.
     for (size_t i = 0; i != nof_bits_group; ++i) {
-      const bool i_th_ssb_group_has_non_zero_elems =
+      constexpr unsigned nof_groups = 8U;
+      const bool         i_th_ssb_group_has_non_zero_elems =
           du_cfg.ran.ssb_cfg.ssb_bitmap.extract(i * nof_bits_group, nof_bits_group) != 0U;
-      cell.ssb_positions_in_burst.group_presence.set(i, i_th_ssb_group_has_non_zero_elems);
+      cell.ssb_positions_in_burst.group_presence.set(nof_groups - i - 1, i_th_ssb_group_has_non_zero_elems);
     }
 
     cell.ssb_positions_in_burst.in_one_group.from_number(du_cfg.ran.ssb_cfg.ssb_bitmap.extract(0U, 8U));
@@ -271,7 +273,7 @@ static asn1::rrc_nr::serving_cell_cfg_common_sib_s make_asn1_rrc_cell_serving_ce
         << (8U - du_cfg.ran.ssb_cfg.ssb_bitmap.get_L_max()));
   }
 
-  asn1::number_to_enum(cell.ssb_periodicity_serving_cell, ssb_periodicity_to_value(du_cfg.ran.ssb_cfg.ssb_period));
+  asn1::number_to_enum(cell.ssb_periodicity_serving_cell, to_value(du_cfg.ran.ssb_cfg.ssb_period));
   cell.ss_pbch_block_pwr = du_cfg.ran.ssb_cfg.ssb_block_power;
 
   const n_ta_offset ta_offset = band_helper::get_ta_offset(du_cfg.ran.dl_carrier.band);
@@ -375,7 +377,7 @@ static asn1::rrc_nr::sib1_s make_asn1_rrc_cell_sib1(const du_cell_config& du_cfg
         ret                               = asn1::number_to_enum(asn1_si.si_periodicity, cfg_si.si_period_radio_frames);
         ocudu_assert(ret, "Invalid SI period");
 
-        // Prepare a SchedulingInfo2-r17 element. This is used for SIB-19.
+        // Prepare a SchedulingInfo2-r17 element. This is used for R17 SIBs (SIB16, SIB19).
         sched_info2_r17_s asn1_si_r17;
         asn1_si_r17.si_broadcast_status_r17.value = sched_info2_r17_s::si_broadcast_status_r17_opts::broadcasting;
         ret = asn1::number_to_enum(asn1_si_r17.si_periodicity_r17, cfg_si.si_period_radio_frames);
@@ -410,8 +412,17 @@ static asn1::rrc_nr::sib1_s make_asn1_rrc_cell_sib1(const du_cell_config& du_cfg
                     asn1_si.sib_map_info.push_back(type_info);
                   }
                 } break;
+                case sib_type::sib16: {
+                  sib_type_info_v1700_s type_info2;
+                  type_info2.sib_type_r17.set_type1_r17().value =
+                      sib_type_info_v1700_s::sib_type_r17_c_::type1_r17_opts::sib_type16;
+                  if (sib.value_tag.valid()) {
+                    type_info2.value_tag_r17_present = true;
+                    type_info2.value_tag_r17         = sib.value_tag.value();
+                  }
+                  asn1_si_r17.sib_map_info_r17.push_back(type_info2);
+                } break;
                 case sib_type::sib19: {
-                  // If the mapping info entry is for a release 17 SIB, append to the schedulingInfo2 element.
                   sib_type_info_v1700_s type_info2;
                   type_info2.sib_type_r17.set_type1_r17().value =
                       sib_type_info_v1700_s::sib_type_r17_c_::type1_r17_opts::sib_type19;
@@ -419,7 +430,6 @@ static asn1::rrc_nr::sib1_s make_asn1_rrc_cell_sib1(const du_cell_config& du_cfg
                     type_info2.value_tag_r17_present = true;
                     type_info2.value_tag_r17         = sib.value_tag.value();
                   }
-
                   asn1_si_r17.sib_map_info_r17.push_back(type_info2);
                 } break;
                 case sib_type::sib1:
@@ -459,6 +469,11 @@ static asn1::rrc_nr::sib1_s make_asn1_rrc_cell_sib1(const du_cell_config& du_cfg
 
   sib1.serving_cell_cfg_common_present = true;
   sib1.serving_cell_cfg_common         = make_asn1_rrc_cell_serving_cell_common(du_cfg);
+
+  if (du_cfg.si.ims_and_ecall_support) {
+    sib1.ims_emergency_support_present  = true;
+    sib1.ecall_over_ims_support_present = true;
+  }
 
   sib1.ue_timers_and_consts_present = true;
 

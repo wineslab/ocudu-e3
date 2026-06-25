@@ -6,7 +6,6 @@
 #include "ocudu/fapi/p7/builders/dl_pdsch_pdu_builder.h"
 #include "ocudu/fapi_adaptor/precoding_matrix_table_generator.h"
 #include "ocudu/ran/pdcch/dci_format.h"
-#include "ocudu/ran/sch/sch_constants.h"
 #include <gtest/gtest.h>
 #include <random>
 
@@ -217,14 +216,13 @@ TEST(fapi_to_phy_pdsch_conversion_test, valid_pdu_conversion_success)
                     // Codeword.
                     ASSERT_EQ(static_cast<modulation_scheme>(qam_mod), proc_pdu.codewords[0].modulation);
                     ASSERT_EQ(rv_index, proc_pdu.codewords[0].rv);
+                    ASSERT_EQ(ldpc_graph, proc_pdu.codewords[0].ldpc_base_graph);
 
                     ASSERT_EQ(nid_pdsch, proc_pdu.n_id);
                     ASSERT_EQ(dl_dmrs_symbol, proc_pdu.dmrs_symbol_mask);
 
                     ASSERT_EQ(static_cast<unsigned>(ref_point), static_cast<unsigned>(proc_pdu.ref_point));
-                    ASSERT_TRUE(dmrs_type((config_type == dmrs_config_type::type1)
-                                              ? dmrs_type::options::TYPE1
-                                              : dmrs_type::options::TYPE2) == proc_pdu.dmrs);
+                    ASSERT_TRUE(config_type == proc_pdu.dmrs);
                     ASSERT_EQ(scrambling_id, proc_pdu.scrambling_id);
                     ASSERT_EQ(n_scid, proc_pdu.n_scid);
                     ASSERT_EQ(dmrs_cdm_grps_no_data, proc_pdu.nof_cdm_groups_without_data);
@@ -251,8 +249,6 @@ TEST(fapi_to_phy_pdsch_conversion_test, valid_pdu_conversion_success)
                                                                          rb_size);
 
                     ASSERT_TRUE(freq_allocation == proc_pdu.freq_alloc);
-
-                    ASSERT_EQ(ldpc_graph, proc_pdu.ldpc_base_graph);
                     ASSERT_EQ(tb_size_lbrm_bytes, proc_pdu.tbs_lbrm);
                   }
                 }

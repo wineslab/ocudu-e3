@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <variant>
 
 namespace ocudu {
 
@@ -18,11 +19,12 @@ enum class pucch_group_hopping {
   DISABLE
 };
 
-/// \brief PUCCH resource set index, as per \c PUCCH-ResourceSetId, TS 38.331.
+/// \brief PUCCH Resource Set ID, as per \c PUCCH-ResourceSetId, TS 38.331.
+///
 /// At the moment, we only supports PUCCH resource set index 0 and 1.
-enum class pucch_res_set_idx : uint8_t { set_0 = 0, set_1 };
+enum class pucch_res_set_id : uint8_t { set_0 = 0, set_1 };
 
-inline uint8_t pucch_res_set_idx_to_uint(pucch_res_set_idx format)
+inline uint8_t to_uint(pucch_res_set_id format)
 {
   return static_cast<uint8_t>(format);
 }
@@ -30,7 +32,7 @@ inline uint8_t pucch_res_set_idx_to_uint(pucch_res_set_idx format)
 /// \brief PUCCH Formats as described in TS38.213 Section 9.2.
 enum class pucch_format : uint8_t { FORMAT_0, FORMAT_1, FORMAT_2, FORMAT_3, FORMAT_4, NOF_FORMATS };
 
-inline uint8_t pucch_format_to_uint(pucch_format format)
+inline uint8_t to_uint(pucch_format format)
 {
   return static_cast<uint8_t>(format);
 }
@@ -109,18 +111,47 @@ inline pucch_format pucch_f2f3f4_format(pucch_formats formats)
 /// TS38.213, Section 9.2.6.
 enum class pucch_repetition_tx_slot { no_multi_slot, starts, continues, ends };
 
-/// \brief Defines a couple of PUCCH resource IDs, the cell's and UE's resource PUCCH resource ID, respectively.
+/// \brief Identifier of a PUCCH resource.
+///
+/// Carries either:
+///   - a \e dedicated identifier (cell-wide id + UE-specific id) for UE-configured PUCCH resources, or
+///   - a \e common identifier (\f$r_{PUCCH}\f$, TS 38.213 Section 9.2.1) for PUCCH resources from the default
+///     common table used before dedicated PUCCH is configured.
 struct pucch_res_id_t {
-  /// This is the PUCCH cell resource ID and is used by the DU and by the scheduler to identify the PUCCH resource.
-  unsigned cell_res_id;
-  /// Corresponds to \c pucch-ResourceId, as part of \c PUCCH-Resource, in \c PUCCH-Config, TS 38.331.
-  /// Used by the DU only to populate the ASN1 message, while it's not used by the scheduler.
-  unsigned ue_res_id;
+  /// Identifier for a PUCCH resource from the default common table (TS 38.213 Table 9.2.1-1).
+  struct common {
+    /// \f$r_{PUCCH}\f$, range {0, ..., 15}.
+    unsigned r_pucch = 0;
 
-  bool operator==(const pucch_res_id_t& rhs) const
+    bool operator==(const common& rhs) const { return r_pucch == rhs.r_pucch; }
+    bool operator!=(const common& rhs) const { return !(rhs == *this); }
+  };
+  /// Identifier for a UE-dedicated PUCCH resource.
+  struct dedicated {
+    /// PUCCH cell resource ID, used by the DU and the scheduler to identify the resource.
+    unsigned cell_res_id = 0;
+    /// Corresponds to \c pucch-ResourceId in \c PUCCH-Resource, \c PUCCH-Config, TS 38.331.
+    /// \remark Used by the DU only to populate the ASN.1 message; not used by the scheduler.
+    unsigned ue_res_id = 0;
+
+    bool operator==(const dedicated& rhs) const { return cell_res_id == rhs.cell_res_id && ue_res_id == rhs.ue_res_id; }
+    bool operator!=(const dedicated& rhs) const { return !(rhs == *this); }
+  };
+  std::variant<dedicated, common> id;
+
+  static pucch_res_id_t make_cmn(unsigned r_pucch) { return pucch_res_id_t{common{r_pucch}}; }
+  static pucch_res_id_t make_ded(unsigned cell_res_id_, unsigned ue_res_id_)
   {
-    return cell_res_id == rhs.cell_res_id && ue_res_id == rhs.ue_res_id;
+    return pucch_res_id_t{dedicated{cell_res_id_, ue_res_id_}};
   }
+
+  bool is_cmn() const { return std::holds_alternative<common>(id); }
+  bool is_ded() const { return std::holds_alternative<dedicated>(id); }
+
+  const common&    cmn() const { return std::get<common>(id); }
+  const dedicated& ded() const { return std::get<dedicated>(id); }
+
+  bool operator==(const pucch_res_id_t& rhs) const { return id == rhs.id; }
   bool operator!=(const pucch_res_id_t& rhs) const { return !(rhs == *this); }
 };
 

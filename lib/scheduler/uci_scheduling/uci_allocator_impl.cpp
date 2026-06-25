@@ -21,7 +21,8 @@ uci_allocator_impl::uci_allocator_impl(const cell_configuration& cell_cfg_, pucc
   logger(ocudulog::fetch_basic_logger("SCHED")),
   max_pucch_payload(cell_cfg_.params.init_bwp.pucch.resources.max_payload_234())
 {
-  const unsigned ring_size = get_allocator_ring_size_gt_min(get_max_slot_ul_alloc_delay(cell_cfg_.ntn_cs_koffset));
+  // The ring must be at least 1 slot larger than the max. UL allocation delay, to take into account the current slot.
+  const unsigned ring_size = get_allocator_ring_size_gt_min(get_max_slot_ul_alloc_delay(cell_cfg_.ntn_cs_koffset) + 1);
   uci_alloc_grid.resize(ring_size);
 }
 
@@ -52,7 +53,7 @@ static void add_csi_to_uci_on_pusch(uci_info::csi_info& uci_csi, const ue_cell_c
   // NOTE: The CSI size depends on whether the CSI is configured on PUSCH or PUCCH, as per Section 5.2.3, TS 38.214:
   // "For both Type I and Type II reports configured for PUCCH but transmitted on PUSCH, the determination of the
   // payload for CSI part 1 and CSI part 2 follows that of PUCCH as described in clause 5.2.4."
-  if (is_pusch_configured(*ue_cell_cfg.csi_meas_cfg())) {
+  if (not ue_cell_cfg.init_bwp().ul.ue_cfg()->periodic_csi_report.has_value()) {
     csi_report_size csi_size   = get_csi_report_pusch_size(uci_csi.csi_rep_cfg);
     uci_csi.csi_part1_nof_bits = csi_size.part1_size.value();
 
@@ -164,16 +165,7 @@ std::optional<uci_allocation> uci_allocator_impl::alloc_harq_ack(cell_resource_a
     cell_slot_resource_allocator& slot_alloc = res_alloc[k0 + k1_candidate + res_alloc.cfg.ntn_cs_koffset];
     const slot_point              uci_slot   = slot_alloc.slot;
 
-    // As per Section 9, TS 38.213:
-    // > A UE does not expect to detect a DCI format scheduling a PDSCH reception or a SPS PDSCH release and indicating
-    // a resource for a PUCCH transmission with corresponding HARQ-ACK information in a slot if the UE previously
-    // detects a DCI format scheduling a PUSCH transmission in the slot and if the UE multiplexes HARQ-ACK information
-    // in the PUSCH transmission.
-    if (not slot_alloc.result.ul.puschs.empty()) {
-      continue;
-    }
-
-    // Check whether UCI slot is UL enabled.
+    // Check whether UCI slot is UL enabled — O(1), runs before the PUSCH scan below.
     if (not cell_cfg.is_fully_ul_enabled(uci_slot)) {
       continue;
     }
@@ -190,13 +182,29 @@ std::optional<uci_allocation> uci_allocator_impl::alloc_harq_ack(cell_resource_a
       continue;
     }
 
-    const bool is_sr_opportunity =
-        sr_helper::is_sr_opportunity_slot(ue_cell_cfg.init_bwp().ul.ded()->pucch_cfg.value(), uci_slot);
+    // As per Section 9, TS 38.213:
+    // > A UE does not expect to detect a DCI format scheduling a PDSCH reception or a SPS PDSCH release and indicating
+    // a resource for a PUCCH transmission with corresponding HARQ-ACK information in a slot if the UE previously
+    // detects a DCI format scheduling a PUSCH transmission in the slot and if the UE multiplexes HARQ-ACK information
+    // in the PUSCH transmission.
+    // Note: the constraint applies only to the same UE — a PUSCH from a different UE must not block PUCCH placement.
+    const bool ue_has_pusch_in_slot =
+        std::any_of(slot_alloc.result.ul.puschs.begin(),
+                    slot_alloc.result.ul.puschs.end(),
+                    [crnti](const ul_sched_info& p) { return p.pusch_cfg.rnti == crnti; });
+    if (ue_has_pusch_in_slot) {
+      continue;
+    }
+
+    const bool is_sr_opportunity = sr_helper::is_sr_opportunity_slot(
+        *ue_cell_cfg.init_bwp().ul.ue_cfg(), cell_cfg.params.init_bwp.pucch.sr_period, uci_slot);
     const unsigned scheduled_harq_bits     = get_scheduled_pdsch_counter_in_ue_uci(slot_alloc.slot, crnti);
     unsigned       nof_available_harq_bits = 0U;
 
-    if (ue_cell_cfg.csi_meas_cfg() != nullptr and not is_pusch_configured(*ue_cell_cfg.csi_meas_cfg()) and
-        csi_helper::is_csi_reporting_slot(*ue_cell_cfg.csi_meas_cfg(), uci_slot)) {
+    if (ue_cell_cfg.init_bwp().ul.ue_cfg()->periodic_csi_report.has_value() and
+        csi_helper::is_csi_reporting_slot(*ue_cell_cfg.init_bwp().ul.ue_cfg()->periodic_csi_report,
+                                          cell_cfg.params.init_bwp.csi->csi_rs_period,
+                                          uci_slot)) {
       // TODO: Remove this when the PUCCH allocator handle properly more than 2 HARQ-ACK bits + CSI.
       const auto     csi_report_cfg  = create_csi_report_configuration(*ue_cell_cfg.csi_meas_cfg());
       const unsigned csi_report_size = get_csi_report_pucch_size(csi_report_cfg).part1_size.value();

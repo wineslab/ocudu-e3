@@ -21,13 +21,19 @@ main() {
     cd /tmp
     curl -L "https://github.com/EttusResearch/uhd/archive/refs/tags/v${uhd_version}.tar.gz" | tar xzf -
 
-    cd uhd*"${uhd_version}"/host && mkdir -p build && cd build
+    local uhd_root="/tmp/uhd-${uhd_version}"
+
+    cd "${uhd_root}/host" && mkdir -p build && cd build
+    # CMake 4.0+ rejects cmake_minimum_required(VERSION <3.5) in UHD's bundled lib/rc (CMakeRC.cmake).
+    # Harmless on older CMake (unused cache entry).
     cmake \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_INSTALL_PREFIX=/opt/uhd/"${uhd_version}" \
         -DENABLE_LIBUHD=On \
         -DENABLE_PYTHON_API=Off \
         -DENABLE_EXAMPLES=Off \
         -DENABLE_TESTS=Off \
+        -DBoost_NO_BOOST_CMAKE=ON \
         -DCMAKE_CXX_FLAGS="${arch}" ..
     cmake --build . -- -j"${ncores}"
     cmake --install .

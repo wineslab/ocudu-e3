@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/rrc/rrc_resume.h"
 #include "ocudu/rrc/rrc_ue.h"
 
 namespace ocudu::ocucp {
@@ -82,12 +83,12 @@ public:
     logger.info("ue={}: Received RRC Reestablishment failure notification", request.ue_index);
   }
 
-  void on_rrc_reestablishment_complete(ue_index_t old_ue_index) override
+  void on_rrc_reestablishment_complete(cu_cp_ue_index_t old_ue_index) override
   {
     logger.info("ue={}: Received RRC Reestablishment complete notification", old_ue_index);
   }
 
-  async_task<bool> on_ue_transfer_required(ue_index_t old_ue_index) override
+  async_task<bool> on_ue_transfer_required(cu_cp_ue_index_t old_ue_index) override
   {
     logger.info("Requested a UE context transfer from old_ue={}.", old_ue_index);
     return launch_async([](coro_context<async_task<bool>>& ctx) mutable {
@@ -124,7 +125,7 @@ public:
     });
   }
 
-  async_task<rrc_resume_request_response> on_rrc_resume_request(const cu_cp_rrc_resume_request& request) override
+  async_task<rrc_resume_request_response> on_rrc_resume_request(const rrc_resume_request& request) override
   {
     logger.info("ue={}: Received RRC Resume Request", request.ue_index);
     return launch_async([](coro_context<async_task<rrc_resume_request_response>>& ctx) mutable {
@@ -141,13 +142,13 @@ public:
                                 bool                               cond_meas           = false,
                                 span<const pci_t>                  candidate_pcis      = {}) override
   {
-    std::optional<rrc_meas_cfg> meas_cfg;
-    return meas_cfg;
+    return next_meas_cfg;
   }
 
   void on_measurement_report(const rrc_meas_results& meas_results) override {}
 
-  virtual void on_rrc_reconfiguration_complete_indicator() override {}
+  /// If set, on_measurement_config_request() returns this value; allows tests to inject a real config.
+  std::optional<rrc_meas_cfg> next_meas_cfg;
 
   cu_cp_ue_context_release_request last_cu_cp_ue_context_release_request;
 
@@ -169,7 +170,7 @@ public:
 
   void on_successful_rrc_connection_establishment(establishment_cause_t cause) override {}
 
-  void on_failed_rrc_connection_establishment(establishment_fail_cause_t) override {}
+  void on_failed_rrc_connection_establishment(establishment_fail_cause_t cause) override {}
 
   void on_attempted_rrc_connection_reestablishment() override {}
 

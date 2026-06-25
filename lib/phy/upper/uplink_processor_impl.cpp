@@ -24,9 +24,15 @@ static prach_detector::configuration get_prach_dectector_config_from_prach_conte
   config.zero_correlation_zone = context.zero_correlation_zone;
   config.start_preamble_index  = context.start_preamble_index;
   config.nof_preamble_indices  = context.nof_preamble_indices;
-  config.ra_scs                = to_ra_subcarrier_spacing(context.pusch_scs);
-  config.nof_rx_ports          = context.ports.size();
-  config.slot                  = context.slot;
+  if (config.format < prach_format_type::three) {
+    config.ra_scs = prach_subcarrier_spacing::kHz1_25;
+  } else if (config.format == prach_format_type::three) {
+    config.ra_scs = prach_subcarrier_spacing::kHz5;
+  } else {
+    config.ra_scs = to_ra_subcarrier_spacing(context.pusch_scs);
+  }
+  config.nof_rx_ports = context.ports.size();
+  config.slot         = context.slot;
 
   return config;
 }
@@ -233,6 +239,11 @@ void uplink_processor_impl::process_prach(shared_prach_buffer buffer, const prac
     return;
   }
 
+  // If the phy tap is configured, send the PRACH symbols through the tap interface.
+  if (ul_tap) {
+    ul_tap->handle_prach_window(*buffer, context_);
+  }
+
   bool success = task_executors.prach_executor.execute(
       [this, buffer_ = std::move(buffer), context_]() noexcept OCUDU_RTSAN_NONBLOCKING {
         trace_point tp = l1_ul_tracer.now();
@@ -305,7 +316,7 @@ void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusc
     // Assume that count_pusch_adaptors will not exceed MAX_PUSCH_PDUS_PER_SLOT.
     unsigned                         notifier_adaptor_id = count_pusch_adaptors.fetch_add(1, std::memory_order_acq_rel);
     pusch_processor_result_notifier& processor_notifier  = pusch_adaptors[notifier_adaptor_id].configure(
-        notifier, to_rnti(pdu.pdu.rnti), pdu.pdu.slot, to_harq_id(pdu.harq_id), data, [this]() {
+        notifier, to_rnti(pdu.pdu.rnti), pdu.pdu.slot, to_harq_id(pdu.harq_id), data, pdu.pdu.n_rapid, [this]() {
           state_machine.on_finish_processing_pdu();
         });
 

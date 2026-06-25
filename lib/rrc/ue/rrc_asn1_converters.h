@@ -9,10 +9,12 @@
 #include "ocudu/asn1/rrc_nr/radio_bearer_cfg.h"
 #include "ocudu/asn1/rrc_nr/serving_cell.h"
 #include "ocudu/asn1/rrc_nr/ul_ccch_msg_ies.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/pdcp/pdcp_config.h"
 #include "ocudu/ran/cause/common.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/five_g_s_tmsi.h"
+#include "ocudu/rrc/rrc_setup.h"
 #include "ocudu/rrc/rrc_types.h"
 #include "ocudu/security/security.h"
 
@@ -83,19 +85,19 @@ integrity_prot_algorithm_to_rrc_asn1(const security::integrity_algorithm& integr
 /// \brief Converts type \c asn1::fixed_bitstring<48> to an RRC NR ASN.1 type.
 /// \param[in] asn1_five_g_s_tmsi five g s tmsi object.
 /// \return The RRC NR ASN.1 object where the result of the conversion is stored.
-cu_cp_five_g_s_tmsi asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<48>& asn1_five_g_s_tmsi);
+five_g_s_tmsi_t asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<48>& asn1_five_g_s_tmsi);
 
 /// \brief Converts type \c asn1::fixed_bitstring<39> and \c asn1::fixed_bitstring<9> to an RRC NR ASN.1 type.
 /// \param[in] asn1_five_g_s_tmsi_part1 five g s tmsi part 1 object.
 /// \param[in] asn1_five_g_s_tmsi_part2 five g s tmsi part 2 object.
 /// \return The RRC NR ASN.1 object where the result of the conversion is stored.
-cu_cp_five_g_s_tmsi asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<39>& asn1_five_g_s_tmsi_part1,
-                                          const asn1::fixed_bitstring<9>&  asn1_five_g_s_tmsi_part2);
+five_g_s_tmsi_t asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<39>& asn1_five_g_s_tmsi_part1,
+                                      const asn1::fixed_bitstring<9>&  asn1_five_g_s_tmsi_part2);
 
 /// \brief Converts type \c asn1::fixed_bitstring<24> to an RRC NR ASN.1 type.
 /// \param[in] asn1_amf_id amf id object.
 /// \return The RRC NR ASN.1 object where the result of the conversion is stored.
-cu_cp_amf_identifier_t asn1_to_amf_identifier(const asn1::fixed_bitstring<24>& asn1_amf_id);
+amf_identifier_t asn1_to_amf_identifier(const asn1::fixed_bitstring<24>& asn1_amf_id);
 
 /// \brief Converts type ASN.1 establishment cause to common type.
 /// \param[in] asn1_cause ASN.1 establishment cause object.

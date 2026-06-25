@@ -33,7 +33,7 @@ using crb_index_list = static_vector<uint16_t, pdcch_constants::MAX_NOF_RB_PDCCH
 struct search_space_info {
   const search_space_configuration*                 cfg     = nullptr;
   const sched_coreset_config*                       coreset = nullptr;
-  bwp_config_ptr                                    bwp;
+  const sched_bwp_config*                           bwp     = nullptr;
   crb_interval                                      dl_crb_lims;
   crb_interval                                      ul_crb_lims;
   span<const pdsch_time_domain_resource_allocation> pdsch_time_domain_list;
@@ -49,9 +49,6 @@ struct search_space_info {
   /// \brief Gets UL DCI format type to use based on SearchSpace configuration.
   /// \return UL DCI format.
   dci_ul_format get_ul_dci_format() const { return pdcch_helper::get_ul_dci_format(*cfg); }
-
-  /// \brief Get table of PDSCH-to-HARQ candidates as per TS38.213, clause 9.2.3.
-  span<const uint8_t> get_k1_candidates() const;
 
   /// \brief Retrieve all the PDCCH candidates for a given aggregation level and slot for this SearchSpace.
   span<const uint8_t> get_pdcch_candidates(aggregation_level aggr_lvl, slot_point pdcch_slot) const
@@ -131,8 +128,8 @@ public:
   /// Get BWP information given a BWP-Id.
   bool                    has_bwp_id(bwp_id_t bwp_id) const { return cell_ded->bwps.contains(bwp_id); }
   const sched_bwp_config* find_bwp(bwp_id_t bwp_id) const { return has_bwp_id(bwp_id) ? &bwp(bwp_id) : nullptr; }
-  const sched_bwp_config& bwp(bwp_id_t bwp_id) const { return cell_ded->bwps[bwp_id].value(); }
-  const sched_bwp_config& init_bwp() const { return cell_ded->bwps[to_bwp_id(0)].value(); }
+  const sched_bwp_config& bwp(bwp_id_t bwp_id) const { return cell_ded->bwps[bwp_id]; }
+  const sched_bwp_config& init_bwp() const { return cell_ded->bwps[to_bwp_id(0)]; }
   const bwp_config_list&  bwps() const { return cell_ded->bwps; }
 
   /// Fetches CORESET configuration based on Coreset-Id.
@@ -173,7 +170,7 @@ public:
   /// Get CSI-MeasConfig for the UE.
   const csi_meas_config* csi_meas_cfg() const
   {
-    return cell_ded->csi_meas_cfg.has_value() ? &*cell_ded->csi_meas_cfg.value() : nullptr;
+    return cell_ded->csi_meas_cfg.has_value() ? &*cell_ded->csi_meas_cfg : nullptr;
   }
 
   /// PDSCH parameters common to all BWPs.

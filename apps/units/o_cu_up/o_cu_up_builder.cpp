@@ -112,11 +112,12 @@ o_cu_up_unit ocudu::build_o_cu_up(const o_cu_up_unit_config& unit_cfg, const o_c
   config.cu_up_cfg.qos = generate_cu_up_qos_config(unit_cfg.cu_up_cfg);
 
   ocuup::o_cu_up_dependencies ocu_up_dependencies;
-  ocu_up_dependencies.cu_dependencies.exec_mapper    = &dependencies.workers->get_cu_up_executor_mapper();
-  ocu_up_dependencies.cu_dependencies.e1_conn_client = dependencies.e1ap_conn_client;
-  ocu_up_dependencies.cu_dependencies.f1u_gateway    = dependencies.f1u_gateway;
-  ocu_up_dependencies.cu_dependencies.gtpu_pcap      = dependencies.gtpu_pcap;
-  ocu_up_dependencies.cu_dependencies.timers         = dependencies.timers;
+  ocu_up_dependencies.cu_dependencies.exec_mapper     = &dependencies.workers->get_cu_up_executor_mapper();
+  ocu_up_dependencies.cu_dependencies.e1_conn_clients = {dependencies.e1ap_conn_client}; // TODO support multiple E1APs.
+  ocu_up_dependencies.cu_dependencies.f1u_teid_allocator = dependencies.f1u_teid_allocator;
+  ocu_up_dependencies.cu_dependencies.f1u_gateway        = dependencies.f1u_gateway;
+  ocu_up_dependencies.cu_dependencies.gtpu_pcap          = dependencies.gtpu_pcap;
+  ocu_up_dependencies.cu_dependencies.timers             = dependencies.timers;
 
   // Create NG-U gateway(s).
   std::vector<std::unique_ptr<gtpu_gateway>> ngu_gws;
@@ -159,8 +160,11 @@ o_cu_up_unit ocudu::build_o_cu_up(const o_cu_up_unit_config& unit_cfg, const o_c
   auto e2_metric_connectors = std::make_unique<e2_cu_metrics_connector_manager>();
 
   if (unit_cfg.e2_cfg.base_config.enable_unit_e2) {
-    config.e2ap_cfg = generate_e2_config(
-        unit_cfg.e2_cfg.base_config, unit_cfg.cu_up_cfg.gnb_id, config.cu_up_cfg.plmn, config.cu_up_cfg.cu_up_id);
+    ocudu_assert(!config.cu_up_cfg.plmns.empty(), "CU-UP PLMN list must not be empty");
+    config.e2ap_cfg                        = generate_e2_config(unit_cfg.e2_cfg.base_config,
+                                         unit_cfg.cu_up_cfg.gnb_id,
+                                         config.cu_up_cfg.plmns.front(),
+                                         config.cu_up_cfg.cu_up_id);
     ocu_up_dependencies.e2_client          = dependencies.e2_gw;
     ocu_up_dependencies.e2_cu_metric_iface = &(*e2_metric_connectors).get_e2_metrics_interface(0);
   }

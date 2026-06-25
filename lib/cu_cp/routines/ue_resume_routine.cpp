@@ -4,17 +4,16 @@
 
 #include "ue_resume_routine.h"
 #include "pdu_session_routine_helpers.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 
 using namespace ocudu;
 using namespace ocucp;
 using namespace asn1::rrc_nr;
 
-static bool verify_rrc_resume_request(const cu_cp_rrc_resume_request& request,
-                                      ue_manager&                     ue_mng,
-                                      const ocudulog::basic_logger&   logger)
+static bool
+verify_rrc_resume_request(const rrc_resume_request& request, ue_manager& ue_mng, const ocudulog::basic_logger& logger)
 {
-  if (request.ue_index == ue_index_t::invalid) {
+  if (request.ue_index == cu_cp_ue_index_t::invalid) {
     logger.warning("UE index must not be invalid");
     return false;
   }
@@ -27,7 +26,7 @@ static bool verify_rrc_resume_request(const cu_cp_rrc_resume_request& request,
   return true;
 }
 
-ue_resume_routine::ue_resume_routine(const cu_cp_rrc_resume_request&        request_,
+ue_resume_routine::ue_resume_routine(const rrc_resume_request&              request_,
                                      const ue_configuration&                ue_cfg_,
                                      du_processor&                          du_proc_,
                                      cu_cp_ue_context_manipulation_handler& ue_context_handler_,
@@ -206,10 +205,10 @@ f1ap_ue_context_release_command ue_resume_routine::fill_du_ue_context_release_co
 
   // Prepare UE Context Release Command and call F1.
   f1ap_ue_context_release_command du_ue_context_release_command;
-  du_ue_context_release_command.ue_index        = request.ue_index;
-  du_ue_context_release_command.cause           = f1ap_cause_radio_network_t::normal_release;
-  du_ue_context_release_command.rrc_release_pdu = release_context.rrc_release_pdu.copy();
-  du_ue_context_release_command.srb_id          = release_context.srb_id;
+  du_ue_context_release_command.ue_index = request.ue_index;
+  du_ue_context_release_command.cause    = f1ap_cause_radio_network_t::normal_release;
+  du_ue_context_release_command.rrc_pdu  = release_context.rrc_pdu.copy();
+  du_ue_context_release_command.srb_id   = release_context.srb_id;
 
   return du_ue_context_release_command;
 }
@@ -266,7 +265,7 @@ bool ue_resume_routine::generate_ue_context_setup_request(f1ap_ue_context_setup_
 bool ue_resume_routine::handle_ue_context_setup_response()
 {
   // Sanity checks.
-  if (ue_context_setup_response.ue_index == ue_index_t::invalid) {
+  if (ue_context_setup_response.ue_index == cu_cp_ue_index_t::invalid) {
     logger.warning("Failed to create UE at the DU");
     return false;
   }

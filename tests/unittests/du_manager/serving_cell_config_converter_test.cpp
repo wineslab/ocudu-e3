@@ -43,8 +43,7 @@ static pusch_config make_initial_pusch_config()
   cfg.pusch_pwr_ctrl.value().p0_alphasets.push_back(pusch_config::pusch_power_control::p0_pusch_alphaset{
       .id = static_cast<p0_pusch_alphaset_id>(0), .p0 = 0, .p0_pusch_alpha = alpha::alpha1});
   cfg.pusch_pwr_ctrl.value().pathloss_ref_rs.push_back(pusch_config::pusch_power_control::pusch_pathloss_ref_rs{
-      .id = static_cast<pusch_config::pusch_power_control::pusch_pathloss_ref_rs_id>(0),
-      .rs = static_cast<ssb_id_t>(0)});
+      .id = static_cast<pusch_config::pusch_power_control::pusch_pathloss_ref_rs_id>(0), .rs = 0});
   cfg.pusch_pwr_ctrl.value().sri_pusch_mapping.push_back(pusch_config::pusch_power_control::sri_pusch_pwr_ctrl{
       .id                           = static_cast<pusch_config::pusch_power_control::sri_pusch_pwr_ctrl_id>(0),
       .sri_pusch_pathloss_ref_rs_id = static_cast<pusch_config::pusch_power_control::pusch_pathloss_ref_rs_id>(0),
@@ -397,20 +396,18 @@ TEST(serving_cell_config_converter_test, test_ue_custom_pucch_cfg_conversion)
 
   // >> PUCCH Resource Set 1.
   dest_pucch_cfg.pucch_res_set.emplace_back();
-  dest_pucch_cfg.pucch_res_set.back().pucch_res_set_id = ocudu::pucch_res_set_idx::set_1;
-  dest_pucch_cfg.pucch_res_set.back().pucch_res_id_list.emplace_back(pucch_res_id_t{1, 1});
+  dest_pucch_cfg.pucch_res_set.back().id = ocudu::pucch_res_set_id::set_1;
+  dest_pucch_cfg.pucch_res_set.back().resources.emplace_back(pucch_res_id_t::make_ded(1, 1));
   // Remove first element.
   dest_pucch_cfg.pucch_res_set.erase(dest_pucch_cfg.pucch_res_set.begin());
 
   // >>> PUCCH resource 2.
-  pucch_resource res_basic{.res_id           = pucch_res_id_t{14, 14},
-                           .starting_prb     = 40,
-                           .second_hop_prb   = 50,
-                           .nof_symbols      = 1,
-                           .starting_sym_idx = 13,
-                           .format           = pucch_format::FORMAT_3};
-  res_basic.format = pucch_format::FORMAT_2;
-  res_basic.format_params.emplace<pucch_format_2_3_cfg>();
+  pucch_resource res_basic;
+  res_basic.res_id         = pucch_res_id_t::make_ded(14, 14);
+  res_basic.starting_prb   = 40;
+  res_basic.second_hop_prb = 50;
+  res_basic.syms           = ofdm_symbol_range::start_and_len(13, 1);
+  res_basic.format_params.emplace<pucch_resource::f2_config>(pucch_resource::f2_config{.nof_prbs = 1});
   dest_pucch_cfg.pucch_res_list.push_back(res_basic);
 
   // Remove first element.
@@ -437,11 +434,12 @@ TEST(serving_cell_config_converter_test, test_ue_custom_pucch_cfg_conversion)
   dest_pucch_cfg.format_4_common_param.value().additional_dmrs = true;
 
   // >>> SR Resource.
-  dest_pucch_cfg.sr_res_list.push_back(scheduling_request_resource_config{.sr_res_id    = 2,
-                                                                          .sr_id        = uint_to_sched_req_id(1),
-                                                                          .period       = sr_periodicity::sl_80,
-                                                                          .offset       = 0,
-                                                                          .pucch_res_id = pucch_res_id_t{1, 1}});
+  dest_pucch_cfg.sr_res_list.push_back(
+      scheduling_request_resource_config{.sr_res_id    = 2,
+                                         .sr_id        = uint_to_sched_req_id(1),
+                                         .period       = sr_periodicity::sl_80,
+                                         .offset       = 0,
+                                         .pucch_res_id = pucch_res_id_t::make_ded(1, 1)});
 
   // Remove first element.
   dest_pucch_cfg.sr_res_list.erase(dest_pucch_cfg.sr_res_list.begin());
@@ -1055,8 +1053,8 @@ TEST(serving_cell_config_converter_test, test_custom_csi_meas_cfg_conversion)
   dest_csi_meas_cfg.csi_im_res_set_list.back().csi_ims_resources = {static_cast<csi_im_res_id_t>(1)};
 
   // Add new configurations. Configuration need not be valid.
-  dest_csi_meas_cfg.csi_ssb_res_set_list.push_back(csi_ssb_resource_set{
-      .res_set_id = static_cast<csi_ssb_res_set_id_t>(0), .csi_ssb_res_list = {static_cast<ssb_id_t>(0)}});
+  dest_csi_meas_cfg.csi_ssb_res_set_list.push_back(
+      csi_ssb_resource_set{.res_set_id = static_cast<csi_ssb_res_set_id_t>(0), .csi_ssb_res_list = {0}});
 
   // Add new/remove configurations. Configuration need not be valid.
   dest_csi_meas_cfg.csi_res_cfg_list.push_back(dest_csi_meas_cfg.csi_res_cfg_list[0]);

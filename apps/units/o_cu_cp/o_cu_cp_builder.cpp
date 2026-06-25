@@ -68,7 +68,7 @@ o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_u
   cu_cp_cfg.services.cu_cp_executor         = &dependencies.executor_mapper->ctrl_executor();
   cu_cp_cfg.services.cu_cp_e2_exec          = &dependencies.executor_mapper->e2_executor();
   cu_cp_cfg.services.timers                 = dependencies.timers;
-  cu_cp_cfg.xnap.xnc_gw                     = dependencies.xnc_gw;
+  cu_cp_cfg.xnap.xnc_gws                    = dependencies.xnc_gws;
 
   o_cu_cp_unit ocucp;
   auto         e2_metric_connectors = std::make_unique<e2_cu_metrics_connector_manager>();
@@ -106,7 +106,13 @@ o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_u
 
   ocucp::o_cu_cp_dependencies ocu_dependencies;
   if (unit_cfg.e2_cfg.base_config.enable_unit_e2) {
-    o_cu_cp_cfg.e2ap_config             = generate_e2_config(unit_cfg.e2_cfg, cucp_unit_cfg.gnb_id);
+    ocudu_assert(!cucp_unit_cfg.amf_config.amf.supported_tas.empty() &&
+                     !cucp_unit_cfg.amf_config.amf.supported_tas.front().plmn_list.empty(),
+                 "CU-CP AMF config must have at least one supported TA with a PLMN");
+    o_cu_cp_cfg.e2ap_config =
+        generate_e2_config(unit_cfg.e2_cfg,
+                           cucp_unit_cfg.gnb_id,
+                           cucp_unit_cfg.amf_config.amf.supported_tas.front().plmn_list.front().plmn_id);
     ocu_dependencies.e2_client          = dependencies.e2_gw;
     ocu_dependencies.e2_cu_metric_iface = &(*e2_metric_connectors).get_e2_metrics_interface(0);
   }
@@ -120,6 +126,8 @@ o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_u
   ocucp.commands.cmdline.commands.push_back(
       std::make_unique<cho_app_command>(ocucp.unit->get_cu_cp().get_command_handler(),
                                         std::chrono::milliseconds{cucp_unit_cfg.mobility_config.cho_timeout_ms}));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<release_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
 
   return ocucp;
 }

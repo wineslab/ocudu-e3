@@ -18,6 +18,7 @@ static sched_ue_creation_request_message make_scheduler_ue_creation_request(cons
   ret.crnti              = request.crnti;
   ret.starts_in_fallback = request.initial_fallback;
   ret.ul_ccch_slot_rx    = request.ul_ccch_slot_rx;
+  ret.cfra_enabled       = request.cfra_preamble_index.has_value();
   ret.cfg                = request.sched_cfg;
   return ret;
 }
@@ -54,8 +55,9 @@ void ocudu_scheduler_adapter::add_cell(const mac_scheduler_cell_creation_request
   cell_handlers.emplace(msg.cell_params.cell_index, *this, msg.cell_params.sched_req);
 
   // Forward cell configuration to scheduler.
-  auto sched_req    = msg.cell_params.sched_req;
-  sched_req.metrics = {msg.metric_notifier};
+  auto sched_req                      = msg.cell_params.sched_req;
+  sched_req.metrics                   = {msg.metric_notifier};
+  sched_req.metrics.report_ue_metrics = msg.report_ue_metrics;
   sched_impl->handle_cell_configuration_request(sched_req);
 }
 
@@ -149,6 +151,10 @@ async_task<void> ocudu_scheduler_adapter::handle_ue_removal_request(const mac_ue
 
 void ocudu_scheduler_adapter::handle_ue_config_applied(du_ue_index_t ue_index)
 {
+  // Free any CFRA preamble slot still held by this UE — the config being applied means
+  // the random access procedure is complete and the slot can be reused.
+  rach_handler.handle_cfra_deallocation(ue_index);
+
   // Notify scheduler that the UE confirmed the configuration.
   sched_impl->handle_ue_config_applied(ue_index);
 }
@@ -267,6 +273,7 @@ void ocudu_scheduler_adapter::handle_ul_phr_indication(const mac_phr_ce_info& ph
 void ocudu_scheduler_adapter::handle_crnti_ce_indication(du_ue_index_t old_ue_index, du_cell_index_t cell_index)
 {
   rlf_handler.handle_crnti_ce(old_ue_index);
+  sched_impl->handle_crnti_ce_received(old_ue_index);
 }
 
 const sched_result& ocudu_scheduler_adapter::slot_indication(slot_point_extended slot_tx, du_cell_index_t cell_idx)

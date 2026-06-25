@@ -14,7 +14,7 @@ static YAML::Node build_cu_cp_tai_slice_section(const cu_cp_unit_plmn_item::tai_
 {
   YAML::Node node;
 
-  node["sst"] = config.sst;
+  node["sst"] = static_cast<unsigned>(config.sst);
   if (config.sd) {
     node["sd"] = config.sd;
   }
@@ -79,22 +79,35 @@ static YAML::Node build_cu_cp_extra_amfs_section(const std::vector<cu_cp_unit_am
 
 static YAML::Node build_cu_cp_amf_section(const cu_cp_unit_amf_config& config)
 {
-  YAML::Node node;
+  // The CLI schema inlines the primary AMF item options into the cu_cp.amf subcommand, so emit those
+  // fields at the same level here rather than under a nested "amf" key.
+  YAML::Node node = build_cu_cp_extra_amfs_item_section(config.amf);
 
   node["no_core"]                     = config.no_core;
   node["amf_reconnection_retry_time"] = config.amf_reconnection_retry_time;
   node["procedure_timeout"]           = config.procedure_timeout;
-  node["amf"]                         = build_cu_cp_extra_amfs_item_section(config.amf);
 
   return node;
 }
 
-static YAML::Node build_cu_cp_xnap_item_section(const cu_cp_unit_xnap_config_item& config)
+static YAML::Node build_cu_cp_xnap_peer_section(const cu_cp_unit_xnap_peer_config& config)
+{
+  YAML::Node node;
+
+  node["peer_addrs"] = config.peer_addrs;
+
+  return node;
+}
+
+static YAML::Node build_cu_cp_xnap_gateway_section(const cu_cp_unit_xnap_gateway_config& config)
 {
   YAML::Node node;
 
   node["bind_addrs"] = config.bind_addrs;
-  node["peer_addrs"] = config.peer_addrs;
+  fill_sctp_config_in_yaml_schema(node["sctp"], config.sctp);
+  for (const auto& peer : config.connections) {
+    node["connections"].push_back(build_cu_cp_xnap_peer_section(peer));
+  }
 
   return node;
 }
@@ -105,10 +118,9 @@ static YAML::Node build_cu_cp_xnap_section(const cu_cp_unit_xnap_config& xnap_co
 
   node["procedure_timeout"]  = xnap_config.procedure_timeout;
   node["no_connection_init"] = xnap_config.no_connection_init;
-  fill_sctp_config_in_yaml_schema(node, xnap_config.sctp);
 
-  for (const auto& xnap : xnap_config.connections) {
-    node["connections"].push_back(build_cu_cp_xnap_item_section(xnap));
+  for (const auto& gateway : xnap_config.gateways) {
+    node["gateways"].push_back(build_cu_cp_xnap_gateway_section(gateway));
   }
 
   return node;
@@ -142,6 +154,12 @@ static YAML::Node build_cu_cp_mobility_cells_section(const cu_cp_unit_cell_confi
   node["gnb_id_bit_length"] = config.gnb_id_bit_length.value();
   if (config.pci) {
     node["pci"] = config.pci.value();
+  }
+  if (config.plmn_id) {
+    node["plmn"] = config.plmn_id.value();
+  }
+  if (config.tac) {
+    node["tac"] = config.tac.value();
   }
   if (config.ssb_arfcn) {
     node["ssb_arfcn"] = config.ssb_arfcn.value().value();
@@ -303,53 +321,32 @@ static YAML::Node build_cu_cp_security_section(const cu_cp_unit_security_config&
   return node;
 }
 
-static YAML::Node build_cu_cp_f1ap_section(const cu_cp_unit_f1ap_config& config)
+static void fill_cu_cp_section(YAML::Node node, const cu_cp_unit_config& config)
 {
-  YAML::Node node;
-
-  node["procedure_timeout"] = config.procedure_timeout;
-
-  return node;
-}
-
-static YAML::Node build_cu_cp_e1ap_section(const cu_cp_unit_e1ap_config& config)
-{
-  YAML::Node node;
-
-  node["procedure_timeout"] = config.procedure_timeout;
-
-  return node;
-}
-
-static YAML::Node build_cu_cp_section(const cu_cp_unit_config& config)
-{
-  YAML::Node node;
-
   node["max_nof_dus"]                 = config.max_nof_dus;
   node["max_nof_cu_ups"]              = config.max_nof_cu_ups;
   node["max_nof_ues"]                 = config.max_nof_ues;
   node["max_nof_drbs_per_ue"]         = static_cast<unsigned>(config.max_nof_drbs_per_ue);
   node["inactivity_timer"]            = config.inactivity_timer;
   node["enable_rrc_inactive"]         = config.enable_rrc_inactive;
-  node["ran_paging_cycle"]            = config.ran_paging_cycle;
+  node["ran_paging_cycle"]            = static_cast<unsigned>(config.ran_paging_cycle);
   node["t380"]                        = config.t380;
-  node["nof_i_rnti_ue_bits"]          = config.nof_i_rnti_ue_bits;
+  node["nof_i_rnti_ue_bits"]          = static_cast<unsigned>(config.nof_i_rnti_ue_bits);
   node["request_pdu_session_timeout"] = config.request_pdu_session_timeout;
 
   node["amf"] = build_cu_cp_amf_section(config.amf_config);
   if (!config.extra_amfs.empty()) {
     node["extra_amfs"] = build_cu_cp_extra_amfs_section(config.extra_amfs);
   }
-  if (!config.xnap_config.connections.empty()) {
+  if (!config.xnap_config.gateways.empty()) {
     node["xnap"] = build_cu_cp_xnap_section(config.xnap_config);
   }
   node["mobility"] = build_cu_cp_mobility_section(config.mobility_config);
   node["rrc"]      = build_cu_cp_rrc_section(config.rrc_config);
   node["security"] = build_cu_cp_security_section(config.security_config);
-  node["f1ap"]     = build_cu_cp_f1ap_section(config.f1ap_config);
-  node["e1ap"]     = build_cu_cp_e1ap_section(config.e1ap_config);
-
-  return node;
+  // Merge into any existing f1ap/e1ap nodes the appconfig writer may have populated (bind_addrs, sctp...).
+  node["f1ap"]["procedure_timeout"] = config.f1ap_config.procedure_timeout;
+  node["e1ap"]["procedure_timeout"] = config.e1ap_config.procedure_timeout;
 }
 
 static void fill_cu_cp_log_section(YAML::Node node, const cu_cp_unit_logger_config& config)
@@ -513,18 +510,6 @@ static void fill_cu_cp_qos_section(YAML::Node node, span<const cu_cp_unit_qos_co
   }
 }
 
-static void build_cu_cp_slicing_section(YAML::Node node, span<const s_nssai_t> slice_cfg)
-{
-  for (const auto& slice : slice_cfg) {
-    YAML::Node node_entry;
-    node_entry["sst"] = slice.sst.value();
-    if (slice.sd.is_set()) {
-      node_entry["sd"] = slice.sd.value();
-    }
-    node["slicing"].push_back(node_entry);
-  }
-}
-
 void ocudu::fill_cu_cp_config_in_yaml_schema(YAML::Node& node, const cu_cp_unit_config& config)
 {
   node["gnb_id"]            = config.gnb_id.id;
@@ -533,11 +518,9 @@ void ocudu::fill_cu_cp_config_in_yaml_schema(YAML::Node& node, const cu_cp_unit_
 
   app_helpers::fill_metrics_appconfig_in_yaml_schema(node, config.metrics.common_metrics_cfg);
 
-  node["cu_cp"] = build_cu_cp_section(config);
+  fill_cu_cp_section(node["cu_cp"], config);
   fill_cu_cp_log_section(node["log"], config.loggers);
   fill_cu_cp_pcap_section(node["pcap"], config.pcap_cfg);
   fill_cu_cp_metrics_section(node["metrics"], config.metrics);
   fill_cu_cp_qos_section(node, config.qos_cfg);
-
-  build_cu_cp_slicing_section(node, config.slice_cfg);
 }

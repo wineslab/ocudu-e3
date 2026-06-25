@@ -23,11 +23,11 @@
 #include "procedures/ngap_ue_context_release_procedure.h"
 #include "ocudu/asn1/ngap/common.h"
 #include "ocudu/asn1/ngap/ngap.h"
-#include "ocudu/cu_cp/cu_cp_location_reporting_types.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/ngap/ngap_setup.h"
 #include "ocudu/ngap/ngap_types.h"
 #include "ocudu/ran/cause/ngap_cause.h"
+#include "ocudu/ran/cu_cp_location_reporting_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/support/async/async_no_op_task.h"
 
 using namespace ocudu;
@@ -59,8 +59,8 @@ ngap_impl::ngap_impl(const ngap_configuration& ngap_cfg_,
 // Note: For fwd declaration of member types, dtor cannot be trivial.
 ngap_impl::~ngap_impl() {}
 
-bool ngap_impl::update_ue_index(ue_index_t              new_ue_index,
-                                ue_index_t              old_ue_index,
+bool ngap_impl::update_ue_index(cu_cp_ue_index_t        new_ue_index,
+                                cu_cp_ue_index_t        old_ue_index,
                                 ngap_cu_cp_ue_notifier& new_ue_notifier)
 {
   if (!ue_ctxt_list.contains(old_ue_index)) {
@@ -85,7 +85,7 @@ bool ngap_impl::update_ue_index(ue_index_t              new_ue_index,
 }
 
 std::optional<ngap_core_network_assist_info_for_inactive>
-ngap_impl::get_cn_assist_info_for_inactive(ue_index_t ue_index)
+ngap_impl::get_cn_assist_info_for_inactive(cu_cp_ue_index_t ue_index)
 {
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.warning("ue={}: Cannot get core network assist info for inactive. UE context does not exist", ue_index);
@@ -281,11 +281,15 @@ void ngap_impl::handle_location_report_transmission(const location_report& msg)
 
   fill_asn1_location_report(*location_report_msg, msg);
 
-  // Forward message to AMF.
-  if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
-    logger.warning("ue={}: AMF notifier is not set. Cannot send LocationReport", msg.ue_index);
-    return;
-  }
+  // Schedule transmission of Location Report message to AMF.
+  ue->schedule_async_task(launch_async([this, msg, ngap_msg](coro_context<async_task<void>>& ctx) {
+    CORO_BEGIN(ctx);
+    if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
+      logger.error("ue={}: AMF notifier is not set. Cannot send LocationReport", msg.ue_index);
+      CORO_EARLY_RETURN();
+    }
+    CORO_RETURN();
+  }));
 }
 
 void ngap_impl::handle_location_reporting_failure_indication_transmission(const location_report_failure_indication& msg)
@@ -487,8 +491,8 @@ void ngap_impl::handle_dl_nas_transport_message(const asn1::ngap::dl_nas_transpo
 
   // Store UE Aggregate Maximum Bitrate.
   if (msg->ue_aggr_max_bit_rate_present) {
-    ue->set_ue_ambr(cu_cp_aggregate_maximum_bit_rate{msg->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_dl,
-                                                     msg->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_ul});
+    ue->set_ue_ambr(aggregate_maximum_bit_rate_t{msg->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_dl,
+                                                 msg->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_ul});
   }
 
   // Add AMF UE ID to ue ngap context if it is not set (this is the first DL NAS Transport message).
@@ -592,7 +596,7 @@ void ngap_impl::handle_initial_context_setup_request(const asn1::ngap::init_cont
     ue->set_ue_ambr(init_ctxt_setup_req.ue_aggr_max_bit_rate.value());
   } else {
     // Add stored UE Aggregate Maximum Bitrate to request.
-    cu_cp_aggregate_maximum_bit_rate ue_ambr = ue->get_ue_ambr();
+    aggregate_maximum_bit_rate_t ue_ambr = ue->get_ue_ambr();
     if (ue_ambr.dl > 0 && ue_ambr.ul > 0) {
       init_ctxt_setup_req.ue_aggr_max_bit_rate = ue_ambr;
     }
@@ -715,15 +719,15 @@ void ngap_impl::handle_pdu_session_resource_setup_request(const asn1::ngap::pdu_
 
   // Store information in UE context.
   if (request->ue_aggr_max_bit_rate_present) {
-    ue->set_ue_ambr(cu_cp_aggregate_maximum_bit_rate{request->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_dl,
-                                                     request->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_ul});
+    ue->set_ue_ambr(aggregate_maximum_bit_rate_t{request->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_dl,
+                                                 request->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_ul});
   }
 
   // Convert to common type.
-  cu_cp_pdu_session_resource_setup_request msg;
+  ngap_pdu_session_resource_setup_request msg;
   msg.ue_index     = ue_ctxt.ue_ids.ue_index;
   msg.serving_plmn = ue_ctxt.serving_guami.plmn;
-  if (!fill_cu_cp_pdu_session_resource_setup_request(msg, request->pdu_session_res_setup_list_su_req)) {
+  if (!fill_ngap_pdu_session_resource_setup_request(msg, request->pdu_session_res_setup_list_su_req)) {
     ue_ctxt.logger.log_warning("Conversion of PDUSessionResourceSetupRequest failed");
     send_error_indication(tx_pdu_notifier, logger, ue_ctxt.ue_ids.ran_ue_id, ue_ctxt.ue_ids.amf_ue_id, {});
     return;
@@ -778,9 +782,9 @@ void ngap_impl::handle_pdu_session_resource_modify_request(const asn1::ngap::pdu
   }
 
   // Convert to common type.
-  cu_cp_pdu_session_resource_modify_request msg;
+  ngap_pdu_session_resource_modify_request msg;
   msg.ue_index = ue_ctxt.ue_ids.ue_index;
-  if (!fill_cu_cp_pdu_session_resource_modify_request(msg, request->pdu_session_res_modify_list_mod_req)) {
+  if (!fill_ngap_pdu_session_resource_modify_request(msg, request->pdu_session_res_modify_list_mod_req)) {
     ue_ctxt.logger.log_warning("Unable to fill ASN1 contents for PDUSessionResourceModifyRequest");
     schedule_error_indication(ue_ctxt.ue_ids.ue_index, ngap_cause_radio_network_t::unspecified);
     return;
@@ -825,9 +829,9 @@ void ngap_impl::handle_pdu_session_resource_release_command(const asn1::ngap::pd
                fmt::underlying(ue_ctxt.ue_ids.amf_ue_id));
 
   // Convert to common type.
-  cu_cp_pdu_session_resource_release_command msg;
+  ngap_pdu_session_resource_release_command msg;
   msg.ue_index = ue_ctxt.ue_ids.ue_index;
-  fill_cu_cp_pdu_session_resource_release_command(msg, command);
+  fill_ngap_pdu_session_resource_release_command(msg, command);
 
   // Start routine.
   ue->schedule_async_task(launch_async<ngap_pdu_session_resource_release_procedure>(
@@ -978,7 +982,7 @@ void ngap_impl::handle_handover_request(const asn1::ngap::ho_request_s& msg)
   // Create UE in target cell.
   ho_request.ue_index = cu_cp_notifier.request_new_ue_index_allocation(
       ho_request.source_to_target_transparent_container.target_cell_id, ho_request.guami.plmn);
-  if (ho_request.ue_index == ue_index_t::invalid) {
+  if (ho_request.ue_index == cu_cp_ue_index_t::invalid) {
     logger.debug("Couldn't allocate UE index for handover target cell");
     send_handover_failure(msg->amf_ue_ngap_id);
     return;
@@ -1031,7 +1035,7 @@ void ngap_impl::handle_dl_ran_status_transfer(const asn1::ngap::dl_ran_status_tr
 
 void ngap_impl::handle_ul_ran_status_transfer(const cu_cp_status_transfer& ul_ran_status_transfer)
 {
-  const ue_index_t ue_index = ul_ran_status_transfer.ue_index;
+  const cu_cp_ue_index_t ue_index = ul_ran_status_transfer.ue_index;
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.warning("ue={}: Dropping ULRANStatusTransfer. UE context does not exist", ue_index);
     return;
@@ -1056,7 +1060,7 @@ void ngap_impl::handle_ul_ran_status_transfer(const cu_cp_status_transfer& ul_ra
   }
 }
 
-async_task<expected<cu_cp_status_transfer>> ngap_impl::handle_dl_ran_status_transfer_required(ue_index_t ue_index)
+async_task<expected<cu_cp_status_transfer>> ngap_impl::handle_dl_ran_status_transfer_required(cu_cp_ue_index_t ue_index)
 {
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.warning("ue={}: Cannot await DLRANStatusTransfer. UE context does not exist", ue_index);
@@ -1131,7 +1135,7 @@ void ngap_impl::handle_location_reporting_control_message(const asn1::ngap::loca
     handle_inconsistent_ue_id_pair(uint_to_ran_ue_id(msg->ran_ue_ngap_id), uint_to_amf_ue_id(msg->amf_ue_ngap_id));
     return;
   }
-  ue_index_t              ue_index = ue_ctxt_list[uint_to_ran_ue_id(msg->ran_ue_ngap_id)].ue_ids.ue_index;
+  cu_cp_ue_index_t        ue_index = ue_ctxt_list[uint_to_ran_ue_id(msg->ran_ue_ngap_id)].ue_ids.ue_index;
   location_report_request location_reporting_ctrl;
 
   fill_ngap_location_report_request(location_reporting_ctrl, msg);
@@ -1140,10 +1144,10 @@ void ngap_impl::handle_location_reporting_control_message(const asn1::ngap::loca
 
 void ngap_impl::handle_error_indication(const asn1::ngap::error_ind_s& msg)
 {
-  amf_ue_id_t amf_ue_id = amf_ue_id_t::invalid;
-  ran_ue_id_t ran_ue_id = ran_ue_id_t::invalid;
-  ue_index_t  ue_index  = ue_index_t::invalid;
-  std::string msg_cause;
+  amf_ue_id_t      amf_ue_id = amf_ue_id_t::invalid;
+  ran_ue_id_t      ran_ue_id = ran_ue_id_t::invalid;
+  cu_cp_ue_index_t ue_index  = cu_cp_ue_index_t::invalid;
+  std::string      msg_cause;
 
   if (msg->cause_present) {
     msg_cause = asn1_cause_to_string(msg->cause);
@@ -1402,7 +1406,7 @@ ngap_impl::handle_handover_preparation_request(const ngap_handover_preparation_r
                                                            ue_ctxt.logger);
 }
 
-void ngap_impl::handle_inter_cu_ho_rrc_recfg_complete(const ue_index_t           ue_index,
+void ngap_impl::handle_inter_cu_ho_rrc_recfg_complete(const cu_cp_ue_index_t     ue_index,
                                                       const nr_cell_global_id_t& cgi,
                                                       const tac_t                tac)
 {
@@ -1430,7 +1434,7 @@ void ngap_impl::handle_inter_cu_ho_rrc_recfg_complete(const ue_index_t          
   }
 }
 
-void ngap_impl::handle_ul_ue_associated_nrppa_transport(ue_index_t ue_index, const byte_buffer& nrppa_pdu)
+void ngap_impl::handle_ul_ue_associated_nrppa_transport(cu_cp_ue_index_t ue_index, const byte_buffer& nrppa_pdu)
 {
   // Forward message to AMF.
   if (!ue_ctxt_list.contains(ue_index)) {
@@ -1504,7 +1508,7 @@ async_task<void> ngap_impl::handle_ul_non_ue_associated_nrppa_transport(const by
 async_task<bool>
 ngap_impl::handle_rrc_inactive_transition_report_required(const ngap_rrc_inactive_transition_report& report)
 {
-  const ue_index_t ue_index = report.ue_index;
+  const cu_cp_ue_index_t ue_index = report.ue_index;
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.warning("ue={}: Dropping RRCInactiveTransitionReport. UE context does not exist", ue_index);
     return launch_async([](coro_context<async_task<bool>>& ctx) {
@@ -1611,7 +1615,7 @@ ngap_info ngap_impl::handle_ngap_metrics_report_request() const
   return ngap_info;
 }
 
-void ngap_impl::remove_ue_context(ue_index_t ue_index)
+void ngap_impl::remove_ue_context(cu_cp_ue_index_t ue_index)
 {
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.debug("ue={}: UE context not found", ue_index);
@@ -1621,16 +1625,16 @@ void ngap_impl::remove_ue_context(ue_index_t ue_index)
   ue_ctxt_list.remove_ue_context(ue_index);
 }
 
-ue_index_t ngap_impl::get_ue_index(const amf_ue_id_t& amf_ue_ngap_id)
+cu_cp_ue_index_t ngap_impl::get_ue_index(const amf_ue_id_t& amf_ue_ngap_id)
 {
   if (ue_ctxt_list.contains(amf_ue_ngap_id)) {
     ngap_ue_context& ue_ctxt = ue_ctxt_list[amf_ue_ngap_id];
     return ue_ctxt.ue_ids.ue_index;
   }
-  return ue_index_t::invalid;
+  return cu_cp_ue_index_t::invalid;
 }
 
-amf_ue_id_t ngap_impl::get_amf_ue_id(const ue_index_t& ue_index)
+amf_ue_id_t ngap_impl::get_amf_ue_id(const cu_cp_ue_index_t& ue_index)
 {
   if (ue_ctxt_list.contains(ue_index)) {
     ngap_ue_context& ue_ctxt = ue_ctxt_list[ue_index];
@@ -1639,7 +1643,9 @@ amf_ue_id_t ngap_impl::get_amf_ue_id(const ue_index_t& ue_index)
   return amf_ue_id_t::invalid;
 }
 
-void ngap_impl::schedule_error_indication(ue_index_t ue_index, ngap_cause_t cause, std::optional<amf_ue_id_t> amf_ue_id)
+void ngap_impl::schedule_error_indication(cu_cp_ue_index_t           ue_index,
+                                          ngap_cause_t               cause,
+                                          std::optional<amf_ue_id_t> amf_ue_id)
 {
   ngap_ue_context& ue_ctxt = ue_ctxt_list[ue_index];
   auto*            ue      = ue_ctxt.get_cu_cp_ue();
@@ -1653,7 +1659,7 @@ void ngap_impl::schedule_error_indication(ue_index_t ue_index, ngap_cause_t caus
   }));
 }
 
-void ngap_impl::on_request_pdu_session_timer_expired(ue_index_t ue_index)
+void ngap_impl::on_request_pdu_session_timer_expired(cu_cp_ue_index_t ue_index)
 {
   if (ue_ctxt_list.contains(ue_index)) {
     ngap_ue_context& ue_ctxt = ue_ctxt_list[ue_index];
@@ -1753,8 +1759,8 @@ static auto log_pdu_helper(ocudulog::basic_logger&       logger,
     return;
   }
 
-  std::optional<ran_ue_id_t> ran_ue_id = asn1_utils::get_ran_ue_id(pdu);
-  std::optional<ue_index_t>  ue_idx;
+  std::optional<ran_ue_id_t>      ran_ue_id = asn1_utils::get_ran_ue_id(pdu);
+  std::optional<cu_cp_ue_index_t> ue_idx;
   if (ran_ue_id.has_value()) {
     const auto* ue = ue_ctxt_list.find(ran_ue_id.value());
     if (ue != nullptr) {

@@ -7,7 +7,7 @@
 #include "lib/cu_cp/du_processor/du_processor.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -114,6 +114,11 @@ TEST_F(du_processor_ue_creation_test, when_init_ul_rrc_message_is_invalid_then_u
   msg.pdu.init_msg().value.init_ul_rrc_msg_transfer()->nr_cgi.nr_cell_id.from_number(1);
 
   du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(msg);
+
+  // Inject UE Context Release Complete.
+  f1ap_message release_cmplt =
+      test_helpers::generate_ue_context_release_complete(gnb_cu_ue_f1ap_id_t{0}, gnb_du_ue_f1ap_id_t{0});
+  du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(release_cmplt);
 
   ASSERT_EQ(ue_mng.get_nof_ues(), 0);
 }

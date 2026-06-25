@@ -8,12 +8,14 @@
 #include "ocudu/adt/span.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg_ies.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/cu_cp/cu_cp_ue_messages.h"
+#include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_ue_context_release.h"
 #include "ocudu/ran/i_rnti.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/rrc/rrc_cell_context.h"
+#include "ocudu/rrc/rrc_resume.h"
 #include "ocudu/rrc/rrc_types.h"
 #include "ocudu/rrc/rrc_ue_config.h"
 #include "ocudu/security/security.h"
@@ -110,11 +112,11 @@ public:
 };
 
 struct srb_creation_message {
-  ue_index_t      ue_index        = ue_index_t::invalid;
-  ue_index_t      old_ue_index    = ue_index_t::invalid;
-  srb_id_t        srb_id          = srb_id_t::nulltype;
-  bool            enable_security = false; // Activate security upon SRB creation.
-  srb_pdcp_config pdcp_cfg;
+  cu_cp_ue_index_t ue_index        = cu_cp_ue_index_t::invalid;
+  cu_cp_ue_index_t old_ue_index    = cu_cp_ue_index_t::invalid;
+  srb_id_t         srb_id          = srb_id_t::nulltype;
+  bool             enable_security = false; // Activate security upon SRB creation.
+  srb_pdcp_config  pdcp_cfg;
 };
 
 /// Interface used by the RRC reconfiguration procedure to
@@ -159,8 +161,14 @@ public:
   virtual void on_new_dl_dcch(srb_id_t srb_id, const asn1::rrc_nr::dl_dcch_msg_s& dl_dcch_msg) = 0;
 
   /// \brief Refresh AS security keys after horizontal key derivation.
+  ///
   /// This includes configuring the PDCP entity security on SRB1 with the new AS keys.
-  virtual void on_new_as_security_context() = 0;
+  /// If \p security_mode_active is \c true, the SRB1 will be configured with strict integrity check. Otherwise the
+  /// PDCP RX of SRB1 will be configured in SMC transition mode to also allow reception of in-flight PDUs without
+  /// integrity protection. The strict integrity check is activated later upon reception of security mode complete.
+  ///
+  /// \param[in] security_mode_present Indicates whether the UE is already in security mode or not (yet).
+  virtual void on_new_as_security_context(bool security_mode_active) = 0;
 };
 
 /// Interface to notify about NGAP messages.
@@ -180,8 +188,8 @@ public:
 };
 
 struct rrc_reconfiguration_response_message {
-  ue_index_t ue_index = ue_index_t::invalid;
-  bool       success  = false;
+  cu_cp_ue_index_t ue_index = cu_cp_ue_index_t::invalid;
+  bool             success  = false;
 };
 
 struct rrc_ue_security_mode_command_context {
@@ -192,7 +200,7 @@ struct rrc_ue_security_mode_command_context {
 
 struct rrc_ue_release_context {
   cu_cp_user_location_info_nr user_location_info;
-  byte_buffer                 rrc_release_pdu;
+  byte_buffer                 rrc_pdu;
   srb_id_t                    srb_id = srb_id_t::nulltype;
 };
 
@@ -272,9 +280,10 @@ public:
   /// release context, see section 5.3.15 in TS 38.331. Otherwise, a RrcRelease message is contained in the release
   /// context.
   virtual rrc_ue_release_context
-  get_rrc_ue_release_context(bool                                  requires_rrc_msg,
-                             std::optional<std::chrono::seconds>   release_wait_time  = std::nullopt,
-                             std::optional<rrc_inactivity_context> inactivity_context = std::nullopt) = 0;
+  get_rrc_ue_release_context(bool                                          requires_rrc_msg,
+                             std::optional<std::chrono::seconds>           release_wait_time  = std::nullopt,
+                             std::optional<rrc_inactivity_context>         inactivity_context = std::nullopt,
+                             std::optional<cu_cp_release_redirect_nr_info> redirect_nr_info   = std::nullopt) = 0;
 
   /// \brief Retrieve RRC context of a UE to perform mobility (handover, reestablishment).
   /// \return Transfer context including UP context, security, SRBs, HO preparation, etc.
@@ -290,8 +299,19 @@ public:
                        bool                               cond_meas           = false,
                        span<const pci_t>                  candidate_pcis      = {}) = 0;
 
-  /// \brief Get the packed RRC measurement config for the current serving cell of the UE.
-  virtual byte_buffer get_packed_meas_config() = 0;
+  /// \brief Get the packed RRC MeasConfig IE for the UE.
+  ///
+  /// When called with an empty (default) candidate_pcis, returns the regular serving-cell
+  /// measurement config and updates the stored context. When called with a non-empty
+  /// candidate_pcis, returns the CHO-specific config filtered to those candidates without
+  /// touching the stored context.
+  virtual byte_buffer get_packed_meas_config(span<const pci_t> candidate_pcis = {}) = 0;
+
+  /// \brief Update the stored measurement config to reflect a config that has been applied at the UE.
+  ///
+  /// Call this after the UE acknowledges an RRCReconfiguration that carried a measConfig (e.g. the
+  /// outer CHO RRCReconfiguration), so that context.meas_cfg stays in sync with VarMeasConfig.
+  virtual void update_meas_config(const rrc_meas_cfg& cfg) = 0;
 
   /// \brief Get the serving cell measurement object for the current serving cell of the UE.
   virtual std::optional<uint8_t> get_serving_cell_mo() = 0;
@@ -374,7 +394,7 @@ public:
 
 /// Struct containing all information needed from the old RRC UE for Reestablishment.
 struct rrc_ue_reestablishment_context_response {
-  ue_index_t                                               ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                                         ue_index = cu_cp_ue_index_t::invalid;
   security::security_context                               sec_context;
   std::optional<asn1::rrc_nr::ue_cap_rat_container_list_l> capabilities_list;
   up_context                                               up_ctx;
@@ -413,16 +433,11 @@ public:
 
   /// \brief Notify the CU-CP to remove the old UE from the CU-CP after an successful reestablishment.
   /// \param[in] old_ue_index The index of the old UE to remove.
-  virtual void on_rrc_reestablishment_complete(ue_index_t old_ue_index) = 0;
-
-  /// \brief Notify the CU-CP that RRC Reconfiguration has been received, so that the CU-CP can notify the DU if
-  /// required.
-  /// \param[in] ue_index The index of the UE that received the reconfiguration complete.
-  virtual void on_rrc_reconfiguration_complete_indicator() = 0;
+  virtual void on_rrc_reestablishment_complete(cu_cp_ue_index_t old_ue_index) = 0;
 
   /// \brief Notify the CU-CP to transfer and remove ue contexts.
   /// \param[in] old_ue_index The old UE index of the UE that sent the Reestablishment Request.
-  virtual async_task<bool> on_ue_transfer_required(ue_index_t old_ue_index) = 0;
+  virtual async_task<bool> on_ue_transfer_required(cu_cp_ue_index_t old_ue_index) = 0;
 
   /// \brief Notify the CU-CP to release a UE.
   /// \param[in] request The release request.
@@ -442,7 +457,7 @@ public:
   /// \brief Notify the CU-CP about the reception of an RRC Resume Request.
   /// \param[in] request The resume request.
   /// \returns The RRC Resume Request response.
-  virtual async_task<rrc_resume_request_response> on_rrc_resume_request(const cu_cp_rrc_resume_request& request) = 0;
+  virtual async_task<rrc_resume_request_response> on_rrc_resume_request(const rrc_resume_request& request) = 0;
 
   /// \brief Notify the CU-CP that a RAN paging for a UE in RRC Inactive state is required.
   virtual void on_ran_paging_required() = 0;

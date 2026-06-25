@@ -22,12 +22,10 @@ static constexpr unsigned DEFAULT_NOF_UL_HARQS = 16;
 
 ue_cell::ue_cell(du_ue_index_t                ue_index_,
                  rnti_t                       crnti_val,
-                 serv_cell_index_t            serv_cell_index_,
                  const ue_cell_configuration& ue_cell_cfg_,
                  cell_harq_manager&           cell_harq_pool,
                  ue_shared_context            shared_ctx_,
                  const ue_cell_components&    components_,
-                 std::optional<slot_point>    msg3_slot_rx,
                  ocudulog::basic_logger&      logger_) :
   ue_index(ue_index_),
   cell_index(ue_cell_cfg_.cell_cfg_common.cell_index),
@@ -47,14 +45,6 @@ ue_cell::ue_cell(du_ue_index_t                ue_index_,
   components(components_),
   logger(logger_)
 {
-  if (serv_cell_index_ == SERVING_PCELL_IDX) {
-    // Set ConRes procedure complete by default. Variable only needed for RACHs where MSG3 contains ConRes MAC-CE.
-    pcell_state.emplace(ue_pcell_state{});
-    pcell_state->conres_complete = true;
-    if (msg3_slot_rx.has_value()) {
-      pcell_state->msg3_rx_slot = msg3_slot_rx.value();
-    }
-  }
 }
 
 void ue_cell::deactivate()
@@ -89,30 +79,6 @@ void ue_cell::handle_reconfiguration_request(const ue_cell_configuration& ue_cel
                     ue_cell_cfg.pusch_serving_cell_cfg()->ul_harq_mode);
 
   get_pusch_power_controller().reconfigure(ue_cell_cfg);
-}
-
-void ue_cell::set_fallback_state(bool set_fallback, bool is_reconfig, bool reestablished)
-{
-  ocudu_assert(pcell_state.has_value(),
-               "ue={} rnti={}: Cannot set fallback state on non-Pcell",
-               fmt::underlying(ue_index),
-               rnti());
-
-  // In case of Pcell, update reconf_ongoing state.
-  pcell_state->reconf_ongoing = is_reconfig;
-  pcell_state->reestablished  = reestablished;
-  if (pcell_state->in_fallback_mode == set_fallback) {
-    // No state change.
-    return;
-  }
-  pcell_state->in_fallback_mode = set_fallback;
-
-  // Cancel pending HARQs retxs of different state.
-  harqs.cancel_retxs();
-  logger.debug("ue={} rnti={}: {} fallback mode",
-               fmt::underlying(ue_index),
-               rnti(),
-               pcell_state->in_fallback_mode ? "Entering" : "Leaving");
 }
 
 std::optional<dl_harq_process_handle> ue_cell::handle_dl_ack_info(slot_point                 uci_slot,
@@ -159,6 +125,11 @@ expected<units::bytes> ue_cell::handle_crc_pdu(slot_point pusch_slot, const ul_c
   // Find UL HARQ with matching PUSCH slot.
   std::optional<ul_harq_process_handle> h_ul = harqs.find_ul_harq_waiting_ack(pusch_slot);
   if (not h_ul.has_value() or h_ul->id() != crc_pdu.harq_id) {
+    if (crc_pdu.harq_id == to_harq_id(0) and get_pcell_state().conres_st == ue_conres_state::pending_cfra) {
+      // CFRA UE: the UL HARQ is managed by the RA scheduler; state transition is handled by the event manager.
+      return make_unexpected(default_error_t{});
+    }
+
     logger.warning("rnti={} h_id={}: Discarding CRC. Cause: UL HARQ process is not expecting CRC for PUSCH slot {}",
                    rnti(),
                    fmt::underlying(crc_pdu.harq_id),
@@ -493,18 +464,4 @@ double ue_cell::get_estimated_ul_rate(const pusch_config_params& pusch_cfg, sch_
 
   // Return the estimated throughput, considering that the number of bytes is for a slot.
   return tbs_bytes.value();
-}
-
-void ue_cell::set_conres_state(bool state)
-{
-  if (pcell_state->conres_complete == state) {
-    return;
-  }
-  pcell_state->conres_complete = state;
-  if (state) {
-    pcell_state->msg3_rx_slot = slot_point{};
-    logger.debug("ue={} rnti={}: ConRes procedure completed", fmt::underlying(ue_index), rnti());
-  } else {
-    logger.debug("ue={} rnti={}: ConRes procedure started", fmt::underlying(ue_index), rnti());
-  }
 }

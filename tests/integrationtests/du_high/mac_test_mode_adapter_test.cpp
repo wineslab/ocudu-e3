@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "lib/du/du_high/test_mode/mac_test_mode_adapter.h"
+#include "lib/du/du_high/test_mode/du_test_mode_controller.h"
 #include "tests/unittests/mac/mac_test_helpers.h"
+#include "ocudu/f1ap/gateways/f1c_connection_client.h"
 #include "ocudu/mac/mac_cell_timing_context.h"
 #include "ocudu/mac/mac_positioning_measurement_handler.h"
 #include "ocudu/ran/csi_report/csi_report_config_helpers.h"
@@ -11,11 +12,21 @@
 #include "ocudu/scheduler/config/ran_cell_config_helper.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
 #include "ocudu/support/async/async_no_op_task.h"
+#include "ocudu/support/executors/inline_task_executor.h"
+#include "ocudu/support/timers.h"
 #include "fmt/std.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
 using namespace odu;
+
+/// Null F1-C client stub for unit tests (no real CU connection needed).
+struct null_f1c_client : public f1c_connection_client {
+  std::unique_ptr<f1ap_message_notifier> handle_du_connection_request(std::unique_ptr<f1ap_message_notifier>) override
+  {
+    return nullptr;
+  }
+};
 
 struct mac_event_interceptor {
   std::optional<mac_ul_sched_result> next_ul_sched_res;
@@ -135,8 +146,11 @@ void PrintTo(const test_params& value, ::std::ostream* os)
   if (value.nof_ports == 2) {
     *os << fmt::format(" pmi={}", value.test_ue_cfg.pmi);
   } else if (value.nof_ports == 4) {
-    *os << fmt::format(
-        " i1_1={} i1_3={} i2={}", value.test_ue_cfg.i_1_1, value.test_ue_cfg.i_1_3, value.test_ue_cfg.i_2);
+    *os << fmt::format(" i1_1={} i1_2={} i1_3={} i2={}",
+                       value.test_ue_cfg.i_1_1,
+                       value.test_ue_cfg.i_1_2,
+                       value.test_ue_cfg.i_1_3,
+                       value.test_ue_cfg.i_2);
   }
 }
 
@@ -160,20 +174,21 @@ static mac_uci_pdu make_random_uci_with_csi(rnti_t test_rnti = to_rnti(0x4601))
 class base_mac_test_mode_test
 {
 protected:
-  base_mac_test_mode_test(const test_params& params_) : params(params_), adapter{params.test_ue_cfg, phy, 1}
+  base_mac_test_mode_test(const test_params& params_) :
+    params(params_), ctrl{params.test_ue_cfg, f1c_stub, phy, timers, exec, 1}
   {
-    adapter.connect(std::make_unique<mac_dummy>(mac_events, adapter.get_phy_notifier()));
+    mac_wrapper = ctrl.decorate(std::make_unique<mac_dummy>(mac_events, ctrl.get_phy_notifier()));
 
     // create cell
     cell_config_builder_params builder{};
     builder.dl_carrier.nof_ant = params.nof_ports;
-    adapter.add_cell(test_helpers::make_default_mac_cell_config(builder));
+    mac_wrapper->get_cell_manager().add_cell(test_helpers::make_default_mac_cell_config(builder));
 
     // create UE
     mac_ue_create_request req = test_helpers::make_default_ue_creation_request(builder);
     req.sched_cfg.cells.value()[0] =
         config_helpers::make_default_ue_cell_config(config_helpers::make_default_ran_cell_config(builder));
-    adapter.get_ue_configurator().handle_ue_create_request(req);
+    mac_wrapper->get_ue_configurator().handle_ue_create_request(req);
     ocudu_assert(mac_events.last_ue_created.has_value(), "UE creation request was not forwarded to MAC");
 
     csi_cfg = create_csi_report_configuration(
@@ -182,17 +197,22 @@ protected:
 
   void run_slot()
   {
-    adapter.get_slot_handler(to_du_cell_index(0)).handle_slot_indication({next_slot, std::chrono::system_clock::now()});
+    mac_wrapper->get_slot_handler(to_du_cell_index(0))
+        .handle_slot_indication({next_slot, std::chrono::system_clock::now()});
 
     next_slot++;
 
     mac_events.next_ul_sched_res.reset();
   }
 
-  test_params           params;
-  mac_event_interceptor mac_events;
-  phy_dummy             phy;
-  mac_test_mode_adapter adapter;
+  test_params                    params;
+  mac_event_interceptor          mac_events;
+  phy_dummy                      phy;
+  null_f1c_client                f1c_stub;
+  inline_task_executor           exec;
+  timer_manager                  timers;
+  du_test_mode_controller        ctrl;
+  std::unique_ptr<mac_interface> mac_wrapper;
 
   csi_report_configuration csi_cfg;
 
@@ -211,13 +231,13 @@ TEST_F(mac_test_mode_test, when_test_mode_ue_has_pucch_grants_then_uci_indicatio
 {
   pucch_info pucch_f0{};
   pucch_f0.crnti = this->params.test_ue_cfg.rnti;
-  pucch_f0.format_params.emplace<pucch_format_0>();
+  pucch_f0.format_params.emplace<pucch_info::f0_config>();
   pucch_f0.uci_bits.harq_ack_nof_bits = 1;
   pucch_f0.uci_bits.sr_bits           = sr_nof_bits::no_sr;
 
   pucch_info pucch_f1{};
   pucch_f1.crnti = this->params.test_ue_cfg.rnti;
-  pucch_f1.format_params.emplace<pucch_format_1>();
+  pucch_f1.format_params.emplace<pucch_info::f1_config>();
   pucch_f1.uci_bits.harq_ack_nof_bits = 1;
   pucch_f1.uci_bits.sr_bits           = sr_nof_bits::no_sr;
 
@@ -243,7 +263,7 @@ TEST_F(mac_test_mode_test, when_test_mode_ue_has_pucch_grants_then_uci_indicatio
     f1_uci.harq_info.emplace();
     f1_uci.harq_info->harqs.resize(1);
     f1_uci.harq_info->harqs[0] = uci_pucch_f0_or_f1_harq_values::nack;
-    this->adapter.get_control_info_handler(to_du_cell_index(0)).handle_uci(uci);
+    this->mac_wrapper->get_control_info_handler(to_du_cell_index(0)).handle_uci(uci);
 
     ASSERT_TRUE(mac_events.last_uci.has_value());
     ASSERT_EQ(mac_events.last_uci->sl_rx, sl_rx.without_hyper_sfn());
@@ -282,7 +302,7 @@ TEST_F(mac_test_mode_test, when_test_mode_ue_has_pusch_grants_then_crc_indicatio
   pdu.rnti           = this->params.test_ue_cfg.rnti;
   pdu.harq_id        = ulgrant.pusch_cfg.harq_id;
   pdu.tb_crc_success = false;
-  this->adapter.get_control_info_handler(to_du_cell_index(0)).handle_crc(crc);
+  this->mac_wrapper->get_control_info_handler(to_du_cell_index(0)).handle_crc(crc);
 
   ASSERT_TRUE(mac_events.last_crc.has_value());
   ASSERT_EQ(mac_events.last_crc->sl_rx, sl_rx);
@@ -304,7 +324,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_only_for_test_mode_ue_then_it_is
   mac_uci_indication_message uci_ind;
   uci_ind.sl_rx = {0, 0};
   uci_ind.ucis.push_back(make_random_uci_with_csi());
-  adapter.get_control_info_handler(to_du_cell_index(0)).handle_uci(uci_ind);
+  mac_wrapper->get_control_info_handler(to_du_cell_index(0)).handle_uci(uci_ind);
 
   ASSERT_FALSE(mac_events.last_uci.has_value());
 }
@@ -316,7 +336,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_also_for_other_ues_then_test_mod
   uci_ind.ucis.push_back(make_random_uci_with_csi());
   uci_ind.ucis.push_back(make_random_uci_with_csi());
   uci_ind.ucis.back().rnti = to_rnti(0x4602);
-  adapter.get_control_info_handler(to_du_cell_index(0)).handle_uci(uci_ind);
+  mac_wrapper->get_control_info_handler(to_du_cell_index(0)).handle_uci(uci_ind);
 
   ASSERT_TRUE(mac_events.last_uci.has_value());
   ASSERT_EQ(mac_events.last_uci->ucis.size(), 1);
@@ -330,13 +350,13 @@ TEST_P(mac_test_mode_auto_uci_test, when_test_mode_ue_has_pucch_grants_then_uci_
 
   pucch_info& pucch_f0 = ul_res.pucchs.emplace_back();
   pucch_f0.crnti       = this->params.test_ue_cfg.rnti;
-  pucch_f0.format_params.emplace<pucch_format_1>();
+  pucch_f0.format_params.emplace<pucch_info::f0_config>();
   pucch_f0.uci_bits.harq_ack_nof_bits = 1;
   pucch_f0.uci_bits.sr_bits           = sr_nof_bits::no_sr;
 
   pucch_info& pucch_f1 = ul_res.pucchs.emplace_back();
   pucch_f1.crnti       = this->params.test_ue_cfg.rnti;
-  pucch_f1.format_params.emplace<pucch_format_1>();
+  pucch_f1.format_params.emplace<pucch_info::f1_config>();
   pucch_f1.uci_bits.harq_ack_nof_bits = 1;
   pucch_f1.uci_bits.sr_bits           = sr_nof_bits::no_sr;
 
@@ -412,7 +432,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_forwarded_to_mac_then_test_mode_
 
   pucch_info& pucch_f2 = ul_res.pucchs.emplace_back();
   pucch_f2.crnti       = this->params.test_ue_cfg.rnti;
-  pucch_f2.format_params.emplace<pucch_format_2>();
+  pucch_f2.format_params.emplace<pucch_info::f2_config>();
   pucch_f2.uci_bits.harq_ack_nof_bits  = 1;
   pucch_f2.uci_bits.sr_bits            = sr_nof_bits::one;
   pucch_f2.uci_bits.csi_part1_nof_bits = 11;
@@ -420,7 +440,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_forwarded_to_mac_then_test_mode_
 
   pucch_info& pucch_f3 = ul_res.pucchs.emplace_back();
   pucch_f3.crnti       = this->params.test_ue_cfg.rnti;
-  pucch_f3.format_params.emplace<pucch_format_3>();
+  pucch_f3.format_params.emplace<pucch_info::f3_config>();
   pucch_f3.uci_bits.harq_ack_nof_bits  = 1;
   pucch_f3.uci_bits.sr_bits            = sr_nof_bits::one;
   pucch_f3.uci_bits.csi_part1_nof_bits = 11;
@@ -428,7 +448,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_forwarded_to_mac_then_test_mode_
 
   pucch_info& pucch_f4 = ul_res.pucchs.emplace_back();
   pucch_f4.crnti       = this->params.test_ue_cfg.rnti;
-  pucch_f4.format_params.emplace<pucch_format_4>();
+  pucch_f4.format_params.emplace<pucch_info::f4_config>();
   pucch_f4.uci_bits.harq_ack_nof_bits  = 1;
   pucch_f4.uci_bits.sr_bits            = sr_nof_bits::one;
   pucch_f4.uci_bits.csi_part1_nof_bits = 11;
@@ -485,13 +505,17 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_forwarded_to_mac_then_test_mode_
       ASSERT_FALSE(report.pmi.has_value());
     } else {
       ASSERT_EQ(*report.ri, params.test_ue_cfg.ri);
+      ASSERT_TRUE(report.pmi.has_value());
       if (params.nof_ports == 2) {
-        ASSERT_TRUE(std::holds_alternative<csi_report_pmi::two_antenna_port>(report.pmi->type));
-        ASSERT_EQ(std::get<csi_report_pmi::two_antenna_port>(report.pmi->type).pmi, params.test_ue_cfg.pmi);
+        ASSERT_TRUE(std::holds_alternative<pmi_two_antenna_port>(*report.pmi));
+        ASSERT_EQ(std::get<pmi_two_antenna_port>(*report.pmi).pmi, params.test_ue_cfg.pmi);
       } else {
-        ASSERT_TRUE(std::holds_alternative<csi_report_pmi::typeI_single_panel_4ports_mode1>(report.pmi->type));
-        auto& t = std::get<csi_report_pmi::typeI_single_panel_4ports_mode1>(report.pmi->type);
+        ASSERT_TRUE(std::holds_alternative<pmi_typeI_single_panel>(*report.pmi));
+        auto& t = std::get<pmi_typeI_single_panel>(*report.pmi);
         ASSERT_EQ(t.i_1_1, params.test_ue_cfg.i_1_1);
+        if (t.i_1_2.has_value()) {
+          ASSERT_EQ(*t.i_1_2, params.test_ue_cfg.i_1_2);
+        }
         if (t.i_1_3.has_value()) {
           ASSERT_EQ(*t.i_1_3, params.test_ue_cfg.i_1_3);
         }
@@ -505,13 +529,13 @@ INSTANTIATE_TEST_SUITE_P(test_configs,
                          mac_test_mode_auto_uci_test,
                          // clang-format off
 ::testing::Values(
-//           ports rnti           nof_ues            CQI RI PMI i1_1 i1_3  i2
+//           ports rnti nof_ues auto_ack CQI RI PMI i1_1 i1_3  i2
   test_params{1, {to_rnti(0x4601), 1, 10, 8, true, true, 12}},
   test_params{1, {to_rnti(0x4601), 1, 10, 8, true, true, 5}},
   test_params{2, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  2,  1}},
   test_params{2, {to_rnti(0x4601), 1, 10, 8, true, true, 3,   1,  3}},
-  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  4,  0,   2,   0,  1}},
-  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  1,  0,   1,   0,  3}},
-  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  2,  0,   7,   1,  0}}
+  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  4,  0,   2,  std::nullopt, 0,  1}},
+  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  1,  0,   1,  std::nullopt, 0,  3}},
+  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  2,  0,   7,  std::nullopt, 1,  0}}
 ));
 // clang-format on

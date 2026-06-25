@@ -31,8 +31,9 @@ static void fill_codewords(pdsch_processor::pdu_t& proc_pdu, const fapi::dl_pdsc
 {
   for (const auto& cw : fapi_pdu.cws) {
     pdsch_processor::codeword_description codeword_descr;
-    codeword_descr.modulation = static_cast<modulation_scheme>(cw.qam_mod_order);
-    codeword_descr.rv         = cw.rv_index;
+    codeword_descr.modulation      = static_cast<modulation_scheme>(cw.qam_mod_order);
+    codeword_descr.rv              = cw.rv_index;
+    codeword_descr.ldpc_base_graph = fapi_pdu.ldpc_base_graph;
     proc_pdu.codewords.push_back(codeword_descr);
   }
 }
@@ -123,7 +124,7 @@ void ocudu::fapi_adaptor::convert_pdsch_fapi_to_phy(pdsch_processor::pdu_t&     
   proc_pdu.ref_point = (fapi_pdu.ref_point == fapi::pdsch_ref_point_type::point_a) ? pdsch_processor::pdu_t::CRB0
                                                                                    : pdsch_processor::pdu_t::PRB0;
 
-  proc_pdu.dmrs = fapi_pdu.dmrs_type == dmrs_config_type::type1 ? dmrs_type::options::TYPE1 : dmrs_type::options::TYPE2;
+  proc_pdu.dmrs                        = fapi_pdu.dmrs_type;
   proc_pdu.scrambling_id               = fapi_pdu.pdsch_dmrs_scrambling_id;
   proc_pdu.n_scid                      = fapi_pdu.nscid == 1U;
   proc_pdu.nof_cdm_groups_without_data = fapi_pdu.num_dmrs_cdm_grps_no_data;
@@ -134,8 +135,7 @@ void ocudu::fapi_adaptor::convert_pdsch_fapi_to_phy(pdsch_processor::pdu_t&     
 
   fill_power_values(proc_pdu, fapi_pdu);
 
-  proc_pdu.ldpc_base_graph = fapi_pdu.ldpc_base_graph;
-  proc_pdu.tbs_lbrm        = fapi_pdu.tb_size_lbrm;
+  proc_pdu.tbs_lbrm = fapi_pdu.tb_size_lbrm;
 
   fill_reserved_re_pattern(proc_pdu, fapi_pdu, csi_re_pattern_list);
 

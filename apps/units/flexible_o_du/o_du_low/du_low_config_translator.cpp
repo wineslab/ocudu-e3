@@ -5,10 +5,11 @@
 #include "du_low_config_translator.h"
 #include "apps/services/worker_manager/worker_manager_config.h"
 #include "du_low_config.h"
-#include "ocudu/du/du_cell_config.h"
+#include "ocudu/phy/upper/channel_coding/ldpc/ldpc.h"
 #include "ocudu/phy/upper/upper_phy_factories.h"
 #include "ocudu/ran/duplex_mode.h"
 #include "ocudu/ran/prach/prach_configuration.h"
+#include "ocudu/ran/pusch/pusch_constants.h"
 
 using namespace ocudu;
 
@@ -59,6 +60,9 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
   upper_phy_factory_config.ldpc_decoder_type                 = "auto";
   if (du_low.expert_phy_cfg.enable_phy_tap) {
     upper_phy_factory_config.phy_tap_arguments = du_low.expert_phy_cfg.phy_tap_arguments;
+    if (cells[0].tdd_pattern) {
+      upper_phy_factory_config.phy_tap_tdd_pattern = cells[0].tdd_pattern;
+    }
   }
 
   // The flexible PDSCH processor implementation will be used by default.
@@ -76,6 +80,17 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
     upper_phy_factory_config.pdsch_processor.emplace<pdsch_processor_flexible_configuration>(
         pdsch_processor_flexible_configuration{.cb_batch_length = cb_batch_length});
   } else if (upper_phy_threads_cfg.pdsch_processor_type == "generic") {
+    // The hardware-accelerated DU does not currently support the 'generic' PDSCH processor implementation.
+    bool hw_acc_pdsch = false;
+    if (du_low.hal_config.has_value()) {
+      const du_low_unit_hal_config& hal_config = *du_low.hal_config;
+      if (hal_config.bbdev_hwacc.has_value()) {
+        const bbdev_appconfig& bbdev_hwacc = *hal_config.bbdev_hwacc;
+        hw_acc_pdsch                       = bbdev_hwacc.pdsch_enc.has_value();
+      }
+    }
+    report_error_if_not(!hw_acc_pdsch,
+                        "The hardware-accelerated DU does not support the 'generic' PDSCH processor type.");
     upper_phy_factory_config.pdsch_processor.emplace<pdsch_processor_generic_configuration>();
   }
 
@@ -94,6 +109,10 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
     // PUSCH HARQ process lifetime in slots. It assumes the maximum lifetime is 100ms.
     unsigned expire_pusch_harq_timeout_slots =
         100 * nof_slots_per_subframe + du_low.expert_phy_cfg.max_processing_delay_slots;
+    // In a NTN cell, extend the HARQ process lifetime by the cell-specific-k-offset.
+    if (cell.ntn_cs_koffset) {
+      expire_pusch_harq_timeout_slots += cell.ntn_cs_koffset->count() * nof_slots_per_subframe;
+    }
 
     // Calculate the number of UL slots in a frame and in a PUSCH HARQ process lifetime.
     unsigned nof_ul_slots_in_harq_lifetime = expire_pusch_harq_timeout_slots;

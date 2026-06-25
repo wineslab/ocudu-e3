@@ -3,8 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_event_manager.h"
+#include "../logging/cell_metrics_handler.h"
 #include "../logging/scheduler_event_logger.h"
-#include "../logging/scheduler_metrics_handler.h"
 #include "../srs/srs_scheduler.h"
 #include "../support/sr_helper.h"
 #include "../uci_scheduling/uci_indication_selector.h"
@@ -49,7 +49,7 @@ public:
     // Signal that this bearer needs its BO state updated.
     if (not pending_evs.try_push(key)) {
       parent.logger.warning("ue={} lcid={}: Discarding DL buffer occupancy update. Cause: Event queue is full",
-                            fmt::underlying(rlc_dl_bo.ue_index),
+                            rlc_dl_bo.ue_index,
                             fmt::underlying(rlc_dl_bo.lcid));
     }
   }
@@ -72,7 +72,7 @@ public:
       dl_bo.bs = ue_dl_bo_table[key].first.exchange(-1, std::memory_order_release);
       if (dl_bo.bs < 0) {
         parent.logger.warning("ue={} lcid={}: Invalid DL buffer occupancy value: {}",
-                              fmt::underlying(dl_bo.ue_index),
+                              dl_bo.ue_index,
                               fmt::underlying(dl_bo.lcid),
                               dl_bo.bs);
         continue;
@@ -80,8 +80,7 @@ public:
 
       // Retrieve UE.
       if (not parent.ue_db.contains(dl_bo.ue_index)) {
-        parent.logger.warning("ue={}: Discarding DL buffer occupancy update. Cause: UE not recognized",
-                              fmt::underlying(dl_bo.ue_index));
+        parent.logger.warning("ue={}: Discarding DL buffer occupancy update. Cause: UE not recognized", dl_bo.ue_index);
         continue;
       }
       ue& u = parent.ue_db[dl_bo.ue_index];
@@ -118,14 +117,19 @@ private:
 class ocudu::pdu_indication_pool
 {
   // We use this value as a safety margin to account for skipped slot indications.
-  static constexpr size_t MAX_EXPECTED_SLOTS        = 4;
-  static constexpr size_t UCI_INITIAL_POOL_SIZE     = MAX_PUCCH_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
-  static constexpr size_t PHR_INITIAL_POOL_SIZE     = MAX_PUSCH_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
-  static constexpr size_t CRC_INITIAL_POOL_SIZE     = MAX_PUSCH_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
-  static constexpr size_t SRS_INITIAL_POOL_SIZE     = MAX_SRS_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
-  static constexpr size_t BSR_INITIAL_POOL_SIZE     = MAX_PUSCH_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
-  static constexpr size_t POSITIONING_REQ_POOL_SIZE = 1 * MAX_EXPECTED_SLOTS;
-  static constexpr size_t SLICE_RECONF_POOL_SIZE    = 1 * MAX_EXPECTED_SLOTS;
+  static constexpr size_t MAX_EXPECTED_SLOTS = 4;
+  // Although PHR and BSR indications are reported in the same quantity as CRC indications, the formers follow a slower
+  // path to reach the scheduler; there's both a thread hop (dispatched to a per-UE MAC UL PDU executor) and processing
+  // latency (MAC PDU decoding + subPDU parsing); therefore, there can be a larger accumulation of in-flight BSR/PHR
+  // indications compared to CRC.
+  static constexpr size_t MAX_BSR_PHR_EXPECTED_SLOTS = 6;
+  static constexpr size_t UCI_INITIAL_POOL_SIZE      = MAX_PUCCH_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
+  static constexpr size_t PHR_INITIAL_POOL_SIZE      = MAX_PUSCH_PDUS_PER_SLOT * MAX_BSR_PHR_EXPECTED_SLOTS;
+  static constexpr size_t CRC_INITIAL_POOL_SIZE      = MAX_PUSCH_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
+  static constexpr size_t SRS_INITIAL_POOL_SIZE      = MAX_SRS_PDUS_PER_SLOT * MAX_EXPECTED_SLOTS;
+  static constexpr size_t BSR_INITIAL_POOL_SIZE      = MAX_PUSCH_PDUS_PER_SLOT * MAX_BSR_PHR_EXPECTED_SLOTS;
+  static constexpr size_t POSITIONING_REQ_POOL_SIZE  = 1 * MAX_EXPECTED_SLOTS;
+  static constexpr size_t SLICE_RECONF_POOL_SIZE     = 1 * MAX_EXPECTED_SLOTS;
 
   using uci_pool          = bounded_object_pool<uci_indication::uci_pdu>;
   using phr_pool          = bounded_object_pool<ul_phr_indication_message>;
@@ -148,6 +152,29 @@ public:
   {
   }
 
+  /// Returns a human-readable name for a PDU type.
+  template <typename PDUType>
+  static constexpr const char* pdu_type_name()
+  {
+    if constexpr (std::is_same_v<PDUType, uci_indication::uci_pdu>) {
+      return "UCI";
+    } else if constexpr (std::is_same_v<PDUType, ul_phr_indication_message>) {
+      return "PHR";
+    } else if constexpr (std::is_same_v<PDUType, ul_crc_pdu_indication>) {
+      return "CRC";
+    } else if constexpr (std::is_same_v<PDUType, srs_indication::srs_indication_pdu>) {
+      return "SRS";
+    } else if constexpr (std::is_same_v<PDUType, ul_bsr_indication_message>) {
+      return "BSR";
+    } else if constexpr (std::is_same_v<PDUType, positioning_measurement_request::cell_info>) {
+      return "positioning measurement request";
+    } else if constexpr (std::is_same_v<PDUType, du_cell_slice_reconfig_request>) {
+      return "slice reconfiguration request";
+    } else {
+      return "unknown";
+    }
+  }
+
   /// Create a PDU managed by an object pool.
   template <typename PDUType>
   auto create_pdu(const PDUType& pdu)
@@ -157,7 +184,7 @@ public:
     if (ret != nullptr) {
       *ret = pdu;
     } else {
-      logger.warning("Discarding indication PDU. Cause: PDU pool is empty");
+      logger.warning("Discarding {} indication PDU. Cause: PDU pool is empty", pdu_type_name<std::decay_t<PDUType>>());
     }
     return ret;
   }
@@ -270,21 +297,35 @@ void ue_cell_event_manager::handle_ue_creation(ue_config_update_event ev)
     // Insert UE in UE repository.
     const du_cell_index_t pcell_index    = ev.next_config().pcell_common_cfg().cell_index;
     bool                  is_in_fallback = ev.get_fallback_command().has_value() and ev.get_fallback_command().value();
-    ue_db.add_ue(ev.next_config(), is_in_fallback, ev.get_ul_ccch_slot_rx());
-    const auto& added_ue = ue_db[ue_index];
+    ue_db.add_ue(ev.next_config(), is_in_fallback, ev.get_ul_ccch_slot_rx(), ev.get_cfra_enabled());
 
-    // Update UCI scheduler with new UE UCI resources.
-    uci_sched.add_ue(added_ue.get_cell(SERVING_PCELL_IDX).cfg());
-
-    // Update SRS scheduler with new UE SRS resources.
-    srs_sched.add_ue(added_ue.get_cell(SERVING_PCELL_IDX).cfg());
+    auto& u     = ue_db[ue_index];
+    auto& ue_cc = u.get_pcell();
+    if (ue_cc.get_pcell_state().conres_st != ue_conres_state::pending_conres_crnti_ce) {
+      // Defer UCI/SR scheduling only for UEs awaiting a C-RNTI MAC CE.
+      uci_sched.add_ue(ue_cc.cfg());
+      srs_sched.add_ue(ue_cc.cfg());
+    }
 
     // Add UE to slice scheduler.
     // Note: This action only has effect when UE is created in non-fallback mode.
     slice_sched.add_ue(ue_index);
 
+    if (ue_cc.get_pcell_state().conres_st == ue_conres_state::pending_conres_ce) {
+      // Note: In case of RACH-created UE, auto-inject MAC ConRes CE.
+
+      // Forward CE to ue instance.
+      u.handle_dl_mac_ce_indication(dl_mac_ce_indication{ue_index, lcid_dl_sch_t::UE_CON_RES_ID});
+
+      // Notify fallback scheduler of a pending ConRes CE.
+      fallback_sched.handle_conres_indication(ue_index);
+    }
+
     // Log Event.
     ev_logger.enqueue(scheduler_event_logger::ue_creation_event{ue_index, crnti, pcell_index});
+
+    // Register UE in the cell metrics.
+    metrics.handle_ue_creation(ue_index, crnti, ev.next_config().pcell_common_cfg().params.pci);
 
     // Notify config manager that creation is complete with success.
     ev.notify_completion();
@@ -311,17 +352,23 @@ void ue_cell_event_manager::handle_ue_reconfiguration(ue_config_update_event ev)
     // Reconfigure PCell
     // Note: Carrier aggregation not yet supported.
     auto& ue_cc = u.get_cell(SERVING_PCELL_IDX);
-    uci_sched.reconf_ue(ev.next_config().ue_cell_cfg(ue_cc.cell_index), ue_cc.cfg());
-    srs_sched.reconf_ue(ev.next_config().ue_cell_cfg(ue_cc.cell_index), ue_cc.cfg());
+
+    if (ue_cc.get_pcell_state().conres_st != ue_conres_state::pending_conres_crnti_ce) {
+      uci_sched.reconf_ue(ev.next_config().ue_cell_cfg(ue_cc.cell_index), ue_cc.cfg());
+      srs_sched.reconf_ue(ev.next_config().ue_cell_cfg(ue_cc.cell_index), ue_cc.cfg());
+    }
 
     // Configure existing UE.
-    ue_db.reconfigure_ue(ev.next_config(), ev.is_reestablished());
+    ue_db.reconfigure_ue(ev.next_config(), ev.get_cause());
 
     // Update slice scheduler.
     slice_sched.reconf_ue(u.ue_index);
 
     // Log event.
     ev_logger.enqueue(scheduler_event_logger::ue_reconf_event{ue_idx, u.crnti});
+
+    // Update the cell metrics.
+    metrics.handle_ue_reconfiguration(ue_idx);
 
     // Notify config manager that creation is complete with success.
     ev.notify_completion();
@@ -346,10 +393,13 @@ void ue_cell_event_manager::handle_ue_deletion(ue_config_delete_event ev)
     const auto&  u    = ue_db[ue_idx];
     const rnti_t rnti = u.crnti;
 
-    // Update UCI scheduling by removing existing UE UCI resources.
-    uci_sched.rem_ue(u.get_pcell().cfg());
-    // Update SRS scheduling by removing existing UE SRS resources.
-    srs_sched.rem_ue(u.get_pcell().cfg());
+    const auto& ue_cc = u.get_pcell();
+    if (ue_cc.get_pcell_state().conres_st != ue_conres_state::pending_conres_crnti_ce) {
+      // A UE awaiting a C-RNTI CE was not added to UCI/SRS scheduling yet (deferred until the CE is received), so
+      // it must not be removed either. All other UEs (including CFRA) were added at creation.
+      uci_sched.rem_ue(u.get_pcell().cfg());
+      srs_sched.rem_ue(u.get_pcell().cfg());
+    }
     // Schedule removal of UE from slice scheduler.
     slice_sched.rem_ue(ue_idx);
 
@@ -371,8 +421,10 @@ void ue_cell_event_manager::handle_ue_config_applied(du_cell_index_t pcell_idx, 
     // Confirm that UE applied new config.
     ue_db.ue_config_applied(ue_idx);
 
-    // Add UE to slice scheduler, once it leaves fallback mode.
-    slice_sched.config_applied(ue_idx);
+    // Notify slice scheduler only when the UE fully exits fallback (conres also done).
+    if (not ue_db[ue_idx].get_pcell().is_in_fallback_mode()) {
+      slice_sched.config_applied(ue_idx);
+    }
 
     // Log UE config applied event.
     ev_logger.enqueue(scheduler_event_logger::ue_cfg_applied_event{ue_idx, ue_db[ue_idx].crnti});
@@ -452,6 +504,10 @@ void ue_cell_event_manager::handle_ul_bsr_indication(const ul_bsr_indication_mes
 void ue_cell_event_manager::handle_crc_indication(const ul_crc_indication& crc_ind)
 {
   for (unsigned i = 0, e = crc_ind.crcs.size(); i != e; ++i) {
+    if (crc_ind.crcs[i].ue_index == INVALID_DU_UE_INDEX) {
+      // CRCs with invalid UE index are ignored (They are handled by the RA scheduler).
+      continue;
+    }
     auto crc_ind_ptr = ind_pdu_pool->create_pdu(crc_ind.crcs[i]);
     if (crc_ind_ptr == nullptr) {
       return;
@@ -468,8 +524,15 @@ void ue_cell_event_manager::handle_crc_indication(const ul_crc_indication& crc_i
       }
 
       // Update HARQ.
-      const auto tbs = ue_cc->handle_crc_pdu(sl_rx, *crc_ptr);
+      const bool was_pending_cfra = ue_cc->get_pcell_state().conres_st == ue_conres_state::pending_cfra;
+      const auto tbs              = ue_cc->handle_crc_pdu(sl_rx, *crc_ptr);
       if (not tbs.has_value()) {
+        if (was_pending_cfra and crc_ptr->tb_crc_success and ue_db.cfra_msg3_acked(crc_ptr->ue_index)) {
+          // CFRA Msg3 ACKed. UE is directly added to slice scheduling. It doesn't need to be in fallback mode.
+          if (not ue_cc->is_in_fallback_mode()) {
+            slice_sched.config_applied(crc_ptr->ue_index);
+          }
+        }
         return event_result::processed;
       }
 
@@ -687,14 +750,19 @@ void ue_cell_event_manager::handle_dl_mac_ce_indication(const dl_mac_ce_indicati
       return event_result::invalid_ue;
     }
     auto& u = ue_db[ce.ue_index];
-    u.handle_dl_mac_ce_indication(ce);
 
     // Notify SRB fallback scheduler upon receiving ConRes CE indication.
     if (ce.ce_lcid == lcid_dl_sch_t::UE_CON_RES_ID) {
-      fallback_sched.handle_conres_indication(ce.ue_index);
-      // Set the ConRes procedure state to "Started" in the pCell.
-      ue_db[ce.ue_index].get_pcell().set_conres_state(false);
+      logger.warning("cell={} rnti={} ue={}: Discarding ConRes CE indication. Cause: The scheduler automatically "
+                     "triggers this type of CE",
+                     cfg.cell_index,
+                     u.crnti,
+                     u.ue_index);
+      return event_result::processed;
     }
+
+    // Forward CE to UE instance.
+    u.handle_dl_mac_ce_indication(ce);
 
     // Log event.
     ev_logger.enqueue(ce);
@@ -703,6 +771,42 @@ void ue_cell_event_manager::handle_dl_mac_ce_indication(const dl_mac_ce_indicati
   };
 
   push_event(cfg.cell_index, event_t{"DL MAC CE", ce.ue_index, std::move(handle_mac_ce_impl)});
+}
+
+void ue_cell_event_manager::handle_crnti_ce_received(du_ue_index_t ue_index)
+{
+  auto handle_crnti_ce_received = [this, ue_index]() {
+    if (not ue_db.contains(ue_index)) {
+      return event_result::invalid_ue;
+    }
+    auto& u     = ue_db[ue_index];
+    auto& ue_cc = u.get_pcell();
+    if (ue_cc.cell_index != cfg.cell_index) {
+      logger.warning("cell={} ue={} rnti={}: Discarding C-RNTI CE. It was received in cell that is not PCell ({})",
+                     cfg.cell_index,
+                     ue_index,
+                     u.crnti,
+                     ue_cc.cell_index);
+      return event_result::invalid_ue_cc;
+    }
+
+    if (ue_db.crnti_ce_received(ue_index)) {
+      // C-RNTI CE received: contention resolution completed for this F1AP-created UE.
+
+      // Initiate UCI and SRS schedulers with the confirmed UE resources.
+      uci_sched.add_ue(ue_cc.cfg());
+      srs_sched.add_ue(ue_cc.cfg());
+
+      // Notify slice scheduler only when the UE fully exits fallback (config also applied).
+      if (not ue_cc.is_in_fallback_mode()) {
+        slice_sched.config_applied(ue_index);
+      }
+    }
+
+    return event_result::processed;
+  };
+
+  push_event(cfg.cell_index, event_t{"CRNTI CE received", ue_index, std::move(handle_crnti_ce_received)});
 }
 
 void ue_cell_event_manager::handle_positioning_measurement_request(
@@ -869,10 +973,10 @@ void ue_cell_event_manager::handle_harq_ind(ue_cell&                            
         ue_cc.ue_index, ue_cc.rnti(), ue_cc.cell_index, uci_sl, h_dl->id(), status, tbs});
 
     // NOTE: this is for the first attachment only. In this case, the first ACK is the one that acks the ConRes or the
-    // ConRes + MSG4; there is only 1 HARQ process waiting for ACKs, which acks the ConRes. Until this is acked, no
-    // other DL grant should be scheduled.
-    if (ue_cc.is_pcell() and not ue_cc.get_pcell_state().conres_complete and h_dl->empty()) {
-      ue_cc.set_conres_state(true);
+    // ConRes + MSG4; there is only 1 HARQ process waiting for ACKs, which acks the ConRes.
+    if (h_dl->empty() and ue_cc.is_pcell() and
+        ue_cc.get_pcell_state().conres_st == ue_conres_state::pending_conres_ce) {
+      ue_db.handle_conres_ce_outcome(ue_cc.ue_index, true);
     }
 
     // Notify metrics handler with HARQ outcome.
@@ -965,7 +1069,7 @@ void ue_cell_event_manager::log_invalid_ue_index(du_ue_index_t ue_index,
   ocudulog::log_channel& log_channel = warn_if_ignored ? logger.warning : logger.info;
   log_channel("cell={} ue={}: Discarding {} event. Cause: UE with provided Id does not exist",
               fmt::underlying(cfg.cell_index),
-              fmt::underlying(ue_index),
+              ue_index,
               event_name);
 }
 
@@ -974,7 +1078,7 @@ void ue_cell_event_manager::log_invalid_cc(du_ue_index_t ue_idx, const char* eve
   ocudulog::log_channel& log_channel = warn_if_ignored ? logger.warning : logger.info;
   log_channel("cell={} ue={}: Discarding {} event. Cause: UE is not configured in this cell",
               fmt::underlying(cfg.cell_index),
-              fmt::underlying(ue_idx),
+              ue_idx,
               event_name);
 }
 

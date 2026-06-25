@@ -8,32 +8,32 @@
 using namespace ocudu;
 using namespace ocucp;
 
-ue_index_t cu_configurator_impl::get_ue_index(const amf_ue_id_t&         amf_ue_id,
-                                              const guami_t&             guami,
-                                              const gnb_cu_ue_f1ap_id_t& gnb_cu_ue_f1ap_id) const
+cu_cp_ue_index_t cu_configurator_impl::get_ue_index(const amf_ue_id_t&         amf_ue_id,
+                                                    const guami_t&             guami,
+                                                    const gnb_cu_ue_f1ap_id_t& gnb_cu_ue_f1ap_id) const
 {
   auto* ngap = ngap_db.find_ngap(guami.plmn);
   if (ngap == nullptr) {
-    return ue_index_t::invalid;
+    return cu_cp_ue_index_t::invalid;
   }
   return ngap->get_ngap_ue_id_translator().get_ue_index(amf_ue_id);
 }
 
-du_index_t cu_configurator_impl::get_du_index(const ue_index_t& ue_index) const
+cu_cp_du_index_t cu_configurator_impl::get_du_index(const cu_cp_ue_index_t& ue_index) const
 {
   auto* ue = ue_mng.find_du_ue(ue_index);
   return ue->get_du_index();
 }
 
-du_index_t cu_configurator_impl::get_du_index(const nr_cell_global_id_t& nr_cgi) const
+cu_cp_du_index_t cu_configurator_impl::get_du_index(const nr_cell_global_id_t& nr_cgi) const
 {
   return du_db.find_du(nr_cgi);
 }
 
 pci_t cu_configurator_impl::get_pci(const nr_cell_global_id_t& nr_cgi) const
 {
-  du_index_t du_index = du_db.find_du(nr_cgi);
-  if (du_index == du_index_t::invalid) {
+  cu_cp_du_index_t du_index = du_db.find_du(nr_cgi);
+  if (du_index == cu_cp_du_index_t::invalid) {
     return INVALID_PCI;
   }
   return du_db.get_du_processor(du_index).get_context()->find_cell(nr_cgi)->pci;
@@ -50,7 +50,7 @@ async_task<cu_cp_intra_cu_handover_response> cu_configurator_impl::return_handov
 }
 
 async_task<cu_cp_intra_cu_handover_response>
-cu_configurator_impl::trigger_handover(const du_index_t&                      source_du_index,
+cu_configurator_impl::trigger_handover(const cu_cp_du_index_t&                source_du_index,
                                        const cu_cp_intra_cu_handover_request& handover_req)
 {
   cu_cp_ue* u = ue_mng.find_du_ue(handover_req.source_ue_index);

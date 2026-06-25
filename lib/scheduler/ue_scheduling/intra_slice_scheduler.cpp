@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "intra_slice_scheduler.h"
-#include "../logging/scheduler_metrics_handler.h"
+#include "../logging/cell_metrics_handler.h"
 #include "ocudu/ran/pdcch/search_space.h"
 #include "ocudu/support/math/mod_math_utils.h"
 
@@ -304,8 +304,8 @@ unsigned intra_slice_scheduler::schedule_dl_retx_candidates(dl_ran_slice_candida
     }
 
     // Perform DL grant allocation, including PDCCH, PDSCH and UCI.
-    auto result =
-        ue_alloc.allocate_dl_grant(ue_retx_dl_grant_request{u, pdsch_slot, h, used_dl_vrbs, enable_pdsch_interleaving});
+    auto result = ue_alloc.allocate_dl_grant(
+        ue_retx_dl_grant_request{u, pdsch_slot, h, used_dl_vrbs, enable_pdsch_interleaving, slice.cfg().rbs.max()});
     if (not result.has_value() and result.error() == dl_alloc_failure_cause::skip_slot) {
       // Received signal to stop allocations in the slot.
       break;
@@ -355,8 +355,8 @@ unsigned intra_slice_scheduler::schedule_ul_retx_candidates(ul_ran_slice_candida
     // Allocate PDCCH and PUSCH.
     // NOTE: the symbols passed to the grant are the symbols that are available for PUSCH and for which the used VRBs
     // have been computed.
-    auto result = ue_alloc.allocate_ul_grant(
-        ue_retx_ul_grant_request{u, pusch_slot, h, used_ul_vrbs, ofdm_symbol_range{0, min_srs_symbol}});
+    auto result = ue_alloc.allocate_ul_grant(ue_retx_ul_grant_request{
+        u, pusch_slot, h, used_ul_vrbs, ofdm_symbol_range{0, min_srs_symbol}, slice.cfg().rbs.max()});
     if (not result.has_value() and result.error() == alloc_status::skip_slot) {
       // Received signal to stop allocations in the slot.
       break;
@@ -478,6 +478,7 @@ unsigned intra_slice_scheduler::schedule_dl_newtx_candidates(dl_ran_slice_candid
       // Allocation was successful. Move grant builder to list of pending newTx grants.
       auto& grant_builder = result.value();
       rb_count += std::min(grant_builder.context().expected_nof_rbs, max_rbs_per_grant);
+
       pending_dl_newtxs.push_back(std::move(grant_builder));
       if (rb_count >= rbs_to_alloc) {
         // Enough UEs have been allocated to ensure that the grid is filled. Move to stage 2.
@@ -726,7 +727,6 @@ std::optional<ue_newtx_candidate> intra_slice_scheduler::create_newtx_ul_candida
   const ue_cell& ue_cc = u.get_cc();
   ocudu_assert(ue_cc.is_active() and not ue_cc.is_in_fallback_mode(), "Invalid slice UE state");
 
-  // Check if the UE has pending data to transmit.
   units::bytes pending_bytes{u.pending_ul_newtx_bytes()};
   if (pending_bytes.value() == 0) {
     return std::nullopt;
@@ -919,6 +919,7 @@ void intra_slice_scheduler::update_used_ul_vrbs(const ul_ran_slice_candidate& sl
   if (symbols_to_check.empty()) {
     logger.debug(
         "No symbols available for PUSCH allocation on slot={} for slice_id={}", pusch_slot, slice.id().value());
+    return;
   }
 
   used_ul_vrbs = cell_alloc[pusch_slot]

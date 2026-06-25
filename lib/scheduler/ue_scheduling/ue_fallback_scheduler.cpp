@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_fallback_scheduler.h"
+#include "../logging/cell_metrics_handler.h"
 #include "../pdcch_scheduling/pdcch_resource_allocator.h"
 #include "../pucch_scheduling/pucch_allocator.h"
 #include "../support/csi_rs_helpers.h"
@@ -29,13 +30,15 @@ ue_fallback_scheduler::ue_fallback_scheduler(const scheduler_ue_expert_config& e
                                              pdcch_resource_allocator&         pdcch_sch_,
                                              pucch_allocator&                  pucch_alloc_,
                                              uci_allocator&                    uci_alloc_,
-                                             ue_repository&                    ues_) :
+                                             ue_repository&                    ues_,
+                                             cell_metrics_handler&             metrics_) :
   expert_cfg(expert_cfg_),
   cell_cfg(cell_cfg_),
   pdcch_sch(pdcch_sch_),
   pucch_alloc(pucch_alloc_),
   uci_alloc(uci_alloc_),
   ues(ues_),
+  metrics(metrics_),
   initial_active_dl_bwp(cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params),
   ss_cfg(cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common
              .search_spaces[cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.ra_search_space_id]),
@@ -232,7 +235,13 @@ void ue_fallback_scheduler::schedule_ul_new_tx_and_retx(cell_resource_allocator&
 {
   // Processes all the UL UEs at once, including UEs with new transmissions and UEs with retransmissions.
   for (auto next_ue = pending_ul_ues.begin(); next_ue != pending_ul_ues.end();) {
-    auto&                u       = ues[*next_ue];
+    auto& u = ues[*next_ue];
+    // While the UE is in pending_cfra state, its UL HARQ process 0 (Msg3) is owned by the RA scheduler until Msg3 is
+    // ACKed. Scheduling a UL grant here would collide with the RA scheduler on the same HARQ process, so skip it.
+    if (u.get_pcell().get_pcell_state().conres_st == ue_conres_state::pending_cfra) {
+      ++next_ue;
+      continue;
+    }
     ul_srb_sched_outcome outcome = schedule_ul_ue(res_alloc, u);
     if (outcome == ul_srb_sched_outcome::stop_ul_scheduling) {
       // If there is no PDCCH space, then stop the scheduling for all UL UEs.
@@ -276,9 +285,10 @@ bool ue_fallback_scheduler::schedule_dl_new_tx(cell_resource_allocator& res_allo
 
     const bool srb0_or_srb1_only =
         alloc_type != dl_new_tx_alloc_type::conres_only and not u.logical_channels().is_con_res_id_pending();
-    if (srb0_or_srb1_only and not u.get_pcell().get_pcell_state().conres_complete) {
-      // If the UE hasn't acked the ConRes, we cannot schedule the SRB0 or SRB1, as any MAC PDU received without ConRes
-      // MAC CE would make the Contention Resolution fail, as per TS 38.331, Section 5.1.5.
+    if (srb0_or_srb1_only and u.get_pcell().get_pcell_state().conres_st != ue_conres_state::conres_completed) {
+      // If ConRes is not completed, SRB0/SRB1 cannot be scheduled. Any MAC PDU without the ConRes MAC CE would cause
+      // Contention Resolution to fail (TS 38.331, Section 5.1.5).
+      // F1AP-created UEs can also only start to transmit after C-RNTI CE is received.
       ++next_ue;
       continue;
     }
@@ -371,7 +381,7 @@ ue_fallback_scheduler::schedule_dl_srb(cell_resource_allocator&              res
     // If the UE hasn't acked (or received) the ConRes (for a new tx or retx) and ra-ContentionResolutionTimer will
     // expire by the slot it will receive the ConRes, abort the allocation; the \ref slot_indication function will take
     // care of removing the UE.
-    if (u.get_pcell().get_pcell_state().msg3_rx_slot.valid() and not u.get_pcell().get_pcell_state().conres_complete) {
+    if (u.get_pcell().get_pcell_state().conres_st == ue_conres_state::pending_conres_ce) {
       const auto ntn_cs_koffset_subframes =
           cell_cfg.ntn_cs_koffset
               ? divide_ceil<uint32_t, uint32_t>(cell_cfg.ntn_cs_koffset, pdsch_alloc.slot.nof_slots_per_subframe())
@@ -658,9 +668,10 @@ ue_fallback_scheduler::alloc_grant(ue&                                   u,
   // allocations.
   // Note: \c u.is_reestablished() is only set at the start of the RRC Reconfiguration procedure following a
   // re-establishment.
-  const bool use_common =
-      not u.get_pcell().get_pcell_state().reconf_ongoing or u.get_pcell().get_pcell_state().reestablished;
-  bool use_dedicated = u.get_pcell().get_pcell_state().reconf_ongoing;
+  const auto cfg_state  = u.get_pcell().get_pcell_state().config_st;
+  const bool use_common = cfg_state != ue_config_state::pending_reconf;
+  bool       use_dedicated =
+      cfg_state == ue_config_state::pending_reconf or cfg_state == ue_config_state::pending_reest_reconf;
   if (u.ue_cfg_dedicated()->is_ue_cfg_complete()) {
     // Note: this check is meant for the case of the GNB missing the ACK for RRCSetup and then retransmitting it. In
     // this case, we need to schedule also on dedicated because the UE already has a dedicated configuration, even
@@ -903,7 +914,7 @@ dl_harq_process_handle ue_fallback_scheduler::fill_dl_srb_grant(ue&             
                                units::bytes{tbs_bytes},
                                u.crnti,
                                cell_cfg,
-                               pdcch.dci.tc_rnti_f1_0,
+                               pdcch.dci.as_tc_rnti_f1_0(),
                                vrbs,
                                not is_retx);
       break;
@@ -915,7 +926,7 @@ dl_harq_process_handle ue_fallback_scheduler::fill_dl_srb_grant(ue&             
                               u.crnti,
                               cell_cfg,
                               u.get_pcell().cfg().search_space(pdcch.ctx.context.ss_id),
-                              pdcch.dci.c_rnti_f1_0,
+                              pdcch.dci.as_c_rnti_f1_0(),
                               vrbs,
                               not is_retx);
       break;
@@ -933,7 +944,7 @@ dl_harq_process_handle ue_fallback_scheduler::fill_dl_srb_grant(ue&             
   }
 
   // Save in HARQ the parameters set for this PDCCH and PDSCH PDUs.
-  dl_harq_alloc_context ctxt{pdcch.dci.type, std::nullopt, std::nullopt, std::nullopt, true};
+  dl_harq_alloc_context ctxt{pdcch.dci.type(), std::nullopt, std::nullopt, std::nullopt, true};
   h_dl->save_grant_params(ctxt, msg);
 
   return *h_dl;
@@ -1307,12 +1318,12 @@ void ue_fallback_scheduler::fill_ul_srb_grant(ue&                               
                           tbs_bytes,
                           cell_cfg,
                           cell_cfg.params.ul_cfg_common.init_ul_bwp,
-                          pdcch.dci.c_rnti_f0_0,
+                          pdcch.dci.as_c_rnti_f0_0(),
                           vrbs,
                           not is_retx);
 
   // Save set PDCCH and PUSCH PDU parameters in HARQ process.
-  h_ul->save_grant_params(ul_harq_alloc_context{pdcch.dci.type}, msg.pusch_cfg);
+  h_ul->save_grant_params(ul_harq_alloc_context{pdcch.dci.type()}, msg.pusch_cfg);
 
   // Notify UL TB scheduling.
   u.logical_channels().handle_ul_grant(msg.pusch_cfg.tb_size_bytes);
@@ -1372,13 +1383,19 @@ void ue_fallback_scheduler::store_harq_tx(du_ue_index_t ue_index, const dl_harq_
   ongoing_ues_ack_retxs.emplace_back(ue_index, h_dl);
 }
 
-/// Helper function to check if the conRes timer has expired for a given UE in fallback mode.
-static bool handle_conres_expiry(ue& u, slot_point sl_tx, ocudulog::basic_logger& logger, unsigned ntn_cs_koffset = 0)
+bool ue_fallback_scheduler::handle_conres_expiry(ue& u, slot_point sl_tx)
 {
-  auto& ue_pcell = u.get_pcell();
+  const unsigned ntn_cs_koffset = cell_cfg.ntn_cs_koffset;
+  auto&          ue_pcell       = u.get_pcell();
 
-  if (ue_pcell.get_pcell_state().conres_complete or not ue_pcell.get_pcell_state().msg3_rx_slot.valid()) {
+  if (ue_pcell.get_pcell_state().conres_st != ue_conres_state::pending_conres_ce) {
     return false;
+  }
+
+  if (not ue_pcell.get_pcell_state().msg3_rx_slot.valid()) {
+    logger.warning("ue={} rnti={}: attempting to compute ra-ContentionResolutionTimer with non-valid msg3 rx slot",
+                   u.ue_index,
+                   u.crnti);
   }
 
   const auto conres_timer       = ue_pcell.cfg().init_bwp().ul.common().rach_cfg_common->ra_con_res_timer.count();
@@ -1393,16 +1410,18 @@ static bool handle_conres_expiry(ue& u, slot_point sl_tx, ocudulog::basic_logger
   if (u.logical_channels().is_con_res_id_pending()) {
     const auto ntn_cs_koffset_ms =
         ntn_cs_koffset ? divide_ceil<uint32_t, uint32_t>(ntn_cs_koffset, sl_tx.nof_slots_per_subframe()) : 0;
-    logger.warning("ue={} rnti={}: ra-ContentionResolutionTimer ({}ms{}) expired before ConRes CE was scheduled. UE "
-                   "will stop being scheduled",
-                   fmt::underlying(u.ue_index),
-                   u.crnti,
-                   conres_timer,
-                   make_formattable([k = ntn_cs_koffset_ms](auto& ctx) {
-                     return k ? fmt::format_to(ctx.out(), " + RTT: {}ms", k) : ctx.out();
-                   }));
-    ue_pcell.set_conres_state(true);
-    u.deactivate();
+    logger.warning(
+        "ue={} rnti={}: ra-ContentionResolutionTimer, for msg3 rx at slot={}, expired ({}ms{}) before ConRes "
+        "CE was scheduled. UE will stop being scheduled",
+        u.ue_index,
+        u.crnti,
+        ue_pcell.get_pcell_state().msg3_rx_slot,
+        conres_timer,
+        make_formattable([k = ntn_cs_koffset_ms](auto& ctx) {
+          return k ? fmt::format_to(ctx.out(), " + RTT: {}ms", k) : ctx.out();
+        }));
+    metrics.handle_conres_timer_expired();
+    ues.handle_conres_ce_outcome(u.ue_index, false);
     return true;
   }
 
@@ -1431,12 +1450,7 @@ static bool handle_conres_expiry(ue& u, slot_point sl_tx, ocudulog::basic_logger
               make_formattable([k = ntn_cs_koffset](auto& ctx) {
                 return k ? fmt::format_to(ctx.out(), " + RTT: {}ms", k) : ctx.out();
               }));
-  ue_pcell.set_conres_state(true);
-
-  if (h_conres.has_value()) {
-    // Cancel any pending retransmissions.
-    h_conres->cancel_retxs();
-  }
+  ues.handle_conres_ce_outcome(u.ue_index, false);
   return true;
 }
 
@@ -1490,7 +1504,7 @@ void ue_fallback_scheduler::slot_indication(slot_point sl)
       continue;
     }
 
-    if (handle_conres_expiry(u, sl, logger, cell_cfg.ntn_cs_koffset)) {
+    if (handle_conres_expiry(u, sl)) {
       // Remove the UE from the fallback scheduler.
       ue_it = pending_dl_ues_new_tx.erase(ue_it);
       if (not ue_pcell.is_active()) {
@@ -1540,7 +1554,7 @@ void ue_fallback_scheduler::slot_indication(slot_point sl)
       continue;
     }
 
-    if (handle_conres_expiry(u, sl, logger, cell_cfg.ntn_cs_koffset)) {
+    if (handle_conres_expiry(u, sl)) {
       it_ue_harq = ongoing_ues_ack_retxs.erase(it_ue_harq);
       if (not ue_pcell.is_active()) {
         // Remove the UE from the fallback scheduler if it got deactivated.
@@ -1564,5 +1578,9 @@ void ue_fallback_scheduler::rem_fallback_ue(du_ue_index_t ue_index)
                      pending_dl_ues_new_tx.end(),
                      [ue_index = ue_index](const fallback_ue& ue) { return ue.ue_index == ue_index; }),
       pending_dl_ues_new_tx.end());
-  pending_ul_ues.erase(std::remove(pending_ul_ues.begin(), pending_ul_ues.end(), ue_index), pending_ul_ues.end());
+  // Note: We do not use the erase+remove pattern because we want to maintain the order of pending_ul_ues.
+  // The UE may not be in the list, so we must check the iterator before erasing; erasing end() is UB.
+  if (auto it = std::find(pending_ul_ues.begin(), pending_ul_ues.end(), ue_index); it != pending_ul_ues.end()) {
+    pending_ul_ues.erase(it);
+  }
 }

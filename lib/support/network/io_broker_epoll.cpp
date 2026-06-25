@@ -173,23 +173,37 @@ void io_broker_epoll::thread_loop()
         continue;
       }
 
+      // Make sure that the socket was not re-armed while the callback is still running.
+      bool in_callback = false;
+      it->second.is_executing_recv_callback.compare_exchange_strong(
+          in_callback, true, std::memory_order_acq_rel, std::memory_order_relaxed);
+      if (in_callback) {
+        logger.error("Trying to defer callback execution, but previous callback for this socket is not finished");
+        continue;
+      }
+
       // Increment fd_handler job count before deferring the task.
       it->second.job_count.fetch_add(1, std::memory_order_release);
-      if (not it->second.executor->defer(
-              [this, fd, callback = &it->second.read_callback, job_count = &it->second.job_count]() {
-                // Track the current FD that is being read by this thread.
-                fd_read_in_callback = fd;
-                (*callback)();
-                // Avoid rearming this FD if the callback unregistered it.
-                if (fd_read_in_callback != AVOID_FD_REARMING) {
-                  rearm_fd(fd);
-                }
-                fd_read_in_callback = -1;
-                // Decrement fd_handler job count after deferred task finished.
-                job_count->fetch_sub(1, std::memory_order_release);
-              })) {
+      if (not it->second.executor->defer([this,
+                                          fd,
+                                          callback       = &it->second.read_callback,
+                                          job_count      = &it->second.job_count,
+                                          is_in_callback = &it->second.is_executing_recv_callback]() {
+            // Track the current FD that is being read by this thread.
+            fd_read_in_callback = fd;
+            (*callback)();
+            is_in_callback->store(false, std::memory_order_release);
+            // Avoid rearming this FD if the callback unregistered it.
+            if (fd_read_in_callback != AVOID_FD_REARMING) {
+              rearm_fd(fd);
+            }
+            fd_read_in_callback = -1;
+            // Decrement fd_handler job count after deferred task finished.
+            job_count->fetch_sub(1, std::memory_order_release);
+          })) {
         rearm_fd(fd);
-        // Decrement fd_handler job count after task deferring failed.
+        // Reset is_executing_recv_callback flag and decrement fd_handler job count after task deferring failed.
+        it->second.is_executing_recv_callback.store(false, std::memory_order_release);
         it->second.job_count.fetch_sub(1, std::memory_order_release);
         logger.error("Could not enqueue task for processing file descriptor: {}", fd);
       }

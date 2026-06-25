@@ -33,6 +33,7 @@
 #include "ocudu/gtpu/gtpu_config.h"
 #include "ocudu/gtpu/gtpu_demux_factory.h"
 #include "ocudu/gtpu/gtpu_gateway.h"
+#include "ocudu/gtpu/gtpu_teid_pool_factory.h"
 #include "ocudu/support/backtrace.h"
 #include "ocudu/support/config_parsers.h"
 #include "ocudu/support/cpu_features.h"
@@ -152,6 +153,10 @@ static void fill_cu_worker_manager_config(worker_manager_config& config, const c
 
 static void autoderive_cu_up_parameters_after_parsing(cu_up_appconfig& cu_up_config, o_cu_up_unit_config& o_cu_up_cfg)
 {
+  // If no PLMN list is configured, use the default.
+  if (o_cu_up_cfg.cu_up_cfg.plmn_list.empty()) {
+    o_cu_up_cfg.cu_up_cfg.plmn_list.push_back("00101");
+  }
   // If no UPF is configured, we set a default configuration.
   if (o_cu_up_cfg.cu_up_cfg.ngu_cfg.ngu_socket_cfg.empty()) {
     cu_up_unit_ngu_socket_config sock_cfg;
@@ -161,6 +166,12 @@ static void autoderive_cu_up_parameters_after_parsing(cu_up_appconfig& cu_up_con
   if (cu_up_config.f1u_cfg.f1u_socket_cfg.empty()) {
     f1u_socket_appconfig sock_cfg;
     cu_up_config.f1u_cfg.f1u_socket_cfg.push_back(sock_cfg);
+  }
+
+  // If no E1AP socket configuration is derived, we set a default configuration.
+  if (cu_up_config.e1ap_cfg.e1ap_cfgs.empty()) {
+    ocuup::e1ap_appconfig sock_cfg;
+    cu_up_config.e1ap_cfg.e1ap_cfgs.push_back(sock_cfg);
   }
 }
 
@@ -241,9 +252,9 @@ int main(int argc, char** argv)
     YAML::Node node;
     fill_cu_up_appconfig_in_yaml_schema(node, cu_up_cfg);
     o_cu_up_app_unit->dump_config(node);
-    config_logger.debug("Input configuration (all values): \n{}", YAML::Dump(node));
+    config_logger.debug("CU-UP input configuration (all values): \n{}", YAML::Dump(node));
   } else {
-    config_logger.info("Input configuration (only non-default values): \n{}", app.config_to_str(false, false));
+    config_logger.info("CU-UP input configuration (only non-default values): \n{}", app.config_to_str(false, false));
   }
 
   app_services::application_tracer app_tracer;
@@ -318,10 +329,19 @@ int main(int argc, char** argv)
   auto on_pcap_close_init = make_scope_exit([&cu_up_logger]() { cu_up_logger.info("Closing PCAP files..."); });
 
   // Create F1-U GW.
+
+  // Create F1-U TEID allocator (CU-UP)
+  gtpu_allocator_creation_request cu_f1u_alloc_msg = {
+      .max_nof_teids = o_cu_up_app_unit->get_o_cu_up_unit_config().cu_up_cfg.max_nof_ues * MAX_NOF_PDU_SESSIONS,
+      .teid_release_linger_time = GTPU_DEFAULT_TEID_RELEASE_LINGER_TIME,
+      .timers                   = *cu_up_timers};
+  std::unique_ptr<gtpu_teid_pool> cu_f1u_teid_allocator = create_gtpu_allocator(cu_f1u_alloc_msg);
+
   // > Create GTP-U Demux.
   gtpu_demux_creation_request cu_f1u_gtpu_msg   = {};
   cu_f1u_gtpu_msg.cfg.name                      = "CU-NR-U-DEMUX";
   cu_f1u_gtpu_msg.cfg.warn_on_drop              = true;
+  cu_f1u_gtpu_msg.teid_linger_checker           = cu_f1u_teid_allocator.get();
   cu_f1u_gtpu_msg.gtpu_pcap                     = cu_up_dlt_pcaps.f1u.get();
   std::unique_ptr<gtpu_demux> cu_f1u_gtpu_demux = create_gtpu_demux(cu_f1u_gtpu_msg);
   // > Create UDP gateway(s).
@@ -348,19 +368,23 @@ int main(int argc, char** argv)
   std::unique_ptr<f1u_cu_up_udp_gateway> cu_f1u_conn =
       ocuup::create_split_f1u_gw({f1u_gw_maps, *cu_f1u_gtpu_demux, *cu_up_dlt_pcaps.f1u, cu_up_cfg.f1u_cfg.peer_port});
 
-  // Instantiate E1 client gateway.
-  // > Create E1 config
-  sctp_network_connector_config e1_sctp{};
-  e1_sctp.if_name           = "E1";
-  e1_sctp.dest_name         = "CU-CP";
-  e1_sctp.connect_addresses = cu_up_cfg.e1ap_cfg.cu_cp_addresses;
-  e1_sctp.connect_port      = E1AP_PORT;
-  e1_sctp.ppid              = E1AP_PPID;
-  e1_sctp.bind_addresses    = cu_up_cfg.e1ap_cfg.bind_addresses;
-  fill_sctp_network_gateway_config_socket_params(e1_sctp, cu_up_cfg.e1ap_cfg.sctp);
-  // > Create E1 gateway
-  std::unique_ptr<ocuup::e1_connection_client> e1_gw = create_e1_gateway_client(e1_cu_up_sctp_gateway_config{
-      e1_sctp, *epoll_broker, workers.get_cu_up_executor_mapper().e1_rx_executor(), *cu_up_dlt_pcaps.e1ap});
+  // Instantiate E1 client gateway(s).
+  std::vector<std::unique_ptr<ocuup::e1_connection_client>> e1_gws;
+  for (const auto& e1_cfg : cu_up_cfg.e1ap_cfg.e1ap_cfgs) {
+    // > Create E1 config.
+    sctp_network_connector_config e1_sctp{};
+    e1_sctp.if_name           = "E1";
+    e1_sctp.dest_name         = "CU-CP";
+    e1_sctp.connect_addresses = e1_cfg.cu_cp_addresses;
+    e1_sctp.connect_port      = E1AP_PORT;
+    e1_sctp.ppid              = E1AP_PPID;
+    e1_sctp.bind_addresses    = e1_cfg.bind_addresses;
+    fill_sctp_network_gateway_config_socket_params(e1_sctp, e1_cfg.sctp);
+    // > Create E1 gateway.
+    std::unique_ptr<ocuup::e1_connection_client> e1_gw = create_e1_gateway_client(e1_cu_up_sctp_gateway_config{
+        e1_sctp, *epoll_broker, workers.get_cu_up_executor_mapper().e1_rx_executor(), *cu_up_dlt_pcaps.e1ap});
+    e1_gws.push_back(std::move(e1_gw));
+  }
 
   // Instantiate E2AP client gateway.
   std::unique_ptr<e2_connection_client> e2_gw_cu_up = create_e2_gateway_client(
@@ -383,10 +407,13 @@ int main(int argc, char** argv)
 
   // TODO: Create console helper object for commands and metrics printing.
 
-  // Create and start O-CU-UP
+  // Create and start O-CU-UP.
   o_cu_up_unit_dependencies o_cuup_unit_deps;
-  o_cuup_unit_deps.workers                = &workers;
-  o_cuup_unit_deps.e1ap_conn_client       = e1_gw.get();
+  o_cuup_unit_deps.workers = &workers;
+  for (const auto& e1_gw : e1_gws) {
+    o_cuup_unit_deps.e1ap_conn_client.push_back(e1_gw.get());
+  }
+  o_cuup_unit_deps.f1u_teid_allocator     = cu_f1u_teid_allocator.get();
   o_cuup_unit_deps.f1u_gateway            = cu_f1u_conn.get();
   o_cuup_unit_deps.gtpu_pcap              = cu_up_dlt_pcaps.n3.get();
   o_cuup_unit_deps.timers                 = cu_up_timers;
@@ -419,7 +446,10 @@ int main(int argc, char** argv)
 
   {
     app_services::application_message_banners app_banner(
-        app_name, cu_up_cfg.log_cfg.filename == "stdout" ? std::string_view() : cu_up_cfg.log_cfg.filename);
+        app_name,
+        cu_up_cfg.log_cfg.filename == "stdout" ? std::string_view() : cu_up_cfg.log_cfg.filename,
+        ocudulog::fetch_basic_logger("CU-UP"),
+        cu_up_cfg.log_cfg.all_level);
 
     auto exec_metrics_session = exec_metrics_service.service
                                     ? exec_metrics_service.service->create_session(workers.get_metrics_executor())

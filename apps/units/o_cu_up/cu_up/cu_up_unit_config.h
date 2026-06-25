@@ -50,6 +50,7 @@ struct cu_up_unit_ngu_gtpu_config {
   unsigned                  gtpu_batch_size          = 256;
   unsigned                  gtpu_reordering_timer_ms = 0;
   std::chrono::milliseconds rate_limiter_period{100};
+  std::chrono::milliseconds gtpu_teid_release_linger_time{100};
   bool                      ignore_ue_ambr = true;
 };
 
@@ -117,6 +118,8 @@ struct cu_up_unit_config {
   cu_up_unit_pcap_config pcap_cfg;
   /// QoS configuration.
   std::vector<cu_up_unit_qos_config> qos_cfg;
+  /// Supported PLMN IDs (up to 12 PLMNs).
+  std::vector<std::string> plmn_list;
   /// Test mode.
   cu_up_unit_test_mode_config test_mode_cfg;
 };

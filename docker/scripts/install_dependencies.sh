@@ -15,8 +15,12 @@
 
 set -e
 
+# shellcheck source=common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
 install_dependencies_debian_ubuntu() {
     local mode="${1:?}"
+    local -x DEBIAN_FRONTEND=noninteractive
     local -a pkgs=()
     local ARCH=""
 
@@ -28,7 +32,7 @@ install_dependencies_debian_ubuntu() {
         libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev libcap2-bin
     )
     local -a extra_pkgs=(
-        libzmq3-dev libuhd-dev uhd-host libboost-program-options-dev libdpdk-dev libelf-dev libdwarf-dev libdw-dev
+        libzmq3-dev libuhd-dev uhd-host libboost-program-options-dev libdpdk-dev libelf-dev libdwarf-dev libdw-dev capnproto libcapnp-dev
     )
 
     case "$mode" in
@@ -61,16 +65,15 @@ install_dependencies_debian_ubuntu() {
     fi
 
     if ((${#pkgs[@]})); then
-        DEBIAN_FRONTEND=noninteractive apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
+        install_ubuntu_pkgs "${pkgs[@]}"
     fi
 
     if [[ "$mode" == "all" || "$mode" == "extra" ]]; then
         if [[ "$ARCH" == "x86_64" ]]; then
             wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
             echo "deb [trusted=yes] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list
-            DEBIAN_FRONTEND=noninteractive apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            apt-get update
+            apt-get install -y --no-install-recommends \
                 intel-oneapi-mkl-core-devel-2025.0 libomp-dev
         else
             pushd /tmp
@@ -89,7 +92,7 @@ install_dependencies_debian_ubuntu() {
         fi
     fi
 
-    DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+    _ubuntu_apt_cleanup
 }
 
 install_dependencies_fedora() {
@@ -97,13 +100,14 @@ install_dependencies_fedora() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
     )
     local -a run_pkgs=(
-        fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel libcap
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap
     )
     local -a extra_pkgs=(
-        cppzmq-devel libusb1-devel boost-devel numactl-devel
+        boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel elfutils-devel elfutils-libelf-devel
+        libdwarf-devel libusb1-devel numactl-devel zeromq-devel
     )
 
     case "$mode" in
@@ -126,10 +130,7 @@ install_dependencies_fedora() {
             ;;
     esac
 
-    if ((${#pkgs[@]})); then
-        dnf -y install "${pkgs[@]}"
-        dnf clean all
-    fi
+    install_fedora_pkgs "${pkgs[@]}"
 }
 
 install_dependencies_arch() {
@@ -137,13 +138,13 @@ install_dependencies_arch() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake make base-devel fftw mbedtls yaml-cpp lksctp-tools gtest pkgconf
+        cmake fftw mbedtls yaml-cpp lksctp-tools gtest pkgconf
     )
     local -a run_pkgs=(
         fftw mbedtls yaml-cpp lksctp-tools gtest libcap
     )
     local -a extra_pkgs=(
-        zeromq libuhd boost dpdk libelf libdwarf elfutils
+        zeromq libuhd boost dpdk libelf libdwarf elfutils capnproto
     )
 
     case "$mode" in
@@ -166,25 +167,28 @@ install_dependencies_arch() {
             ;;
     esac
 
-    if ((${#pkgs[@]})); then
-        pacman -Syu --noconfirm "${pkgs[@]}"
-        pacman -Scc --noconfirm
-    fi
+    install_arch_pkgs "${pkgs[@]}"
 }
 
 install_dependencies_rhel() {
     local mode="${1:?}"
     local -a pkgs=()
 
+    # gcc-toolset-11/12 are RHEL subscription-only and redundant on UBI9/RHEL9
+    # where GCC 11 is the default compiler. libatomic replaces gcc-toolset-12-libatomic-devel.
+    # yaml-cpp-devel and mbedtls-devel come from EPEL (installed below).
     local -a build_pkgs=(
-        cmake fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel
-        gcc-toolset-11 gcc-toolset-11-gcc-c++ gcc-toolset-12-libatomic-devel
+        cmake fftw-devel lksctp-tools-devel
+        gcc gcc-c++ libatomic
+        yaml-cpp-devel mbedtls-devel
     )
     local -a run_pkgs=(
-        fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gcc-toolset-12-libatomic-devel libcap
+        fftw-devel lksctp-tools
+        libatomic libcap
+        yaml-cpp-devel mbedtls-devel
     )
     local -a extra_pkgs=(
-        cppzmq-devel libusb1-devel boost-devel numactl-devel
+        cppzmq-devel libusbx-devel boost-devel numactl-devel capnproto capnproto-devel
     )
 
     case "$mode" in
@@ -207,10 +211,8 @@ install_dependencies_rhel() {
             ;;
     esac
 
-    if ((${#pkgs[@]})); then
-        dnf -y install "${pkgs[@]}"
-        dnf clean all
-    fi
+    dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+    install_rhel_pkgs "${pkgs[@]}"
 }
 
 main() {

@@ -18,7 +18,7 @@ rrc_ue_impl::rrc_ue_impl(rrc_pdu_f1ap_notifier&                 f1ap_pdu_notifie
                          rrc_ue_measurement_notifier&           measurement_notifier_,
                          rrc_ue_cu_cp_ue_notifier&              cu_cp_ue_notifier_,
                          rrc_ue_event_notifier&                 metrics_notifier_,
-                         const ue_index_t                       ue_index_,
+                         const cu_cp_ue_index_t                 ue_index_,
                          const rnti_t                           c_rnti_,
                          const rrc_cell_context&                cell_,
                          const rrc_ue_cfg_t&                    cfg_,
@@ -143,14 +143,16 @@ void rrc_ue_impl::on_new_dl_dcch(srb_id_t srb_id, const asn1::rrc_nr::dl_dcch_ms
   send_dl_dcch(srb_id, dl_dcch_msg);
 }
 
-void rrc_ue_impl::on_new_as_security_context()
+void rrc_ue_impl::on_new_as_security_context(bool security_mode_active)
 {
   ocudu_sanity_check(context.srbs.find(srb_id_t::srb1) != context.srbs.end(),
                      "Attempted to configure security, but there is no interface to PDCP");
 
   context.srbs.at(srb_id_t::srb1)
-      .enable_rx_security(
-          security::integrity_enabled::on, security::ciphering_enabled::off, cu_cp_ue_notifier.get_rrc_128_as_config());
+      .enable_rx_security(security_mode_active ? security::integrity_enabled::on
+                                               : security::integrity_enabled::smc_transition,
+                          security::ciphering_enabled::off,
+                          cu_cp_ue_notifier.get_rrc_128_as_config());
   context.srbs.at(srb_id_t::srb1)
       .enable_tx_security(
           security::integrity_enabled::on, security::ciphering_enabled::off, cu_cp_ue_notifier.get_rrc_128_as_config());

@@ -9,9 +9,9 @@
 #include "ocudu/adt/expected.h"
 #include "ocudu/asn1/rrc_nr/cell_group_config.h"
 #include "ocudu/asn1/rrc_nr/dl_ccch_msg.h"
+#include "ocudu/asn1/rrc_nr/rrc_nr.h"
 #include "ocudu/asn1/rrc_nr/ul_ccch1_msg.h"
 #include "ocudu/asn1/rrc_nr/ul_ccch_msg.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/ran/plmn_identity.h"
 
 using namespace ocudu;
@@ -64,7 +64,16 @@ rrc_du_impl::get_cell_info(const std::vector<cu_cp_du_served_cells_item>& served
     }
 
     for (const auto& asn1_meas_timing : asn1_meas_timing_cfg.crit_exts.c1().meas_timing_conf().meas_timing) {
-      cell_info.meas_timings.push_back(asn1_to_meas_timing(asn1_meas_timing));
+      if (asn1_meas_timing.freq_and_timing_present) {
+        // Only add measurement configs with freq_and_timing.
+        cell_info.meas_timings.push_back(asn1_to_meas_timing(asn1_meas_timing));
+      }
+    }
+
+    // At least one measurement timing config entry with freq_and_timing must be present.
+    if (cell_info.meas_timings.empty()) {
+      logger.error("No Measurement Timing Config contained freq_and_timing entry");
+      return {};
     }
 
     if (!served_cell.gnb_du_sys_info.has_value()) {
@@ -167,6 +176,11 @@ byte_buffer rrc_du_impl::get_rrc_reject()
   return pack_into_pdu(dl_ccch_msg, "RRCReject");
 }
 
+byte_buffer rrc_du_impl::pack_meas_config(const rrc_meas_cfg& meas_cfg)
+{
+  return pack_into_pdu(meas_config_to_rrc_asn1(meas_cfg), "RRCMeasConfig");
+}
+
 std::optional<rrc_resume_context_t> rrc_du_impl::get_rrc_resume_context(byte_buffer rrc_container,
                                                                         uint8_t     nof_i_rnti_ue_bits)
 {
@@ -267,14 +281,19 @@ rrc_ue_interface* rrc_du_impl::add_ue(const rrc_ue_creation_message& msg)
   }
 
   // Create UE object.
-  ue_index_t   ue_index                 = msg.ue_index;
-  rrc_ue_cfg_t ue_cfg                   = {};
+  cu_cp_ue_index_t ue_index             = msg.ue_index;
+  rrc_ue_cfg_t     ue_cfg               = {};
   ue_cfg.force_reestablishment_fallback = cfg.force_reestablishment_fallback;
   ue_cfg.force_resume_fallback          = cfg.force_resume_fallback;
   ue_cfg.rrc_procedure_guard_time_ms    = cfg.rrc_procedure_guard_time_ms;
   ue_cfg.meas_timings                   = cell_info_db.at(msg.cell.cgi.nci).meas_timings;
 
   // Copy RRC cell and add SSB ARFCN.
+  // Defensive check: freq_and_timing must be present.
+  if (ue_cfg.meas_timings.empty() || !ue_cfg.meas_timings.front().freq_and_timing.has_value()) {
+    logger.error("ue={}: Missing freq_and_timing in meas_timings - aborting UE creation", ue_index);
+    return nullptr;
+  }
   rrc_cell_context rrc_cell   = msg.cell;
   rrc_cell.ssb_arfcn          = ue_cfg.meas_timings.front().freq_and_timing.value().carrier_freq;
   rrc_cell.timers             = cell_info_db.at(msg.cell.cgi.nci).timers;
@@ -304,7 +323,7 @@ rrc_ue_interface* rrc_du_impl::add_ue(const rrc_ue_creation_message& msg)
   return nullptr;
 }
 
-void rrc_du_impl::remove_ue(ue_index_t ue_index)
+void rrc_du_impl::remove_ue(cu_cp_ue_index_t ue_index)
 {
   auto ue_it = ue_db.find(ue_index);
   if (ue_it == ue_db.end()) {

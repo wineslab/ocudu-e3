@@ -20,6 +20,8 @@ services:
     #  - "38412:38412/sctp"
     #  - "2152:2152/udp"
     command: 5gc -c open5gs-5gc.yml
+    volumes:
+      - ./open5gs/subscriber_db.csv:/open5gs/subscriber_db.csv:ro
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.20 7777"]
       interval: 3s
@@ -38,7 +40,7 @@ services:
       dockerfile: docker/Dockerfile
       args:
         OS: ${OS:-ubuntu}
-        OS_VERSION: ${OS_VERSION:-24.04}
+        OS_VERSION: ${OS_VERSION:-26.04}
     # privileged mode is requred only for accessing usb devices
     privileged: true
     # Extra capabilities always required

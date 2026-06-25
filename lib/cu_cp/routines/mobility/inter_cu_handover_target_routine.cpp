@@ -5,6 +5,7 @@
 #include "inter_cu_handover_target_routine.h"
 #include "../../cell_meas_manager/cell_meas_manager_impl.h"
 #include "../pdu_session_routine_helpers.h"
+#include "ocudu/f1ap/cu_cp/f1ap_cu_ue_context_update.h"
 #include "ocudu/ran/cause/e1ap_cause_converters.h"
 
 using namespace ocudu;
@@ -30,18 +31,20 @@ static bool handle_ue_context_setup_response(e1ap_bearer_context_modification_re
 inter_cu_handover_target_routine::inter_cu_handover_target_routine(
     const cu_cp_inter_cu_handover_request& request_,
     e1ap_bearer_context_manager&           e1ap_bearer_ctxt_mng_,
-    f1ap_ue_context_manager&               f1ap_ue_ctxt_mng_,
+    du_processor&                          du_proc_,
     cu_cp_ue_removal_handler&              ue_removal_handler_,
     ue_manager&                            ue_mng_,
     cell_meas_manager&                     cell_meas_mng_,
+    ngap_location_reporting_handler&       ngap_loc_report_handler_,
     const security_indication_t&           default_security_indication_,
     ocudulog::basic_logger&                logger_) :
   request(request_),
   e1ap_bearer_ctxt_mng(e1ap_bearer_ctxt_mng_),
-  f1ap_ue_ctxt_mng(f1ap_ue_ctxt_mng_),
+  du_proc(du_proc_),
   ue_removal_handler(ue_removal_handler_),
   ue_mng(ue_mng_),
   cell_meas_mng(cell_meas_mng_),
+  ngap_loc_report_handler(ngap_loc_report_handler_),
   logger(logger_),
   default_security_indication(default_security_indication_)
 {
@@ -122,6 +125,12 @@ void inter_cu_handover_target_routine::operator()(
         request.rrc_handover_preparation_information.copy();
     ue_context_setup_request.cu_to_du_rrc_info.ue_cap_rat_container_list = rrc_context.ue_cap_rat_container_list.copy();
 
+    // For CHO, notify the DU to expect a conditional access (C-RNTI CE) from this UE.
+    if (request.is_conditional_handover) {
+      ue_context_setup_request.conditional_inter_du_mobility_info.emplace();
+      ue_context_setup_request.conditional_inter_du_mobility_info->cho_trigger = f1ap_cho_trigger::cho_initiation;
+    }
+
     // Generate and add Measurement Configuration to set ServingCellMO. Note that the RRC UE doesn't exist yet.
     meas_cfg = cell_meas_mng.get_measurement_config(request.ue_index, request.target_cell_id.nci, std::nullopt);
     if (meas_cfg.has_value()) {
@@ -130,11 +139,15 @@ void inter_cu_handover_target_routine::operator()(
         ue_context_setup_request.serving_cell_mo = meas_obj_id_to_uint(
             ue_mng.get_measurement_context(request.ue_index).nci_to_meas_obj_id.at(request.target_cell_id.nci));
       }
+      // Forward the MeasConfig to the target DU so it can derive the measurement gap. The RRC UE doesn't exist yet on
+      // this CU, so the packing is delegated to the RRC DU instead of the RRC UE.
+      ue_context_setup_request.cu_to_du_rrc_info.meas_cfg =
+          du_proc.get_rrc_du_handler().pack_meas_config(meas_cfg.value());
     }
 
     // Call F1AP procedure.
     CORO_AWAIT_VALUE(ue_context_setup_response,
-                     f1ap_ue_ctxt_mng.handle_ue_context_setup_request(ue_context_setup_request, rrc_context));
+                     du_proc.get_f1ap_handler().handle_ue_context_setup_request(ue_context_setup_request, rrc_context));
     // Handle UE Context Setup Response.
     if (!handle_ue_context_setup_response(
             bearer_context_modification_request, ue_context_setup_response, next_config, logger)) {
@@ -216,13 +229,49 @@ void inter_cu_handover_target_routine::operator()(
     // trigger a HandoverNotify message.
     unsigned transaction_id = 0;
 
-    // Get RRC Handover Command container.
-    handover_command_pdu = ue->get_rrc_ue()->get_rrc_handover_command(rrc_reconfig_args, transaction_id);
+    if (request.is_conditional_handover) {
+      // CHO: produce a plain RRCReconfiguration (no HandoverCommand wrapper) to be embedded
+      // in condRRCReconfig-r16 at the source. The target UE is freshly created, so the first
+      // allocated transaction ID will be 0, matching inter_cu_cho_target_execution_routine.
+      rrc_reconfig_args.is_cho_preparation = true;
+      auto ho_ctxt         = ue->get_rrc_ue()->get_rrc_ue_handover_reconfiguration_context(rrc_reconfig_args);
+      handover_command_pdu = std::move(ho_ctxt.rrc_ue_handover_reconfiguration_pdu);
+    } else {
+      // Regular inter-CU HO: get packed RRC Handover Command container.
+      handover_command_pdu = ue->get_rrc_ue()->get_rrc_handover_command(rrc_reconfig_args, transaction_id);
+    }
   }
 
-  // Configure location reporting if requested in the handover request.
+  // Configure location reporting and/or send immediate report if requested in the handover request.
   if (request.location_report_request_type.has_value()) {
-    ue->get_location_manager().configure_location_reporting(request.location_report_request_type.value());
+    const auto& loc_req = request.location_report_request_type.value();
+
+    // Configure location reporting, only if required.
+    using event_type = location_report_request::event_type;
+    if (loc_req.location_reporting_type != event_type::direct &&
+        loc_req.location_reporting_type != event_type::nulltype) {
+      ue->get_location_manager().configure_location_reporting(loc_req);
+    }
+
+    if (loc_req.location_reporting_type == event_type::direct ||
+        loc_req.location_reporting_type == event_type::change_of_serve_cell ||
+        loc_req.location_reporting_type == event_type::change_of_serving_cell_and_ue_presence_in_the_area_of_interest) {
+      const auto* du_ctx      = du_proc.get_context();
+      const auto* target_cell = du_ctx != nullptr ? du_ctx->find_cell(request.target_cell_id) : nullptr;
+      if (target_cell == nullptr) {
+        logger.warning("ue={}: \"{}\" cannot send immediate location report, target cell not found. cell_id={}",
+                       request.ue_index,
+                       name(),
+                       request.target_cell_id);
+      } else {
+        cu_cp_user_location_info_nr user_location_info;
+        user_location_info.nr_cgi = {request.guami.plmn, target_cell->cgi.nci};
+        user_location_info.tai    = {request.guami.plmn, target_cell->tac};
+        auto report =
+            ue->get_location_manager().get_direct_location_report(request.ue_index, user_location_info, loc_req);
+        ngap_loc_report_handler.handle_location_report_transmission(report);
+      }
+    }
   }
 
   CORO_RETURN(generate_handover_resource_allocation_response(true));

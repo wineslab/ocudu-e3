@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-
 add_library(ocudu_ran
         cause/ngap_cause_converters.cpp
         cause/f1ap_cause_converters.cpp
@@ -29,7 +28,9 @@ add_library(ocudu_ran
         prach/prach_frequency_mapping.cpp
         prach/prach_preamble_information.cpp
         prach/prach_helper.cpp
+        prach/prach_time_mapping.cpp
         precoding/precoding_codebook_configuration.cpp
+        precoding/precoding_codebook_helpers.cpp
         precoding/precoding_codebooks.cpp
         ptrs/ptrs_pattern.cpp
         pucch/pucch_info.cpp
@@ -45,14 +46,16 @@ add_library(ocudu_ran
         resource_allocation/resource_allocation_frequency.cpp
         resource_allocation/vrb_to_prb.cpp
         sch/sch_segmentation.cpp
+        sib/sib_helper.cpp
         srs/srs_bandwidth_configuration.cpp
         srs/srs_information.cpp
         ssb/pbch_mib_pack.cpp
         ssb/ssb_freq_position_generator.cpp
         ssb/ssb_gscn.cpp
+        ssb/ssb_helper.cpp
         ssb/ssb_mapping.cpp
         tdd_ul_dl_config.cpp
         drx_config.cpp)
-target_link_libraries(ocudu_ran ocudulog)
+target_link_libraries(ocudu_ran ocudulog ocuduvec)
 
 add_to_exported_libs(ocudu_ran)

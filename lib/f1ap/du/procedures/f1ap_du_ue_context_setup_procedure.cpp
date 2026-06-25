@@ -143,6 +143,12 @@ void f1ap_du_ue_context_setup_procedure::operator()(coro_context<async_task<void
   // > If the UE CONTEXT SETUP REQUEST message contains the RRC-Container IE, the gNB-DU shall send the corresponding
   // RRC message to the UE via SRB1.
   if (msg->rrc_container_present and not msg->rrc_container.empty()) {
+    if (not msg->gnb_du_ue_f1ap_id_present) {
+      // Awaiting the transmission of a RRC container in a UEContextSetupRequest for a newly created UE will likely
+      // fail, because the UE only becomes active in the scheduler after the reception of a C-RNTI CE.
+      logger.warning("{}: Unexpected presence of RRC container in a UEContextSetupRequest for a newly created UE",
+                     f1ap_log_prefix{ue->context, name()});
+    }
     CORO_AWAIT_VALUE(bool ret, handle_rrc_container());
     if (ret) {
       logger.debug("{}: RRC container sent successfully.", f1ap_log_prefix{ue->context, name()});
@@ -258,7 +264,7 @@ async_task<f1ap_ue_context_update_response> f1ap_du_ue_context_setup_procedure::
   // servingCellMOs that have been encoded in CellGroupConfig IE as ServingCellMO-encoded-in-CGC List IE in the UE
   // CONTEXT SETUP RESPONSE message.
   if (msg->serving_cell_mo_list_present) {
-    auto& list = du_request.serving_cell_mo_list.emplace(msg->serving_cell_mo_list.size());
+    auto& list = du_request.serving_cell_mo_list.emplace();
     for (const auto& item : msg->serving_cell_mo_list) {
       list.emplace_back(f1ap_serving_cell_mo_list_item{item->serving_cell_mo_list_item().serving_cell_mo,
                                                        item->serving_cell_mo_list_item().ssb_freq});

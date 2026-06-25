@@ -4,9 +4,7 @@
 
 #include "cu_up_connection_manager.h"
 #include "../cu_up_processor/cu_up_processor_repository.h"
-#include "ocudu/cu_cp/common_task_scheduler.h"
 #include "ocudu/e1ap/common/e1ap_message.h"
-#include "ocudu/support/executors/sync_task_executor.h"
 #include <thread>
 
 using namespace ocudu;
@@ -24,7 +22,7 @@ public:
   ~shared_cu_up_connection_context() { disconnect(); }
 
   /// Assign a CU-UP repository index to the context. This is called when the CU-UP repository is actually created.
-  void connect_cu_up(cu_up_index_t cu_up_idx_)
+  void connect_cu_up(cu_cp_cu_up_index_t cu_up_idx_)
   {
     cu_up_idx   = cu_up_idx_;
     msg_handler = &parent.cu_ups.get_cu_up(cu_up_idx).get_e1ap_message_handler();
@@ -44,7 +42,7 @@ public:
     // Notify CU-UP that the connection is closed.
     parent.handle_e1_gw_connection_closed(cu_up_idx);
 
-    cu_up_idx   = cu_up_index_t::invalid;
+    cu_up_idx   = cu_cp_cu_up_index_t::invalid;
     msg_handler = nullptr;
   }
 
@@ -61,7 +59,7 @@ public:
 
 private:
   cu_up_connection_manager& parent;
-  cu_up_index_t             cu_up_idx   = cu_up_index_t::invalid;
+  cu_cp_cu_up_index_t       cu_up_idx   = cu_cp_cu_up_index_t::invalid;
   e1ap_message_handler*     msg_handler = nullptr;
 };
 
@@ -109,7 +107,7 @@ private:
 cu_up_connection_manager::cu_up_connection_manager(unsigned                    max_nof_cu_ups_,
                                                    cu_up_processor_repository& cu_ups_,
                                                    task_executor&              cu_cp_exec_,
-                                                   common_task_scheduler&      common_task_sched_) :
+                                                   async_task_scheduler&       common_task_sched_) :
   max_nof_cu_ups(max_nof_cu_ups_),
   cu_ups(cu_ups_),
   cu_cp_exec(cu_cp_exec_),
@@ -141,8 +139,8 @@ cu_up_connection_manager::handle_new_cu_up_connection(std::unique_ptr<e1ap_messa
   // We dispatch the task to allocate a CU-UP processor and "attach" it to the notifier
   while (not cu_cp_exec.execute([this, shared_ctxt, sender_notifier = std::move(e1ap_tx_pdu_notifier)]() mutable {
     // Create a new CU-UP processor.
-    cu_up_index_t cu_up_index = cu_ups.add_cu_up(std::move(sender_notifier));
-    if (cu_up_index == cu_up_index_t::invalid) {
+    cu_cp_cu_up_index_t cu_up_index = cu_ups.add_cu_up(std::move(sender_notifier));
+    if (cu_up_index == cu_cp_cu_up_index_t::invalid) {
       logger.warning("Rejecting new CU-UP TNL connection. Cause: Failed to create a new CU-UP.");
       return;
     }
@@ -164,11 +162,11 @@ cu_up_connection_manager::handle_new_cu_up_connection(std::unique_ptr<e1ap_messa
   return rx_pdu_notifier;
 }
 
-void cu_up_connection_manager::handle_e1_gw_connection_closed(cu_up_index_t cu_up_idx)
+void cu_up_connection_manager::handle_e1_gw_connection_closed(cu_cp_cu_up_index_t cu_up_idx)
 {
   // Note: Called from within CU-CP execution context.
 
-  common_task_sched.schedule_async_task(launch_async([this, cu_up_idx](coro_context<async_task<void>>& ctx) {
+  common_task_sched.schedule(launch_async([this, cu_up_idx](coro_context<async_task<void>>& ctx) {
     CORO_BEGIN(ctx);
     if (cu_up_connections.find(cu_up_idx) == cu_up_connections.end()) {
       // CU-UP was already removed.
@@ -208,12 +206,12 @@ void cu_up_connection_manager::stop()
     }
 
     // For each created CU-UP connection context, launch the deletion routine.
-    std::vector<cu_up_index_t> cu_up_idxs;
+    std::vector<cu_cp_cu_up_index_t> cu_up_idxs;
     cu_up_idxs.reserve(cu_up_connections.size());
     for (const auto& [cu_up_idx, ctxt] : cu_up_connections) {
       cu_up_idxs.push_back(cu_up_idx);
     }
-    for (cu_up_index_t cu_up_idx : cu_up_idxs) {
+    for (cu_cp_cu_up_index_t cu_up_idx : cu_up_idxs) {
       // Disconnect CU-UP notifier.
       cu_up_connections[cu_up_idx]->disconnect();
     }

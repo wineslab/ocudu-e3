@@ -1,6 +1,21 @@
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
+spec:
+  inputs:
+    promote-image-tag:
+      description: "Optional Docker tag prefix to build and promote. Leave empty to use the normal date-based tag."
+      default: ""
+      regex: "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+    pflt-submit:
+      description: "Submit RH preflight results to Red Hat/Pyxis."
+      default: "false"
+      options:
+        - "false"
+        - "true"
+
+---
+
 include:
   - local: .gitlab/ci-shared/gitlab_settings/.gitlab-ci.yml
   - local: .gitlab/ci-shared/workflow.yml
@@ -11,6 +26,7 @@ include:
 
 stages:
   - ci
+  - promote
   - static
   - build and unit tests
   - documentation
@@ -63,6 +79,23 @@ trigger buildkit:
     include: .gitlab/ci/buildkit-cli/.gitlab-ci.yml
     strategy: mirror
 
+trigger rh-tool-cli:
+  stage: ci
+  rules:
+    - if: $SKIP_OCUDU_BUILDING_CONTAINERS_CI
+      when: never
+    - if: $ON_MR_FORK
+      when: never
+    - if: $ON_MR_TRAIN
+      when: never
+    - if: $ON_MR
+      changes:
+        paths:
+          - .gitlab/ci/rh-tool-cli/**/*
+  trigger:
+    include: .gitlab/ci/rh-tool-cli/.gitlab-ci.yml
+    strategy: mirror
+
 trigger docker:
   stage: ci
   rules:
@@ -88,6 +121,37 @@ trigger docker:
     strategy: mirror
   needs:
     - job: trigger buildkit
+      optional: true
+      artifacts: false
+
+promote stable docker images:
+  stage: promote
+  variables:
+    PROMOTE_IMAGE_TAG: "$[[ inputs.promote-image-tag ]]"
+    PFLT_SUBMIT: "$[[ inputs.pflt-submit ]]"
+  rules:
+    - if: $SKIP_OCUDU_BUILDING_CONTAINERS_CI
+      when: never
+    - if: $ON_MR_FORK
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $ON_WEB
+      when: manual
+      allow_failure: true
+    - if: $ON_API
+      when: manual
+      allow_failure: true
+  trigger:
+    include: .gitlab/ci/docker/promote-stable-preflight.yml
+    strategy: mirror
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  needs:
+    - job: trigger buildkit
+      optional: true
+      artifacts: false
+    - job: trigger rh-tool-cli
       optional: true
       artifacts: false
 
@@ -139,7 +203,7 @@ warning about unapplied changes:
   stage: ci
   image: alpine:3.16.0
   rules:
-    - if: $SKIP_OCUDU_BUILDING_CONTAINERS_CI
+    - if: $SKIP_OCUDU_BUILDING_CONTAINERS_CI && $ON_MR
       changes: &warning_container_changes
         paths:
           - .gitlab/ci/builders/**/*
@@ -299,10 +363,7 @@ clang-tidy incremental:
       git config advice.detachedHead false
       UNSHALLOW=$([ "$(git rev-parse --is-shallow-repository)" = "true" ] && echo --unshallow || true)
       if [ "$CI_MERGE_REQUEST_SOURCE_PROJECT_PATH" != "$CI_PROJECT_PATH" ]; then
-        git remote add fork $CI_MERGE_REQUEST_SOURCE_PROJECT_URL
-        git fetch $UNSHALLOW origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
-        git fetch fork $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
-        git branch -f $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME fork/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+        git fetch $UNSHALLOW origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME "refs/merge-requests/$CI_MERGE_REQUEST_IID/head:$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
         git branch -f $CI_MERGE_REQUEST_TARGET_BRANCH_NAME origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
       else
         git fetch $UNSHALLOW origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
@@ -371,6 +432,9 @@ unit coverage:
       variables:
         coverage_report: summary
     - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Nightly/
+      variables:
+        coverage_report: summary
+    - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Smoke/
       variables:
         coverage_report: summary
     - if: $ON_PROTECTED_BRANCH
@@ -447,6 +511,7 @@ doxygen:
         paths:
           - docs/**/*
     - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Nightly/
+    - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Smoke/
     - if: $ON_PROTECTED_BRANCH
   script:
     - |

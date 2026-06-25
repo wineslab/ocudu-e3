@@ -3,7 +3,6 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "xnap_repository.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/support/ocudu_assert.h"
 #include "ocudu/xnap/xnap_factory.h"
 #include <algorithm>
@@ -25,14 +24,14 @@ std::map<xnc_peer_index_t, xnap_interface*> xnap_repository::get_xnaps()
   return xnaps;
 }
 
-xnap_interface* xnap_repository::add_xnap(xnc_peer_index_t               xnc_index,
-                                          const transport_layer_address& peer_addr,
-                                          const xnap_configuration&      xnap_cfg)
+xnap_interface* xnap_repository::add_xnap(xnc_peer_index_t                            xnc_index,
+                                          const std::vector<transport_layer_address>& peer_addrs,
+                                          const xnap_configuration&                   xnap_cfg)
 {
   auto it = xnap_db.insert(std::make_pair(xnc_index, xnap_context{}));
   ocudu_assert(it.second, "Unable to insert XNAP in map");
   xnap_context& xnap_ctxt = it.first->second;
-  xnap_ctxt.peer_addr     = peer_addr;
+  xnap_ctxt.peer_addrs    = peer_addrs;
   xnap_ctxt.xnap_to_cu_cp_notifier.connect_cu_cp(cfg.cu_cp_notifier, xnc_index);
 
   std::unique_ptr<xnap_interface> xnap_entity = create_xnap(xnc_index,
@@ -64,7 +63,8 @@ xnc_peer_index_t xnap_repository::find_xnap(const transport_layer_address& peer_
 {
   auto it = std::find_if(
       xnap_db.begin(), xnap_db.end(), [&peer_addr](const std::pair<const xnc_peer_index_t, xnap_context>& xn) {
-        return xn.second.peer_addr == peer_addr;
+        return std::find(xn.second.peer_addrs.begin(), xn.second.peer_addrs.end(), peer_addr) !=
+               xn.second.peer_addrs.end();
       });
   if (it == xnap_db.end()) {
     return xnc_peer_index_t::invalid;
@@ -74,21 +74,31 @@ xnc_peer_index_t xnap_repository::find_xnap(const transport_layer_address& peer_
 
 xnap_interface* xnap_repository::find_xnap(const gnb_id_t& peer_gnb_id)
 {
-  for (const auto& xn : xnap_db) {
-    if (xn.second.xnap->has_peer_gnb_id(peer_gnb_id)) {
-      return xn.second.xnap.get();
+  for (const auto& [idx, xn] : xnap_db) {
+    if (xn.xnap->has_peer_gnb_id(peer_gnb_id)) {
+      return xn.xnap.get();
     }
   }
   return nullptr;
 }
 
-std::optional<transport_layer_address> xnap_repository::get_peer_addr(xnc_peer_index_t xnc_index) const
+std::optional<xnc_peer_index_t> xnap_repository::find_xnap_index(const gnb_id_t& peer_gnb_id)
+{
+  for (const auto& [idx, xn] : xnap_db) {
+    if (xn.xnap->has_peer_gnb_id(peer_gnb_id)) {
+      return idx;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::vector<transport_layer_address>> xnap_repository::get_peer_addrs(xnc_peer_index_t xnc_index) const
 {
   auto it = xnap_db.find(xnc_index);
   if (it == xnap_db.end()) {
     return std::nullopt;
   }
-  return it->second.peer_addr;
+  return it->second.peer_addrs;
 }
 
 void xnap_repository::connect_association(xnc_peer_index_t idx, std::unique_ptr<xnap_message_notifier> sender_notifier)

@@ -10,6 +10,7 @@
 #include "../up_resource_manager/up_resource_manager_impl.h"
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/cu_cp/ue_task_scheduler.h"
+#include "ocudu/f1ap/cu_cp/f1ap_rrc_msg_transfer_handling.h"
 #include "ocudu/ngap/ngap.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/rrc/rrc_ue.h"
@@ -20,7 +21,7 @@ namespace ocudu::ocucp {
 class rrc_ue_f1ap_pdu_adapter : public rrc_pdu_f1ap_notifier
 {
 public:
-  explicit rrc_ue_f1ap_pdu_adapter(f1ap_rrc_message_handler& f1ap_handler_, ue_index_t ue_index_) :
+  explicit rrc_ue_f1ap_pdu_adapter(f1ap_rrc_message_handler& f1ap_handler_, cu_cp_ue_index_t ue_index_) :
     f1ap_handler(f1ap_handler_), ue_index(ue_index_)
   {
   }
@@ -36,7 +37,7 @@ public:
 
 private:
   f1ap_rrc_message_handler& f1ap_handler;
-  const ue_index_t          ue_index;
+  const cu_cp_ue_index_t    ue_index;
 };
 
 // Adapter between RRC UE and NGAP.
@@ -142,7 +143,7 @@ private:
 class rrc_ue_cu_cp_adapter : public rrc_ue_context_update_notifier, public rrc_ue_measurement_notifier
 {
 public:
-  rrc_ue_cu_cp_adapter(ue_index_t ue_index_) : ue_index(ue_index_) {}
+  rrc_ue_cu_cp_adapter(cu_cp_ue_index_t ue_index_) : ue_index(ue_index_) {}
 
   void connect_cu_cp(cu_cp_rrc_ue_interface&        cu_cp_rrc_ue_,
                      cu_cp_ue_removal_handler&      ue_removal_handler_,
@@ -187,19 +188,13 @@ public:
     cu_cp_rrc_ue_handler->handle_rrc_reestablishment_failure(request);
   }
 
-  void on_rrc_reestablishment_complete(ue_index_t old_ue_index) override
+  void on_rrc_reestablishment_complete(cu_cp_ue_index_t old_ue_index) override
   {
     ocudu_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
     cu_cp_rrc_ue_handler->handle_rrc_reestablishment_complete(old_ue_index);
   }
 
-  void on_rrc_reconfiguration_complete_indicator() override
-  {
-    ocudu_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
-    cu_cp_rrc_ue_handler->handle_rrc_reconf_complete_indicator(ue_index);
-  }
-
-  async_task<bool> on_ue_transfer_required(ue_index_t old_ue_index) override
+  async_task<bool> on_ue_transfer_required(cu_cp_ue_index_t old_ue_index) override
   {
     ocudu_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
     return cu_cp_rrc_ue_handler->handle_ue_context_transfer(ue_index, old_ue_index);
@@ -229,7 +224,7 @@ public:
     return ue_removal_handler->handle_ue_removal_request(ue_index);
   }
 
-  async_task<rrc_resume_request_response> on_rrc_resume_request(const cu_cp_rrc_resume_request& request) override
+  async_task<rrc_resume_request_response> on_rrc_resume_request(const rrc_resume_request& request) override
   {
     ocudu_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
     return cu_cp_rrc_ue_handler->handle_rrc_resume_request(request);
@@ -264,7 +259,7 @@ private:
   up_resource_manager*           up_mng               = nullptr;
   cu_cp_ue_admission_controller* controller           = nullptr;
   cu_cp_measurement_handler*     meas_handler         = nullptr;
-  ue_index_t                     ue_index;
+  cu_cp_ue_index_t               ue_index;
 };
 
 } // namespace ocudu::ocucp

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ocudu/ran/gnb_constants.h"
+#include "ocudu/ran/du_cell_index.h"
 #include "fmt/format.h"
 #include <cstdint>
 #include <type_traits>
@@ -13,18 +13,11 @@ namespace ocudu {
 
 /// Maximum number of UEs supported by DU (implementation-defined).
 enum du_ue_index_t : uint16_t {
-  MIN_DU_UE_INDEX     = 0,
-  MAX_DU_UE_INDEX     = 8191,
-  MAX_NOF_DU_UES      = 8192,
-  INVALID_DU_UE_INDEX = MAX_NOF_DU_UES
-};
-
-/// Maximum number of cells supported by DU (implementation-defined).
-enum du_cell_index_t : uint16_t {
-  MIN_DU_CELL_INDEX     = 0,
-  MAX_DU_CELL_INDEX     = MAX_CELLS_PER_DU - 1,
-  MAX_NOF_DU_CELLS      = MAX_CELLS_PER_DU,
-  INVALID_DU_CELL_INDEX = MAX_NOF_DU_CELLS
+  MIN_DU_UE_INDEX         = 0,
+  MAX_NOF_DU_UES_PER_CELL = 2048,
+  MAX_DU_UE_INDEX         = 8191,
+  MAX_NOF_DU_UES          = 8192,
+  INVALID_DU_UE_INDEX     = MAX_NOF_DU_UES
 };
 
 /// Convert integer to DU UE index type.
@@ -36,12 +29,6 @@ constexpr du_ue_index_t to_du_ue_index(std::underlying_type_t<du_ue_index_t> idx
 constexpr bool is_du_ue_index_valid(du_ue_index_t ue_idx)
 {
   return ue_idx < MAX_NOF_DU_UES;
-}
-
-/// Convert integer to DU cell index type.
-constexpr du_cell_index_t to_du_cell_index(std::underlying_type_t<du_cell_index_t> idx)
-{
-  return static_cast<du_cell_index_t>(idx);
 }
 
 /// \brief DU-specific index to group of cells that might be aggregated into a UE-specific CellGroup, if the UE
@@ -68,24 +55,6 @@ struct formatter<ocudu::du_ue_index_t> {
   {
     if (ocudu::is_du_ue_index_valid(ue_idx)) {
       return format_to(ctx.out(), "{}", underlying(ue_idx));
-    }
-    return format_to(ctx.out(), "invalid");
-  }
-};
-
-template <>
-struct formatter<ocudu::du_cell_index_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::du_cell_index_t cell_idx, FormatContext& ctx) const
-  {
-    if (cell_idx < ocudu::du_cell_index_t::MAX_NOF_DU_CELLS) {
-      return format_to(ctx.out(), "{}", underlying(cell_idx));
     }
     return format_to(ctx.out(), "invalid");
   }

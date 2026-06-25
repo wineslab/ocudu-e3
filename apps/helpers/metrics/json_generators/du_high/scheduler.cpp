@@ -97,21 +97,29 @@ void to_json(nlohmann::json& json, const scheduler_ue_metrics& metrics)
       metrics.avg_sr_to_pusch_delay_ms.has_value() ? metrics.avg_sr_to_pusch_delay_ms : 0.0f;
   json["max_sr_to_pusch_delay"] =
       metrics.max_sr_to_pusch_delay_ms.has_value() ? metrics.max_sr_to_pusch_delay_ms : 0.0f;
+  json["max_dl_lcid0_flush_delay"] =
+      metrics.max_dl_lcid0_flush_delay_ms.has_value() ? metrics.max_dl_lcid0_flush_delay_ms : 0.0f;
+  json["max_dl_lcid1_flush_delay"] =
+      metrics.max_dl_lcid1_flush_delay_ms.has_value() ? metrics.max_dl_lcid1_flush_delay_ms : 0.0f;
 }
 
 void to_json(nlohmann::json& json, const scheduler_cell_metrics& metrics)
 {
   // Cell metrics.
-  auto& cell_json                      = json["cell_metrics"];
-  cell_json["pci"]                     = metrics.pci;
-  cell_json["error_indication_count"]  = metrics.nof_error_indications;
-  cell_json["average_latency"]         = metrics.average_decision_latency.count();
-  cell_json["max_latency"]             = metrics.max_decision_latency.count();
-  cell_json["nof_failed_pdcch_allocs"] = metrics.nof_failed_pdcch_allocs;
-  cell_json["nof_failed_uci_allocs"]   = metrics.nof_failed_uci_allocs;
-  cell_json["latency_histogram"]       = metrics.latency_histogram;
-  cell_json["msg3_nof_ok"]             = metrics.nof_msg3_ok;
-  cell_json["msg3_nof_nok"]            = metrics.nof_msg3_nok;
+  auto& cell_json                       = json["cell_metrics"];
+  cell_json["pci"]                      = metrics.pci;
+  cell_json["error_indication_count"]   = metrics.nof_error_indications;
+  cell_json["average_latency"]          = metrics.average_decision_latency.count();
+  cell_json["max_latency"]              = metrics.max_decision_latency.count();
+  cell_json["failed_dl_pdcch"]          = metrics.failed_dl_pdcch;
+  cell_json["failed_ul_pdcch"]          = metrics.failed_ul_pdcch;
+  cell_json["failed_common_dl_pdcch"]   = metrics.failed_common_dl_pdcch;
+  cell_json["failed_common_ul_pdcch"]   = metrics.failed_common_ul_pdcch;
+  cell_json["nof_failed_uci_allocs"]    = metrics.nof_failed_uci_allocs;
+  cell_json["latency_histogram"]        = metrics.latency_histogram;
+  cell_json["msg3_nof_ok"]              = metrics.nof_msg3_ok;
+  cell_json["msg3_nof_nok"]             = metrics.nof_msg3_nok;
+  cell_json["nof_conres_timer_expired"] = metrics.nof_conres_timer_expired;
   cell_json["avg_prach_delay"] = metrics.avg_prach_delay_slots.has_value() ? metrics.avg_prach_delay_slots : 0.0f;
   cell_json["late_dl_harqs"]   = metrics.nof_failed_pdsch_allocs_late_harqs;
   cell_json["late_ul_harqs"]   = metrics.nof_failed_pusch_allocs_late_harqs;

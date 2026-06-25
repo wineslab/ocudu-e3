@@ -17,6 +17,7 @@ initial_context_setup_routine::initial_context_setup_routine(
     const ngap_init_context_setup_request&       request_,
     rrc_ue_interface&                            rrc_ue_,
     ngap_ue_radio_capability_management_handler& ngap_ue_radio_cap_handler_,
+    ngap_location_reporting_handler&             ngap_location_reporting_handler_,
     ue_security_manager&                         security_mng_,
     ue_location_manager&                         loc_mng_,
     f1ap_ue_context_manager&                     f1ap_ue_ctxt_mng_,
@@ -25,6 +26,7 @@ initial_context_setup_routine::initial_context_setup_routine(
   request(request_),
   rrc_ue(rrc_ue_),
   ngap_ue_radio_cap_handler(ngap_ue_radio_cap_handler_),
+  ngap_ue_location_reporting_handler(ngap_location_reporting_handler_),
   security_mng(security_mng_),
   loc_mng(loc_mng_),
   f1ap_ue_ctxt_mng(f1ap_ue_ctxt_mng_),
@@ -146,14 +148,36 @@ void initial_context_setup_routine::operator()(
     }
   }
 
-  // Configure location reporting if requested.
-  if (request.location_report_request_type.has_value()) {
-    loc_mng.configure_location_reporting(request.location_report_request_type.value());
-  }
-
   // Schedule transmission of UE Radio Capability Info Indication.
   if (!request.ue_radio_cap.has_value()) {
     send_ue_radio_capability_info_indication();
+  }
+
+  // Configure location reporting or/and send direct location report if requested.
+  if (request.location_report_request_type.has_value()) {
+    const location_report_request loc_req = *request.location_report_request_type;
+
+    // Configure location reporting, only if required.
+    using event_type = location_report_request::event_type;
+    if (loc_req.location_reporting_type != event_type::direct &&
+        loc_req.location_reporting_type != event_type::nulltype) {
+      loc_mng.configure_location_reporting(loc_req);
+    }
+
+    // Send immediate location report if required, 3GPP TS 38.413 8.12.1.2 states that "if reporting upon change of
+    // serving cell is requested, the NG-RAN node shall send a report immediately"
+    if (loc_req.location_reporting_type == event_type::direct ||
+        loc_req.location_reporting_type == event_type::change_of_serve_cell ||
+        loc_req.location_reporting_type == event_type::change_of_serving_cell_and_ue_presence_in_the_area_of_interest) {
+      // Get cell info and build location report immediately.
+      const auto& cell_ctx = rrc_ue.get_cell_context();
+
+      cu_cp_user_location_info_nr user_location_info;
+      user_location_info.nr_cgi = {request.guami.plmn, cell_ctx.cgi.nci};
+      user_location_info.tai    = {request.guami.plmn, cell_ctx.tac};
+      auto report               = loc_mng.get_direct_location_report(request.ue_index, user_location_info, loc_req);
+      ngap_ue_location_reporting_handler.handle_location_report_transmission(report);
+    }
   }
 
   logger.info("ue={}: \"{}\" finished successfully", request.ue_index, name());
@@ -167,7 +191,7 @@ void initial_context_setup_routine::handle_failure(ngap_cause_t cause)
   if (request.pdu_session_res_setup_list_cxt_req.has_value()) {
     for (const auto& pdu_session_item :
          request.pdu_session_res_setup_list_cxt_req.value().pdu_session_res_setup_items) {
-      cu_cp_pdu_session_res_setup_failed_item failed_item;
+      ngap_pdu_session_res_setup_failed_item failed_item;
       failed_item.pdu_session_id              = pdu_session_item.pdu_session_id;
       failed_item.unsuccessful_transfer.cause = cause;
 

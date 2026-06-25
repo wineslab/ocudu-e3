@@ -4,14 +4,14 @@
 
 #include "ssb_processor_impl.h"
 #include "ocudu/ran/cyclic_prefix.h"
-#include "ocudu/support/math/math_utils.h"
+#include "ocudu/ran/ssb/ssb_mapping.h"
 
 using namespace ocudu;
 
 void ssb_processor_impl::process(resource_grid_writer& grid, const pdu_t& pdu)
 {
   // Calculate derivative parameters.
-  unsigned l_start_in_burst = ssb_get_l_first(pdu.pattern_case, pdu.ssb_idx);
+  unsigned l_start_in_burst = ssb_get_l_first(pdu.pattern_case, pdu.ssb_idx.value());
   unsigned l_start          = (l_start_in_burst % get_nsymb_per_slot(cyclic_prefix::NORMAL));
   unsigned k_start          = ssb_get_k_first(to_frequency_range(pdu.pattern_case),
                                      to_subcarrier_spacing(pdu.pattern_case),
@@ -70,7 +70,7 @@ void ssb_processor_impl::process(resource_grid_writer& grid, const pdu_t& pdu)
   pss_config.phys_cell_id         = pdu.phys_cell_id;
   pss_config.ssb_first_symbol     = l_start;
   pss_config.ssb_first_subcarrier = k_start;
-  pss_config.amplitude            = convert_dB_to_amplitude(pdu.beta_pss);
+  pss_config.amplitude            = ssb_pss_to_sss_epre_to_amplitude(pdu.beta_pss);
   pss_config.ports                = pdu.ports;
 
   // Put PSS.

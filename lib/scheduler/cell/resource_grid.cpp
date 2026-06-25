@@ -126,6 +126,7 @@ bool carrier_subslot_resource_grid::collides(ofdm_symbol_range symbols, span<con
 
 crb_bitmap carrier_subslot_resource_grid::used_crbs(crb_interval bwp_crb_lims, ofdm_symbol_range symbols) const
 {
+  ocudu_sanity_check(not symbols.empty(), "used_crbs called on an empty OFDM symbol range");
   ocudu_sanity_check(symbols.stop() <= NOF_OFDM_SYM_PER_SLOT_NORMAL_CP, "OFDM symbols out-of-bounds");
   slot_rb_bitmap slot_rbs_selected_symbols = slot_rbs.slice(symbols.start() * nof_rbs(), symbols.stop() * nof_rbs());
   auto crb_bits = fold_and_accumulate<MAX_NOF_PRBS>(slot_rbs_selected_symbols, nof_rbs()).convert_to<crb_bitmap>();
@@ -136,6 +137,7 @@ crb_bitmap carrier_subslot_resource_grid::used_crbs(crb_interval bwp_crb_lims, o
 
 prb_bitmap carrier_subslot_resource_grid::used_prbs(crb_interval bwp_crb_lims, ofdm_symbol_range symbols) const
 {
+  ocudu_sanity_check(not symbols.empty(), "used_crbs called on an empty OFDM symbol range");
   ocudu_sanity_check(symbols.stop() <= NOF_OFDM_SYM_PER_SLOT_NORMAL_CP, "OFDM symbols out-of-bounds");
   slot_rb_bitmap slot_rbs_selected_symbols = slot_rbs.slice(symbols.start() * nof_rbs(), symbols.stop() * nof_rbs());
   auto           prb_bits                  = fold_and_accumulate<MAX_NOF_PRBS>(
@@ -332,8 +334,11 @@ void cell_slot_resource_allocator::clear()
   result.ul.prachs.clear();
   result.ul.pucchs.clear();
   result.ul.srss.clear();
-  result.failed_attempts.pdcch = 0;
-  result.failed_attempts.uci   = 0;
+  result.failed_attempts.dl_pdcch        = 0;
+  result.failed_attempts.ul_pdcch        = 0;
+  result.failed_attempts.common_dl_pdcch = 0;
+  result.failed_attempts.common_ul_pdcch = 0;
+  result.failed_attempts.uci             = 0;
   dl_res_grid.clear();
   ul_res_grid.clear();
   result.success = false;

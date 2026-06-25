@@ -5,8 +5,6 @@
 #pragma once
 
 #include "ocudu/e1ap/common/e1ap_types.h"
-#include "ocudu/pdcp/pdcp_config.h"
-#include "ocudu/sdap/sdap_config.h"
 
 namespace ocudu {
 
@@ -25,20 +23,20 @@ inline pdcp_config make_pdcp_drb_config(const e1ap_pdcp_config& e1ap_cfg, const 
 
   // ROHC
   if (e1ap_cfg.rohc_config.has_value()) {
-    const auto&       rohc_cfg_in  = *e1ap_cfg.rohc_config;
-    rohc::rohc_config rohc_cfg_out = {};
+    const auto& rohc_cfg_in  = *e1ap_cfg.rohc_config;
+    rohc_config rohc_cfg_out = {};
     switch (rohc_cfg_in.rohc_type) {
       case e1ap_rohc_type::rohc:
-        rohc_cfg_out.rohc_type = rohc::rohc_type_t::rohc;
+        rohc_cfg_out.rohc_type = rohc_type_t::rohc;
         break;
       case ocudu::e1ap_rohc_type::uplink_only_rohc:
-        rohc_cfg_out.rohc_type = rohc::rohc_type_t::uplink_only_rohc;
+        rohc_cfg_out.rohc_type = rohc_type_t::uplink_only_rohc;
         break;
     }
     rohc_cfg_out.max_cid = rohc_cfg_in.rohc_params.max_cid;
     rohc_cfg_out.profiles.set_profile_bitmap(rohc_cfg_in.rohc_params.rohc_profiles);
     rohc_cfg_out.continue_rohc =
-        rohc_cfg_in.rohc_params.continue_rohc.has_value() && *rohc_cfg_in.rohc_params.continue_rohc == true;
+        rohc_cfg_in.rohc_params.continue_rohc.has_value() && *rohc_cfg_in.rohc_params.continue_rohc;
     cfg.header_compression = rohc_cfg_out;
   } else {
     cfg.header_compression = std::nullopt;
@@ -84,7 +82,7 @@ inline pdcp_config make_pdcp_drb_config(const e1ap_pdcp_config& e1ap_cfg, const 
   return cfg;
 }
 
-inline sdap_config make_sdap_drb_config(const sdap_config_t& e1ap_cfg)
+inline sdap_ran_config make_sdap_drb_config(const sdap_config_t& e1ap_cfg)
 {
   sdap_config cfg = {};
   cfg.default_drb = e1ap_cfg.default_drb;

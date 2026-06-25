@@ -6,7 +6,6 @@
 
 #include "cell_scheduler.h"
 #include "config/sched_config_manager.h"
-#include "logging/scheduler_metrics_handler.h"
 #include "ue_scheduling/ue_scheduler.h"
 #include "ocudu/scheduler/config/scheduler_expert_config.h"
 #include "ocudu/scheduler/mac_scheduler.h"
@@ -51,6 +50,7 @@ public:
   void handle_dl_mac_ce_indication(const dl_mac_ce_indication& mac_ce) override;
   void handle_ul_bsr_indication(const ul_bsr_indication_message& bsr) override;
   void handle_ul_phr_indication(const ul_phr_indication_message& phr_ind) override;
+  void handle_crnti_ce_received(du_ue_index_t ue_index) override;
 
   // PHY events.
   void handle_rach_indication(const rach_indication_message& msg) override;
@@ -66,9 +66,6 @@ private:
   const scheduler_expert_config expert_params;
 
   ocudulog::basic_logger& logger;
-
-  // Slot metrics sink.
-  scheduler_metrics_handler metrics;
 
   // Manager of configurations forwarded to the scheduler.
   sched_config_manager cfg_mng;

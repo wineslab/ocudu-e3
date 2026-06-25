@@ -14,6 +14,7 @@
 #include "ocudu/f1ap/f1ap_message.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/ran/positioning/positioning_ids.h"
+#include "ocudu/ran/up_transport_layer_info.h"
 
 using namespace ocudu;
 using namespace asn1::f1ap;
@@ -318,7 +319,7 @@ static drbs_to_be_setup_item_s generate_drb_am_setup_item(drb_id_t drbid)
   drb.ul_up_tnl_info_to_be_setup_list.resize(1);
   auto& gtp_tun = drb.ul_up_tnl_info_to_be_setup_list[0].ul_up_tnl_info.set_gtp_tunnel();
   auto  addr    = transport_layer_address::create_from_string("127.0.0.1");
-  gtp_tun.transport_layer_address.from_string(addr.to_bitstring());
+  tla_to_asn1_bitstring(gtp_tun.transport_layer_address, addr);
   gtp_tun.gtp_teid.from_number(1);
 
   return drb;
@@ -363,10 +364,14 @@ f1ap_message ocudu::test_helpers::generate_ue_context_setup_request(gnb_cu_ue_f1
     ++count;
   }
 
-  dl_msg->rrc_container_present = true;
-  bool success                  = dl_msg->rrc_container.append(
-      generate_rrc_container(rrc_container_pdcp_sn, test_rng::uniform_int<unsigned>(3, 100)));
-  report_error_if_not(success, "Failed to allocate RRC container");
+  if (du_ue_id.has_value()) {
+    // Note: In case of a new UE being created, an RRC container should not be stored, as it would have to wait for
+    // the C-RNTI CE.
+    dl_msg->rrc_container_present = true;
+    bool success                  = dl_msg->rrc_container.append(
+        generate_rrc_container(rrc_container_pdcp_sn, test_rng::uniform_int<unsigned>(3, 100)));
+    report_error_if_not(success, "Failed to allocate RRC container");
+  }
 
   return msg;
 }
@@ -496,7 +501,7 @@ static asn1::f1ap::ul_up_tnl_info_to_be_setup_list_l generate_ul_up_tnl_info_to_
   list.resize(1);
   auto& gtp_tun = list[0].ul_up_tnl_info.set_gtp_tunnel();
   auto  addr    = transport_layer_address::create_from_string("127.0.0.1");
-  gtp_tun.transport_layer_address.from_string(addr.to_bitstring());
+  tla_to_asn1_bitstring(gtp_tun.transport_layer_address, addr);
   gtp_tun.gtp_teid.from_number(1);
 
   return list;

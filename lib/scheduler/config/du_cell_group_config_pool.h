@@ -13,6 +13,7 @@
 #include "ocudu/scheduler/config/serving_cell_config.h"
 #include "ocudu/scheduler/config/ue_bwp_config.h"
 #include "ocudu/scheduler/scheduler_configurator.h"
+#include <deque>
 
 namespace ocudu {
 
@@ -35,9 +36,10 @@ public:
 
   const bwp_downlink_common& dl_common() const { return bwp_dl_cmn; }
 
-  config_ptr<sched_bwp_config> add_ded_cfg(const bwp_downlink_dedicated* dl_ded,
-                                           const bwp_uplink_dedicated*   ul_ded,
-                                           const ue_bwp_config&          ue_bwp_cfg);
+  // Builds the UE-dedicated BWP config.
+  sched_bwp_config add_ded_cfg(const bwp_downlink_dedicated* dl_ded,
+                               const bwp_uplink_dedicated*   ul_ded,
+                               const ue_bwp_config&          ue_bwp_cfg);
 
   const sched_bwp_config& cell_cfg() const { return common_bwp_cfg; }
 
@@ -48,8 +50,6 @@ private:
   pdcch_config_pool                          pdcch_pool;
   sched_bwp_config                           common_bwp_cfg;
   config_object_pool<bwp_downlink_dedicated> dl_ded_config_pool;
-  config_object_pool<bwp_uplink_dedicated>   ul_ded_config_pool;
-  config_object_pool<sched_bwp_config>       sched_bwp_config_pool;
 };
 
 class du_cell_config_pool
@@ -62,6 +62,7 @@ public:
   const cell_configuration& cell_cfg() const { return cell_cfg_inst; }
   cell_configuration&       cell_cfg() { return cell_cfg_inst; }
 
+  // Builds a reference-counted UE-dedicated cell config.
   ue_cell_config_ptr update_ue(const ue_cell_config& ue_cell);
 
 private:
@@ -70,6 +71,17 @@ private:
                const bwp_uplink_dedicated*   ul_bwp_ded,
                const ue_bwp_config&          ue_bwp_cfg);
 
+  /// \brief Returns a reusable ue_cell_res_config slot from the pool, growing the pool if none is free.
+  /// The returned slot has its payload cleared, ready to be populated.
+  /// \note Called only from the (non-RT) config path.
+  ue_cell_res_config& acquire_ue_cell_cfg();
+
+  /// Pool of per-UE dedicated cell configs. Slots are reused once their reference count drops to zero; a reference
+  /// being dropped on the RT scheduler thread only decrements the counter (never frees), so the pool only ever grows
+  /// (to the peak number of concurrent UEs) and frees at cell teardown. A deque keeps element addresses stable for
+  /// the intrusive_ptr handles.
+  std::deque<ue_cell_res_config> ue_cell_cfg_pool;
+
   /// BWPs managed in this cell.
   std::vector<std::unique_ptr<bwp_config_pool>> cell_bwps;
 
@@ -77,10 +89,8 @@ private:
   cell_configuration cell_cfg_inst;
 
   // Pools of UE-dedicated configurations.
-  config_object_pool<ue_cell_res_config>        cell_cfg_pool;
   config_object_pool<pdsch_serving_cell_config> pdsch_serv_cell_pool;
   config_object_pool<pusch_serving_cell_config> pusch_serv_cell_pool;
-  config_object_pool<csi_meas_config>           csi_meas_config_pool;
 };
 
 /// Class responsible for managing the configurations of all the entities (cells, UEs, slices) in a cell group.

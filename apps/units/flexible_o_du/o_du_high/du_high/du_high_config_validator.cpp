@@ -13,6 +13,7 @@
 #include "ocudu/ran/pucch/pucch_mapping.h"
 #include "ocudu/ran/transform_precoding/transform_precoding_helpers.h"
 #include "ocudu/rlc/rlc_config.h"
+#include "ocudu/support/math/math_utils.h"
 #include <algorithm>
 
 using namespace ocudu;
@@ -23,12 +24,12 @@ static bool validate_pcap_configs(const du_high_unit_config& config)
     for (const auto& cell : config.cells_cfg) {
       // FIXME don't use just the nof_antennas, but compute MAX PDU size from bandwidth, MCS table, etc.
       if (cell.cell.nof_antennas_dl >= 2 && config.pcaps.mac.type != "dlt") {
-        fmt::print("Using more than two DL antennas might make the MAC PDU larger than what is supported in the UDP "
+        fmt::print("Using more than one DL antenna might make the MAC PDU larger than what is supported in the UDP "
                    "wrapper. Use PCAP DLT type to avoid pcap corruption.\n");
         return false;
       }
       if (cell.cell.nof_antennas_ul >= 2 && config.pcaps.mac.type != "dlt") {
-        fmt::print("Using more than two UL antennas might make the MAC PDU larger than what is supported in the UDP "
+        fmt::print("Using more than one UL antenna might make the MAC PDU larger than what is supported in the UDP "
                    "wrapper. Use PCAP DLT type to avoid pcap corruption.\n");
         return false;
       }
@@ -511,6 +512,32 @@ static bool validate_pucch_cell_unit_config(const du_high_unit_base_cell_config&
     }
   }
 
+  if (!pucch_cfg.repetition_sinr_thresholds.empty()) {
+    if (pucch_cfg.repetition_sinr_thresholds.size() > 3) {
+      fmt::print("Too many PUCCH repetition SINR thresholds defined (maximum is 3 to allow repetition factor 8).\n");
+      return false;
+    }
+    if (pucch_cfg.repetition_factors.size() != pucch_cfg.res_set_size) {
+      fmt::print("With PUCCH repetition enabled, the provided number of repetition factors ({}) must equal the "
+                 "resource set size ({}).\n",
+                 pucch_cfg.repetition_factors.size(),
+                 pucch_cfg.res_set_size);
+      return false;
+    }
+    const unsigned max_factor =
+        *std::max_element(pucch_cfg.repetition_factors.begin(), pucch_cfg.repetition_factors.end());
+    // Enabling repetition factor 2 requires 1 threshold, 4 requires 2, and 8 requires 3.
+    const unsigned required_thresholds = log2_ceil(max_factor);
+    if (pucch_cfg.repetition_sinr_thresholds.size() < required_thresholds) {
+      fmt::print(
+          "Enabling PUCCH repetition factor {} requires {} PUCCH repetition SINR thresholds (only {} provided).\n",
+          max_factor,
+          required_thresholds,
+          pucch_cfg.repetition_sinr_thresholds.size());
+      return false;
+    }
+  }
+
   // We need to count pucch_cfg.nof_ue_pucch_res_harq_per_set twice, as we have 2 sets of PUCCH resources for HARQ-ACK
   // (PUCCH Resource Set Id 0 with Format 0/1 and PUCCH Resource Set Id 1 with Format 2/3/4).
   if (pucch_cfg.res_set_size * 2U * pucch_cfg.nof_cell_res_set_configs + pucch_cfg.nof_cell_sr_resources +
@@ -586,12 +613,11 @@ static bool validate_pucch_cell_unit_config(const du_high_unit_base_cell_config&
     case pucch_format::FORMAT_2: {
       // The number of symbols per PUCCH resource F2 is not exposed to the DU user interface and set by default to 2.
       constexpr unsigned pucch_f2_nof_symbols = 2U;
-      const unsigned     f2_max_rbs =
-          pucch_cfg.f2_max_payload_bits.has_value()
-                  ? get_pucch_format2_max_nof_prbs(pucch_cfg.f2_max_payload_bits.value(),
-                                               pucch_f2_nof_symbols,
-                                               to_max_code_rate_float(pucch_cfg.f2_max_code_rate))
-                  : pucch_cfg.f2_max_nof_rbs;
+      const unsigned     f2_max_rbs           = pucch_cfg.f2_max_payload_bits.has_value()
+                                                    ? get_pucch_format2_max_nof_prbs(pucch_cfg.f2_max_payload_bits.value(),
+                                                                       pucch_f2_nof_symbols,
+                                                                       to_float(pucch_cfg.f2_max_code_rate))
+                                                    : pucch_cfg.f2_max_nof_rbs;
 
       const unsigned nof_f2_blocks = max_nof_pucch_symbols / pucch_f2_nof_symbols;
       nof_f2_f3_f4_rbs =
@@ -601,8 +627,8 @@ static bool validate_pucch_cell_unit_config(const du_high_unit_base_cell_config&
       if (pucch_cfg.f2_intraslot_freq_hopping) {
         nof_f2_f3_f4_rbs = static_cast<unsigned>(std::ceil(static_cast<float>(nof_f2_f3_f4_rbs) / 2.0F)) * 2;
       }
-      f2_f3_f4_max_payload = get_pucch_format2_max_payload(
-          f2_max_rbs, pucch_f2_nof_symbols, to_max_code_rate_float(pucch_cfg.f2_max_code_rate));
+      f2_f3_f4_max_payload =
+          get_pucch_format2_max_payload(f2_max_rbs, pucch_f2_nof_symbols, to_float(pucch_cfg.f2_max_code_rate));
     } break;
     case pucch_format::FORMAT_3: {
       // The number of symbols per PUCCH resource is not exposed to the DU user interface; for PUCCH F3, we use all
@@ -612,7 +638,7 @@ static bool validate_pucch_cell_unit_config(const du_high_unit_base_cell_config&
           pucch_cfg.f3_max_payload_bits.has_value()
               ? get_pucch_format3_max_nof_prbs(pucch_cfg.f3_max_payload_bits.value(),
                                                pucch_f3_nof_symbols,
-                                               to_max_code_rate_float(pucch_cfg.f3_max_code_rate),
+                                               to_float(pucch_cfg.f3_max_code_rate),
                                                // Since we are forcing 14 symbols intraslot_freq_hopping doesn't matter.
                                                false,
                                                pucch_cfg.f3_additional_dmrs,
@@ -629,7 +655,7 @@ static bool validate_pucch_cell_unit_config(const du_high_unit_base_cell_config&
       }
       f2_f3_f4_max_payload = get_pucch_format3_max_payload(f3_max_rbs,
                                                            pucch_f3_nof_symbols,
-                                                           to_max_code_rate_float(pucch_cfg.f3_max_code_rate),
+                                                           to_float(pucch_cfg.f3_max_code_rate),
                                                            false,
                                                            pucch_cfg.f3_additional_dmrs,
                                                            pucch_cfg.f3_pi2_bpsk);
@@ -646,7 +672,7 @@ static bool validate_pucch_cell_unit_config(const du_high_unit_base_cell_config&
         nof_f2_f3_f4_rbs = static_cast<unsigned>(std::ceil(static_cast<float>(nof_f2_f3_f4_rbs) / 2.0F)) * 2;
       }
       f2_f3_f4_max_payload = get_pucch_format4_max_payload(pucch_f4_nof_symbols,
-                                                           to_max_code_rate_float(pucch_cfg.f4_max_code_rate),
+                                                           to_float(pucch_cfg.f4_max_code_rate),
                                                            false,
                                                            pucch_cfg.f4_additional_dmrs,
                                                            pucch_cfg.f4_pi2_bpsk,
@@ -809,7 +835,7 @@ template <typename T>
 
 /// Validates the given PRACH cell application configuration. Returns true on success, otherwise false.
 static bool
-validate_prach_cell_unit_config(const du_high_unit_prach_config& config, nr_band band, unsigned nof_rx_atennas)
+validate_prach_cell_unit_config(const du_high_unit_rach_config& config, nr_band band, unsigned nof_rx_antennas)
 {
   ocudu_assert(config.prach_config_index.has_value(), "The PRACH configuration index must be set.");
 
@@ -854,44 +880,52 @@ validate_prach_cell_unit_config(const du_high_unit_prach_config& config, nr_band
 
   // See TS 38.331, ssb-perRACH-OccasionAndCB-PreamblesPerSSB and totalNumberOfRA-Preambles.
   // totalNumberOfRA-Preambles should be a multiple of the number of SSBs per RACH occasion.
-  bool is_total_nof_ra_preambles_valid = true;
   if (config.nof_ssb_per_ro >= ssb_per_rach_occasions::one) {
     if (config.total_nof_ra_preambles % static_cast<uint8_t>(ssb_per_rach_occ_to_float(config.nof_ssb_per_ro)) != 0) {
-      is_total_nof_ra_preambles_valid = false;
+      fmt::print("Total nof. RA preambles ({}) should be a multiple of the number of SSBs per RACH occasion ({}).\n",
+                 config.total_nof_ra_preambles,
+                 ssb_per_rach_occ_to_float(config.nof_ssb_per_ro));
+      return false;
     }
     // Ensure \c config.total_nof_ra_preambles can accommodate contention based RA preambles.
     // NOTE: \c config.total_nof_ra_preambles nof. RA preambles are shared among \c config.nof_ssb_per_ro nof. SSB
     // beams.
     if (config.nof_cb_preambles_per_ssb * static_cast<unsigned>(ssb_per_rach_occ_to_float(config.nof_ssb_per_ro)) >
         config.total_nof_ra_preambles) {
-      is_total_nof_ra_preambles_valid = false;
+      fmt::print("Total nof. of contention based RA preambles ({} preambles/SSB x {} SSBs/RO = {}) exceeds total nof. "
+                 "RA preambles ({}).\n",
+                 config.nof_cb_preambles_per_ssb,
+                 ssb_per_rach_occ_to_float(config.nof_ssb_per_ro),
+                 config.nof_cb_preambles_per_ssb *
+                     static_cast<unsigned>(ssb_per_rach_occ_to_float(config.nof_ssb_per_ro)),
+                 config.total_nof_ra_preambles);
+      return false;
     }
   } else {
     // Number of SSBs per RACH occasion is 1/8 or 1/4 or 1/2.
     const auto product =
         static_cast<float>(config.total_nof_ra_preambles) * ssb_per_rach_occ_to_float(config.nof_ssb_per_ro);
     if ((product - static_cast<uint8_t>(product)) > 0) {
-      is_total_nof_ra_preambles_valid = false;
+      fmt::print("Total nof. RA preambles ({}) should be a multiple of the number of SSBs per RACH occasion ({}).\n",
+                 config.total_nof_ra_preambles,
+                 ssb_per_rach_occ_to_float(config.nof_ssb_per_ro));
+      return false;
     }
     // Ensure \c config.total_nof_ra_preambles can accommodate contention based RA preambles.
     // NOTE: Each SSB beam has multiple RACH occasions and each occasion has \c config.total_nof_ra_preambles RA
     // preambles.
     if (config.nof_cb_preambles_per_ssb > config.total_nof_ra_preambles) {
-      is_total_nof_ra_preambles_valid = false;
+      fmt::print("Total nof. of contention based RA preambles per SSB ({}) exceeds total nof. RA preambles ({}).\n",
+                 config.nof_cb_preambles_per_ssb,
+                 config.total_nof_ra_preambles);
+      return false;
     }
   }
 
-  if (not is_total_nof_ra_preambles_valid) {
-    fmt::print("Total nof. RA preambles ({}) should be a multiple of the number of SSBs per RACH occasion ({}).\n",
-               config.total_nof_ra_preambles,
-               ssb_per_rach_occ_to_float(config.nof_ssb_per_ro));
-    return false;
-  }
-
-  if (config.ports.size() > nof_rx_atennas) {
+  if (config.ports.size() > nof_rx_antennas) {
     fmt::print("PRACH number of ports ({}) is bigger than the number of reception antennas ({}).\n",
                config.ports.size(),
-               nof_rx_atennas);
+               nof_rx_antennas);
 
     return false;
   }
@@ -902,9 +936,19 @@ validate_prach_cell_unit_config(const du_high_unit_prach_config& config, nr_band
   }
 
   for (auto port_id : config.ports) {
-    if (port_id >= nof_rx_atennas) {
-      fmt::print("PRACH port id '{}' out of range. Valid range {}-{}.\n", port_id, 0, nof_rx_atennas - 1);
+    if (port_id >= nof_rx_antennas) {
+      fmt::print("PRACH port id '{}' out of range. Valid range {}-{}.\n", port_id, 0, nof_rx_antennas - 1);
+      return false;
+    }
+  }
 
+  if (config.two_step.has_value()) {
+    const auto& ts = *config.two_step;
+    if (ts.cb_preambles_per_ssb_per_shared_ro >= config.nof_cb_preambles_per_ssb) {
+      fmt::print(
+          "Two-step RACH: cb_preambles_per_ssb_per_shared_ro ({}) must be less than nof_cb_preambles_per_ssb ({}).\n",
+          ts.cb_preambles_per_ssb_per_shared_ro,
+          config.nof_cb_preambles_per_ssb);
       return false;
     }
   }
@@ -945,7 +989,8 @@ static bool validate_tdd_ul_dl_pattern_unit_config(const tdd_ul_dl_pattern_unit_
     return false;
   }
 
-  const unsigned period_msec = config.dl_ul_period_slots / get_nof_slots_per_subframe(common_scs);
+  const float period_msec =
+      static_cast<float>(config.dl_ul_period_slots) / static_cast<float>(get_nof_slots_per_subframe(common_scs));
 
   static constexpr std::array<float, 10> valid_periods = {0.5F, 0.625, 1.0, 1.25, 2.0, 2.5, 3.0, 4.0, 5.0, 10.0};
   if (std::none_of(valid_periods.begin(), valid_periods.end(), [period_msec](float v) {
@@ -988,11 +1033,13 @@ static bool validate_tdd_ul_dl_unit_config(const du_high_unit_tdd_ul_dl_config& 
     return false;
   }
 
-  const unsigned period_msec =
-      (config.pattern1.dl_ul_period_slots + (config.pattern2.has_value() ? config.pattern2->dl_ul_period_slots : 0)) /
-      get_nof_slots_per_subframe(common_scs);
+  const unsigned total_period_slots =
+      config.pattern1.dl_ul_period_slots + (config.pattern2.has_value() ? config.pattern2->dl_ul_period_slots : 0);
+  const unsigned slots_per_20ms = 20U * get_nof_slots_per_subframe(common_scs);
   // As per TS 38.213, clause 11.1, "A UE expects that P + P2 divides 20 msec".
-  if (20 % period_msec != 0) {
+  if (slots_per_20ms % total_period_slots != 0) {
+    const float period_msec =
+        static_cast<float>(total_period_slots) / static_cast<float>(get_nof_slots_per_subframe(common_scs));
     fmt::print("Invalid TDD pattern total periodicity={}ms. It must divide 20 msec.\n", period_msec);
     return false;
   }
@@ -1003,6 +1050,12 @@ static bool validate_tdd_ul_dl_unit_config(const du_high_unit_tdd_ul_dl_config& 
 static bool validate_dl_ul_arfcn_and_band(const du_high_unit_base_cell_config& config)
 {
   const nr_band band = config.band.value_or(band_helper::get_band_from_dl_arfcn(config.dl_f_ref_arfcn));
+
+  if (!band_helper::is_band_known(band)) {
+    fmt::print("Band n{} is not a known NR band and has not been registered as a custom band.\n",
+               fmt::underlying(band));
+    return false;
+  }
 
   // Check if the band is supported with given SCS or band.
   // NOTE: Band n46 would be compatible with the 10MHz BW, but there is no sync raster that falls within the band
@@ -1630,11 +1683,68 @@ static bool validate_rlc_unit_config(five_qi_t five_qi, const du_high_unit_rlc_c
   return true;
 }
 
+static bool validate_custom_freq_bands(const std::vector<du_high_unit_custom_band_config>& bands)
+{
+  for (const auto& cb : bands) {
+    if (cb.band_nr < 1 || cb.band_nr > 1024) {
+      fmt::print("Custom band number {} is out of range [1, 1024].\n", cb.band_nr);
+      return false;
+    }
+    if (cb.dl_freq_min >= cb.dl_freq_max) {
+      fmt::print("Custom band {}: dl_freq_min ({}) >= dl_freq_max ({}).\n", cb.band_nr, cb.dl_freq_min, cb.dl_freq_max);
+      return false;
+    }
+    if (cb.dl_freq_max - cb.dl_freq_min < 5.0) {
+      fmt::print("Custom band {}: DL frequency range ({} - {} MHz) is less than the minimum 5 MHz bandwidth.\n",
+                 cb.band_nr,
+                 cb.dl_freq_min,
+                 cb.dl_freq_max);
+      return false;
+    }
+    if (cb.ul_freq_min.has_value() && *cb.ul_freq_min >= *cb.ul_freq_max) {
+      fmt::print("Custom band {}: ul_freq_min ({}) >= ul_freq_max ({}) for FDD band.\n",
+                 cb.band_nr,
+                 *cb.ul_freq_min,
+                 *cb.ul_freq_max);
+      return false;
+    }
+    if (cb.ul_freq_min.has_value() && *cb.ul_freq_max - *cb.ul_freq_min < 5.0) {
+      fmt::print("Custom band {}: UL frequency range ({} - {} MHz) is less than the minimum 5 MHz bandwidth.\n",
+                 cb.band_nr,
+                 *cb.ul_freq_min,
+                 *cb.ul_freq_max);
+      return false;
+    }
+    if (cb.f_raster == band_helper::delta_freq_raster::DEFAULT) {
+      fmt::print("Custom band {}: f_raster is invalid (must be 15, 30, 60, 100, or 120 kHz).\n", cb.band_nr);
+      return false;
+    }
+    if (cb.ssb_scs == subcarrier_spacing::invalid) {
+      fmt::print("Custom band {}: ssb_scs is invalid (must be 15, 30, 120, or 240 kHz).\n", cb.band_nr);
+      return false;
+    }
+    if (cb.delta_gscn != 1 && cb.delta_gscn != 3 && cb.delta_gscn != 7 && cb.delta_gscn != 16) {
+      fmt::print("Custom band {}: delta_gscn={} is invalid (must be 1, 3, 7, or 16).\n", cb.band_nr, cb.delta_gscn);
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Validates the given QoS configuration. Returns true on success, otherwise false.
 static bool validate_qos_config(span<const du_high_unit_qos_config> config)
 {
   for (const auto& qos : config) {
     if (!validate_rlc_unit_config(qos.five_qi, qos.rlc)) {
+      return false;
+    }
+    // delay_slots is capped at 10 slots to bound the pending-grant vector size.
+    if (qos.mac.triggered_ul_grant.has_value() &&
+        qos.mac.triggered_ul_grant->delay_slots > SCHEDULER_MAX_TRIG_UL_DELAY) {
+      fmt::print("5QI {} triggered_ul_grant delay_slots={} exceeds maximum of {}\n",
+                 qos.five_qi,
+                 qos.mac.triggered_ul_grant->delay_slots,
+                 SCHEDULER_MAX_TRIG_UL_DELAY);
       return false;
     }
   }
@@ -1643,6 +1753,10 @@ static bool validate_qos_config(span<const du_high_unit_qos_config> config)
 
 bool ocudu::validate_du_high_config(const du_high_unit_config& config)
 {
+  if (!validate_custom_freq_bands(config.custom_freq_bands)) {
+    return false;
+  }
+
   if (!validate_cells_unit_config(config.cells_cfg, config.gnb_id)) {
     return false;
   }

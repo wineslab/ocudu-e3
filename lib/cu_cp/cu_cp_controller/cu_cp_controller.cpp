@@ -12,7 +12,7 @@ using namespace ocucp;
 
 cu_cp_controller::cu_cp_controller(const cu_cp_configuration&      config_,
                                    cu_cp_amf_reconnection_handler& cu_cp_notifier,
-                                   common_task_scheduler&          common_task_sched_,
+                                   async_task_scheduler&           common_task_sched_,
                                    ngap_repository&                ngaps_,
                                    cu_up_processor_repository&     cu_ups_,
                                    du_processor_repository&        dus_,
@@ -24,7 +24,7 @@ cu_cp_controller::cu_cp_controller(const cu_cp_configuration&      config_,
   amf_mng(ngaps_, cu_cp_notifier, *cfg.services.timers, ctrl_exec_, common_task_sched_, cfg.ngap.ng_setup_notifier),
   du_mng(cfg.admission.max_nof_dus, dus_, ctrl_exec, common_task_sched_),
   cu_up_mng(cfg.admission.max_nof_cu_ups, cu_ups_, ctrl_exec, common_task_sched_),
-  xnc_mng(xncs_, config_.xnap.xnc_gw, *config_.services.timers, ctrl_exec_, common_task_sched_)
+  xnc_mng(xncs_, config_.xnap.xnc_gws, *config_.services.timers, ctrl_exec_, common_task_sched_)
 {
 }
 
@@ -51,7 +51,7 @@ void cu_cp_controller::stop()
   amf_mng.stop();
 }
 
-bool cu_cp_controller::handle_du_setup_request(du_index_t du_idx, const std::set<plmn_identity>& plmn_ids)
+bool cu_cp_controller::handle_du_setup_request(cu_cp_du_index_t du_idx, const std::set<plmn_identity>& plmn_ids)
 {
   bool success = false;
   for (const auto& plmn : plmn_ids) {

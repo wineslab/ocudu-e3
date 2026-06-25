@@ -6,15 +6,26 @@
 
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/adt/slotted_vector.h"
-#include "ocudu/pdcp/pdcp_config.h"
 #include "ocudu/ran/cause/e1ap_cause.h"
 #include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/pdcp/pdcp_discard_timer.h"
+#include "ocudu/ran/pdcp/pdcp_rlc_mode.h"
+#include "ocudu/ran/pdcp/pdcp_sn_size.h"
+#include "ocudu/ran/pdcp/pdcp_t_reordering.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/ran/up_transport_layer_info.h"
 #include "ocudu/security/security.h"
 #include <cstdint>
 
 namespace ocudu {
+
+/// \brief Index used to identify the E1 interface in the CU-UP.
+constexpr uint16_t MAX_NOF_E1S = std::numeric_limits<uint16_t>::max();
+enum class cu_up_e1_index_t : uint16_t { min = 0, max = MAX_NOF_E1S - 1, invalid = MAX_NOF_E1S };
+constexpr uint16_t cu_up_e1_index_to_uint(cu_up_e1_index_t index)
+{
+  return static_cast<uint16_t>(index);
+}
 
 /// \brief GNB-CU-CP-UE-E1AP-ID used to identify the UE in the CU-CP E1AP.
 /// \remark See TS 38.463 Section 9.3.1.4: GNB-CU-UE-E1AP-ID valid values: (0..2^32-1).
@@ -122,7 +133,7 @@ enum class e1ap_dupl_activation { active = 0, inactive };
 struct e1ap_pdcp_config {
   pdcp_sn_size                        pdcp_sn_size_ul;
   pdcp_sn_size                        pdcp_sn_size_dl;
-  ocudu::pdcp_rlc_mode                rlc_mod;
+  pdcp_rlc_mode                       rlc_mod;
   std::optional<e1ap_rohc_config>     rohc_config;
   std::optional<pdcp_t_reordering>    t_reordering_timer;
   std::optional<pdcp_discard_timer>   discard_timer;

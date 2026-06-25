@@ -7,10 +7,10 @@
 #include "lib/cu_cp/ue_manager/ue_manager_impl.h"
 #include "ngap_test_messages.h"
 #include "ocudu/adt/byte_buffer.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/cu_cp/ue_task_scheduler.h"
 #include "ocudu/ngap/gateways/n2_connection_client.h"
 #include "ocudu/ngap/ngap_message.h"
+#include "ocudu/ran/cu_cp_pdu_session.h"
 #include "ocudu/security/security.h"
 #include <gtest/gtest.h>
 #include <optional>
@@ -145,7 +145,7 @@ public:
 
   void connect_ngap(ngap_ue_context_removal_handler& ngap_handler_) { ngap_handler = &ngap_handler_; }
 
-  ngap_cu_cp_ue_notifier* on_new_ngap_ue(ue_index_t ue_index) override
+  ngap_cu_cp_ue_notifier* on_new_ngap_ue(cu_cp_ue_index_t ue_index) override
   {
     last_ue = ue_index;
 
@@ -159,13 +159,13 @@ public:
     return &ue->get_ngap_cu_cp_ue_notifier();
   }
 
-  bool schedule_async_task(ue_index_t ue_index, async_task<void> task) override
+  bool schedule_async_task(cu_cp_ue_index_t ue_index, async_task<void> task) override
   {
     ocudu_assert(ue_mng.find_ue_task_scheduler(ue_index) != nullptr, "UE task scheduler must be present");
     return ue_mng.find_ue_task_scheduler(ue_index)->schedule_async_task(std::move(task));
   }
 
-  bool on_handover_request_received(ue_index_t                        ue_index,
+  bool on_handover_request_received(cu_cp_ue_index_t                  ue_index,
                                     const plmn_identity&              selected_plmn,
                                     const security::security_context& sec_ctxt) override
   {
@@ -200,7 +200,7 @@ public:
             if (last_init_ctxt_setup_request.pdu_session_res_setup_list_cxt_req.has_value()) {
               for (const auto& session : last_init_ctxt_setup_request.pdu_session_res_setup_list_cxt_req.value()
                                              .pdu_session_res_setup_items) {
-                cu_cp_pdu_session_res_setup_failed_item failed_item;
+                ngap_pdu_session_res_setup_failed_item failed_item;
                 failed_item.pdu_session_id              = session.pdu_session_id;
                 failed_item.unsuccessful_transfer.cause = ngap_cause_radio_network_t::unspecified;
 
@@ -214,14 +214,14 @@ public:
           if (last_init_ctxt_setup_request.pdu_session_res_setup_list_cxt_req.has_value()) {
             for (const auto& session :
                  last_init_ctxt_setup_request.pdu_session_res_setup_list_cxt_req.value().pdu_session_res_setup_items) {
-              cu_cp_pdu_session_res_setup_response_item response_item;
+              ngap_pdu_session_res_setup_response_item response_item;
               response_item.pdu_session_id = session.pdu_session_id;
               response_item.pdu_session_resource_setup_response_transfer.dlqos_flow_per_tnl_info.up_tp_layer_info =
                   up_transport_layer_info{transport_layer_address::create_from_string("127.0.0.1"),
                                           int_to_gtpu_teid(1)};
               response_item.pdu_session_resource_setup_response_transfer.dlqos_flow_per_tnl_info
                   .associated_qos_flow_list.emplace(uint_to_qos_flow_id(5),
-                                                    cu_cp_associated_qos_flow{uint_to_qos_flow_id(5)});
+                                                    ngap_associated_qos_flow{uint_to_qos_flow_id(5)});
               resp.pdu_session_res_setup_response_items.emplace(response_item.pdu_session_id, response_item);
             }
           }
@@ -245,71 +245,71 @@ public:
         });
   }
 
-  async_task<cu_cp_pdu_session_resource_setup_response>
-  on_new_pdu_session_resource_setup_request(cu_cp_pdu_session_resource_setup_request& request) override
+  async_task<ngap_pdu_session_resource_setup_response>
+  on_new_pdu_session_resource_setup_request(ngap_pdu_session_resource_setup_request& request) override
   {
     logger.info("Received a new pdu session resource setup request");
 
     last_request = std::move(request);
 
-    return launch_async([this, res = cu_cp_pdu_session_resource_setup_response{}](
-                            coro_context<async_task<cu_cp_pdu_session_resource_setup_response>>& ctx) mutable {
+    return launch_async([this, res = ngap_pdu_session_resource_setup_response{}](
+                            coro_context<async_task<ngap_pdu_session_resource_setup_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
 
       if (last_request.pdu_session_res_setup_items.empty()) {
-        cu_cp_pdu_session_res_setup_failed_item failed_item;
+        ngap_pdu_session_res_setup_failed_item failed_item;
         for (const auto& pdu_session : last_request.pdu_session_res_setup_items) {
           failed_item.pdu_session_id              = pdu_session.pdu_session_id;
           failed_item.unsuccessful_transfer.cause = ngap_cause_radio_network_t::unspecified;
           res.pdu_session_res_failed_to_setup_items.emplace(failed_item.pdu_session_id, failed_item);
         }
       } else {
-        res = generate_cu_cp_pdu_session_resource_setup_response(last_request);
+        res = generate_ngap_pdu_session_resource_setup_response(last_request);
       }
 
       CORO_RETURN(res);
     });
   }
 
-  async_task<cu_cp_pdu_session_resource_modify_response>
-  on_new_pdu_session_resource_modify_request(cu_cp_pdu_session_resource_modify_request& request) override
+  async_task<ngap_pdu_session_resource_modify_response>
+  on_new_pdu_session_resource_modify_request(ngap_pdu_session_resource_modify_request& request) override
   {
     logger.info("Received a new pdu session resource modify request");
 
     last_modify_request = std::move(request);
 
-    return launch_async([this, res = cu_cp_pdu_session_resource_modify_response{}](
-                            coro_context<async_task<cu_cp_pdu_session_resource_modify_response>>& ctx) mutable {
+    return launch_async([this, res = ngap_pdu_session_resource_modify_response{}](
+                            coro_context<async_task<ngap_pdu_session_resource_modify_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
 
       if (!last_modify_request.pdu_session_res_modify_items.empty()) {
-        res = generate_cu_cp_pdu_session_resource_modify_response(uint_to_pdu_session_id(1));
+        res = generate_ngap_pdu_session_resource_modify_response(uint_to_pdu_session_id(1));
       }
 
       CORO_RETURN(res);
     });
   }
 
-  void set_pdu_session_resource_release_outcome(const cu_cp_pdu_session_resource_release_response& outcome)
+  void set_pdu_session_resource_release_outcome(const ngap_pdu_session_resource_release_response& outcome)
   {
     release_command_outcome = outcome;
   }
 
-  async_task<cu_cp_pdu_session_resource_release_response>
-  on_new_pdu_session_resource_release_command(cu_cp_pdu_session_resource_release_command& command) override
+  async_task<ngap_pdu_session_resource_release_response>
+  on_new_pdu_session_resource_release_command(ngap_pdu_session_resource_release_command& command) override
   {
     logger.info("Received a new pdu session resource release command");
 
     last_release_command = std::move(command);
 
-    return launch_async([this](coro_context<async_task<cu_cp_pdu_session_resource_release_response>>& ctx) mutable {
+    return launch_async([this](coro_context<async_task<ngap_pdu_session_resource_release_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
 
       if (release_command_outcome.has_value()) {
         CORO_EARLY_RETURN(release_command_outcome.value());
       }
 
-      CORO_RETURN(generate_cu_cp_pdu_session_resource_release_response(uint_to_pdu_session_id(1)));
+      CORO_RETURN(generate_ngap_pdu_session_resource_release_response(uint_to_pdu_session_id(1)));
     });
   }
 
@@ -337,7 +337,7 @@ public:
 
   void on_transmission_of_handover_required() override { logger.info("Received a new Handover Required"); }
 
-  async_task<bool> on_new_rrc_handover_command(ue_index_t ue_index, byte_buffer command) override
+  async_task<bool> on_new_rrc_handover_command(cu_cp_ue_index_t ue_index, byte_buffer command) override
   {
     logger.info("Received a new RRC Handover Command");
 
@@ -349,17 +349,17 @@ public:
     });
   }
 
-  void on_n2_handover_execution(ue_index_t ue_index) override {}
+  void on_n2_handover_execution(cu_cp_ue_index_t ue_index) override {}
 
-  void on_n2_disconnection(amf_index_t amf_index) override {}
+  void on_n2_disconnection(cu_cp_amf_index_t amf_index) override {}
 
   cu_cp_ue_context_release_command last_command;
   byte_buffer                      last_handover_command;
 
-  ue_index_t allocate_ue_index()
+  cu_cp_ue_index_t allocate_ue_index()
   {
-    ue_index_t ue_index = ue_index_t::invalid;
-    if (ue_id < ue_index_to_uint(ue_index_t::max)) {
+    cu_cp_ue_index_t ue_index = cu_cp_ue_index_t::invalid;
+    if (ue_id < cu_cp_ue_index_to_uint(cu_cp_ue_index_t::max)) {
       ue_index              = uint_to_ue_index(ue_id);
       last_created_ue_index = ue_index;
       ue_id++;
@@ -374,9 +374,9 @@ public:
     last_paging_msg = std::move(msg);
   }
 
-  ue_index_t request_new_ue_index_allocation(nr_cell_global_id_t /*cgi*/, const plmn_identity& /*plmn*/) override
+  cu_cp_ue_index_t request_new_ue_index_allocation(nr_cell_global_id_t /*cgi*/, const plmn_identity& /*plmn*/) override
   {
-    return ue_index_t::invalid;
+    return cu_cp_ue_index_t::invalid;
   }
 
   async_task<cu_cp_handover_resource_allocation_response>
@@ -390,33 +390,33 @@ public:
     });
   }
 
-  void on_dl_ue_associated_nrppa_transport_pdu(ue_index_t ue_index, const byte_buffer& nrppa_pdu) override
+  void on_dl_ue_associated_nrppa_transport_pdu(cu_cp_ue_index_t ue_index, const byte_buffer& nrppa_pdu) override
   {
     logger.error("DL UE associated NRPPa transport failed. Cause: NRPPa transport PDUs not supported.");
   }
 
-  void on_dl_non_ue_associated_nrppa_transport_pdu(amf_index_t amf_index, const byte_buffer& nrppa_pdu) override
+  void on_dl_non_ue_associated_nrppa_transport_pdu(cu_cp_amf_index_t amf_index, const byte_buffer& nrppa_pdu) override
   {
     logger.error("DL non UE associated NRPPa transport failed. Cause: NRPPa transport PDUs not supported.");
   }
 
-  void on_location_reporting_control_message(ue_index_t ue_index, const location_report_request& msg) override
+  void on_location_reporting_control_message(cu_cp_ue_index_t ue_index, const location_report_request& msg) override
   {
     last_location_reporting_ctrl_ue_index = ue_index;
     last_location_reporting_ctrl          = msg;
   }
 
-  ue_index_t                                                 last_ue = ue_index_t::invalid;
-  ngap_init_context_setup_request                            last_init_ctxt_setup_request;
-  ngap_ue_context_modification_request                       last_ue_ctxt_modification_request;
-  cu_cp_pdu_session_resource_setup_request                   last_request;
-  cu_cp_pdu_session_resource_modify_request                  last_modify_request;
-  std::optional<cu_cp_pdu_session_resource_release_response> release_command_outcome;
-  cu_cp_pdu_session_resource_release_command                 last_release_command;
-  std::optional<ue_index_t>                                  last_created_ue_index;
-  cu_cp_paging_message                                       last_paging_msg;
-  std::optional<ue_index_t>                                  last_location_reporting_ctrl_ue_index;
-  std::optional<location_report_request>                     last_location_reporting_ctrl;
+  cu_cp_ue_index_t                                          last_ue = cu_cp_ue_index_t::invalid;
+  ngap_init_context_setup_request                           last_init_ctxt_setup_request;
+  ngap_ue_context_modification_request                      last_ue_ctxt_modification_request;
+  ngap_pdu_session_resource_setup_request                   last_request;
+  ngap_pdu_session_resource_modify_request                  last_modify_request;
+  std::optional<ngap_pdu_session_resource_release_response> release_command_outcome;
+  ngap_pdu_session_resource_release_command                 last_release_command;
+  std::optional<cu_cp_ue_index_t>                           last_created_ue_index;
+  cu_cp_paging_message                                      last_paging_msg;
+  std::optional<cu_cp_ue_index_t>                           last_location_reporting_ctrl_ue_index;
+  std::optional<location_report_request>                    last_location_reporting_ctrl;
 
 private:
   ue_manager&             ue_mng;
@@ -424,13 +424,13 @@ private:
 
   ngap_ue_context_removal_handler* ngap_handler = nullptr;
 
-  uint64_t ue_id = ue_index_to_uint(ocucp::ue_index_t::min);
+  uint64_t ue_id = cu_cp_ue_index_to_uint(cu_cp_ue_index_t::min);
 };
 
 class dummy_rrc_ngap_message_handler : public rrc_ngap_message_handler
 {
 public:
-  dummy_rrc_ngap_message_handler(ue_index_t ue_index_) :
+  dummy_rrc_ngap_message_handler(cu_cp_ue_index_t ue_index_) :
     ue_index(ue_index_), logger(ocudulog::fetch_basic_logger("TEST"))
   {
   }
@@ -453,7 +453,7 @@ public:
   byte_buffer last_nas_pdu;
 
 private:
-  ue_index_t              ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t        ue_index = cu_cp_ue_index_t::invalid;
   ocudulog::basic_logger& logger;
   byte_buffer             ho_preparation_message;
 };
@@ -463,11 +463,11 @@ class dummy_ngap_cu_cp_ue_notifier : public ngap_cu_cp_ue_notifier
 public:
   ~dummy_ngap_cu_cp_ue_notifier() = default;
 
-  void set_ue_index(ue_index_t ue_index_) { ue_index = ue_index_; }
+  void set_ue_index(cu_cp_ue_index_t ue_index_) { ue_index = ue_index_; }
   void set_rrc_ue_notifier(dummy_ngap_rrc_ue_notifier& rrc_ue_notifier_) { rrc_ue_notifier = &rrc_ue_notifier_; }
 
   /// \brief Get the UE index of the UE.
-  ue_index_t get_ue_index() override { return ue_index.value(); }
+  cu_cp_ue_index_t get_ue_index() override { return ue_index.value(); }
 
   /// \brief Schedule an async task for the UE.
   bool schedule_async_task(async_task<void> task) override { return true; }
@@ -489,13 +489,13 @@ public:
 
   /// \brief Set UE AMBR.
   /// \param[in] ue_ambr The AMBR to set for the UE.
-  void set_ue_ambr(cu_cp_aggregate_maximum_bit_rate ue_ambr) override {}
+  void set_ue_ambr(aggregate_maximum_bit_rate_t ue_ambr) override {}
 
   /// \brief Get UE AMBR.
-  cu_cp_aggregate_maximum_bit_rate get_ue_ambr() const override { return cu_cp_aggregate_maximum_bit_rate{}; }
+  aggregate_maximum_bit_rate_t get_ue_ambr() const override { return aggregate_maximum_bit_rate_t{}; }
 
-  std::optional<ue_index_t>   ue_index;
-  dummy_ngap_rrc_ue_notifier* rrc_ue_notifier = nullptr;
+  std::optional<cu_cp_ue_index_t> ue_index;
+  dummy_ngap_rrc_ue_notifier*     rrc_ue_notifier = nullptr;
 };
 
 } // namespace ocudu::ocucp

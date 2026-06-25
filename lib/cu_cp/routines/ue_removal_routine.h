@@ -5,6 +5,9 @@
 #pragma once
 
 #include "../ue_manager/ue_manager_impl.h"
+#include "ocudu/e1ap/cu_cp/e1ap_cu_cp.h"
+#include "ocudu/f1ap/cu_cp/f1ap_cu.h"
+#include "ocudu/rrc/rrc_du.h"
 #include "ocudu/support/async/async_task.h"
 #include "ocudu/xnap/xnap.h"
 
@@ -14,7 +17,7 @@ namespace ocudu::ocucp {
 class ue_removal_routine
 {
 public:
-  ue_removal_routine(ue_index_t                           ue_index_,
+  ue_removal_routine(cu_cp_ue_index_t                     ue_index_,
                      rrc_ue_handler*                      rrc_du_notifier_,
                      e1ap_bearer_context_removal_handler* e1ap_removal_handler_,
                      f1ap_ue_context_removal_handler*     f1ap_removal_handler_,
@@ -29,7 +32,7 @@ public:
   static const char* name() { return "UE Removal Routine"; }
 
 private:
-  const ue_index_t ue_index;
+  const cu_cp_ue_index_t ue_index;
   // Handlers to trigger UE removal in the respective layers.
   rrc_ue_handler*                      rrc_du_notifier       = nullptr;
   e1ap_bearer_context_removal_handler* e1ap_removal_handler  = nullptr;

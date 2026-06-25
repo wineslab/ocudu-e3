@@ -6,6 +6,8 @@
 
 #include "../rnti_value_table.h"
 #include "rlf_detector.h"
+#include "ocudu/adt/spmc_slot_ring.h"
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/mac/mac_cell_control_information_handler.h"
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
 #include "ocudu/scheduler/scheduler_configurator.h"
@@ -38,7 +40,8 @@ private:
     csi_report_configuration csi_rep_cfg;
   };
 
-  size_t to_grid_index(slot_point slot) const { return slot.to_uint() % expected_uci_report_grid.size(); }
+  /// Expected UCI reports for a single slot, stored by store_uci and looked up by decode_uci.
+  using slot_ucis = static_vector<uci_context, MAX_PUCCH_PDUS_PER_SLOT + MAX_PUSCH_PDUS_PER_SLOT>;
 
   const du_rnti_table&    rnti_table;
   du_cell_index_t         cell_index;
@@ -46,7 +49,10 @@ private:
   rlf_detector&           rlf_handler;
   ocudulog::basic_logger& logger;
 
-  std::vector<static_vector<uci_context, MAX_PUCCH_PDUS_PER_SLOT + MAX_PUSCH_PDUS_PER_SLOT>> expected_uci_report_grid;
+  /// Ring buffer of expected UCI reports, keyed by slot. The slot-indication path (store_uci) is the single writer;
+  /// the PHY may deliver a slot's UCIs concurrently across several worker threads, so decode_uci readers access it
+  /// concurrently.
+  spmc_slot_ring<slot_ucis> expected_uci_report_grid;
 };
 
 } // namespace ocudu

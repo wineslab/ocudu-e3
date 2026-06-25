@@ -15,6 +15,7 @@
 #include "ocudu/ran/positioning/positioning_information_exchange.h"
 #include "ocudu/ran/positioning/trp_information_exchange.h"
 #include "ocudu/ran/srs/srs_configuration.h"
+#include "ocudu/support/enum_utils.h"
 #include <variant>
 
 namespace ocudu::ocucp {
@@ -67,6 +68,27 @@ asn1_to_meas_quantities_item(const asn1::nrppa::meas_quantities_item_s& asn1_mea
     case asn1::nrppa::meas_quantities_value_e::rsrq:
       meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::rsrq;
       break;
+    case asn1::nrppa::meas_quantities_value_e::ss_rsrp:
+      meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::ss_rsrp;
+      break;
+    case asn1::nrppa::meas_quantities_value_e::ss_rsrq:
+      meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::ss_rsrq;
+      break;
+    case asn1::nrppa::meas_quantities_value_e::csi_rsrp:
+      meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::csi_rsrp;
+      break;
+    case asn1::nrppa::meas_quantities_value_e::csi_rsrq:
+      meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::csi_rsrq;
+      break;
+    case asn1::nrppa::meas_quantities_value_e::angle_of_arrival_nr:
+      meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::angle_of_arrival_nr;
+      break;
+    case asn1::nrppa::meas_quantities_value_e::timing_advance_nr:
+      meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::timing_advance_nr;
+      break;
+    case asn1::nrppa::meas_quantities_value_e::ue_rx_tx_time_diff:
+      meas_quantities_item.meas_quantities_value = nrppa_meas_quantities_value::ue_rx_tx_time_diff;
+      break;
     default:
       report_fatal_error("Unsupported NRPPa meas quantities value. NRPPa meas quantities value={}",
                          asn1_meas_quantities_item.meas_quantities_value.to_number());
@@ -98,6 +120,27 @@ meas_quantities_item_to_asn1(const nrppa_meas_quantities_item& meas_quantities_i
       break;
     case nrppa_meas_quantities_value::rsrq:
       asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::rsrq;
+      break;
+    case nrppa_meas_quantities_value::ss_rsrp:
+      asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::ss_rsrp;
+      break;
+    case nrppa_meas_quantities_value::ss_rsrq:
+      asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::ss_rsrq;
+      break;
+    case nrppa_meas_quantities_value::csi_rsrp:
+      asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::csi_rsrp;
+      break;
+    case nrppa_meas_quantities_value::csi_rsrq:
+      asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::csi_rsrq;
+      break;
+    case nrppa_meas_quantities_value::angle_of_arrival_nr:
+      asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::angle_of_arrival_nr;
+      break;
+    case nrppa_meas_quantities_value::timing_advance_nr:
+      asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::timing_advance_nr;
+      break;
+    case nrppa_meas_quantities_value::ue_rx_tx_time_diff:
+      asn1_meas_quantities_item.meas_quantities_value = asn1::nrppa::meas_quantities_value_opts::ue_rx_tx_time_diff;
       break;
     default:
       report_fatal_error("Unsupported NRPPa meas quantities value");
@@ -547,8 +590,7 @@ inline asn1::nrppa::ssb_info_item_s ssb_info_item_to_asn1(const ssb_info_item_t&
   asn1::string_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_subcarrier_spacing,
                        to_string(ssb_info_item.ssb_cfg.ssb_subcarrier_spacing));
   asn1_ssb_info_item.ssb_cfg.ssb_tx_pwr = ssb_info_item.ssb_cfg.ssb_tx_pwr;
-  asn1::number_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_periodicity,
-                       ssb_periodicity_to_value(ssb_info_item.ssb_cfg.ssb_period));
+  asn1::number_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_periodicity, to_value(ssb_info_item.ssb_cfg.ssb_period));
   asn1_ssb_info_item.ssb_cfg.ssb_half_frame_offset = ssb_info_item.ssb_cfg.ssb_half_frame_offset;
   asn1_ssb_info_item.ssb_cfg.ssb_sfn_offset        = ssb_info_item.ssb_cfg.ssb_sfn_offset;
   if (ssb_info_item.ssb_cfg.ssb_burst_position.has_value()) {
@@ -1289,7 +1331,7 @@ inline srs_configuration_t asn1_to_srs_configuration(const asn1::nrppa::srs_conf
           srs_config::srs_pos_resource::srs_spatial_relation_pos::ssb ssb;
           ssb.pci_nr = asn1_pos_srs_res.spatial_relation_pos.ssb_pos().pci_nr;
           if (asn1_pos_srs_res.spatial_relation_pos.ssb_pos().ssb_idx_present) {
-            ssb.ssb_idx = (ssb_id_t)asn1_pos_srs_res.spatial_relation_pos.ssb_pos().ssb_idx;
+            ssb.ssb_idx = asn1_pos_srs_res.spatial_relation_pos.ssb_pos().ssb_idx;
           }
           pos_srs_res.spatial_relation_info->reference_signal = ssb;
         } else {

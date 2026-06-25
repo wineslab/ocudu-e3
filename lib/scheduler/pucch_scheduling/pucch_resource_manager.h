@@ -148,7 +148,7 @@ public:
     pucch_resource_manager*              parent;
     cell_slot_resource_grid&             ul_res_grid;
     const pucch_resource_builder_params& res_params;
-    const cell_pucch_res_config&         cell_pucch_cfg;
+    const cell_pucch_res_config&         cell_resources;
     const rnti_t                         rnti;
     const slot_point                     sl;
     const ue_uplink_bwp_config&          ue_bwp_cfg;
@@ -188,7 +188,7 @@ private:
     std::optional<unsigned> find_res_used_by_ue(span<const pucch_res_id_t> res_to_check, rnti_t rnti) const
     {
       for (unsigned r_pucch = 0; r_pucch != res_to_check.size(); ++r_pucch) {
-        const unsigned cell_res_id = res_to_check[r_pucch].cell_res_id;
+        const unsigned cell_res_id = res_to_check[r_pucch].ded().cell_res_id;
         ocudu_assert(cell_res_id < ues_using_pucch_res.size(),
                      "PUCCH resource index from PUCCH resource set exceeds the size of the cell resource array");
         if (ues_using_pucch_res[cell_res_id] == rnti) {
@@ -199,8 +199,9 @@ private:
     }
   };
 
-  const cell_configuration& cell_cfg;
-  pucch_collision_manager   collision_manager;
+  const cell_configuration&    cell_cfg;
+  const cell_pucch_res_config& cell_resources;
+  pucch_collision_manager      collision_manager;
 
   // Ring buffer of slot contexts to keep track of PUCCH resource usage in recent slots.
   circular_vector<slot_context> slots_ctx;

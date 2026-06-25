@@ -17,6 +17,8 @@
 #include "ocudu/ran/pucch/pucch_info.h"
 #include "ocudu/ran/pucch/pucch_mapping.h"
 #include "ocudu/ran/sib/cell_reselection.h"
+#include "ocudu/ran/sib/sib_helper.h"
+#include "ocudu/ran/ssb/ssb_helper.h"
 #include "ocudu/rlc/rlc_srb_config_factory.h"
 #include "ocudu/scheduler/config/cell_config_builder_params.h"
 #include "ocudu/scheduler/config/csi_helper.h"
@@ -288,19 +290,38 @@ static void fill_csi_resources(odu::du_cell_config& out_cell, const du_high_unit
   if (cell_cfg.tdd_ul_dl_cfg.has_value()) {
     const unsigned max_csi_symbol_index = *std::max_element(du_csi.tracking_csi_ofdm_symbol_indices.begin(),
                                                             du_csi.tracking_csi_ofdm_symbol_indices.end());
+    const auto&    pdcch_common         = out_cell.ran.dl_cfg_common.init_dl_bwp.pdcch_common;
+    const auto     ssb_slots =
+        ssb_helper::get_occupied_slot_offsets(out_cell.ran.ssb_cfg, out_cell.ran.dl_carrier.band, cell_cfg.common_scs);
+    const auto              sib1_occ = sib_helper::get_occupied_slot_offsets(out_cell.ran.ssb_cfg,
+                                                                out_cell.ran.dl_carrier.band,
+                                                                cell_cfg.common_scs,
+                                                                *pdcch_common.get_searchspace0(),
+                                                                pdcch_common.get_coreset0()->value());
+    std::array<unsigned, 1> zp_arr;
+    span<const unsigned>    zp_offsets;
+    if (csi_cfg.zp_csi_slot_offset.has_value()) {
+      zp_arr     = {*csi_cfg.zp_csi_slot_offset};
+      zp_offsets = zp_arr;
+    }
     if (not csi_helper::derive_valid_csi_rs_slot_offsets(
             du_csi,
             csi_cfg.meas_csi_slot_offset,
             csi_cfg.tracking_csi_slot_offset,
-            csi_cfg.zp_csi_slot_offset,
+            zp_offsets,
             generate_tdd_pattern(cell_cfg.common_scs, *cell_cfg.tdd_ul_dl_cfg),
             max_csi_symbol_index,
-            cell_cfg.ssb_cfg.ssb_period_msec)) {
+            static_cast<ssb_periodicity>(cell_cfg.ssb_cfg.ssb_period_msec),
+            ssb_slots,
+            sib1_occ.window_period_slots,
+            sib1_occ.slot_offsets)) {
       report_error("Unable to derive valid CSI-RS slot offsets and period for cell with pci={}\n", cell_cfg.pci);
     }
   } else {
-    du_csi.meas_csi_slot_offset = csi_cfg.meas_csi_slot_offset.has_value() ? *csi_cfg.meas_csi_slot_offset : 2;
-    du_csi.zp_csi_slot_offset   = csi_cfg.zp_csi_slot_offset.has_value() ? *csi_cfg.zp_csi_slot_offset : 2;
+    du_csi.meas_csi_slot_offsets = {csi_cfg.meas_csi_slot_offset.has_value() ? *csi_cfg.meas_csi_slot_offset : 2U};
+    if (csi_cfg.zp_csi_slot_offset.has_value()) {
+      du_csi.zp_csi_slot_offsets = {*csi_cfg.zp_csi_slot_offset};
+    }
     du_csi.tracking_csi_slot_offset =
         csi_cfg.tracking_csi_slot_offset.has_value() ? *csi_cfg.tracking_csi_slot_offset : 12;
   }
@@ -614,6 +635,20 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
             static_cast<ra_prioritization::scaling_factor_bi>(clifield.scaling_factor_bi.value());
       }
     }
+    if (base_cell.prach_cfg.two_step.has_value()) {
+      const auto& src = *base_cell.prach_cfg.two_step;
+      rach_cfg.two_step_rach_cfg.emplace();
+      auto& dst                              = *rach_cfg.two_step_rach_cfg;
+      dst.cb_preambles_per_ssb_per_shared_ro = src.cb_preambles_per_ssb_per_shared_ro;
+      dst.msgA_rsrp_thres                    = rsrp_range{src.msga_rsrp_thres_dbm};
+      dst.msgB_response_window_slots         = src.msgb_response_window_slots;
+      dst.pusch.td_offset                    = src.td_offset;
+      dst.pusch.pusch_td_res_index           = src.pusch_td_res_index;
+      dst.pusch.mcs                          = sch_mcs_index{src.mcs};
+      dst.pusch.nof_prbs_per_msgA_po         = src.nof_prbs_per_msga_po;
+      dst.pusch.prb_start                    = src.prb_start;
+      dst.pusch.po_fdm                       = src.po_fdm;
+    }
 
     // PhysicalCellGroup Config parameters.
     if (base_cell.pcg_cfg.p_nr_fr1.has_value()) {
@@ -727,11 +762,11 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     cset1_cfg.set_freq_domain_resources(freq_resources);
     cset1_cfg.set_non_coreset0_duration(base_cell.pdcch_cfg.dedicated.coreset1_duration.value_or(
         out_cell.ran.dl_cfg_common.init_dl_bwp.pdcch_common.coreset0->duration()));
-    const std::array<uint8_t, 5> auto_compute_ss2_n_candidates_cfg = {0, 0, 0, 0, 0};
+    static constexpr std::array<uint8_t, 5> auto_compute_ss2_n_candidates_cfg = {0, 0, 0, 0, 0};
     if (base_cell.pdcch_cfg.dedicated.ss2_n_candidates != auto_compute_ss2_n_candidates_cfg) {
       ss2_cfg.set_non_ss0_nof_candidates(base_cell.pdcch_cfg.dedicated.ss2_n_candidates);
     } else if (base_cell.pdcch_cfg.dedicated.ss2_type != search_space_configuration::type_t::common) {
-      ss2_cfg.set_non_ss0_nof_candidates({0,
+      ss2_cfg.set_non_ss0_nof_candidates({config_helpers::compute_max_nof_candidates(aggregation_level::n1, cset1_cfg),
                                           config_helpers::compute_max_nof_candidates(aggregation_level::n2, cset1_cfg),
                                           config_helpers::compute_max_nof_candidates(aggregation_level::n4, cset1_cfg),
                                           0,
@@ -823,13 +858,11 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
       // Subtract 2 PUCCH resources from value: with Format 0, 2 extra resources will be added by the DU resource
       // allocator when the DU create the UE configuration.
       const unsigned extra_res_harq = pucch_f2f3f4_format(user_pucch_cfg.formats) == pucch_format::FORMAT_2 ? 2U : 0U;
-      du_pucch_cfg.res_set_0_size   = user_pucch_cfg.res_set_size - extra_res_harq;
-      du_pucch_cfg.res_set_1_size   = user_pucch_cfg.res_set_size - extra_res_harq;
+      du_pucch_cfg.res_set_size     = user_pucch_cfg.res_set_size - extra_res_harq;
       f0_params.intraslot_freq_hopping = user_pucch_cfg.f0_intraslot_freq_hopping;
     } else {
       auto& f1_params                  = du_pucch_cfg.f0_or_f1_params.emplace<pucch_f1_params>();
-      du_pucch_cfg.res_set_0_size      = user_pucch_cfg.res_set_size;
-      du_pucch_cfg.res_set_1_size      = user_pucch_cfg.res_set_size;
+      du_pucch_cfg.res_set_size        = user_pucch_cfg.res_set_size;
       f1_params.occ_supported          = user_pucch_cfg.f1_enable_occ;
       f1_params.nof_cyc_shifts         = static_cast<pucch_nof_cyclic_shifts>(user_pucch_cfg.f1_nof_cyclic_shifts);
       f1_params.intraslot_freq_hopping = user_pucch_cfg.f1_intraslot_freq_hopping;
@@ -841,14 +874,13 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
         constexpr unsigned pucch_f2_nof_symbols = 2U;
         auto&              f2_params            = du_pucch_cfg.f2_or_f3_or_f4_params.emplace<pucch_f2_params>();
         f2_params.max_code_rate                 = user_pucch_cfg.f2_max_code_rate;
-        f2_params.max_nof_rbs =
-            user_pucch_cfg.f2_max_payload_bits.has_value()
-                ? get_pucch_format2_max_nof_prbs(user_pucch_cfg.f2_max_payload_bits.value(),
-                                                 pucch_f2_nof_symbols,
-                                                 to_max_code_rate_float(user_pucch_cfg.f2_max_code_rate))
-                : user_pucch_cfg.f2_max_nof_rbs;
-        f2_params.intraslot_freq_hopping = user_pucch_cfg.f2_intraslot_freq_hopping;
-        f2_params.max_payload_bits       = user_pucch_cfg.f2_max_payload_bits;
+        f2_params.max_nof_rbs                   = user_pucch_cfg.f2_max_payload_bits.has_value()
+                                                      ? get_pucch_format2_max_nof_prbs(user_pucch_cfg.f2_max_payload_bits.value(),
+                                                                     pucch_f2_nof_symbols,
+                                                                     to_float(user_pucch_cfg.f2_max_code_rate))
+                                                      : user_pucch_cfg.f2_max_nof_rbs;
+        f2_params.intraslot_freq_hopping        = user_pucch_cfg.f2_intraslot_freq_hopping;
+        f2_params.max_payload_bits              = user_pucch_cfg.f2_max_payload_bits;
       } break;
       case pucch_format::FORMAT_3: {
         // The number of symbols per PUCCH resource is not exposed to the DU user interface; for PUCCH F3, we use all
@@ -865,7 +897,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
                                                    ? get_pucch_format3_max_nof_prbs(
                                           user_pucch_cfg.f3_max_payload_bits.value(),
                                           pucch_f3_nof_symbols,
-                                          to_max_code_rate_float(user_pucch_cfg.f3_max_code_rate),
+                                          to_float(user_pucch_cfg.f3_max_code_rate),
                                           // Since we are forcing 14 symbols intraslot_freq_hopping doesn't matter.
                                           false,
                                           user_pucch_cfg.f3_additional_dmrs,
@@ -886,6 +918,15 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
       } break;
       default:
         break;
+    }
+
+    if (!user_pucch_cfg.repetition_sinr_thresholds.empty()) {
+      auto& rep           = out_cell.ran.init_bwp.pucch.resources.harq_ack_rep.emplace();
+      rep.sinr_thresholds = user_pucch_cfg.repetition_sinr_thresholds;
+      rep.factors_per_res.reserve(user_pucch_cfg.repetition_factors.size());
+      for (unsigned f : user_pucch_cfg.repetition_factors) {
+        rep.factors_per_res.push_back(static_cast<pucch_repetition_factor>(f));
+      }
     }
 
     // Parameters for SRS-Config.
@@ -1047,6 +1088,13 @@ static std::map<five_qi_t, odu::du_qos_config> generate_du_qos_config(const du_h
         qos.rlc.mode == "am" ? qos.rlc.am.tx.queue_size_bytes : qos.rlc.um.tx.queue_size_bytes;
     out_f1u.warn_on_drop   = config.warn_on_drop;
     out_f1u.ul_buffer_size = qos.f1u_du.ul_buffer_size;
+
+    // Convert triggered UL grant config (optional - presence enables the feature)
+    if (qos.mac.triggered_ul_grant.has_value()) {
+      auto& out_trig       = out_cfg[qos.five_qi].triggered_ul_grant.emplace();
+      out_trig.delay_slots = qos.mac.triggered_ul_grant->delay_slots;
+      out_trig.grant_size  = units::bytes{qos.mac.triggered_ul_grant->grant_size};
+    }
   }
   return out_cfg;
 }
@@ -1157,6 +1205,7 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
   out_cfg.ue.ul_power_ctrl.enable_phr_bw_adaptation          = pusch.enable_phr_bw_adaptation;
   out_cfg.ue.ul_power_ctrl.target_pusch_sinr                 = pusch.target_pusch_sinr;
   out_cfg.ue.ul_power_ctrl.path_loss_for_target_pusch_sinr   = pusch.path_loss_for_target_pusch_sinr;
+  out_cfg.ue.ul_power_ctrl.ema_alpha_cl_pw_control_sinr      = pusch.ema_alpha_cl_pw_control_sinr;
   out_cfg.ue.ta_control.ta_cmd_offset_threshold              = cell.ta_cfg.ta_cmd_offset_threshold;
   out_cfg.ue.ta_control.target                               = cell.ta_cfg.ta_target;
   out_cfg.ue.ta_control.measurement_period                   = cell.ta_cfg.ta_measurement_slot_period;
@@ -1171,17 +1220,18 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
       cell.srs_cfg.srs_type_enabled == "aperiodic" ? std::optional<srs_periodicity>(srs_prohibit_time) : std::nullopt;
 
   // PUCCH and scheduler expert parameters.
-  out_cfg.ue.max_ul_grants_per_slot                   = cell.ul_common_cfg.max_ul_grants_per_slot;
-  out_cfg.ue.max_pucchs_per_slot                      = cell.ul_common_cfg.max_pucchs_per_slot;
-  out_cfg.ue.min_pucch_pusch_prb_distance             = cell.ul_common_cfg.min_pucch_pusch_prb_distance;
-  const du_high_unit_pucch_config& pucch              = cell.pucch_cfg;
-  out_cfg.ue.ul_power_ctrl.enable_pucch_cl_pw_control = pucch.enable_closed_loop_pw_control;
-  out_cfg.ue.ul_power_ctrl.pucch_f0_sinr_target_dB    = pucch.pucch_f0_sinr_target_dB;
-  out_cfg.ue.ul_power_ctrl.pucch_f2_sinr_target_dB    = pucch.pucch_f2_sinr_target_dB;
-  out_cfg.ue.ul_power_ctrl.pucch_f3_sinr_target_dB    = pucch.pucch_f3_sinr_target_dB;
+  out_cfg.ue.max_ul_grants_per_slot                           = cell.ul_common_cfg.max_ul_grants_per_slot;
+  out_cfg.ue.max_pucchs_per_slot                              = cell.ul_common_cfg.max_pucchs_per_slot;
+  out_cfg.ue.min_pucch_pusch_prb_distance                     = cell.ul_common_cfg.min_pucch_pusch_prb_distance;
+  const du_high_unit_pucch_config& pucch                      = cell.pucch_cfg;
+  out_cfg.ue.ul_power_ctrl.enable_pucch_cl_pw_control         = pucch.enable_closed_loop_pw_control;
+  out_cfg.ue.ul_power_ctrl.pucch_f0_sinr_target_dB            = pucch.pucch_f0_sinr_target_dB;
+  out_cfg.ue.ul_power_ctrl.pucch_f2_sinr_target_dB            = pucch.pucch_f2_sinr_target_dB;
+  out_cfg.ue.ul_power_ctrl.pucch_f3_sinr_target_dB            = pucch.pucch_f3_sinr_target_dB;
+  out_cfg.ue.ul_power_ctrl.ema_alpha_cl_pw_control_pucch_sinr = pucch.ema_alpha_cl_pw_control_sinr;
 
   // RA parameters.
-  const du_high_unit_prach_config& prach = cell.prach_cfg;
+  const du_high_unit_rach_config& prach = cell.prach_cfg;
 
   out_cfg.ra.rar_mcs_index            = pdsch.fixed_rar_mcs;
   out_cfg.ra.max_nof_msg3_harq_retxs  = prach.max_msg3_harq_retx;
@@ -1204,17 +1254,50 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
   return out_cfg;
 }
 
+static odu::du_test_mode_config generate_test_mode_config(const du_high_unit_config& du_high_unit_cfg)
+{
+  odu::du_test_mode_config test_cfg;
+  if (du_high_unit_cfg.test_mode_cfg.test_ue.rnti == rnti_t::INVALID_RNTI) {
+    return test_cfg;
+  }
+
+  const auto&                              test_ue = du_high_unit_cfg.test_mode_cfg.test_ue;
+  std::optional<std::chrono::milliseconds> attach_detach_duration;
+  if (test_ue.attach_detach_duration_ms.has_value()) {
+    attach_detach_duration = std::chrono::milliseconds{*test_ue.attach_detach_duration_ms};
+  }
+  test_cfg.test_ue =
+      odu::du_test_mode_config::test_mode_ue_config{test_ue.rnti,
+                                                    test_ue.nof_ues,
+                                                    test_ue.ue_creation_stagger_slots,
+                                                    test_ue.auto_ack_indication_delay,
+                                                    test_ue.pdsch_active,
+                                                    test_ue.pusch_active,
+                                                    test_ue.cqi,
+                                                    test_ue.ri,
+                                                    test_ue.pmi,
+                                                    test_ue.i_1_1,
+                                                    test_ue.i_1_2,
+                                                    test_ue.i_1_3,
+                                                    test_ue.i_2,
+                                                    attach_detach_duration,
+                                                    std::chrono::milliseconds{test_ue.attach_detach_guard_duration_ms}};
+
+  return test_cfg;
+}
+
 void ocudu::generate_du_high_config(odu::du_high_configuration& du_hi_cfg, const du_high_unit_config& du_high_unit_cfg)
 {
   // DU-high configuration.
-  du_hi_cfg.ran.gnb_du_id          = du_high_unit_cfg.gnb_du_id;
-  du_hi_cfg.ran.gnb_du_name        = fmt::format("odu{}", fmt::underlying(du_hi_cfg.ran.gnb_du_id));
-  du_hi_cfg.ran.cells              = generate_du_cell_config(du_high_unit_cfg);
-  du_hi_cfg.metrics.enable_mac     = du_high_unit_cfg.metrics.layers_cfg.enable_mac;
-  du_hi_cfg.metrics.enable_rlc     = du_high_unit_cfg.metrics.layers_cfg.enable_rlc;
-  du_hi_cfg.metrics.enable_sched   = du_high_unit_cfg.metrics.layers_cfg.enable_scheduler;
-  du_hi_cfg.metrics.enable_du_proc = du_high_unit_cfg.metrics.layers_cfg.enable_du_proc;
-  du_hi_cfg.metrics.period         = std::chrono::milliseconds{du_high_unit_cfg.metrics.du_report_period};
+  du_hi_cfg.ran.gnb_du_id           = du_high_unit_cfg.gnb_du_id;
+  du_hi_cfg.ran.gnb_du_name         = fmt::format("odu{}", fmt::underlying(du_hi_cfg.ran.gnb_du_id));
+  du_hi_cfg.ran.cells               = generate_du_cell_config(du_high_unit_cfg);
+  du_hi_cfg.metrics.enable_mac      = du_high_unit_cfg.metrics.layers_cfg.enable_mac;
+  du_hi_cfg.metrics.enable_rlc      = du_high_unit_cfg.metrics.layers_cfg.enable_rlc;
+  du_hi_cfg.metrics.enable_sched    = du_high_unit_cfg.metrics.layers_cfg.enable_scheduler;
+  du_hi_cfg.metrics.enable_sched_ue = du_high_unit_cfg.metrics.layers_cfg.enable_scheduler_ue;
+  du_hi_cfg.metrics.enable_du_proc  = du_high_unit_cfg.metrics.layers_cfg.enable_du_proc;
+  du_hi_cfg.metrics.period          = std::chrono::milliseconds{du_high_unit_cfg.metrics.du_report_period};
 
   // Validates the derived parameters.
   du_hi_cfg.ran.srbs                  = generate_du_srb_config(du_high_unit_cfg);
@@ -1222,6 +1305,9 @@ void ocudu::generate_du_high_config(odu::du_high_configuration& du_hi_cfg, const
   du_hi_cfg.ran.mac_cfg               = generate_mac_expert_config(du_high_unit_cfg);
   du_hi_cfg.ran.mac_cfg.initial_crnti = to_rnti(0x4601);
   du_hi_cfg.ran.sched_cfg             = generate_scheduler_expert_config(du_high_unit_cfg);
+
+  // Configure test mode
+  du_hi_cfg.test_cfg = generate_test_mode_config(du_high_unit_cfg);
 }
 
 void ocudu::fill_du_high_worker_manager_config(worker_manager_config&     config,

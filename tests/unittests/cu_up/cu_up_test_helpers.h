@@ -121,6 +121,8 @@ public:
 
   [[nodiscard]] bool release_teid(gtpu_teid_t teid) override { return true; }
 
+  bool is_teid_lingering(gtpu_teid_t teid) override { return true; }
+
   [[nodiscard]] bool full() override { return true; }
 
   uint32_t get_max_nof_teids() override { return UINT32_MAX; }
@@ -310,6 +312,8 @@ class dummy_cu_up_manager_pdcp_interface final : public ocuup::cu_up_manager_pdc
 public:
   void handle_pdcp_protocol_failure(cu_up_ue_index_t ue_index) override {}
 
+  void handle_pdcp_integrity_failure(cu_up_ue_index_t ue_index) override {}
+
   void handle_pdcp_max_count_reached(cu_up_ue_index_t ue_index) override {}
 
   void handle_pdcp_resume_required(cu_up_ue_index_t ue_index) override {}
@@ -318,13 +322,12 @@ public:
 class dummy_e1ap final : public ocuup::e1ap_interface
 {
 public:
-  explicit dummy_e1ap()  = default;
+  explicit dummy_e1ap(cu_up_e1_index_t e1_index_) : e1_index(e1_index_) {}
   ~dummy_e1ap() override = default;
   void
   handle_bearer_context_inactivity_notification(const ocuup::e1ap_bearer_context_inactivity_notification& msg) override
   {
   }
-  void handle_connection_loss() override {}
 
   bool connect_to_cu_cp() override { return true; }
 
@@ -335,6 +338,8 @@ public:
 
   async_task<void> handle_cu_up_e1ap_release_request() override { return {}; }
 
+  cu_up_e1_index_t get_e1_index() const override { return e1_index; }
+
   size_t get_nof_ues() const override { return 0; }
 
   void handle_message(const e1ap_message& msg) override {}
@@ -342,6 +347,8 @@ public:
   void handle_bearer_context_release_request_required(cu_up_ue_index_t ue_index) override {}
 
   void handle_dl_data_notification_required(cu_up_ue_index_t ue_index) override {}
+
+  cu_up_e1_index_t e1_index;
 };
 
 inline e1ap_message generate_bearer_context_setup_request(unsigned cu_cp_ue_e1ap_id)

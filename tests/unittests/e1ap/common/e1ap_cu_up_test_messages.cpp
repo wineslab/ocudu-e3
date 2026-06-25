@@ -157,7 +157,8 @@ e1ap_message ocudu::ocuup::generate_bearer_context_modification_request(unsigned
   bearer_context_modification_request.pdu.set_init_msg();
   bearer_context_modification_request.pdu.init_msg().load_info_obj(ASN1_E1AP_ID_BEARER_CONTEXT_MOD);
   auto& bearer_context_mod_req = bearer_context_modification_request.pdu.init_msg().value.bearer_context_mod_request();
-  bearer_context_mod_req->gnb_cu_cp_ue_e1ap_id = cu_cp_ue_e1ap_id;
+  bearer_context_mod_req->gnb_cu_cp_ue_e1ap_id                   = cu_cp_ue_e1ap_id;
+  bearer_context_mod_req->sys_bearer_context_mod_request_present = true;
   bearer_context_mod_req->sys_bearer_context_mod_request.set_ng_ran_bearer_context_mod_request();
 
   auto& ng_ran_bearer_context_mod_req =
@@ -185,6 +186,37 @@ e1ap_message ocudu::ocuup::generate_bearer_context_modification_request(unsigned
   ng_ran_bearer_context_mod_req.pdu_session_res_to_modify_list.push_back(pdu_session_res_to_setup_modify_item);
 
   return bearer_context_modification_request;
+}
+
+e1ap_message ocudu::ocuup::generate_bearer_context_modification_request_with_ng_ul_tnl(unsigned    cu_cp_ue_e1ap_id,
+                                                                                       uint32_t    upf_teid,
+                                                                                       const char* upf_addr)
+{
+  e1ap_message msg = {};
+  msg.pdu.set_init_msg();
+  msg.pdu.init_msg().load_info_obj(ASN1_E1AP_ID_BEARER_CONTEXT_MOD);
+
+  auto& req                                   = msg.pdu.init_msg().value.bearer_context_mod_request();
+  req->gnb_cu_cp_ue_e1ap_id                   = cu_cp_ue_e1ap_id;
+  req->sys_bearer_context_mod_request_present = true;
+  req->sys_bearer_context_mod_request.set_ng_ran_bearer_context_mod_request();
+
+  auto& ng_ran = req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request();
+  ng_ran.pdu_session_res_to_modify_list_present = true;
+
+  asn1::e1ap::pdu_session_res_to_modify_item_s item = {};
+  item.pdu_session_id                               = 1;
+  item.ng_ul_up_tnl_info_present                    = true;
+  item.ng_ul_up_tnl_info.set_gtp_tunnel();
+  auto& gtp = item.ng_ul_up_tnl_info.gtp_tunnel();
+  gtp.gtp_teid.from_number(upf_teid);
+  // Encode the IPv4 address as a 32-bit big-endian bitstring.
+  transport_layer_address addr = transport_layer_address::create_from_string(upf_addr);
+  tla_to_asn1_bitstring(gtp.transport_layer_address, addr);
+
+  ng_ran.pdu_session_res_to_modify_list.push_back(item);
+
+  return msg;
 }
 
 e1ap_message ocudu::ocuup::generate_invalid_bearer_context_modification_request(unsigned cu_cp_ue_e1ap_id,
@@ -220,7 +252,8 @@ e1ap_message ocudu::ocuup::generate_bearer_context_release_command(unsigned cu_c
   return bearer_context_release_command;
 }
 
-e1ap_message ocudu::ocuup::generate_e1_reset(std::vector<std::pair<gnb_cu_cp_ue_e1ap_id_t, gnb_cu_up_ue_e1ap_id_t>> ues)
+e1ap_message
+ocudu::ocuup::generate_e1_reset(const std::vector<std::pair<gnb_cu_cp_ue_e1ap_id_t, gnb_cu_up_ue_e1ap_id_t>>& ues)
 {
   e1ap_message msg = {};
 
@@ -232,7 +265,7 @@ e1ap_message ocudu::ocuup::generate_e1_reset(std::vector<std::pair<gnb_cu_cp_ue_
     e1_reset->reset_type.set_e1_interface();
   } else {
     ue_associated_lc_e1_conn_list_res_l& reset_part_of_e1_interface = e1_reset->reset_type.set_part_of_e1_interface();
-    for (auto ue_ids : ues) {
+    for (const auto& ue_ids : ues) {
       asn1::protocol_ie_single_container_s<asn1::e1ap::ue_associated_lc_e1_conn_item_res_o> item_container;
       asn1::e1ap::ue_associated_lc_e1_conn_item_s& conn_item = item_container->ue_associated_lc_e1_conn_item();
 

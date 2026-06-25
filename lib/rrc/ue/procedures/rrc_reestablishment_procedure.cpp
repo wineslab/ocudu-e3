@@ -7,7 +7,7 @@
 #include "ue/rrc_ue_helpers.h"
 #include "ocudu/asn1/rrc_nr/dl_dcch_msg.h"
 #include "ocudu/asn1/rrc_nr/nr_ue_variables.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/security/integrity.h"
 
 using namespace ocudu;
@@ -144,7 +144,7 @@ async_task<void> rrc_reestablishment_procedure::handle_rrc_reestablishment_fallb
                                                  logger,
                                                  true));
 
-    if (old_ue_reest_context.ue_index != ue_index_t::invalid and !old_ue_reest_context.old_ue_fully_attached) {
+    if (old_ue_reest_context.ue_index != cu_cp_ue_index_t::invalid and !old_ue_reest_context.old_ue_fully_attached) {
       // The UE exists but still has not established an SRB2 and DRB. Request the release of the old UE.
       logger.log_debug("old_ue={} was not fully attached yet. Requesting UE context release",
                        old_ue_reest_context.ue_index);
@@ -177,7 +177,7 @@ bool rrc_reestablishment_procedure::is_reestablishment_accepted()
   }
 
   // Check if an old UE context with matching C-RNTI, PCI exists.
-  if (old_ue_reest_context.ue_index == ue_index_t::invalid) {
+  if (old_ue_reest_context.ue_index == cu_cp_ue_index_t::invalid) {
     log_rejected_reestablishment("Old UE context not found");
     return false;
   }
@@ -271,7 +271,7 @@ void rrc_reestablishment_procedure::create_srb1()
   srb_notifier.create_srb(srb1_msg);
 
   // Activate SRB1 PDCP security.
-  rrc_ue_reest_notifier.on_new_as_security_context();
+  rrc_ue_reest_notifier.on_new_as_security_context(/* security_mode_active */ true);
 }
 
 void rrc_reestablishment_procedure::send_rrc_reestablishment()

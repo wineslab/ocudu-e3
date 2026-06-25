@@ -197,8 +197,10 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
         "Scheduler cell pci={} metrics:"
         " total_dl_brate={}bps total_ul_brate={}bps nof_prbs={} nof_dl_slots={} nof_ul_slots={} nof_prach_preambles={} "
         "error_indications={} pdsch_rbs_per_slot={} pusch_rbs_per_slot={} pdschs_per_slot={:.3} puschs_per_slot={:.3} "
-        "failed_pdcch={} failed_uci={} nof_ues={} mean_latency={}usec max_latency={}usec max_latency_slot={} "
-        "latency_hist=[{}] msg3_ok={} msg3_nok={} late_dl_harqs={} late_ul_harqs={} pucch_tot_rb_usage_avg={:.3}",
+        "failed_dl_pdcch={} failed_common_dl_pdcch={} failed_ul_pdcch={} failed_common_ul_pdcch={} failed_uci={} "
+        "nof_ues={} mean_latency={}usec max_latency={}usec max_latency_slot={} "
+        "latency_hist=[{}] msg3_ok={} msg3_nok={} conres_timer_expired={} late_dl_harqs={} late_ul_harqs={} "
+        "pucch_tot_rb_usage_avg={:.3}",
         cell.pci,
         float_to_eng_string(sum_dl_bitrate_kbps * 1e3, 2, false),
         float_to_eng_string(sum_ul_bitrate_kbps * 1e3, 2, false),
@@ -211,7 +213,10 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
         cell.nof_ul_slots > 0 ? sum_pusch_rbs / cell.nof_ul_slots : 0,
         cell.nof_dl_slots > 0 ? cell.dl_grants_count / (float)cell.nof_dl_slots : 0,
         cell.nof_ul_slots > 0 ? cell.ul_grants_count / (float)cell.nof_ul_slots : 0,
-        cell.nof_failed_pdcch_allocs,
+        cell.failed_dl_pdcch,
+        cell.failed_common_dl_pdcch,
+        cell.failed_ul_pdcch,
+        cell.failed_common_ul_pdcch,
         cell.nof_failed_uci_allocs,
         cell.ue_metrics.size(),
         cell.average_decision_latency.count(),
@@ -220,6 +225,7 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
         fmt::join(cell.latency_histogram.begin(), cell.latency_histogram.end(), ", "),
         cell.nof_msg3_ok,
         cell.nof_msg3_nok,
+        cell.nof_conres_timer_expired,
         cell.nof_failed_pdsch_allocs_late_harqs,
         cell.nof_failed_pusch_allocs_late_harqs,
         cell.pucch_tot_rb_usage_avg);
@@ -381,6 +387,12 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
       fmt::format_to(out_it, " max_pucch_harq_delay={:.3}", format_unit_or(ue.max_pucch_harq_delay_ms, "ms", "n/a"));
       fmt::format_to(out_it, " avg_sr_to_pusch_delay={:.3}", format_unit_or(ue.avg_sr_to_pusch_delay_ms, "ms", "n/a"));
       fmt::format_to(out_it, " max_sr_to_pusch_delay={:.3}", format_unit_or(ue.max_sr_to_pusch_delay_ms, "ms", "n/a"));
+      if (ue.max_dl_lcid0_flush_delay_ms.value_or(0) > 0) {
+        fmt::format_to(out_it, " max_dl_lcid0_flush_delay={:.3}ms", *ue.max_dl_lcid0_flush_delay_ms);
+      }
+      if (ue.max_dl_lcid1_flush_delay_ms.value_or(0) > 0) {
+        fmt::format_to(out_it, " max_dl_lcid1_flush_delay={:.3}ms", *ue.max_dl_lcid1_flush_delay_ms);
+      }
 
       log_chan("{}", to_c_str(buffer));
       buffer.clear();

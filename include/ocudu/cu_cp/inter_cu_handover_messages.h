@@ -4,11 +4,15 @@
 
 #pragma once
 
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/adt/slotted_vector.h"
 #include "ocudu/ngap/ngap_types.h"
+#include "ocudu/pdcp/pdcp_config.h"
 #include "ocudu/ran/cause/ngap_cause.h"
 #include "ocudu/ran/cause/xnap_cause.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/pdcp/pdcp_sn_size.h"
+#include "ocudu/ran/rb_id.h"
 #include "ocudu/ran/up_transport_layer_info.h"
 #include "ocudu/security/security.h"
 
@@ -68,14 +72,14 @@ struct cu_cp_pdu_session_with_cause_item {
 };
 
 struct cu_cp_handover_request_ack {
-  ue_index_t                                       ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                                 ue_index = cu_cp_ue_index_t::invalid;
   std::vector<cu_cp_pdu_session_res_admitted_item> pdu_session_res_admitted_list;
   std::vector<cu_cp_pdu_session_with_cause_item>   pdu_session_failed_to_setup_list;
   byte_buffer                                      rrc_handover_command;
 };
 
 struct cu_cp_handover_request_failure {
-  ue_index_t                               ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                         ue_index = cu_cp_ue_index_t::invalid;
   std::variant<ngap_cause_t, xnap_cause_t> cause;
 };
 
@@ -99,7 +103,7 @@ struct cu_cp_drbs_subject_to_status_transfer_item {
 };
 
 struct cu_cp_status_transfer {
-  ue_index_t                                                              ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                                                        ue_index = cu_cp_ue_index_t::invalid;
   slotted_id_vector<drb_id_t, cu_cp_drbs_subject_to_status_transfer_item> drbs_subject_to_status_transfer_list;
 };
 
@@ -117,7 +121,7 @@ struct cu_cp_pdu_session_res_to_be_switched_dl_item {
 };
 
 struct cu_cp_path_switch_request {
-  ue_index_t                                                ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                                          ue_index = cu_cp_ue_index_t::invalid;
   unsigned                                                  source_amf_ue_ngap_id;
   cu_cp_user_location_info_nr                               user_location_info;
   security::supported_algorithms                            supported_enc_algos;
@@ -140,7 +144,7 @@ struct cu_cp_pdu_session_res_released_item {
 };
 
 struct cu_cp_path_switch_request_ack {
-  ue_index_t                                                 ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                                           ue_index = cu_cp_ue_index_t::invalid;
   security::security_context                                 security_context;
   std::vector<cu_cp_pdu_session_res_switched_item>           pdu_session_res_switched_list;
   std::vector<cu_cp_pdu_session_res_released_item>           pdu_session_res_released_list;
@@ -150,7 +154,7 @@ struct cu_cp_path_switch_request_ack {
 };
 
 struct cu_cp_path_switch_request_failure {
-  ue_index_t                                       ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                                 ue_index = cu_cp_ue_index_t::invalid;
   std::vector<cu_cp_pdu_session_res_released_item> pdu_session_res_released_list;
 };
 

@@ -6,6 +6,7 @@
 
 #include "lib/du/du_high/du_manager/du_cell_manager.h"
 #include "lib/du/du_high/du_manager/ran_resource_management/du_ran_resource_manager.h"
+#include "lib/gtpu/gtpu_teid_pool_impl.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
 #include "ocudu/gtpu/gtpu_teid_pool.h"
 #include "ocudu/mac/mac_cell_manager.h"
@@ -33,6 +34,8 @@ public:
   }
 
   [[nodiscard]] bool release_teid(gtpu_teid_t teid) override { return true; }
+
+  bool is_teid_lingering(gtpu_teid_t teid) override { return false; }
 
   [[nodiscard]] bool full() override { return false; }
 
@@ -387,6 +390,8 @@ public:
 
   expected<ue_ran_resource_configurator, std::string>
   create_ue_resource_configurator(du_ue_index_t ue_index, du_cell_index_t pcell_index, bool has_tc_rnti) override;
+
+  unsigned get_max_nof_setup_ues(du_cell_index_t cell_index) const override { return MAX_NOF_DU_UES_PER_CELL; }
 };
 
 f1ap_ue_context_update_request create_f1ap_ue_context_update_request(du_ue_index_t                   ue_idx,
@@ -399,18 +404,19 @@ class du_manager_test_bench
 public:
   du_manager_test_bench(span<const du_cell_config> cells);
 
-  std::vector<du_cell_config>            du_cells;
-  timer_manager                          timers;
-  manual_task_worker                     worker;
-  task_executor&                         du_mng_exec;
-  dummy_ue_executor_mapper               ue_exec_mapper;
-  dummy_cell_executor_mapper             cell_exec_mapper;
-  f1ap_test_dummy                        f1ap;
-  f1u_gateway_dummy                      f1u_gw;
-  mac_test_dummy                         mac;
-  null_rlc_pcap                          rlc_pcap;
-  du_manager_params                      params;
-  du_cell_manager                        cell_mng;
+  std::vector<du_cell_config> du_cells;
+  timer_manager               timers;
+  manual_task_worker          worker;
+  task_executor&              du_mng_exec;
+  dummy_ue_executor_mapper    ue_exec_mapper;
+  dummy_cell_executor_mapper  cell_exec_mapper;
+  f1ap_test_dummy             f1ap;
+  gtpu_teid_pool_impl f1u_teid_allocator{MAX_NOF_DU_UES * MAX_NOF_DRBS, GTPU_DEFAULT_TEID_RELEASE_LINGER_TIME, timers};
+  f1u_gateway_dummy   f1u_gw;
+  mac_test_dummy      mac;
+  null_rlc_pcap       rlc_pcap;
+  du_manager_params   params;
+  du_cell_manager     cell_mng;
   dummy_ue_resource_configurator_factory cell_res_alloc;
   ocudulog::basic_logger&                logger;
 };

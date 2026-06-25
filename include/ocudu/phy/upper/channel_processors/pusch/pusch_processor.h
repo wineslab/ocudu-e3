@@ -7,8 +7,10 @@
 #include "ocudu/adt/expected.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/phy/antenna_ports.h"
+#include "ocudu/phy/support/mask_types.h"
 #include "ocudu/phy/support/rb_allocation.h"
-#include "ocudu/phy/upper/dmrs_mapping.h"
+#include "ocudu/ran/cyclic_prefix.h"
+#include "ocudu/ran/dmrs/dmrs.h"
 #include "ocudu/ran/pusch/pusch_context.h"
 #include "ocudu/ran/sch/ldpc_base_graph.h"
 #include "ocudu/ran/sch/sch_mcs.h"
@@ -66,7 +68,7 @@ public:
   /// Collects the DM-RS parameters.
   struct dmrs_configuration {
     /// Indicates the DM-RS type.
-    dmrs_type dmrs;
+    dmrs_config_type dmrs;
     /// \brief Parameter \f$N^{n_{SCID}}_{ID}\f$ TS38.211 Section 6.4.1.1.1.
     ///
     /// It is equal to:
@@ -147,6 +149,16 @@ public:
     /// Sets the direct current position relative to Point A.
     /// \remark An assertion is triggered if the DC position is not within the resource grid.
     std::optional<unsigned> dc_position;
+    /// \brief Random Access Preamble Index (RAPID) associated with msgA on PUSCH (Release 16). Possible values
+    /// are {0, ..., 63}.
+    ///
+    /// During 2-step RACH, the PUSCH carrying msgA is alternatively scrambled using an initialization value that
+    /// depends on the sequence index of the detected RACH preamble.
+    ///
+    /// The presence of this parameter indicates the PUSCH is a msgA and the scrambling sequence is initialized as:
+    /// \f$c_{init} = n_{RNTI} \cdot 2^{16} + n_{RAPID} \cdot 2^{10} + n_{ID}\f$
+    /// as specified in TS 38.211, Section 6.3.1.1.
+    std::optional<unsigned> n_rapid;
   };
 
   /// \brief Channel size as seen by the PUSCH channel estimator.

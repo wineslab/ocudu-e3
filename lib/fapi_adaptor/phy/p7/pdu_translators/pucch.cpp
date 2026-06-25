@@ -102,11 +102,10 @@ static void fill_format2_parameters(uplink_pdu_slot_repository::pucch_pdu& phy_p
   format2.cp           = fapi_pdu.cp;
   format2.bwp_size_rb  = fapi_pdu.bwp.length();
   format2.bwp_start_rb = fapi_pdu.bwp.start();
-  format2.starting_prb = fapi_pdu.prbs.start();
+  format2.prbs         = fapi_pdu.prbs;
   if (fapi_pdu.second_hop_prb.has_value()) {
     format2.second_hop_prb.emplace(*fapi_pdu.second_hop_prb);
   }
-  format2.nof_prb            = fapi_pdu.prbs.length();
   format2.start_symbol_index = fapi_pdu.symbols.start();
   format2.nof_symbols        = fapi_pdu.symbols.length();
 
@@ -144,11 +143,10 @@ static void fill_format3_parameters(uplink_pdu_slot_repository::pucch_pdu& phy_p
   format3.cp           = fapi_pdu.cp;
   format3.bwp_size_rb  = fapi_pdu.bwp.length();
   format3.bwp_start_rb = fapi_pdu.bwp.start();
-  format3.starting_prb = fapi_pdu.prbs.start();
+  format3.prbs         = fapi_pdu.prbs;
   if (fapi_pdu.second_hop_prb.has_value()) {
     format3.second_hop_prb.emplace(*fapi_pdu.second_hop_prb);
   }
-  format3.nof_prb            = fapi_pdu.prbs.length();
   format3.start_symbol_index = fapi_pdu.symbols.start();
   format3.nof_symbols        = fapi_pdu.symbols.length();
 

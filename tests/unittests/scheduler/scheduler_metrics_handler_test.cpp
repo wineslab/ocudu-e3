@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/config/cell_configuration.h"
-#include "lib/scheduler/logging/scheduler_metrics_handler.h"
+#include "lib/scheduler/logging/cell_metrics_handler.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/scheduler/test_utils/config_generators.h"
@@ -86,7 +86,7 @@ protected:
 
   slot_point_extended next_sl_tx{
       subcarrier_spacing::kHz15,
-      test_rng::uniform_int<unsigned>(0, NOF_HYPER_SFNS* NOF_SFNS* NOF_SUBFRAMES_PER_FRAME - 1)};
+      test_rng::uniform_int<unsigned>(0, NOF_HYPER_SFNS * NOF_SFNS * NOF_SUBFRAMES_PER_FRAME - 1)};
   unsigned slot_count = 0;
 };
 
@@ -108,6 +108,29 @@ TEST_F(scheduler_metrics_handler_tester, metrics_sent_with_defined_periodicity)
 
     ASSERT_EQ(metrics_notif.last_report.ue_metrics[0].rnti, to_rnti(0x4601));
   }
+}
+
+TEST_F(scheduler_metrics_handler_tester, when_ue_metrics_disabled_then_only_cell_metrics_are_reported)
+{
+  test_scheduler_cell_metrics_notifier cell_only_notif;
+  cell_only_notif.period_slots = report_period.count() * get_nof_slots_per_subframe(cell_cfg.scs_common());
+  cell_metrics_handler cell_only_metrics(
+      cell_cfg, sched_cell_configuration_request_message::metrics_config{&cell_only_notif, 64, false});
+  cell_only_metrics.handle_ue_creation(test_ue_index, to_rnti(0x4601), pci_t{0});
+
+  sched_result sched_res;
+  sched_res.dl.nof_dl_symbols = 14;
+  sched_res.ul.nof_ul_symbols = 14;
+
+  // Drive enough slots to span at least two report periods.
+  slot_point_extended sl = next_sl_tx;
+  for (unsigned i = 0, e = 2 * cell_only_notif.period_slots; i != e; ++i) {
+    cell_only_metrics.push_result(sl, sched_res, std::chrono::microseconds{0});
+    ++sl;
+  }
+
+  ASSERT_GT(cell_only_notif.last_report.nof_slots, 0) << "Cell metrics must still be reported";
+  ASSERT_TRUE(cell_only_notif.last_report.ue_metrics.empty()) << "Per-UE metrics must be suppressed";
 }
 
 TEST_F(scheduler_metrics_handler_tester, when_no_events_took_place_then_metrics_are_zero)
@@ -303,6 +326,46 @@ TEST_F(scheduler_metrics_handler_tester, compute_latency_metric)
   }
 }
 
+TEST_F(scheduler_metrics_handler_tester, when_ue_is_removed_mid_period_then_its_last_metrics_are_still_reported)
+{
+  unsigned nof_acks  = test_rng::uniform_int<unsigned>(1, 100);
+  unsigned nof_nacks = test_rng::uniform_int<unsigned>(1, 100);
+
+  ul_crc_pdu_indication crc_pdu;
+  crc_pdu.rnti     = to_rnti(0x4601);
+  crc_pdu.ue_index = test_ue_index;
+
+  crc_pdu.tb_crc_success = true;
+  for (unsigned i = 0; i != nof_acks; ++i) {
+    metrics.handle_crc_indication(next_sl_tx.without_hyper_sfn() - 1, crc_pdu, units::bytes{1});
+  }
+  crc_pdu.tb_crc_success = false;
+  for (unsigned i = 0; i != nof_nacks; ++i) {
+    metrics.handle_crc_indication(next_sl_tx.without_hyper_sfn() - 1, crc_pdu, units::bytes{1});
+  }
+
+  // Remove the UE before the periodic report is generated.
+  metrics.handle_ue_deletion(test_ue_index);
+
+  // The next report must still carry the metrics accumulated by the removed UE.
+  this->get_next_metric();
+  ASSERT_EQ(metrics_notif.last_report.ue_metrics.size(), 1);
+  scheduler_ue_metrics ue_metrics = metrics_notif.last_report.ue_metrics[0];
+  ASSERT_EQ(ue_metrics.rnti, to_rnti(0x4601));
+  ASSERT_EQ(ue_metrics.ul_nof_ok, nof_acks);
+  ASSERT_EQ(ue_metrics.ul_nof_nok, nof_nacks);
+
+  // The removed UE must not be reported again on subsequent reports.
+  metrics_notif.last_report = {};
+  sched_result sched_res;
+  sched_res.dl.nof_dl_symbols = 14;
+  sched_res.ul.nof_ul_symbols = 14;
+  for (unsigned i = 0; i != report_period.count() * next_sl_tx.nof_slots_per_subframe(); ++i) {
+    run_slot(sched_res);
+  }
+  ASSERT_TRUE(metrics_notif.last_report.ue_metrics.empty());
+}
+
 TEST_F(scheduler_metrics_handler_tester, compute_error_indications)
 {
   metrics.handle_error_indication();
@@ -311,4 +374,38 @@ TEST_F(scheduler_metrics_handler_tester, compute_error_indications)
   ASSERT_EQ(metrics_notif.last_report.nof_error_indications, 2);
   this->get_next_metric();
   ASSERT_EQ(metrics_notif.last_report.nof_error_indications, 0);
+}
+
+TEST_F(scheduler_metrics_handler_tester, failed_pdcch_allocs_are_accumulated_per_dl_ul_and_common)
+{
+  // Discard first report, as it may have not enough slots.
+  get_next_metric();
+  metrics_notif.last_report = {};
+
+  // Per-slot failures: two DL (one of which in a common SearchSpace) and one common UL.
+  sched_result sched_res;
+  sched_res.dl.nof_dl_symbols               = 14;
+  sched_res.ul.nof_ul_symbols               = 14;
+  sched_res.failed_attempts.dl_pdcch        = 2;
+  sched_res.failed_attempts.common_dl_pdcch = 1;
+  sched_res.failed_attempts.ul_pdcch        = 1;
+  sched_res.failed_attempts.common_ul_pdcch = 1;
+
+  for (unsigned i = 0; i != report_period.count() and metrics_notif.last_report.nof_slots == 0; ++i) {
+    run_slot(sched_res);
+  }
+
+  const scheduler_cell_metrics& report = metrics_notif.last_report;
+  ASSERT_GT(report.nof_slots, 0);
+  ASSERT_EQ(report.failed_dl_pdcch, report.nof_slots * 2);
+  ASSERT_EQ(report.failed_common_dl_pdcch, report.nof_slots * 1);
+  ASSERT_EQ(report.failed_ul_pdcch, report.nof_slots * 1);
+  ASSERT_EQ(report.failed_common_ul_pdcch, report.nof_slots * 1);
+
+  // Counters reset on the next report.
+  this->get_next_metric();
+  ASSERT_EQ(metrics_notif.last_report.failed_dl_pdcch, 0);
+  ASSERT_EQ(metrics_notif.last_report.failed_common_dl_pdcch, 0);
+  ASSERT_EQ(metrics_notif.last_report.failed_ul_pdcch, 0);
+  ASSERT_EQ(metrics_notif.last_report.failed_common_ul_pdcch, 0);
 }

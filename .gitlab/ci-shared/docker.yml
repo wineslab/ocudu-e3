@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 variables:
-  BUILDKIT_CLI_VERSION: "0.27.1"
+  BUILDKIT_CLI_VERSION: "0.28.0"
+  RH_TOOL_CLI_VERSION: "1.0.3"
 
 .docker-builder:
   tags:
@@ -15,6 +16,7 @@ variables:
     VERSION: ""
     BUILD_ARGS: "" # ; separated
     BUILD_SECRETS: "" # ; separated, format id=secret_name,src=secret_file
+    DOCKER_TARGET: "" # Dockerfile stage to build; empty means last stage
     MODE: "build"
     MULTI_ARCH_BUILD: ""
     PLATFORM_OS: "linux"
@@ -22,12 +24,17 @@ variables:
     CACHE_MODE: "min" # min or max
     OVERWRITE: "false"
     ATTESTATION_FILE: ""
+    GRYPE_SKIP: "false"
     COSIGN_YES: "true" # Used by Cosign to skip confirmation prompts for non-destructive operations
     REGISTRY_URI: ${CI_REGISTRY_IMAGE}
   id_tokens:
     SIGSTORE_ID_TOKEN: # Used by Cosign to get certificate from Fulcio
       aud: sigstore
   image: ${OCUDU_REGISTRY_URI}/buildkit-cli:$BUILDKIT_CLI_VERSION
+  artifacts:
+    paths:
+      - grype-report.json
+    when: on_failure
   script:
     - |
       check_if_image_exists() {
@@ -89,6 +96,9 @@ variables:
 
     # Build & publish
     - |
+      TARGET_OPT=""
+      [ -n "${DOCKER_TARGET}" ] && TARGET_OPT="--opt target=${DOCKER_TARGET}"
+    - |
       sh -c "buildctl-daemonless.sh build \
         --progress=plain \
         --opt platform=${PLATFORM_OS}/${PLATFORM} \
@@ -96,31 +106,84 @@ variables:
         --local context="${CONTEXT}" \
         --local dockerfile=${DOCKERFILE} \
         ${BUILD_ARGS} \
+        ${TARGET_OPT} \
         --output ${OUTPUT}"
 
-    # Attestation
+    # Attestation functions
     - |
-      if [ ${MODE} = "publish" ]; then
-        IMAGE_DIGEST="${IMAGE_NAME_VERSION}@$(regctl image digest ${IMAGE_NAME_VERSION})"
-        echo "=== Signing image ==="
-        cosign sign ${IMAGE_DIGEST}
-        echo "=== Generating container SPDX ==="
+      generate_container_spdx() {
+        # Catalog OS packages only (no file metadata or executable classification).
+        # Post-process to strip file-level SPDX entries: without this the output
+        # exceeds 19MB (dpkg package lists inflate it) which breaks cosign attest
+        # because Rekor rejects entries that large.
+        #   awk:    removes FileName: element blocks (File sections from dpkg lists)
+        #   grep 1: removes evident-by RelationshipComment lines paired with file refs
+        #   grep 2: removes CONTAINS/OTHER Relationship lines pointing to SPDXRef-File-
+
         SYFT_REGISTRY_AUTH_USERNAME="${CI_REGISTRY_USER}" \
           SYFT_REGISTRY_AUTH_PASSWORD="${CI_REGISTRY_PASSWORD}" \
           SYFT_REGISTRY_AUTH_AUTHORITY="${CI_REGISTRY}" \
-          syft registry:${IMAGE_NAME_VERSION} -o spdx-json \
-          --select-catalogers "os" > container.spdx
+          syft registry:${IMAGE_NAME_VERSION} -o spdx \
+          --select-catalogers "os,-file-metadata-cataloger,-file-executable-cataloger" \
+          | awk '/^FileName:/{skip=1;next} /^$/{if(skip){skip=0;next}} !skip' \
+          | grep -v "^RelationshipComment: evident-by:" \
+          | grep -v "^Relationship:.*SPDXRef-File-" \
+          > container.spdx
+      }
+
+      attest_spdx() {
+        local predicate=$1
+        local base_url="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${NAME}/${VERSION}"
+
+        echo "Attesting ${predicate} ($(wc -c < ${predicate}) bytes)"
+        cosign attest --predicate "${predicate}" --type spdx ${IMAGE_DIGEST}
+
+        if [ -n "${COSIGN_PRIVATE_KEY_B64}" ]; then
+          echo "${COSIGN_PRIVATE_KEY_B64}" | base64 -d > /tmp/cosign.key
+
+          echo "Signing ${predicate} as detached blob signature"
+          cosign sign-blob --key /tmp/cosign.key \
+            --output-signature "${predicate}.sig" "${predicate}"
+
+          echo "Publishing ${predicate}, ${predicate}.sig and cosign.pub to package registry (${base_url})"
+          cosign public-key --key /tmp/cosign.key > cosign.pub
+          curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+            --upload-file "${predicate}" "${base_url}/${predicate}"
+          curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+            --upload-file "${predicate}.sig" "${base_url}/${predicate}.sig"
+          curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+            --upload-file cosign.pub "${base_url}/cosign.pub"
+        fi
+      }
+
+    # Attestation functions
+    - |
+      if [ ${MODE} = "publish" ]; then
+        IMAGE_DIGEST="${IMAGE_NAME_VERSION}@$(regctl image digest ${IMAGE_NAME_VERSION})"
+
+        echo "=== Signing image ==="
+        cosign sign ${IMAGE_DIGEST}
+
+        echo "=== Generating container SPDX ==="
+        generate_container_spdx
         if [ -s container.spdx ]; then
           echo "=== Attesting container SPDX ==="
-          # COSIGN_TLOG_UPLOAD=false: the SPDX payload could be too large for reliable Rekor upload
-          COSIGN_TLOG_UPLOAD=false cosign attest --predicate container.spdx --type spdx ${IMAGE_DIGEST}
+          attest_spdx container.spdx
         else
           echo "WARNING: syft produced an empty container.spdx, skipping container attestation"
         fi
+
         if [ -n "$ATTESTATION_FILE" ]; then
-          echo "=== Attesting $ATTESTATION_FILE ==="
+          echo "=== Attesting ${ATTESTATION_FILE} ==="
           regctl image get-file ${IMAGE_NAME_VERSION} ${ATTESTATION_FILE} > build.spdx
-          cosign attest --predicate build.spdx --type spdx ${IMAGE_DIGEST}
+          attest_spdx build.spdx
+        fi
+
+        if [ "${GRYPE_SKIP}" != "true" ]; then
+          echo "=== Running grype CVE scan on ${IMAGE_NAME_VERSION} ==="
+          grype registry:${IMAGE_NAME_VERSION} --fail-on critical -o json > grype-report.json
+          echo "=== Attesting grype report ==="
+          cosign attest --predicate grype-report.json --type vuln ${IMAGE_DIGEST}
         fi
       fi
 
@@ -146,6 +209,25 @@ variables:
         --amend ${REGISTRY_URI}/${NAME}:${VERSION}-arm64
       docker manifest push ${REGISTRY_URI}/${NAME}:${VERSION}
       echo "Image ${REGISTRY_URI}/${NAME}:${VERSION} pushed"
+
+.docker copy:
+  image: ${OCUDU_REGISTRY_URI}/buildkit-cli:$BUILDKIT_CLI_VERSION
+  tags:
+    - ${OCUDU_RUNNER_TAG}-amd64
+  variables:
+    GIT_STRATEGY: none
+    SOURCE_IMAGE: ""
+    DESTINATION_IMAGE: ""
+  before_script:
+    - *docker_login
+  script:
+    - *docker_login # Setup duplicated on purpose so before_script can be overwritten
+    - |
+      [ -z "${SOURCE_IMAGE}" ] && echo "SOURCE_IMAGE is mandatory" && exit 1
+      [ -z "${DESTINATION_IMAGE}" ] && echo "DESTINATION_IMAGE is mandatory" && exit 1
+      regctl manifest get "${SOURCE_IMAGE}" >/dev/null
+      regctl image copy "${SOURCE_IMAGE}" "${DESTINATION_IMAGE}"
+      echo "Image ${DESTINATION_IMAGE} pushed"
 
 .check image exists for all supported ubuntu versions:
   image: ${OCUDU_REGISTRY_URI}/buildkit-cli:$BUILDKIT_CLI_VERSION

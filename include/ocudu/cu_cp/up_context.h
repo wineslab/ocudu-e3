@@ -5,8 +5,12 @@
 #pragma once
 
 #include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/qos/qos_flow_id.h"
+#include "ocudu/ran/qos/qos_parameters.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/ran/rlc_mode.h"
+#include "ocudu/ran/up_transport_layer_info.h"
 #include <map>
 
 namespace ocudu::ocucp {

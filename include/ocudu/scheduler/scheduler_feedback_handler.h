@@ -112,8 +112,10 @@ public:
 
   mac_harq_ack_report_status&       operator[](unsigned idx) { return to_span()[idx]; }
   const mac_harq_ack_report_status& operator[](unsigned idx) const { return to_span()[idx]; }
+
   operator span<mac_harq_ack_report_status>() { return to_span(); }
   operator span<const mac_harq_ack_report_status>() const { return to_span(); }
+
   size_t size() const { return to_span().size(); }
   bool   empty() const { return to_span().empty(); }
 
@@ -272,6 +274,9 @@ public:
   ///
   /// \param mac_ce DL MAC CE to be scheduled.
   virtual void handle_dl_mac_ce_indication(const dl_mac_ce_indication& mac_ce) = 0;
+
+  /// \brief Handle indication that C-RNTI CE was received for the provided UE.
+  virtual void handle_crnti_ce_received(du_ue_index_t ue_index) = 0;
 };
 
 } // namespace ocudu

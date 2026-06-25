@@ -14,7 +14,6 @@
 namespace ocudu {
 
 class sched_config_manager;
-class scheduler_metrics_handler;
 
 /// Event to create/reconfigure a UE in the scheduler.
 class ue_config_update_event
@@ -25,19 +24,21 @@ public:
                          sched_config_manager&             parent_,
                          std::unique_ptr<ue_configuration> next_cfg         = nullptr,
                          const std::optional<bool>&        set_fallback     = {},
-                         slot_point                        ul_ccch_slot_rx_ = slot_point(),
-                         bool                              reestablished_   = false);
+                         std::optional<slot_point>         ul_ccch_slot_rx_ = {},
+                         bool                              cfra_enabled     = false,
+                         sched_ue_config_request::causes   cause = sched_ue_config_request::causes::other_rrc_proc);
   ue_config_update_event(ue_config_update_event&&) noexcept            = default;
   ue_config_update_event& operator=(ue_config_update_event&&) noexcept = default;
   ~ue_config_update_event();
 
   bool valid() const { return next_ded_cfg != nullptr; }
 
-  du_ue_index_t           get_ue_index() const { return ue_index; }
-  const ue_configuration& next_config() const { return *next_ded_cfg; }
-  std::optional<bool>     get_fallback_command() const { return set_fallback_mode; }
-  slot_point              get_ul_ccch_slot_rx() const { return ul_ccch_slot_rx; }
-  bool                    is_reestablished() const { return reestablished; }
+  du_ue_index_t                   get_ue_index() const { return ue_index; }
+  const ue_configuration&         next_config() const { return *next_ded_cfg; }
+  std::optional<bool>             get_fallback_command() const { return set_fallback_mode; }
+  std::optional<slot_point>       get_ul_ccch_slot_rx() const { return ul_ccch_slot_rx; }
+  bool                            get_cfra_enabled() const { return cfra_enabled; }
+  sched_ue_config_request::causes get_cause() const { return cause; }
 
   void notify_completion();
 
@@ -47,8 +48,9 @@ private:
   std::unique_ptr<sched_config_manager, noop_operation> parent;
   std::unique_ptr<ue_configuration>                     next_ded_cfg;
   std::optional<bool>                                   set_fallback_mode;
-  slot_point                                            ul_ccch_slot_rx;
-  bool                                                  reestablished;
+  std::optional<slot_point>                             ul_ccch_slot_rx;
+  bool                                                  cfra_enabled = false;
+  sched_ue_config_request::causes                       cause;
 };
 
 /// Event to delete a UE in the scheduler.
@@ -103,12 +105,11 @@ public:
 ///
 /// In particular, this class is responsible for:
 /// - notifying back to the MAC when the configurations are complete,
-/// - adding/removing UE entries in the scheduler reported metrics,
 /// - validating the configuration requests provided by the MAC.
 class sched_config_manager
 {
 public:
-  sched_config_manager(const scheduler_config& sched_cfg_, scheduler_metrics_handler& metrics_handler_);
+  explicit sched_config_manager(const scheduler_config& sched_cfg_);
 
   const cell_configuration* add_cell(const sched_cell_configuration_request_message& msg);
 
@@ -154,20 +155,19 @@ private:
   }
   static du_cell_index_t unpack_pcell(uint32_t val) { return to_du_cell_index(val & (0xffffU)); }
 
-  void flush_ues_to_rem();
+  void flush_ues_to_rem(unsigned max_rem_ues);
 
   void handle_ue_config_complete(du_ue_index_t ue_index, std::unique_ptr<ue_configuration> next_cfg);
   void handle_ue_delete_complete(du_ue_index_t ue_index);
 
   const scheduler_expert_config expert_params;
-  scheduler_metrics_handler&    metrics_handler;
   sched_configuration_notifier& config_notifier;
   ocudulog::basic_logger&       logger;
 
-  std::array<std::unique_ptr<ue_configuration>, MAX_NOF_DU_UES> ue_cfg_list;
-
-  // Config Resources associated with this cell group.
+  // Config Resources associated with supported cell groups.
   slotted_vector<std::unique_ptr<du_cell_group_config_pool>> group_cfg_pool;
+
+  std::array<std::unique_ptr<ue_configuration>, MAX_NOF_DU_UES> ue_cfg_list;
 
   // List of common configs for the scheduler cells.
   cell_common_configuration_list added_cells;

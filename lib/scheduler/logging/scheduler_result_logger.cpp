@@ -25,9 +25,9 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
   std::optional<uint8_t> dai;
   std::optional<bool>    vrb_prb;
 
-  switch (dci.type) {
+  switch (dci.type()) {
     case dci_dl_rnti_config_type::c_rnti_f1_0: {
-      const auto& dci1_0 = dci.c_rnti_f1_0;
+      const auto& dci1_0 = dci.as_c_rnti_f1_0();
       h_id               = dci1_0.harq_process_number;
       ndi                = dci1_0.new_data_indicator;
       rv                 = dci1_0.redundancy_version;
@@ -36,7 +36,7 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
       tpc_cmd            = dci1_0.tpc_command;
     } break;
     case dci_dl_rnti_config_type::tc_rnti_f1_0: {
-      const auto& dci1_0 = dci.tc_rnti_f1_0;
+      const auto& dci1_0 = dci.as_tc_rnti_f1_0();
       h_id               = dci1_0.harq_process_number;
       ndi                = dci1_0.new_data_indicator;
       rv                 = dci1_0.redundancy_version;
@@ -44,7 +44,7 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
       pucch_res_id       = dci1_0.pucch_resource_indicator;
     } break;
     case dci_dl_rnti_config_type::c_rnti_f1_1: {
-      const auto& dci1_1 = dci.c_rnti_f1_1;
+      const auto& dci1_1 = dci.as_c_rnti_f1_1();
       h_id               = dci1_1.harq_process_number;
       ndi                = dci1_1.tb1_new_data_indicator;
       rv                 = dci1_1.tb1_redundancy_version;
@@ -52,8 +52,8 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
       pucch_res_id       = dci1_1.pucch_resource_indicator;
       tpc_cmd            = dci1_1.tpc_command;
       vrb_prb            = dci1_1.vrb_prb_mapping;
-      if (dci.c_rnti_f1_1.downlink_assignment_index.has_value()) {
-        dai = dci.c_rnti_f1_1.downlink_assignment_index;
+      if (dci.as_c_rnti_f1_1().downlink_assignment_index.has_value()) {
+        dai = dci.as_c_rnti_f1_1().downlink_assignment_index;
       }
     } break;
     default:
@@ -90,9 +90,9 @@ static auto make_ul_dci_log_entry(const dci_ul_info& dci)
   int8_t                 ant        = 1;
   std::optional<uint8_t> csi_request;
 
-  switch (dci.type) {
+  switch (dci.type()) {
     case dci_ul_rnti_config_type::c_rnti_f0_0: {
-      const auto& dci0_0 = dci.c_rnti_f0_0;
+      const auto& dci0_0 = dci.as_c_rnti_f0_0();
       h_id               = dci0_0.harq_process_number;
       ndi                = dci0_0.new_data_indicator;
       rv                 = dci0_0.redundancy_version;
@@ -100,7 +100,7 @@ static auto make_ul_dci_log_entry(const dci_ul_info& dci)
       tpc_cmd            = dci0_0.tpc_command;
     } break;
     case dci_ul_rnti_config_type::tc_rnti_f0_0: {
-      const auto& dci0_0 = dci.tc_rnti_f0_0;
+      const auto& dci0_0 = dci.as_tc_rnti_f0_0();
       rv                 = dci0_0.redundancy_version;
       mcs                = dci0_0.modulation_coding_scheme;
       h_id               = 0;
@@ -108,7 +108,7 @@ static auto make_ul_dci_log_entry(const dci_ul_info& dci)
       tpc_cmd            = dci0_0.tpc_command;
     } break;
     case dci_ul_rnti_config_type::c_rnti_f0_1: {
-      const auto& dci0_1 = dci.c_rnti_f0_1;
+      const auto& dci0_1 = dci.as_c_rnti_f0_1();
       h_id               = dci0_1.harq_process_number;
       ndi                = dci0_1.new_data_indicator;
       rv                 = dci0_1.redundancy_version;
@@ -138,7 +138,7 @@ static auto make_ul_dci_log_entry(const dci_ul_info& dci)
 static auto make_dl_pdcch_log_entry(const pdcch_dl_information& pdcch)
 {
   return make_formattable([rnti     = pdcch.ctx.rnti,
-                           dci_type = pdcch.dci.type,
+                           dci_type = pdcch.dci.type(),
                            cs_id    = pdcch.ctx.coreset_cfg->get_id(),
                            ss_id    = pdcch.ctx.context.ss_id,
                            cces     = pdcch.ctx.cces,
@@ -160,7 +160,7 @@ static auto make_dl_pdcch_log_entry(const pdcch_dl_information& pdcch)
 static auto make_ul_pdcch_log_entry(const pdcch_ul_information& pdcch)
 {
   return make_formattable([rnti     = pdcch.ctx.rnti,
-                           dci_type = pdcch.dci.type,
+                           dci_type = pdcch.dci.type(),
                            cid      = pdcch.ctx.coreset_cfg->get_id(),
                            ssid     = pdcch.ctx.context.ss_id,
                            cces     = pdcch.ctx.cces,
@@ -405,10 +405,16 @@ static auto make_sib_debug_log_entry(const sib_information& sib_info)
 static auto make_rar_debug_log_entry(const rar_information& rar_info)
 {
   auto make_rar_grant_debug_entry = [](const rar_ul_grant& grant) {
+    const auto* ts     = std::get_if<rar_ul_grant::two_step_info>(&grant.type);
+    const auto  result = ts != nullptr ? std::optional<bool>{ts->is_success} : std::nullopt;
     return make_formattable(
-        [tcrnti = grant.temp_crnti, rapid = grant.rapid, ta = grant.ta, td = grant.time_resource_assignment](
+        [tcrnti = grant.temp_crnti, rapid = grant.rapid, ta = grant.ta, td = grant.time_resource_assignment, result](
             auto& ctx) {
-          return fmt::format_to(ctx.out(), "tc-rnti={}: rapid={} ta={} time_res={}", tcrnti, rapid, ta, td);
+          fmt::format_to(ctx.out(), "tc-rnti={}: rapid={} ta={} time_res={}", tcrnti, rapid, ta, td);
+          if (result.has_value()) {
+            fmt::format_to(ctx.out(), " result={}", *result ? "successRAR" : "fallbackRAR");
+          }
+          return ctx.out();
         });
   };
 
@@ -449,8 +455,8 @@ static auto make_ue_dl_msg_debug_log_entry(const dl_msg_alloc& ue_grant)
                    ue_grant.context.nof_retxs,
                    ue_grant.context.k1);
     if (ue_grant.pdsch_cfg.precoding.has_value() and not ue_grant.pdsch_cfg.precoding.value().prg_infos.empty()) {
-      const auto& prg_type = ue_grant.pdsch_cfg.precoding->prg_infos[0].type;
-      fmt::format_to(ctx.out(), " ri={} {}", ue_grant.pdsch_cfg.nof_layers, csi_report_pmi{prg_type});
+      const auto& prg_type = ue_grant.pdsch_cfg.precoding->prg_infos[0];
+      fmt::format_to(ctx.out(), " ri={} {}", ue_grant.pdsch_cfg.nof_layers, precoding_matrix_indicator{prg_type});
     }
     if (ue_grant.pdsch_cfg.codewords[0].new_data) {
       fmt::format_to(ctx.out(), " dl_bo={}", ue_grant.context.buffer_occupancy);
@@ -535,70 +541,72 @@ static auto make_pusch_debug_log_entry(const ul_sched_info& ul_info)
 
 static auto make_pucch_debug_log_entry(const pucch_info& pucch)
 {
-  return make_formattable([pucch](auto& ctx) {
+  // Capture res by value and pre-compute grant_prbs() to avoid a dangling pointer: the pucch_resource
+  // objects live in cell config vectors that may be freed before the async logging thread formats this entry.
+  return make_formattable([pucch, res = *pucch.res, grant_prbs = pucch.grant_prbs()](auto& ctx) {
     switch (pucch.format()) {
       case pucch_format::FORMAT_0: {
-        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=0 prb={}", pucch.crnti, pucch.resources.prbs);
-        if (not pucch.resources.second_hop_prbs.empty()) {
-          format_to(ctx.out(), " second_prbs={}", pucch.resources.second_hop_prbs);
+        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=0 prb={}", pucch.crnti, grant_prbs);
+        if (res.second_hop_prb.has_value()) {
+          format_to(ctx.out(), " prb2={}", *res.second_hop_prb);
         }
         format_to(ctx.out(),
                   " symb={} uci: harq_bits={} sr={}",
-                  pucch.resources.symbols,
+                  res.syms,
                   pucch.uci_bits.harq_ack_nof_bits,
                   fmt::underlying(pucch.uci_bits.sr_bits));
       } break;
       case pucch_format::FORMAT_1: {
-        const auto& format_1 = std::get<pucch_format_1>(pucch.format_params);
-        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=1 prb={}", pucch.crnti, pucch.resources.prbs);
-        if (not pucch.resources.second_hop_prbs.empty()) {
-          format_to(ctx.out(), " second_prbs={}", pucch.resources.second_hop_prbs);
+        const auto& f1 = std::get<pucch_resource::f1_config>(res.format_params);
+        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=1 prb={}", pucch.crnti, grant_prbs);
+        if (res.second_hop_prb.has_value()) {
+          format_to(ctx.out(), " prb2={}", *res.second_hop_prb);
         }
         format_to(ctx.out(),
                   " symb={} cs={} occ={} uci: harq_bits={} sr={}",
-                  pucch.resources.symbols,
-                  format_1.initial_cyclic_shift,
-                  format_1.time_domain_occ,
+                  res.syms,
+                  f1.initial_cyclic_shift,
+                  f1.time_domain_occ,
                   pucch.uci_bits.harq_ack_nof_bits,
                   fmt::underlying(pucch.uci_bits.sr_bits));
 
       } break;
       case pucch_format::FORMAT_2: {
-        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=2 prb={}", pucch.crnti, pucch.resources.prbs);
-        if (not pucch.resources.second_hop_prbs.empty()) {
-          format_to(ctx.out(), " second_prbs={}", pucch.resources.second_hop_prbs);
+        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=2 prb={}", pucch.crnti, grant_prbs);
+        if (res.second_hop_prb.has_value()) {
+          format_to(ctx.out(), " prb2={}", *res.second_hop_prb);
         }
         format_to(ctx.out(),
                   " symb={} uci: harq_bits={} sr={} csi-1_bits={}",
-                  pucch.resources.symbols,
+                  res.syms,
                   pucch.uci_bits.harq_ack_nof_bits,
                   fmt::underlying(pucch.uci_bits.sr_bits),
                   pucch.uci_bits.csi_part1_nof_bits);
 
       } break;
       case pucch_format::FORMAT_3: {
-        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=3 prb={}", pucch.crnti, pucch.resources.prbs);
-        if (not pucch.resources.second_hop_prbs.empty()) {
-          format_to(ctx.out(), " second_prbs={}", pucch.resources.second_hop_prbs);
+        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=3 prb={}", pucch.crnti, grant_prbs);
+        if (res.second_hop_prb.has_value()) {
+          format_to(ctx.out(), " prb2={}", *res.second_hop_prb);
         }
         format_to(ctx.out(),
                   " symb={} uci: harq_bits={} sr={} csi-1_bits={}",
-                  pucch.resources.symbols,
+                  res.syms,
                   pucch.uci_bits.harq_ack_nof_bits,
                   fmt::underlying(pucch.uci_bits.sr_bits),
                   pucch.uci_bits.csi_part1_nof_bits);
       } break;
       case pucch_format::FORMAT_4: {
-        const auto& format_4 = std::get<pucch_format_4>(pucch.format_params);
-        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=4 prb={}", pucch.crnti, pucch.resources.prbs);
-        if (not pucch.resources.second_hop_prbs.empty()) {
-          format_to(ctx.out(), " second_prbs={}", pucch.resources.second_hop_prbs);
+        const auto& f4 = std::get<pucch_resource::f4_config>(res.format_params);
+        format_to(ctx.out(), "\n- PUCCH: c-rnti={} format=4 prb={}", pucch.crnti, grant_prbs);
+        if (res.second_hop_prb.has_value()) {
+          format_to(ctx.out(), " prb2={}", *res.second_hop_prb);
         }
         format_to(ctx.out(),
                   " symb={} occ={}/{} uci: harq_bits={} sr={} csi-1_bits={}",
-                  pucch.resources.symbols,
-                  format_4.orthog_seq_idx,
-                  fmt::underlying(format_4.n_sf_pucch_f4),
+                  res.syms,
+                  fmt::underlying(f4.occ_index),
+                  fmt::underlying(f4.occ_length),
                   pucch.uci_bits.harq_ack_nof_bits,
                   fmt::underlying(pucch.uci_bits.sr_bits),
                   pucch.uci_bits.csi_part1_nof_bits);
@@ -741,7 +749,8 @@ void scheduler_result_logger::log_debug(const sched_result& result, std::chrono:
       result.dl.ul_pdcchs.empty() and result.dl.paging_grants.empty() and result.dl.rar_grants.empty() and
       result.dl.ue_grants.empty() and result.ul.puschs.empty() and result.ul.pucchs.empty() and result.ul.srss.empty();
 
-  const bool failed_attempts = result.failed_attempts.pdcch + result.failed_attempts.uci > 0;
+  const bool failed_attempts =
+      result.failed_attempts.dl_pdcch + result.failed_attempts.ul_pdcch + result.failed_attempts.uci > 0;
   const bool slot_is_logged =
       (log_broadcast and not broadcast_is_empty) or not non_broadcast_is_empty or failed_attempts;
 
@@ -752,7 +761,7 @@ void scheduler_result_logger::log_debug(const sched_result& result, std::chrono:
     }
     const unsigned nof_puschs       = result.ul.puschs.size();
     const unsigned nof_pucchs       = result.ul.pucchs.size();
-    const unsigned nof_failed_pdcch = result.failed_attempts.pdcch;
+    const unsigned nof_failed_pdcch = result.failed_attempts.dl_pdcch + result.failed_attempts.ul_pdcch;
     const unsigned nof_failed_uci   = result.failed_attempts.uci;
     logger.debug("Slot decisions pci={} t={}us ({} PDSCH{}, {} PUSCH{}, {} PUCCH{}, {} attempted PDCCH{}, {} attempted "
                  "UCI{}):{}",
@@ -774,8 +783,9 @@ void scheduler_result_logger::log_debug(const sched_result& result, std::chrono:
 
 void scheduler_result_logger::log_info(const sched_result& result, std::chrono::microseconds decision_latency)
 {
-  const bool failed_attempts = result.failed_attempts.pdcch + result.failed_attempts.uci > 0;
-  bool       slot_is_logged  = (log_broadcast and not result.dl.bc.sibs.empty()) or not result.dl.rar_grants.empty() or
+  const bool failed_attempts =
+      result.failed_attempts.dl_pdcch + result.failed_attempts.ul_pdcch + result.failed_attempts.uci > 0;
+  bool slot_is_logged = (log_broadcast and not result.dl.bc.sibs.empty()) or not result.dl.rar_grants.empty() or
                         not result.dl.ue_grants.empty() or not result.ul.puschs.empty() or
                         not result.dl.paging_grants.empty() or failed_attempts;
 

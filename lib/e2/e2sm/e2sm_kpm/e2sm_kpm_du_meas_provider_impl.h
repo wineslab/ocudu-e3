@@ -67,7 +67,7 @@ private:
                                           const std::optional<asn1::e2sm::cgi_c>       cell_global_id,
                                           std::vector<asn1::e2sm::meas_record_item_c>& items);
 
-  typedef metric_meas_getter_func_t(e2sm_kpm_du_meas_provider_impl::*metric_meas_getter_func_ptr);
+  typedef metric_meas_getter_func_t(e2sm_kpm_du_meas_provider_impl::* metric_meas_getter_func_ptr);
 
   struct e2sm_kpm_supported_metric_t {
     uint32_t                    supported_labels;
@@ -106,10 +106,10 @@ private:
 
   ocudulog::basic_logger&                            logger;
   odu::f1ap_ue_id_translator&                        f1ap_ue_id_provider;
-  unsigned                                           nof_cell_prbs;
-  unsigned                                           nof_dl_slots;
-  unsigned                                           nof_ul_slots;
-  unsigned                                           nof_ded_cell_preambles;
+  unsigned                                           nof_cell_prbs          = 0;
+  unsigned                                           nof_dl_slots           = 0;
+  unsigned                                           nof_ul_slots           = 0;
+  unsigned                                           nof_ded_cell_preambles = 0;
   std::vector<scheduler_ue_metrics>                  last_ue_metrics;
   std::map<uint16_t, std::deque<rlc_metrics>>        ue_aggr_rlc_metrics;
   std::chrono::system_clock::time_point              last_rlc_metrics_clear_time = std::chrono::system_clock::now();

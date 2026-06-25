@@ -10,6 +10,7 @@
 #include "ue.h"
 #include "ue_cell_repository.h"
 #include "ue_drx_controller.h"
+#include "ue_fsm_states.h"
 #include "ocudu/adt/ring_buffer.h"
 
 namespace ocudu {
@@ -48,13 +49,25 @@ public:
   const ue* find_by_rnti(rnti_t rnti) const;
 
   /// \brief Add new UE in the UE repository.
-  void add_ue(const ue_configuration& ue_cfg, bool starts_in_fallback, std::optional<slot_point> ul_ccch_slot_rx);
+  void add_ue(const ue_configuration&   ue_cfg,
+              bool                      starts_in_fallback,
+              std::optional<slot_point> ul_ccch_slot_rx,
+              bool                      cfra_enabled);
 
   /// \brief Reconfigure existing UE.
-  void reconfigure_ue(const ue_configuration& new_cfg, bool reestablished_);
+  void reconfigure_ue(const ue_configuration& new_cfg, sched_ue_config_request::causes cause);
 
   /// \brief Called when UE configuration has been applied (e.g. after RRC ReconfigurationComplete).
-  void ue_config_applied(du_ue_index_t ue_index);
+  bool ue_config_applied(du_ue_index_t ue_index);
+
+  /// \brief Called when C-RNTI CE is received.
+  bool crnti_ce_received(du_ue_index_t ue_index);
+
+  /// \brief Called when CFRA Msg3 is successfully ACKed.
+  bool cfra_msg3_acked(du_ue_index_t ue_index);
+
+  /// \brief Called when C-RNTI CE is received.
+  bool handle_conres_ce_outcome(du_ue_index_t ue_index, bool success);
 
   /// \brief Initiate removal of existing UE from the repository.
   void schedule_ue_rem(ue_config_delete_event ev);
@@ -82,10 +95,16 @@ private:
   /// Force the removal of the UE without waiting for the flushing of pending events.
   void rem_ue(const ue& u);
 
+  /// Update UE config FSM.
+  bool update_ue_fsm(du_ue_index_t ue_index, ue_fsm_config_event ev);
+
   ocudulog::basic_logger& logger;
 
   // List of UEs per cell.
   slotted_id_table<du_cell_index_t, std::unique_ptr<ue_cell_repository>, MAX_NOF_DU_CELLS> cell_ues;
+
+  /// FSM of the UE configuration stages.
+  slotted_id_table<du_ue_index_t, ue_pcell_state, MAX_NOF_DU_UES> ue_fsms;
 
   /// Management of all UE logical channels.
   logical_channel_system lc_ch_sys;

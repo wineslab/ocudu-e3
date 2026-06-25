@@ -116,7 +116,7 @@ protected:
   {
     ue_ded_cell_cfg_list.push_back(cfg_mng.add_ue(ue_req));
     ocudu_assert(ue_ded_cell_cfg_list.back() != nullptr, "Failed to create UE configuration");
-    ues.add_ue(*ue_ded_cell_cfg_list.back(), ue_req.starts_in_fallback, std::nullopt);
+    ues.add_ue(*ue_ded_cell_cfg_list.back(), ue_req.starts_in_fallback, ue_req.ul_ccch_slot_rx, ue_req.cfra_enabled);
     slice_sched.add_ue(ue_req.ue_index);
     return ues[ue_req.ue_index];
   }
@@ -226,8 +226,7 @@ TEST_P(scheduler_policy_css_test, when_coreset0_used_then_dl_grant_is_within_bou
   ue& u                                                                     = add_ue(ue_req);
 
   // Note: set CQI=15 to use low aggregation level.
-  u.get_pcell().handle_csi_report(
-      csi_report_data{std::nullopt, std::nullopt, std::nullopt, std::nullopt, cqi_value{15U}, true});
+  u.get_pcell().handle_csi_report(csi_report_data{.first_tb_wideband_cqi = cqi_value{15U}, .valid = true});
   push_dl_bs(u.ue_index, uint_to_lcid(4), 100000000);
 
   run_slot();
@@ -281,10 +280,11 @@ TEST_P(scheduler_policy_test, scheduler_allocates_more_than_one_ue_in_case_their
   span<const pusch_time_domain_resource_allocation> pusch_td_res_list =
       u1.get_pcell().cfg().cell_cfg_common.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common->pusch_td_alloc_list;
   // In default UE dedicated configuration, SearchSpace#2 is configured to use DCI format 1_1/0_1.
-  if (this->res_grid[0].result.dl.ul_pdcchs[0].dci.c_rnti_f0_1.time_resource ==
-      this->res_grid[0].result.dl.ul_pdcchs[1].dci.c_rnti_f0_1.time_resource) {
-    const unsigned k2 = pusch_td_res_list[this->res_grid[0].result.dl.ul_pdcchs[0].dci.c_rnti_f0_1.time_resource].k2;
-    const auto&    pusch_res_grid = this->res_grid[k2];
+  if (this->res_grid[0].result.dl.ul_pdcchs[0].dci.as_c_rnti_f0_1().time_resource ==
+      this->res_grid[0].result.dl.ul_pdcchs[1].dci.as_c_rnti_f0_1().time_resource) {
+    const unsigned k2 =
+        pusch_td_res_list[this->res_grid[0].result.dl.ul_pdcchs[0].dci.as_c_rnti_f0_1().time_resource].k2;
+    const auto& pusch_res_grid = this->res_grid[k2];
     ASSERT_EQ(pusch_res_grid.result.ul.puschs.size(), 2);
     ASSERT_FALSE(pusch_res_grid.result.ul.puschs[0].pusch_cfg.rbs.type1().overlaps(
         pusch_res_grid.result.ul.puschs[1].pusch_cfg.rbs.type1()));
@@ -325,35 +325,6 @@ TEST_P(scheduler_policy_test, scheduler_allocates_ues_with_sr_opportunity_first_
       << fmt::format("UE with SR opportunity should have been scheduled first.");
 }
 
-TEST_P(scheduler_policy_test, scheduler_allocates_ues_with_ul_retx_first_than_ues_with_newtx)
-{
-  const lcg_id_t lcg_id = uint_to_lcg_id(2);
-  ue&            u1     = add_ue(make_ue_create_req(to_du_ue_index(0), to_rnti(0x4601), {uint_to_lcid(5)}, lcg_id));
-  ue&            u2     = add_ue(make_ue_create_req(to_du_ue_index(1), to_rnti(0x4602), {uint_to_lcid(5)}, lcg_id));
-
-  // Push high enough UL BSR such that grant occupies entire BWP CRBs.
-  notify_ul_bsr(u1.ue_index, lcg_id, 20000);
-  notify_ul_bsr(u2.ue_index, lcg_id, 20000);
-
-  bool             pusch_scheduled = run_until([this]() { return not this->res_grid[0].result.ul.puschs.empty(); });
-  const slot_point current_slot    = next_slot - 1;
-  ASSERT_TRUE(pusch_scheduled);
-  const ul_sched_info& pusch = this->res_grid[0].result.ul.puschs[0];
-  // Send CRC=KO to trigger retransmission.
-  const ul_crc_pdu_indication crc_pdu{
-      pusch.pusch_cfg.rnti, pusch.context.ue_index, to_harq_id(pusch.pusch_cfg.harq_id), false};
-  if (pusch.context.ue_index == u1.ue_index) {
-    u1.get_pcell().handle_crc_pdu(current_slot, crc_pdu);
-  } else if (pusch.context.ue_index == u2.ue_index) {
-    u2.get_pcell().handle_crc_pdu(current_slot, crc_pdu);
-  }
-  const du_ue_index_t ue_with_retx = pusch.context.ue_index;
-
-  pusch_scheduled = run_until([this]() { return not this->res_grid[0].result.ul.puschs.empty(); });
-  ASSERT_TRUE(pusch_scheduled);
-  ASSERT_EQ(this->res_grid[0].result.ul.puschs[0].context.ue_index, ue_with_retx);
-}
-
 TEST_P(scheduler_policy_test, scheduler_allocates_ues_with_ul_srb_newtx_first_than_ues_with_ul_drb_newtx)
 {
   const lcg_id_t drb_lcg_id = uint_to_lcg_id(2);
@@ -368,44 +339,6 @@ TEST_P(scheduler_policy_test, scheduler_allocates_ues_with_ul_srb_newtx_first_th
   ASSERT_TRUE(pusch_scheduled);
   // UE2 with SRB newTx data is scheduled first.
   ASSERT_EQ(this->res_grid[0].result.ul.puschs[0].context.ue_index, u2.ue_index);
-}
-
-TEST_P(scheduler_policy_test, scheduler_allocates_ues_with_dl_retx_first_than_ues_with_newtx)
-{
-  const lcg_id_t lcg_id = uint_to_lcg_id(2);
-  ue&            u1     = add_ue(make_ue_create_req(to_du_ue_index(0), to_rnti(0x4601), {uint_to_lcid(5)}, lcg_id));
-  ue&            u2     = add_ue(make_ue_create_req(to_du_ue_index(1), to_rnti(0x4602), {uint_to_lcid(5)}, lcg_id));
-
-  // Push high enough DL buffer status such that grant occupies entire BWP CRBs.
-  push_dl_bs(u1.ue_index, uint_to_lcid(5), 100000);
-  push_dl_bs(u2.ue_index, uint_to_lcid(5), 100000);
-
-  bool pdsch_scheduled = run_until([this]() { return not this->res_grid[0].result.dl.ue_grants.empty(); });
-  ASSERT_TRUE(pdsch_scheduled);
-  const bool pdsch_ack_scheduled = run_until([this]() { return not this->res_grid[0].result.ul.pucchs.empty(); });
-  ASSERT_TRUE(pdsch_ack_scheduled);
-  const slot_point  current_slot = next_slot - 1;
-  const pucch_info& pucch        = this->res_grid[0].result.ul.pucchs[0];
-  // Auto NACK HARQ.
-  const unsigned nof_ack_bits = pucch.uci_bits.harq_ack_nof_bits;
-  du_ue_index_t  ue_with_retx;
-
-  if (pucch.crnti == u1.crnti) {
-    ue_with_retx = u1.ue_index;
-    for (unsigned harq_bit_idx = 0; harq_bit_idx < nof_ack_bits; ++harq_bit_idx) {
-      u1.get_pcell().handle_dl_ack_info(current_slot, mac_harq_ack_report_status::nack, harq_bit_idx, 100);
-    }
-  } else if (pucch.crnti == u2.crnti) {
-    ue_with_retx = u2.ue_index;
-    for (unsigned harq_bit_idx = 0; harq_bit_idx < nof_ack_bits; ++harq_bit_idx) {
-      u2.get_pcell().handle_dl_ack_info(current_slot, mac_harq_ack_report_status::nack, harq_bit_idx, 100);
-    }
-  }
-
-  run_slot();
-  pdsch_scheduled = run_until([this]() { return not this->res_grid[0].result.dl.ue_grants.empty(); });
-  ASSERT_TRUE(pdsch_scheduled);
-  ASSERT_EQ(this->res_grid[0].result.dl.ue_grants[0].context.ue_index, ue_with_retx);
 }
 
 TEST_P(scheduler_policy_test, scheduler_allocates_ues_with_dl_srb_newtx_first_than_ues_with_dl_drb_newtx)
@@ -597,13 +530,10 @@ TEST_F(scheduler_pf_test, pf_ensures_fairness_in_dl_when_ues_have_different_chan
   for (unsigned i = 0; i != 100; ++i) {
     // Report different CQIs for different UEs.
     // Best channel condition.
-    u1.get_pcell().handle_csi_report(
-        csi_report_data{std::nullopt, std::nullopt, std::nullopt, std::nullopt, cqi_value{15U}, true});
+    u1.get_pcell().handle_csi_report(csi_report_data{.first_tb_wideband_cqi = cqi_value{15U}, .valid = true});
     // Worst channel condition.
-    u2.get_pcell().handle_csi_report(
-        csi_report_data{std::nullopt, std::nullopt, std::nullopt, std::nullopt, cqi_value{10U}, true});
-    u3.get_pcell().handle_csi_report(
-        csi_report_data{std::nullopt, std::nullopt, std::nullopt, std::nullopt, cqi_value{12U}, true});
+    u2.get_pcell().handle_csi_report(csi_report_data{.first_tb_wideband_cqi = cqi_value{10U}, .valid = true});
+    u3.get_pcell().handle_csi_report(csi_report_data{.first_tb_wideband_cqi = cqi_value{12U}, .valid = true});
 
     run_slot();
     const slot_point current_slot = next_slot - 1;
@@ -741,10 +671,8 @@ TEST_P(scheduler_pf_qos_test, pf_upholds_qos_in_dl_gbr_flows)
   push_dl_bs(ue_with_no_gbr.ue_index, non_gbr_bearer_lcid, 1000000);
 
   // Report best channel condition for different UEs.
-  ue_with_gbr.get_pcell().handle_csi_report(
-      csi_report_data{std::nullopt, std::nullopt, std::nullopt, std::nullopt, cqi_value{15U}, true});
-  ue_with_no_gbr.get_pcell().handle_csi_report(
-      csi_report_data{std::nullopt, std::nullopt, std::nullopt, std::nullopt, cqi_value{15U}, true});
+  ue_with_gbr.get_pcell().handle_csi_report(csi_report_data{.first_tb_wideband_cqi = cqi_value{15U}, .valid = true});
+  ue_with_no_gbr.get_pcell().handle_csi_report(csi_report_data{.first_tb_wideband_cqi = cqi_value{15U}, .valid = true});
 
   unsigned              scheduled_bytes_for_gbr_bearer = 0;
   static const unsigned max_nof_slots                  = 50;

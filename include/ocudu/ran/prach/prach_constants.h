@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/phy_time_unit.h"
+#include "ocudu/ran/time/radio_frame_constants.h"
 
 namespace ocudu {
 
@@ -41,6 +42,10 @@ constexpr unsigned MAX_NOF_PRACH_FD_OCCASIONS = 8;
 /// Maximum number of PRACH occasions within a slot as per TS38.211, Tables 6.3.3.2-[2-4] and maximum msg1-FDM of 8
 /// according to TS 38.331.
 constexpr size_t MAX_NOF_PRACH_OCCASIONS_PER_SLOT = MAX_NOF_PRACH_TD_OCCASIONS * MAX_NOF_PRACH_FD_OCCASIONS;
+
+/// Maximum PRACH SFN opportunity period. Maximum value for the parameter \f$x\f$. This value is deduced from TS
+/// 38.211 Tables 6.3.3.2-2, 6.3.3.2-3, and 6.3.3.2-4.
+static constexpr unsigned MAX_PRACH_SFN_PERIOD = 16;
 
 } // namespace prach_constants
 

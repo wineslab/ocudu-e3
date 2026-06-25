@@ -8,6 +8,7 @@
 #include "../../mobility_manager/mobility_manager_impl.h"
 #include "../../ue_manager/ue_manager_impl.h"
 #include "ocudu/cu_cp/cu_cp_intra_cu_ho_types.h"
+#include "ocudu/f1ap/cu_cp/f1ap_cu.h"
 #include "ocudu/support/async/async_task.h"
 
 namespace ocudu::ocucp {
@@ -65,7 +66,7 @@ private:
 
   // (sub-)routine results
   cu_cp_intra_cu_handover_response      response_msg;
-  ue_index_t                            target_ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                      target_ue_index = cu_cp_ue_index_t::invalid;
   f1ap_ue_context_setup_response        target_ue_context_setup_response;
   f1ap_ue_context_modification_response source_ue_context_modification_response;
   bool                                  rrc_reconfig_sent = false;

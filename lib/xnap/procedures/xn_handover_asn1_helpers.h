@@ -7,6 +7,7 @@
 #include "../xnap_asn1_converters.h"
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/xnap/xnap_pdu_contents.h"
+#include "ocudu/cu_cp/cu_cp_cho_types.h"
 #include "ocudu/support/io/transport_layer_address.h"
 #include "ocudu/xnap/xnap_handover.h"
 #include <variant>
@@ -19,8 +20,7 @@ inline bool asn1_to_ue_context_info_ho_request(xnap_ue_context_info_ho_request& 
   // > Fill NG-C UE associated signalling reference (AMF UE NGAP ID).
   request.amf_ue_id = asn1_request.ng_c_ue_ref;
   // > Fill CP TNL info source (AMF SCTP IP address).
-  request.amf_addr =
-      transport_layer_address::create_from_bitstring(asn1_request.cp_tnl_info_source.endpoint_ip_address().to_string());
+  request.amf_addr = tla_from_asn1_bitstring(asn1_request.cp_tnl_info_source.endpoint_ip_address());
   // > Fill security context.
   asn1_to_security_context(request.security_context, asn1_request.ue_security_cap, asn1_request.security_info);
   // > Fill UE aggregated max bit rate.
@@ -104,6 +104,13 @@ inline bool asn1_to_handover_request(xnap_handover_request& request, const asn1:
   if (!asn1_to_ue_context_info_ho_request(request.ue_context_info_ho_request,
                                           asn1_request->ue_context_info_ho_request)) {
     return false;
+  }
+
+  // Check whether this is a Conditional Handover (CHO) preparation.
+  request.is_conditional_handover = asn1_request->ch_oinfo_req_present;
+  if (request.is_conditional_handover && asn1_request->ch_oinfo_req.ie_exts.cho_time_based_info_present) {
+    request.cho_timeout =
+        cho_window_duration_step * asn1_request->ch_oinfo_req.ie_exts.cho_time_based_info.cho_ho_win_dur;
   }
 
   // TODO: fill missing optional parameters.

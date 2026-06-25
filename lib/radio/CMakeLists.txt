@@ -9,6 +9,9 @@ add_library(ocudu_radio STATIC
 set(OCUDU_RADIO_DEFINITIONS "")
 set(OCUDU_RADIO_LIBRARIES "")
 
+add_subdirectory(realtime_loopback)
+list(APPEND OCUDU_RADIO_LIBRARIES ocudu_radio_realtime_loopback)
+
 if (UHD_FOUND AND ENABLE_UHD)
     # The UHD library uses RTTI
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -frtti")
@@ -22,6 +25,12 @@ if (ZEROMQ_FOUND AND ENABLE_ZEROMQ)
     list(APPEND OCUDU_RADIO_DEFINITIONS -DENABLE_ZMQ)
     list(APPEND OCUDU_RADIO_LIBRARIES ocudu_radio_zmq)
 endif (ZEROMQ_FOUND AND ENABLE_ZEROMQ)
+
+if (Sidekiq_FOUND AND ENABLE_SIDEKIQ)
+    add_subdirectory(sidekiq)
+    list(APPEND OCUDU_RADIO_DEFINITIONS -DENABLE_SIDEKIQ)
+    list(APPEND OCUDU_RADIO_LIBRARIES ocudu_radio_sidekiq)
+endif (Sidekiq_FOUND AND ENABLE_SIDEKIQ)
 
 add_definitions(${OCUDU_RADIO_DEFINITIONS})
 target_link_libraries(ocudu_radio ${OCUDU_RADIO_LIBRARIES} ocudulog dl)

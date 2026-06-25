@@ -4,6 +4,9 @@
 include:
   - local: .gitlab/ci-shared/docker.yml
   - local: .gitlab/ci-shared/version_check.yml
+  - local: .gitlab/ci/docker/image-matrix.yml
+  - local: .gitlab/ci/docker/image-build.yml
+  - local: .gitlab/ci/docker/image-build-rh.yml
 
 ################################################################################
 # Stages
@@ -11,6 +14,7 @@ include:
 stages:
   - ci
   - static
+  - build
   - compose
   - publish
 
@@ -111,9 +115,9 @@ gnb docker compose:
   extends: .docker compose
   variables:
     OS: ubuntu
-    OS_VERSION: "24.04"
-    DOCKER_UHD_VERSION: "4.7.0.0"
-    DOCKER_DPDK_VERSION: "24.11.2"
+    OS_VERSION: "26.04"
+    DOCKER_UHD_VERSION: "4.9.0.1"
+    DOCKER_DPDK_VERSION: "25.11.2"
   rules:
     - if: $ON_MR
       changes:
@@ -140,6 +144,25 @@ gnb docker compose:
     - sh -c "docker compose -f docker/docker-compose.yml run --no-deps gnb which ru_emulator"
     - sh -c "docker compose -f docker/docker-compose.yml run --no-deps gnb gnb cu_cp amf --no_core=true ru_sdr --device_driver uhd | grep 'Failed to open device with address'"
     - sh -c "docker compose -f docker/docker-compose.yml run --no-deps gnb gnb cu_cp amf --no_core=true hal --eal_args='--help'"
+
+# Manual only: validates gNB image on fedora:44 (dnf, GCC 15+). Run from the child pipeline when docker CI is included.
+gnb docker compose fedora 44 manual:
+  extends: gnb docker compose
+  variables:
+    OS: fedora
+    OS_VERSION: "44"
+  rules:
+    - if: $ON_MR
+      changes:
+        <<: *container_changes
+      when: manual
+      allow_failure: true
+    - if: $ON_MR
+      changes:
+        paths:
+          - docker/docker-compose.yml
+      when: manual
+      allow_failure: true
 
 5gc docker compose:
   extends: .docker compose

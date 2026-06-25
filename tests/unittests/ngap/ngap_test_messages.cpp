@@ -8,10 +8,10 @@
 #include "ocudu/asn1/ngap/common.h"
 #include "ocudu/asn1/ngap/ngap_ies.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/ngap/ngap_handover.h"
 #include "ocudu/ngap/ngap_message.h"
 #include "ocudu/ngap/ngap_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/cu_types.h"
 #include "ocudu/ran/plmn_identity.h"
 #include <vector>
@@ -132,7 +132,7 @@ ngap_message ocudu::ocucp::generate_ng_setup_failure_with_time_to_wait(time_to_w
   return ng_setup_failure;
 }
 
-cu_cp_initial_ue_message ocudu::ocucp::generate_initial_ue_message(ue_index_t ue_index)
+cu_cp_initial_ue_message ocudu::ocucp::generate_initial_ue_message(cu_cp_ue_index_t ue_index)
 {
   cu_cp_initial_ue_message msg = {};
   msg.ue_index                 = ue_index;
@@ -178,7 +178,7 @@ ngap_message ocudu::ocucp::generate_downlink_nas_transport_message_with_ue_cap_i
   return dl_nas_transport;
 }
 
-cu_cp_ul_nas_transport ocudu::ocucp::generate_ul_nas_transport_message(ue_index_t ue_index)
+cu_cp_ul_nas_transport ocudu::ocucp::generate_ul_nas_transport_message(cu_cp_ue_index_t ue_index)
 {
   cu_cp_ul_nas_transport ul_nas_transport = {};
   ul_nas_transport.ue_index               = ue_index;
@@ -366,7 +366,7 @@ ngap_message ocudu::ocucp::generate_ue_context_modification_request_base(amf_ue_
 ngap_message ocudu::ocucp::generate_valid_ue_context_modification_request_message(
     amf_ue_id_t                                               amf_ue_id,
     ran_ue_id_t                                               ran_ue_id,
-    std::optional<cu_cp_aggregate_maximum_bit_rate>           ue_ambr,
+    std::optional<aggregate_maximum_bit_rate_t>               ue_ambr,
     std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
     std::optional<guami_t>                                    new_guami)
 {
@@ -514,7 +514,7 @@ ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_setup_request_mes
       // Fill UL NGU UP TNL Info.
       asn1_setup_req_transfer->ul_ngu_up_tnl_info.set_gtp_tunnel();
       auto addr = transport_layer_address::create_from_string("127.0.0.1");
-      asn1_setup_req_transfer->ul_ngu_up_tnl_info.gtp_tunnel().transport_layer_address.from_string(addr.to_bitstring());
+      tla_to_asn1_bitstring(asn1_setup_req_transfer->ul_ngu_up_tnl_info.gtp_tunnel().transport_layer_address, addr);
       asn1_setup_req_transfer->ul_ngu_up_tnl_info.gtp_tunnel().gtp_teid.from_number(0x00005e6c);
 
       // Fill PDU session type.
@@ -613,20 +613,20 @@ ocudu::ocucp::generate_pdu_session_resource_setup_request_with_pdu_session_type_
   return ngap_msg;
 }
 
-cu_cp_pdu_session_resource_setup_response
-ocudu::ocucp::generate_cu_cp_pdu_session_resource_setup_response(cu_cp_pdu_session_resource_setup_request& request)
+ngap_pdu_session_resource_setup_response
+ocudu::ocucp::generate_ngap_pdu_session_resource_setup_response(ngap_pdu_session_resource_setup_request& request)
 {
-  cu_cp_pdu_session_resource_setup_response pdu_session_res_setup_resp;
+  ngap_pdu_session_resource_setup_response pdu_session_res_setup_resp;
 
   for (const auto& pdu_session : request.pdu_session_res_setup_items) {
-    cu_cp_pdu_session_res_setup_response_item pdu_session_setup_response_item;
+    ngap_pdu_session_res_setup_response_item pdu_session_setup_response_item;
     pdu_session_setup_response_item.pdu_session_id = pdu_session.pdu_session_id;
 
     auto& dlqos_flow_per_tnl_info =
         pdu_session_setup_response_item.pdu_session_resource_setup_response_transfer.dlqos_flow_per_tnl_info;
     dlqos_flow_per_tnl_info.up_tp_layer_info = {transport_layer_address::create_from_string("0.0.0.0"),
                                                 int_to_gtpu_teid(0)};
-    cu_cp_associated_qos_flow assoc_qos_flow;
+    ngap_associated_qos_flow assoc_qos_flow;
     assoc_qos_flow.qos_flow_id = uint_to_qos_flow_id(1);
     dlqos_flow_per_tnl_info.associated_qos_flow_list.emplace(uint_to_qos_flow_id(1), assoc_qos_flow);
 
@@ -682,12 +682,12 @@ ngap_message ocudu::ocucp::generate_invalid_pdu_session_resource_release_command
   return ngap_msg;
 }
 
-cu_cp_pdu_session_resource_release_response
-ocudu::ocucp::generate_cu_cp_pdu_session_resource_release_response(pdu_session_id_t pdu_session_id)
+ngap_pdu_session_resource_release_response
+ocudu::ocucp::generate_ngap_pdu_session_resource_release_response(pdu_session_id_t pdu_session_id)
 {
-  cu_cp_pdu_session_resource_release_response pdu_session_res_release_resp;
+  ngap_pdu_session_resource_release_response pdu_session_res_release_resp;
 
-  cu_cp_pdu_session_res_released_item_rel_res pdu_session_res_released_item_rel_res;
+  ngap_pdu_session_res_released_item_rel_res pdu_session_res_released_item_rel_res;
 
   pdu_session_res_released_item_rel_res.pdu_session_id = pdu_session_id;
 
@@ -813,20 +813,20 @@ ngap_message ocudu::ocucp::generate_invalid_pdu_session_resource_modify_request_
   return ngap_msg;
 }
 
-cu_cp_pdu_session_resource_modify_response
-ocudu::ocucp::generate_cu_cp_pdu_session_resource_modify_response(pdu_session_id_t pdu_session_id,
-                                                                  qos_flow_id_t    qos_flow_id)
+ngap_pdu_session_resource_modify_response
+ocudu::ocucp::generate_ngap_pdu_session_resource_modify_response(pdu_session_id_t pdu_session_id,
+                                                                 qos_flow_id_t    qos_flow_id)
 {
-  cu_cp_pdu_session_resource_modify_response pdu_session_res_modify_resp;
+  ngap_pdu_session_resource_modify_response pdu_session_res_modify_resp;
 
-  cu_cp_pdu_session_resource_modify_response_item pdu_session_modify_response_item;
+  ngap_pdu_session_resource_modify_response_item pdu_session_modify_response_item;
   pdu_session_modify_response_item.pdu_session_id = pdu_session_id;
 
-  cu_cp_qos_flow_per_tnl_information qos_flow_per_tnl_info;
+  ngap_qos_flow_per_tnl_information qos_flow_per_tnl_info;
   qos_flow_per_tnl_info.up_tp_layer_info = {transport_layer_address::create_from_string("127.0.0.1"),
                                             int_to_gtpu_teid(1)};
 
-  cu_cp_associated_qos_flow assoc_qos_flow;
+  ngap_associated_qos_flow assoc_qos_flow;
   assoc_qos_flow.qos_flow_id = qos_flow_id;
 
   qos_flow_per_tnl_info.associated_qos_flow_list.emplace(qos_flow_id, assoc_qos_flow);
@@ -1112,15 +1112,16 @@ ngap_message ocudu::ocucp::generate_valid_handover_command(amf_ue_id_t amf_ue_id
 }
 
 ngap_handover_preparation_request ocudu::ocucp::generate_handover_preparation_request(
-    ue_index_t                                                ue_index,
+    cu_cp_ue_index_t                                          ue_index,
     const std::map<pdu_session_id_t, up_pdu_session_context>& pdu_sessions,
     nr_cell_identity                                          nci,
     uint32_t                                                  gnb_id_bit_length)
 {
   ngap_handover_preparation_request request = {};
   request.ue_index                          = ue_index;
-  request.gnb_id                            = nci.gnb_id(gnb_id_bit_length);
-  request.nci                               = nci;
+  request.target_id.gnb_id                  = nci.gnb_id(gnb_id_bit_length);
+  request.target_id.plmn = plmn_identity::test_value(), request.target_id.tac = 7;
+  request.nci = nci;
   // Fill create a map of all PDU sessions and their associated QoS flows.
   for (const auto& pdu_session : pdu_sessions) {
     std::vector<qos_flow_id_t> qos_flows;
@@ -1307,4 +1308,31 @@ ngap_message ocudu::ocucp::generate_path_switch_request_ack(amf_ue_id_t amf_ue_i
   path_switch_req_ack->allowed_nssai.push_back(allowed_nssai);
 
   return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_path_switch_request_ack_with_ul_tunnel(amf_ue_id_t             amf_ue_id,
+                                                                           ran_ue_id_t             ran_ue_id,
+                                                                           pdu_session_id_t        psi,
+                                                                           transport_layer_address ul_tla,
+                                                                           gtpu_teid_t             ul_teid)
+{
+  ngap_message msg                 = generate_path_switch_request_ack(amf_ue_id, ran_ue_id);
+  auto&        path_switch_req_ack = msg.pdu.successful_outcome().value.path_switch_request_ack();
+
+  // Overwrite the PDU session switched list with one entry that carries UL tunnel info.
+  path_switch_req_ack->pdu_session_res_switched_list.clear();
+
+  pdu_session_res_switched_item_s switched_item;
+  switched_item.pdu_session_id = pdu_session_id_to_uint(psi);
+
+  path_switch_request_ack_transfer_s ack_transfer;
+  ack_transfer.ul_ngu_up_tnl_info_present = true;
+  ack_transfer.ul_ngu_up_tnl_info.set_gtp_tunnel();
+  tla_to_asn1_bitstring(ack_transfer.ul_ngu_up_tnl_info.gtp_tunnel().transport_layer_address, ul_tla);
+  ack_transfer.ul_ngu_up_tnl_info.gtp_tunnel().gtp_teid.from_number(ul_teid.value());
+
+  switched_item.path_switch_request_ack_transfer = pack_into_pdu(ack_transfer);
+  path_switch_req_ack->pdu_session_res_switched_list.push_back(switched_item);
+
+  return msg;
 }

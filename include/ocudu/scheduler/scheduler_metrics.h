@@ -81,6 +81,8 @@ struct scheduler_ue_metrics {
   std::optional<float> max_pucch_harq_delay_ms;
   std::optional<float> avg_sr_to_pusch_delay_ms;
   std::optional<float> max_sr_to_pusch_delay_ms;
+  std::optional<float> max_dl_lcid0_flush_delay_ms;
+  std::optional<float> max_dl_lcid1_flush_delay_ms;
   /// @}
   std::optional<float>    last_dl_olla;
   std::optional<float>    last_ul_olla;
@@ -140,14 +142,22 @@ struct scheduler_cell_metrics {
   unsigned dl_grants_count = 0;
   /// Counter of UE PUSCH grants.
   unsigned ul_grants_count = 0;
-  /// Number of failed PDCCH allocation attempts.
-  unsigned nof_failed_pdcch_allocs = 0;
+  /// Number of failed DL PDCCH allocation attempts (common and UE-dedicated SearchSpaces).
+  unsigned failed_dl_pdcch = 0;
+  /// Number of failed UL PDCCH allocation attempts (common and UE-dedicated SearchSpaces).
+  unsigned failed_ul_pdcch = 0;
+  /// Number of failed DL PDCCH allocation attempts in common SearchSpaces. Subset of \c failed_dl_pdcch.
+  unsigned failed_common_dl_pdcch = 0;
+  /// Number of failed UL PDCCH allocation attempts in common SearchSpaces. Subset of \c failed_ul_pdcch.
+  unsigned failed_common_ul_pdcch = 0;
   /// Number of failed UCI allocation attempts.
   unsigned nof_failed_uci_allocs = 0;
   /// Number of MSG3s.
   unsigned nof_msg3_ok = 0;
   /// Number of MSG3 KOs.
   unsigned nof_msg3_nok = 0;
+  /// Number of ra-ContentionResolutionTimer expiries that occurred before the ConRes CE could be scheduled.
+  unsigned nof_conres_timer_expired = 0;
   /// Average PRACH delay in slots.
   std::optional<float> avg_prach_delay_slots;
   /// Number of failed PDSCH allocations due to late HARQs.

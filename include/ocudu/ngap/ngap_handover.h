@@ -4,10 +4,14 @@
 
 #pragma once
 
-#include "ocudu/cu_cp/cu_cp_location_reporting_types.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ngap/ngap_pdu_session.h"
 #include "ocudu/ngap/ngap_types.h"
+#include "ocudu/ran/cu_cp_location_reporting_types.h"
+#include "ocudu/ran/cu_cp_pdu_session.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/guami.h"
+#include "ocudu/ran/plmn_identity.h"
+#include "ocudu/ran/tac.h"
 #include "ocudu/security/security.h"
 #include <map>
 
@@ -19,9 +23,15 @@ struct ngap_ue_source_handover_context {
   byte_buffer rrc_container;
 };
 
+struct target_ran_node_id_t {
+  gnb_id_t      gnb_id;
+  plmn_identity plmn = plmn_identity::test_value();
+  tac_t         tac;
+};
+
 struct ngap_handover_preparation_request {
-  ue_index_t                                             ue_index = ue_index_t::invalid;
-  gnb_id_t                                               gnb_id;
+  cu_cp_ue_index_t                                       ue_index = cu_cp_ue_index_t::invalid;
+  target_ran_node_id_t                                   target_id;
   nr_cell_identity                                       nci;
   std::map<pdu_session_id_t, std::vector<qos_flow_id_t>> pdu_sessions;
 };
@@ -39,8 +49,8 @@ struct ngap_qos_flow_info_item {
 };
 
 struct ngap_drbs_to_qos_flows_map_item {
-  drb_id_t                               drb_id = drb_id_t::invalid;
-  std::vector<cu_cp_associated_qos_flow> associated_qos_flow_list;
+  drb_id_t                              drb_id = drb_id_t::invalid;
+  std::vector<ngap_associated_qos_flow> associated_qos_flow_list;
 };
 
 struct ngap_pdu_session_res_info_item {
@@ -82,10 +92,10 @@ struct ngap_source_ngran_node_to_target_ngran_node_transparent_container {
 };
 
 struct ngap_handover_request {
-  ue_index_t                                                            ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                                                      ue_index = cu_cp_ue_index_t::invalid;
   ngap_handov_type                                                      handov_type;
   ngap_cause_t                                                          cause;
-  cu_cp_aggregate_maximum_bit_rate                                      ue_aggr_max_bit_rate;
+  aggregate_maximum_bit_rate_t                                          ue_aggr_max_bit_rate;
   std::optional<ngap_core_network_assist_info_for_inactive>             core_network_assist_info_for_inactive;
   security::security_context                                            security_context;
   std::optional<bool>                                                   new_security_context_ind;

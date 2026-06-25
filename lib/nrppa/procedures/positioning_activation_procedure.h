@@ -6,9 +6,9 @@
 
 #include "du_context/nrppa_du_context.h"
 #include "ocudu/asn1/nrppa/nrppa.h"
-#include "ocudu/cu_cp/positioning_messages.h"
 #include "ocudu/nrppa/nrppa.h"
 #include "ocudu/ran/cause/nrppa_cause.h"
+#include "ocudu/ran/positioning/positioning_messages.h"
 
 namespace ocudu::ocucp {
 
@@ -20,7 +20,7 @@ class positioning_activation_procedure
 public:
   positioning_activation_procedure(const positioning_activation_request_t& request_,
                                    uint16_t                                transaction_id_,
-                                   du_index_t                              du_index_,
+                                   cu_cp_du_index_t                        du_index_,
                                    nrppa_du_context_list&                  du_ctxt_list_,
                                    nrppa_cu_cp_notifier&                   cu_cp_notifier_,
                                    ocudulog::basic_logger&                 logger_);
@@ -47,7 +47,7 @@ private:
 
   const positioning_activation_request_t pos_act_request;
   uint16_t                               transaction_id;
-  du_index_t                             du_index;
+  cu_cp_du_index_t                       du_index;
   nrppa_du_context_list&                 du_ctxt_list;
   nrppa_cu_cp_notifier&                  cu_cp_notifier;
   ocudulog::basic_logger&                logger;

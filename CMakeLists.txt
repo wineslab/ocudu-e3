@@ -62,6 +62,7 @@ option(ENABLE_RTSAN          "Enable clang real-time sanitizer"             OFF)
 option(ENABLE_GCOV           "Enable code coverage"                         OFF)
 option(ENABLE_BACKWARD       "Enable backward"                              ON)
 option(ENABLE_UHD            "Enable UHD"                                   ON)
+option(ENABLE_SIDEKIQ        "Enable Sidekiq"                               ON)
 option(ENABLE_ZEROMQ         "Enable ZeroMQ"                                ON)
 option(ENABLE_FFTW           "Enable FFTW"                                  ON)
 option(ENABLE_MKL            "Enable Intel MKL"                             ON)
@@ -117,7 +118,7 @@ if (ENABLE_WERROR)
         if (HAS_STRINGOP_OVERFLOW)
             set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=stringop-overflow")
         endif()
-        if (ASSERT_LEVEL_DERIVED STREQUAL "NONE")
+        if (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
             check_cxx_compiler_flag("-Warray-bounds" HAS_ARRAY_BOUNDS)
             if (HAS_ARRAY_BOUNDS)
                 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=array-bounds")
@@ -133,7 +134,9 @@ endif ()
 # Hardware acceleration for both PUSCH and PDSCH is enabled by default when using DPDK.
 if (ENABLE_DPDK)
   SET(ENABLE_PDSCH_HWACC ON CACHE BOOL "Enable PDSCH hardware-acceleration")
+  message(STATUS "BBDEV hardware-acceleration enabled for PDSCH.")
   SET(ENABLE_PUSCH_HWACC ON CACHE BOOL "Enable PUSCH hardware-acceleration")
+  message(STATUS "BBDEV hardware-acceleration enabled for PUSCH.")
 else (ENABLE_DPDK)
   unset(ENABLE_PDSCH_HWACC CACHE)
   unset(ENABLE_PUSCH_HWACC CACHE)
@@ -362,9 +365,9 @@ include(GNUInstallDirs)
 sbom_generate(
     OUTPUT       "${CMAKE_INSTALL_PREFIX}/share/ocudu.spdx"
     PROJECT      "OCUDU 5G CU DU"
-    SUPPLIER     "Software Radio Systems Ltd"
-    SUPPLIER_URL "https://srs.io"
-    DOWNLOAD_URL "https://github.com/ocudu/ocudu.git"
+    SUPPLIER     "OCUDU Project"
+    SUPPLIER_URL "https://ocudu.org"
+    DOWNLOAD_URL "https://gitlab.com/ocudu/ocudu.git"
     LICENSE      "LicenseRef-OCUDU"
 )
 
@@ -542,6 +545,22 @@ if (YAML_CPP_FOUND)
 else (YAML_CPP_FOUND)
     message(FATAL_ERROR "yaml-cpp is required to build ${CMAKE_PROJECT_NAME}")
 endif (YAML_CPP_FOUND)
+
+# SKIQ
+if (ENABLE_SIDEKIQ)
+    find_package(Sidekiq)
+    if (Sidekiq_FOUND)
+        sbom_add(
+            PACKAGE            "Sidekiq"
+            DOWNLOAD_LOCATION  "https://support.epiqsolutions.com/viewforum.php?f=148"
+            SUPPLIER           "EPIQ Design Solutions LLC"
+            LICENSE            "Software Library License V3.0 (Proprietary)"
+            VERSION            ${Sidekiq_VERSION}
+        )
+    endif (Sidekiq_FOUND)
+else (ENABLE_SIDEKIQ)
+    unset(Sidekiq_FOUND CACHE)
+endif (ENABLE_SIDEKIQ)
 
 # ZeroMQ
 if (ENABLE_ZEROMQ)

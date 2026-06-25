@@ -6,19 +6,20 @@
 
 #include "ocudu/asn1/ngap/ngap.h"
 #include "ocudu/asn1/ngap/ngap_ies.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/cu_cp/up_context.h"
 #include "ocudu/ngap/ngap.h"
 #include "ocudu/ngap/ngap_handover.h"
 #include "ocudu/ngap/ngap_types.h"
 #include "ocudu/ran/cause/ngap_cause.h"
+#include "ocudu/ran/cu_cp_pdu_session.h"
+#include "ocudu/ran/gtpu/gtpu_teid.h"
 
 namespace ocudu::ocucp {
 
 /// \brief Check that two NGAP PDUs have the same type.
 bool is_same_pdu_type(const ngap_message& lhs, const ngap_message& rhs);
-bool is_pdu_type(const ngap_message& pdu, const asn1::ngap::ngap_elem_procs_o::init_msg_c::types type);
-bool is_pdu_type(const ngap_message& pdu, const asn1::ngap::ngap_elem_procs_o::successful_outcome_c::types type);
+bool is_pdu_type(const ngap_message& pdu, asn1::ngap::ngap_elem_procs_o::init_msg_c::types type);
+bool is_pdu_type(const ngap_message& pdu, asn1::ngap::ngap_elem_procs_o::successful_outcome_c::types type);
 
 // NG Application Protocol (NGSetupRequest)
 //     NGAP-PDU: initiatingMessage (0)
@@ -92,7 +93,7 @@ ngap_message generate_ng_setup_failure_with_time_to_wait(asn1::ngap::time_to_wai
 
 const uint32_t nas_pdu_len = 4; // Dummy length used for testing (content is not important)
 /// \brief Generate a dummy Initial UE Message.
-cu_cp_initial_ue_message generate_initial_ue_message(ue_index_t ue_index);
+cu_cp_initial_ue_message generate_initial_ue_message(cu_cp_ue_index_t ue_index);
 
 /// \brief Generate a dummy DL NAS Transport Message.
 ngap_message
@@ -104,7 +105,7 @@ ngap_message generate_downlink_nas_transport_message_with_ue_cap_info_request(am
                                                                               byte_buffer nas_pdu = {});
 
 /// \brief Generate a dummy UL NAS Transport Message.
-cu_cp_ul_nas_transport generate_ul_nas_transport_message(ue_index_t ue_index);
+cu_cp_ul_nas_transport generate_ul_nas_transport_message(cu_cp_ue_index_t ue_index);
 
 /// \brief Generate a dummy UL NAS Transport Message.
 ngap_message generate_uplink_nas_transport_message(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id);
@@ -137,7 +138,7 @@ ngap_message generate_ue_context_modification_request_base(amf_ue_id_t amf_ue_id
 ngap_message generate_valid_ue_context_modification_request_message(
     amf_ue_id_t                                               amf_ue_id,
     ran_ue_id_t                                               ran_ue_id,
-    std::optional<cu_cp_aggregate_maximum_bit_rate>           ue_ambr                     = std::nullopt,
+    std::optional<aggregate_maximum_bit_rate_t>               ue_ambr                     = std::nullopt,
     std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive = std::nullopt,
     std::optional<guami_t>                                    new_guami                   = std::nullopt);
 
@@ -181,8 +182,8 @@ ngap_message generate_pdu_session_resource_setup_request_with_pdu_session_type_i
     ran_ue_id_t ran_ue_id);
 
 /// \brief Generate a dummy PDU Session Resource Setup Response.
-cu_cp_pdu_session_resource_setup_response
-generate_cu_cp_pdu_session_resource_setup_response(cu_cp_pdu_session_resource_setup_request& request);
+ngap_pdu_session_resource_setup_response
+generate_ngap_pdu_session_resource_setup_response(ngap_pdu_session_resource_setup_request& request);
 
 /// \brief Generate a dummy PDU Session Resource Release Command base.
 ngap_message generate_pdu_session_resource_release_command_base(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id);
@@ -196,8 +197,8 @@ ngap_message generate_valid_pdu_session_resource_release_command(amf_ue_id_t    
 ngap_message generate_invalid_pdu_session_resource_release_command(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id);
 
 /// \brief Generate a dummy PDU Session Resource Release Response.
-cu_cp_pdu_session_resource_release_response
-generate_cu_cp_pdu_session_resource_release_response(pdu_session_id_t pdu_session_id);
+ngap_pdu_session_resource_release_response
+generate_ngap_pdu_session_resource_release_response(pdu_session_id_t pdu_session_id);
 
 /// \brief Generate a dummy PDU Session Resource Modify Request base.
 ngap_message generate_pdu_session_resource_modify_request_base(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id);
@@ -216,9 +217,9 @@ ngap_message generate_invalid_pdu_session_resource_modify_request_message(amf_ue
                                                                           pdu_session_id_t pdu_session_id);
 
 /// \brief Generate a dummy PDU Session Resource Modify Response.
-cu_cp_pdu_session_resource_modify_response
-generate_cu_cp_pdu_session_resource_modify_response(pdu_session_id_t pdu_session_id,
-                                                    qos_flow_id_t    qos_flow_id = uint_to_qos_flow_id(1));
+ngap_pdu_session_resource_modify_response
+generate_ngap_pdu_session_resource_modify_response(pdu_session_id_t pdu_session_id,
+                                                   qos_flow_id_t    qos_flow_id = uint_to_qos_flow_id(1));
 
 /// \brief Generate a valid dummy Paging message with only mandatory fields set.
 ngap_message generate_valid_minimal_paging_message();
@@ -248,7 +249,7 @@ ngap_message generate_valid_dl_ran_status_transfer(amf_ue_id_t amf_ue_id, ran_ue
 
 /// \brief Generate a handover preparation request.
 ngap_handover_preparation_request
-generate_handover_preparation_request(ue_index_t                                                ue_index,
+generate_handover_preparation_request(cu_cp_ue_index_t                                          ue_index,
                                       const std::map<pdu_session_id_t, up_pdu_session_context>& pdu_sessions,
                                       nr_cell_identity nci               = nr_cell_identity::create({1, 22}, 1).value(),
                                       uint32_t         gnb_id_bit_length = 22);
@@ -283,5 +284,12 @@ ngap_message generate_path_switch_request_failure(amf_ue_id_t amf_ue_id, ran_ue_
 
 /// \brief Generate a Path Switch Request Ack message.
 ngap_message generate_path_switch_request_ack(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id);
+
+/// \brief Generate a Path Switch Request Ack message with a new UL NG-U tunnel endpoint for each PDU session.
+ngap_message generate_path_switch_request_ack_with_ul_tunnel(amf_ue_id_t             amf_ue_id,
+                                                             ran_ue_id_t             ran_ue_id,
+                                                             pdu_session_id_t        psi,
+                                                             transport_layer_address ul_tla,
+                                                             gtpu_teid_t             ul_teid);
 
 } // namespace ocudu::ocucp

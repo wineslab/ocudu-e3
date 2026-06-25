@@ -8,6 +8,7 @@
 #include "../converters/scheduler_configuration_helpers.h"
 #include "../du_cell_manager.h"
 #include "../du_manager_context.h"
+#include "../ran_resource_management/du_ran_resource_manager.h"
 #include "ocudu/mac/config/mac_config_helpers.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/scheduler/config/scheduler_cell_config_validator.h"
@@ -25,7 +26,8 @@ static mac_cell_creation_request make_mac_cell_config(du_cell_index_t           
                                                       const du_cell_config&                           du_cfg,
                                                       const byte_buffer&                              sib1,
                                                       span<const bcch_dl_sch_payload_type>            si_messages,
-                                                      const sched_cell_configuration_request_message& sched_cell_cfg)
+                                                      const sched_cell_configuration_request_message& sched_cell_cfg,
+                                                      unsigned                                        max_nof_setup_ues)
 {
   mac_cell_creation_request mac_cfg{};
   mac_cfg.cell_index = cell_index;
@@ -46,6 +48,14 @@ static mac_cell_creation_request make_mac_cell_config(du_cell_index_t           
   mac_cfg.sched_req                       = sched_cell_cfg;
   mac_cfg.cell_barred                     = du_cfg.cell_barred;
   mac_cfg.intra_freq_reselection          = du_cfg.intra_freq_reselection;
+
+  // (Implementation-defined) Number of HARQs needed to account for UEs that the cell cannot support but still require
+  // HARQs for sending an RRC Reject. We consider that UEs to be RRC Rejected only need one HARQ.
+  static constexpr unsigned harqs_for_rrc_rejects = 64;
+
+  // Dimension the MAC DL HARQ buffer pool based on the number of UEs the cell can actually support (each using the
+  // configured number of DL HARQ processes) plus a margin for UEs that only need a single HARQ to be RRC Rejected.
+  mac_cfg.max_harq_buffers = du_cfg.ran.init_bwp.pdsch.max_harq_procs * max_nof_setup_ues + harqs_for_rrc_rejects;
 
   return mac_cfg;
 }
@@ -168,7 +178,12 @@ void du_setup_procedure::configure_du_cells()
 
     // Forward config to MAC.
     ctxt.params.mac.mgr.get_cell_manager().add_cell(
-        make_mac_cell_config(cell_index, du_cfg, sys_info.sib1, sys_info.si_messages, sched_cfg));
+        make_mac_cell_config(cell_index,
+                             du_cfg,
+                             sys_info.sib1,
+                             sys_info.si_messages,
+                             sched_cfg,
+                             ctxt.res_mng.get_max_nof_setup_ues(cell_index)));
   }
 }
 

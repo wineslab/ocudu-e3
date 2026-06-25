@@ -13,9 +13,9 @@
 #include "procedures/bearer_context_release_procedure.h"
 #include "procedures/bearer_context_setup_procedure.h"
 #include "ocudu/asn1/e1ap/e1ap.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/e1ap/cu_cp/inactivity_notification.h"
 #include "ocudu/ran/cause/e1ap_cause.h"
-#include "ocudu/ran/cause/e1ap_cause_converters.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include <variant>
 
 using namespace ocudu;
@@ -23,7 +23,7 @@ using namespace asn1::e1ap;
 using namespace ocucp;
 
 e1ap_cu_cp_impl::e1ap_cu_cp_impl(const e1ap_configuration&      e1ap_cfg_,
-                                 cu_up_index_t                  cu_up_index_,
+                                 cu_cp_cu_up_index_t            cu_up_index_,
                                  e1ap_message_notifier&         e1ap_pdu_notifier_,
                                  e1ap_cu_up_processor_notifier& e1ap_cu_up_processor_notifier_,
                                  e1ap_cu_cp_notifier&           cu_cp_notifier_,
@@ -283,7 +283,7 @@ void e1ap_cu_cp_impl::handle_bearer_context_release_request(const asn1::e1ap::be
 
   cu_cp_bearer_context_release_request release_request;
   release_request.ue_index = ue_ctxt.ue_ids.ue_index;
-  release_request.cause    = e1ap_to_ngap_cause(asn1_to_cause(msg->cause));
+  release_request.cause    = asn1_to_cause(msg->cause);
 
   // Schedule forwarding of release request.
   if (!cu_cp_notifier.schedule_async_task(ue_ctxt.ue_ids.ue_index,
@@ -310,7 +310,7 @@ void e1ap_cu_cp_impl::handle_bearer_context_inactivity_notification(
   // Get UE context.
   e1ap_ue_context& ue_ctxt = ue_ctxt_list[int_to_gnb_cu_cp_ue_e1ap_id(msg->gnb_cu_cp_ue_e1ap_id)];
 
-  cu_cp_inactivity_notification inactivity_notification;
+  e1ap_inactivity_notification inactivity_notification;
   inactivity_notification.ue_index = ue_ctxt.ue_ids.ue_index;
 
   switch (msg->activity_info.type()) {
@@ -468,7 +468,7 @@ void e1ap_cu_cp_impl::handle_unsuccessful_outcome(const asn1::e1ap::unsuccessful
   }
 }
 
-void e1ap_cu_cp_impl::cancel_ue_tasks(ue_index_t ue_index)
+void e1ap_cu_cp_impl::cancel_ue_tasks(cu_cp_ue_index_t ue_index)
 {
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.info("ue={}: UE does not exist in the CU-CP", ue_index);
@@ -479,7 +479,7 @@ void e1ap_cu_cp_impl::cancel_ue_tasks(ue_index_t ue_index)
   u.bearer_ev_mng.cancel_all();
 }
 
-void e1ap_cu_cp_impl::update_ue_context(ue_index_t ue_index, ue_index_t old_ue_index)
+void e1ap_cu_cp_impl::update_ue_context(cu_cp_ue_index_t ue_index, cu_cp_ue_index_t old_ue_index)
 {
   if (!ue_ctxt_list.contains(old_ue_index)) {
     logger.warning("Failed to transfer E1AP UE context from ue={} to ue={}. Old UE context does not exist",
@@ -493,7 +493,7 @@ void e1ap_cu_cp_impl::update_ue_context(ue_index_t ue_index, ue_index_t old_ue_i
   ue_ctxt_list.update_ue_index(ue_index, old_ue_index);
 }
 
-void e1ap_cu_cp_impl::remove_bearer_context(ue_index_t ue_index)
+void e1ap_cu_cp_impl::remove_bearer_context(cu_cp_ue_index_t ue_index)
 {
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.debug("ue={}: UE context not found", ue_index);
@@ -510,11 +510,11 @@ void e1ap_cu_cp_impl::log_pdu(bool is_rx, const e1ap_message& e1ap_pdu)
   }
 
   // Fetch UE index.
-  auto                      cp_ue_id = get_gnb_cu_cp_ue_e1ap_id(e1ap_pdu.pdu);
-  std::optional<ue_index_t> ue_idx;
+  auto                            cp_ue_id = get_gnb_cu_cp_ue_e1ap_id(e1ap_pdu.pdu);
+  std::optional<cu_cp_ue_index_t> ue_idx;
   if (cp_ue_id.has_value()) {
     auto* ue_ptr = ue_ctxt_list.find_ue(cp_ue_id.value());
-    if (ue_ptr != nullptr and ue_ptr->ue_ids.ue_index != ue_index_t::invalid) {
+    if (ue_ptr != nullptr and ue_ptr->ue_ids.ue_index != cu_cp_ue_index_t::invalid) {
       ue_idx = ue_ptr->ue_ids.ue_index;
     }
   }

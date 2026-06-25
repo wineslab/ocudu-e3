@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../common/e1ap_asn1_converters.h"
+#include "../common/e1ap_logger.h"
 #include "ocudu/asn1/e1ap/e1ap.h"
 #include "ocudu/asn1/e1ap/e1ap_ies.h"
 #include "ocudu/asn1/e1ap/e1ap_pdu_contents.h"
@@ -109,28 +110,28 @@ inline asn1::e1ap::gnb_cu_up_e1_setup_request_s cu_up_e1_setup_request_to_asn1(c
 
 inline bool
 check_e1ap_bearer_context_setup_request_valid(const asn1::e1ap::bearer_context_setup_request_s& asn1_request,
-                                              ocudulog::basic_logger&                           logger)
+                                              e1ap_logger&                                      logger)
 {
   // We only support NG-RAN Bearer.
   if (asn1_request->sys_bearer_context_setup_request.type() !=
       asn1::e1ap::sys_bearer_context_setup_request_c::types::ng_ran_bearer_context_setup_request) {
-    logger.error("Not handling E-UTRAN Bearers");
+    logger.log_error("Not handling E-UTRAN Bearers");
     return false;
   }
 
   // Check UE-AMBR makes sense.
   if (asn1_request->ue_dl_aggr_max_bit_rate == 0) {
-    logger.error("Invalid UE-DL-AMBR");
+    logger.log_error("Invalid UE-DL-AMBR");
     return false;
   }
 
   // Check activity level.
   if (asn1_request->activity_notif_level.value != asn1::e1ap::activity_notif_level_e::ue) {
-    logger.warning("Unsupported activity notification level: {}", asn1_request->activity_notif_level.to_string());
+    logger.log_warning("Unsupported activity notification level: {}", asn1_request->activity_notif_level.to_string());
     return false;
   }
   if (!asn1_request->ue_inactivity_timer_present) {
-    logger.warning("Activity notification level is UE, but no UE inactivity timer present.");
+    logger.log_warning("Activity notification level is UE, but no UE inactivity timer present.");
     return false;
   }
   return true;
@@ -364,8 +365,11 @@ inline void fill_asn1_bearer_context_setup_response(asn1::e1ap::sys_bearer_conte
 }
 
 inline bool fill_e1ap_bearer_context_modification_request(e1ap_bearer_context_modification_request&       request,
-                                                          const asn1::e1ap::bearer_context_mod_request_s& asn1_request)
+                                                          const asn1::e1ap::bearer_context_mod_request_s& asn1_request,
+                                                          cu_up_ue_index_t                                ue_index)
 {
+  request.ue_index = ue_index;
+
   // Fill security info.
   if (asn1_request->security_info_present) {
     e1ap_security_info security_info;
@@ -530,6 +534,12 @@ inline bool fill_e1ap_bearer_context_modification_request(e1ap_bearer_context_mo
       for (const auto& asn1_res_to_mod_item : asn1_ng_ran_bearer_context_mod_request.pdu_session_res_to_modify_list) {
         e1ap_pdu_session_res_to_modify_item pdu_session_res_to_mod_item;
         pdu_session_res_to_mod_item.pdu_session_id = uint_to_pdu_session_id(asn1_res_to_mod_item.pdu_session_id);
+
+        // Fill NG UL UP transport layer information (updated UPF endpoint, e.g. after Xn path switch).
+        if (asn1_res_to_mod_item.ng_ul_up_tnl_info_present) {
+          pdu_session_res_to_mod_item.ng_ul_up_tnl_info =
+              asn1_to_up_transport_layer_info(asn1_res_to_mod_item.ng_ul_up_tnl_info);
+        }
 
         // Fill DRB to setup list.
         for (const auto& asn1_drb_to_setup_item : asn1_res_to_mod_item.drb_to_setup_list_ng_ran) {

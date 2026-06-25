@@ -72,8 +72,8 @@ protected:
   void init()
   {
     // Add UE to UE manager.
-    allocated_ue_index = ue_mng.add_ue(du_index_t::min);
-    ASSERT_NE(allocated_ue_index, ue_index_t::invalid);
+    allocated_ue_index = ue_mng.add_ue(cu_cp_du_index_t::min);
+    ASSERT_NE(allocated_ue_index, cu_cp_ue_index_t::invalid);
     ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
 
     ue_mng.set_plmn(allocated_ue_index, plmn_identity::test_value());
@@ -195,7 +195,7 @@ protected:
     }
 
     // Configure PDCP entity security on SRB1.
-    rrc_ue->on_new_as_security_context();
+    rrc_ue->on_new_as_security_context(false);
 
     return true;
   }
@@ -346,7 +346,7 @@ protected:
                                                     byte_buffer::create(rrc_reconfig_complete_pdu).value());
   }
 
-  void add_ue_reestablishment_context(ue_index_t ue_index)
+  void add_ue_reestablishment_context(cu_cp_ue_index_t ue_index)
   {
     rrc_ue_reestablishment_context_response reest_context = {};
     reest_context.ue_index                                = ue_index;
@@ -430,7 +430,7 @@ protected:
               92);
   }
 
-  ue_index_t allocated_ue_index;
+  cu_cp_ue_index_t allocated_ue_index;
 
   timer_manager               timers;
   manual_task_worker          ctrl_worker{64};
@@ -543,7 +543,7 @@ protected:
       0x09, 0x0d, 0x0d, 0x40, 0x09, 0xbd, 0x5b, 0x7d, 0xde, 0x00, 0x3a, 0xab, 0xbc, 0xc0, 0x00, 0x00, 0x00, 0x00};
 
   // UL-DCCH with RRC reconfiguration complete.
-  std::array<uint8_t, 8> rrc_reconfig_complete_pdu = {0x0, 0x1, 0x0a, 0x00, 0xbf, 0x5d, 0x10, 0x52};
+  std::array<uint8_t, 8> rrc_reconfig_complete_pdu = {0x0, 0x1, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00};
 
   // UL-DCCH with RRC reestablishment complete.
   std::array<uint8_t, 8> rrc_reest_complete_pdu = {0x0, 0x0, 0x18, 0x00, 0xae, 0x09, 0xf9, 0x1a};

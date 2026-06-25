@@ -19,19 +19,7 @@ namespace ocudu {
 
 namespace test_helpers {
 
-pucch_info make_common_pucch_info(const bwp_configuration* bwp_cfg,
-                                  unsigned                 pci,
-                                  pucch_format             format,
-                                  prb_interval             prbs,
-                                  prb_interval             second_hop_prbs,
-                                  ofdm_symbol_range        symbols,
-                                  uint8_t                  initial_cyclic_shift,
-                                  uint8_t                  time_domain_occ);
-
-pucch_info make_ded_pucch_info(const cell_configuration& cell_cfg,
-                               const pucch_resource&     res,
-                               pucch_uci_bits            uci_bits,
-                               max_pucch_code_rate       max_code_rate);
+pucch_info make_pucch_info(const cell_configuration& cell_cfg, const pucch_resource& res, pucch_uci_bits uci_bits);
 
 } // namespace test_helpers
 

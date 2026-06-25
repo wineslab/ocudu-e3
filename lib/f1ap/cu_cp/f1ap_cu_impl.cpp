@@ -22,8 +22,8 @@
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/f1ap/f1ap_message.h"
+#include "ocudu/ran/cu_cp_types.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -75,14 +75,14 @@ f1ap_cu_impl::handle_ue_context_setup_request(const f1ap_ue_context_setup_reques
       cfg, request, ue_ctxt_list, du_processor_notifier, tx_pdu_notifier, logger, rrc_context);
 }
 
-async_task<ue_index_t> f1ap_cu_impl::handle_ue_context_release_command(const f1ap_ue_context_release_command& msg)
+async_task<cu_cp_ue_index_t> f1ap_cu_impl::handle_ue_context_release_command(const f1ap_ue_context_release_command& msg)
 {
   if (!ue_ctxt_list.contains(msg.ue_index)) {
     logger.warning("ue={}: Dropping \"UEContextReleaseCommand\". Cause: UE context does not exist", msg.ue_index);
 
-    return launch_async([](coro_context<async_task<ue_index_t>>& ctx) mutable {
+    return launch_async([](coro_context<async_task<cu_cp_ue_index_t>>& ctx) mutable {
       CORO_BEGIN(ctx);
-      CORO_RETURN(ue_index_t::invalid);
+      CORO_RETURN(cu_cp_ue_index_t::invalid);
     });
   }
 
@@ -104,7 +104,7 @@ f1ap_cu_impl::handle_ue_context_modification_request(const f1ap_ue_context_modif
   return launch_async<ue_context_modification_procedure>(cfg, request, ue_ctxt_list[request.ue_index], tx_pdu_notifier);
 }
 
-bool f1ap_cu_impl::handle_ue_id_update(ue_index_t ue_index, ue_index_t old_ue_index)
+bool f1ap_cu_impl::handle_ue_id_update(cu_cp_ue_index_t ue_index, cu_cp_ue_index_t old_ue_index)
 {
   if (!ue_ctxt_list.contains(ue_index) or !ue_ctxt_list.contains(old_ue_index)) {
     return false;
@@ -159,7 +159,7 @@ void f1ap_cu_impl::handle_message(const f1ap_message& msg)
   }
 }
 
-void f1ap_cu_impl::remove_ue_context(ue_index_t ue_index)
+void f1ap_cu_impl::remove_ue_context(cu_cp_ue_index_t ue_index)
 {
   if (!ue_ctxt_list.contains(ue_index)) {
     logger.debug("ue={}: UE context not found", ue_index);
@@ -340,10 +340,23 @@ void f1ap_cu_impl::handle_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_m
     return;
   }
 
+  // Request UE index allocation from DU processor.
+  cu_cp_ue_index_t ue_index = du_processor_notifier.request_new_ue_creation();
+  if (ue_index == cu_cp_ue_index_t::invalid) {
+    logger.warning("du_ue={}: Dropping \"InitialULRRCMessageTransfer\". Cause: Failed to create UE context",
+                   fmt::underlying(du_ue_id));
+    return;
+  }
+
+  // Add UE context.
+  f1ap_ue_context& ue_ctxt = ue_ctxt_list.add_ue(ue_index, cu_ue_f1ap_id);
+  ue_ctxt_list.add_du_ue_f1ap_id(cu_ue_f1ap_id, du_ue_id);
+
   // Request RRC UE entity creation.
   ue_rrc_context_creation_request req;
-  req.c_rnti = crnti;
-  req.cgi    = cgi.value();
+  req.ue_index = ue_index;
+  req.c_rnti   = crnti;
+  req.cgi      = cgi.value();
   if (msg->du_to_cu_rrc_container_present) {
     req.du_to_cu_rrc_container = byte_buffer(msg->du_to_cu_rrc_container);
   } else {
@@ -356,41 +369,27 @@ void f1ap_cu_impl::handle_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_m
   req.rrc_container                    = msg->rrc_container.copy();
   ue_rrc_context_creation_outcome resp = du_processor_notifier.on_ue_rrc_context_creation_request(req);
 
-  // Reject the UE if the creation was not successful.
+  // Return if the UE creation was not successful.
+  // Note: The higher layers will release the UE context, so we don't need to do anything here and must return directly.
   if (not resp.has_value()) {
-    asn1::f1ap::ue_context_release_cmd_s release_cmd = {};
-    release_cmd->gnb_cu_ue_f1ap_id                   = gnb_cu_ue_f1ap_id_to_uint(cu_ue_f1ap_id);
-    release_cmd->gnb_du_ue_f1ap_id                   = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
-    release_cmd->cause.set_radio_network() = asn1::f1ap::cause_radio_network_opts::options::no_radio_res_available;
-    release_cmd->srb_id_present            = true;
-    release_cmd->srb_id                    = srb_id_to_uint(srb_id_t::srb0);
-    release_cmd->rrc_container_present     = true;
-    release_cmd->rrc_container             = resp.error().copy();
-
-    // Pack message into PDU.
-    f1ap_message f1ap_release_cmd;
-    f1ap_release_cmd.pdu.set_init_msg();
-    f1ap_release_cmd.pdu.init_msg().load_info_obj(ASN1_F1AP_ID_UE_CONTEXT_RELEASE);
-    f1ap_release_cmd.pdu.init_msg().value.ue_context_release_cmd() = std::move(release_cmd);
-
-    // Send DL RRC message.
-    tx_pdu_notifier.on_new_message(f1ap_release_cmd);
     return;
   }
 
-  if (ue_ctxt_list.contains(resp->ue_index)) {
+  // If the UE context creation was successful, create/update the UE context in the CU-CP and forward the RRC container
+  // to RRC. Otherwise the UE will be rejected and the context will be released by higher layers.
+  if (resp->ue_index != ue_index && ue_ctxt_list.contains(resp->ue_index)) {
     // This is a resumed UE. Update the existing context with the new DU UE F1AP ID.
-    f1ap_ue_context& ue_ctxt = ue_ctxt_list[resp->ue_index];
-    ue_ctxt_list.add_du_ue_f1ap_id(ue_ctxt.ue_ids.cu_ue_f1ap_id, du_ue_id);
+    f1ap_ue_context& resume_ue_ctxt = ue_ctxt_list[resp->ue_index];
+    ue_ctxt_list.add_du_ue_f1ap_id(resume_ue_ctxt.ue_ids.cu_ue_f1ap_id, du_ue_id);
 
     // Reset release state so the context can be released again if needed (e.g. RRC Resume with invalid MAC).
-    ue_ctxt.reset_release_state(); // TODO: This is a temporary solution, F1AP context should not be reused
+    resume_ue_ctxt.reset_release_state(); // TODO: This is a temporary solution, F1AP context should not be reused
 
-    ue_ctxt.logger.log_info("Updated resumed UE context with new DU UE F1AP ID");
+    resume_ue_ctxt.logger.log_info("Updated resumed UE context with new DU UE F1AP ID");
+
+    // Note: We the newly created UE will be released and removed by higher layers.
   } else {
-    // Create UE context and store it.
-    f1ap_ue_context& ue_ctxt = ue_ctxt_list.add_ue(resp->ue_index, cu_ue_f1ap_id);
-    ue_ctxt_list.add_du_ue_f1ap_id(cu_ue_f1ap_id, du_ue_id);
+    // Add SRB notifiers to the UE context.
     ue_ctxt_list.add_srb0_rrc_notifier(resp->ue_index, resp->f1ap_srb0_notifier);
     ue_ctxt_list.add_srb1_rrc_notifier(resp->ue_index, resp->f1ap_srb1_notifier);
     ue_ctxt_list.add_srb2_rrc_notifier(resp->ue_index, resp->f1ap_srb2_notifier);
@@ -650,11 +649,11 @@ void f1ap_cu_impl::log_pdu(bool is_rx, const f1ap_message& pdu)
   }
 
   // Fetch UE index.
-  auto                      cu_ue_id = get_gnb_cu_ue_f1ap_id(pdu.pdu);
-  std::optional<ue_index_t> ue_idx;
+  auto                            cu_ue_id = get_gnb_cu_ue_f1ap_id(pdu.pdu);
+  std::optional<cu_cp_ue_index_t> ue_idx;
   if (cu_ue_id.has_value()) {
     const auto* ue_ptr = ue_ctxt_list.find(cu_ue_id.value());
-    if (ue_ptr != nullptr and ue_ptr->ue_ids.ue_index != ue_index_t::invalid) {
+    if (ue_ptr != nullptr and ue_ptr->ue_ids.ue_index != cu_cp_ue_index_t::invalid) {
       ue_idx = ue_ptr->ue_ids.ue_index;
     }
   }

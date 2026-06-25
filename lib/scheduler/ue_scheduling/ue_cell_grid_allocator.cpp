@@ -4,8 +4,11 @@
 
 #include "ue_cell_grid_allocator.h"
 #include "../support/dci_builder.h"
+#include "../support/pucch/pucch_k1_helper.h"
 #include "../ue_context/ue_drx_controller.h"
 #include "grant_params_selector.h"
+#include "ocudu/adt/static_vector.h"
+#include "ocudu/scheduler/config/pusch_td_resource_indices.h"
 #include "ocudu/scheduler/result/dci_info.h"
 #include "ocudu/support/error_handling.h"
 
@@ -28,6 +31,25 @@ ue_cell_grid_allocator::ue_cell_grid_allocator(const scheduler_ue_expert_config&
 {
   dl_grants.reserve(MAX_UE_PDUS_PER_SLOT);
   ul_grants.reserve(MAX_PUSCH_PDUS_PER_SLOT);
+
+  const auto pusch_list =
+      get_pusch_td_resource_indices_per_slot(cell_alloc.cfg.scs_common(),
+                                             cell_alloc.cfg.params.tdd_cfg,
+                                             cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
+                                             cell_alloc.cfg.dl_data_to_ul_ack);
+  k1s_per_dl_slot = get_pucch_k1_list_per_slot(
+      cell_alloc.cfg.dl_data_to_ul_ack,
+      cell_alloc.cfg.params.tdd_cfg,
+      cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list,
+      pusch_list);
+  static constexpr std::array<uint8_t, 5> f1_0_k1_list = {4, 5, 6, 7, 8};
+  k1s_per_dl_slot_dci_1_0                              = get_pucch_k1_list_per_slot(
+      f1_0_k1_list,
+      cell_alloc.cfg.params.tdd_cfg,
+      cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list,
+      pusch_list);
+  ocudu_assert(k1s_per_dl_slot_dci_1_0.size() == k1s_per_dl_slot_dci_1_0.size(),
+               "k1s_per_dl_slot vector size must be the same for both DCI 1_0's and DCI 1_1's lists");
 }
 
 std::optional<sch_mcs_tbs>
@@ -108,7 +130,14 @@ std::optional<uci_allocation> ue_cell_grid_allocator::alloc_uci(const ue_cell&  
   const pdsch_time_domain_resource_allocation& pdsch_td_cfg = ss_info.pdsch_time_domain_list[pdsch_td_res_index];
 
   // Allocate UCI. UCI destination (i.e., PUCCH or PUSCH) depends on whether there exist a PUSCH grant for the UE.
-  span<const uint8_t>           k1_list = ss_info.get_k1_candidates();
+  // NOTE: k1s_per_dl_slot size is the same for with k1s_per_dl_slot_dci_1_0 and k1s_per_dl_slot lists, we ensure that
+  // in the constructor.
+  const slot_point    pdsch_slot  = cell_alloc[pdsch_td_cfg.k0].slot;
+  const unsigned      k1_list_idx = pdsch_slot.count() % k1s_per_dl_slot.size();
+  span<const uint8_t> k1_list     = ss_info.get_dl_dci_format() == dci_dl_format::f1_0
+                                        ? k1s_per_dl_slot_dci_1_0[k1_list_idx]
+                                        : k1s_per_dl_slot[k1_list_idx];
+
   std::optional<uci_allocation> uci =
       uci_alloc.alloc_harq_ack(cell_alloc, ue_cc.rnti(), ue_cc.cfg(), pdsch_td_cfg.k0, k1_list);
   if (not uci.has_value()) {
@@ -160,6 +189,7 @@ ue_cell_grid_allocator::setup_dl_grant_builder(const slice_ue&                  
   // Fetch PDCCH and PDSCH resource grid allocators.
   cell_slot_resource_allocator& pdcch_alloc = cell_alloc[0];
   cell_slot_resource_allocator& pdsch_alloc = cell_alloc[pdsch_td_cfg.k0];
+
   ocudu_sanity_check(not pdcch_alloc.result.dl.dl_pdcchs.full(), "No space available for PDCCH");
   ocudu_sanity_check(pdsch_alloc.result.dl.bc.sibs.size() + pdsch_alloc.result.dl.paging_grants.size() +
                              pdsch_alloc.result.dl.rar_grants.size() + pdsch_alloc.result.dl.ue_grants.size() <
@@ -170,7 +200,6 @@ ue_cell_grid_allocator::setup_dl_grant_builder(const slice_ue&                  
   // Allocate PDCCH.
   auto pdcch_result = alloc_dl_pdcch(ue_cc, ss_info);
   if (not pdcch_result.has_value()) {
-    ++pdcch_alloc.result.failed_attempts.pdcch;
     return make_unexpected(dl_alloc_failure_cause::pdcch_alloc_failed);
   }
   pdcch_dl_information* pdcch = pdcch_result.value();
@@ -356,7 +385,7 @@ void ue_cell_grid_allocator::set_pdsch_params(dl_grant_info&                    
   if (not is_retx and ue_cc.link_adaptation_controller().is_dl_olla_enabled()) {
     msg.context.olla_offset = ue_cc.link_adaptation_controller().dl_cqi_offset();
   }
-  switch (grant.pdcch->dci.type) {
+  switch (grant.pdcch->dci.type()) {
     case dci_dl_rnti_config_type::c_rnti_f1_0:
       build_pdsch_f1_0_c_rnti(msg.pdsch_cfg,
                               pdsch_cfg,
@@ -364,7 +393,7 @@ void ue_cell_grid_allocator::set_pdsch_params(dl_grant_info&                    
                               u.crnti,
                               cell_cfg,
                               ss_info,
-                              grant.pdcch->dci.c_rnti_f1_0,
+                              grant.pdcch->dci.as_c_rnti_f1_0(),
                               vrbs,
                               not is_retx);
       break;
@@ -375,7 +404,7 @@ void ue_cell_grid_allocator::set_pdsch_params(dl_grant_info&                    
                               u.crnti,
                               ue_cell_cfg,
                               grant.cfg.ss_id,
-                              grant.pdcch->dci.c_rnti_f1_1,
+                              grant.pdcch->dci.as_c_rnti_f1_1(),
                               vrbs,
                               not is_retx,
                               ue_cc.channel_state_manager());
@@ -386,7 +415,7 @@ void ue_cell_grid_allocator::set_pdsch_params(dl_grant_info&                    
 
   // Save set PDCCH and PDSCH PDU parameters in HARQ process.
   dl_harq_alloc_context pdsch_sched_ctx;
-  pdsch_sched_ctx.dci_cfg_type = grant.pdcch->dci.type;
+  pdsch_sched_ctx.dci_cfg_type = grant.pdcch->dci.type();
   if (not is_retx) {
     pdsch_sched_ctx.olla_mcs =
         ue_cc.link_adaptation_controller().calculate_dl_mcs(msg.pdsch_cfg.codewords[0].mcs_table);
@@ -416,8 +445,12 @@ expected<vrb_interval, dl_alloc_failure_cause>
 ue_cell_grid_allocator::allocate_dl_grant(const ue_retx_dl_grant_request& request) const
 {
   // Select PDCCH searchSpace and PDSCH time-domain resource config.
-  auto sched_ctxt = sched_helper::get_retx_dl_sched_context(
-      request.user, cell_alloc[0].slot, request.pdsch_slot, request.interleaving_enabled, request.h_dl);
+  auto sched_ctxt = sched_helper::get_retx_dl_sched_context(request.user,
+                                                            cell_alloc[0].slot,
+                                                            request.pdsch_slot,
+                                                            request.interleaving_enabled,
+                                                            request.h_dl,
+                                                            request.max_rbs);
   if (not sched_ctxt) {
     return make_unexpected(dl_alloc_failure_cause::other);
   }
@@ -491,7 +524,8 @@ ue_cell_grid_allocator::allocate_ul_grant(const ue_retx_ul_grant_request& reques
                                                             request.pusch_slot,
                                                             pending_uci_harq_bits,
                                                             request.h_ul,
-                                                            request.allowed_symbols);
+                                                            request.allowed_symbols,
+                                                            request.max_rbs);
   if (not sched_ctxt) {
     return make_unexpected(alloc_status::skip_ue);
   }
@@ -767,14 +801,14 @@ void ue_cell_grid_allocator::set_pusch_params(ul_grant_info& grant, const vrb_in
   if (not is_retx and ue_cc.link_adaptation_controller().is_ul_olla_enabled()) {
     msg.context.olla_offset = ue_cc.link_adaptation_controller().ul_snr_offset_db();
   }
-  switch (grant.pdcch->dci.type) {
+  switch (grant.pdcch->dci.type()) {
     case dci_ul_rnti_config_type::tc_rnti_f0_0:
       build_pusch_f0_0_tc_rnti(msg.pusch_cfg,
                                pusch_cfg,
                                mcs_tbs_info.value().tbs,
                                u.crnti,
                                cell_cfg,
-                               grant.pdcch->dci.tc_rnti_f0_0,
+                               grant.pdcch->dci.as_tc_rnti_f0_0(),
                                vrbs,
                                not is_retx);
       break;
@@ -785,7 +819,7 @@ void ue_cell_grid_allocator::set_pusch_params(ul_grant_info& grant, const vrb_in
                               mcs_tbs_info.value().tbs,
                               cell_cfg,
                               bwp_ul_cmn,
-                              grant.pdcch->dci.c_rnti_f0_0,
+                              grant.pdcch->dci.as_c_rnti_f0_0(),
                               vrbs,
                               not is_retx);
       break;
@@ -796,7 +830,7 @@ void ue_cell_grid_allocator::set_pusch_params(ul_grant_info& grant, const vrb_in
                               mcs_tbs_info.value(),
                               ue_cell_cfg,
                               ss_cfg.get_id(),
-                              grant.pdcch->dci.c_rnti_f0_1,
+                              grant.pdcch->dci.as_c_rnti_f0_1(),
                               vrbs,
                               not is_retx);
       break;
@@ -810,7 +844,7 @@ void ue_cell_grid_allocator::set_pusch_params(ul_grant_info& grant, const vrb_in
 
   // Save set PDCCH and PUSCH PDU parameters in HARQ process.
   ul_harq_alloc_context pusch_sched_ctx;
-  pusch_sched_ctx.dci_cfg_type = grant.pdcch->dci.type;
+  pusch_sched_ctx.dci_cfg_type = grant.pdcch->dci.type();
   if (not is_retx) {
     pusch_sched_ctx.olla_mcs =
         ue_cc.link_adaptation_controller().calculate_ul_mcs(pusch_cfg.mcs_table, pusch_cfg.use_transform_precoder);
@@ -898,6 +932,7 @@ void ue_cell_grid_allocator::post_process_pucch_pw_ctrl_results(slot_point slot)
     }
 
     pucch_uci_bits pucch_uci_bits;
+    unsigned       nof_prbs = 1;
     // pi_2_bpsk, additional_dmrs and intraslot_freq_hopping are only used for PUCCH format 3 and 4.
     bool pi_2_bpsk              = false;
     bool additional_dmrs        = false;
@@ -907,17 +942,21 @@ void ue_cell_grid_allocator::post_process_pucch_pw_ctrl_results(slot_point slot)
     pucch_uci_bits.sr_bits            = pucch.uci_bits.sr_bits;
     pucch_uci_bits.csi_part1_nof_bits = pucch.uci_bits.csi_part1_nof_bits;
     switch (pucch.format()) {
+      case pucch_format::FORMAT_2: {
+        nof_prbs = std::get<pucch_info::f2_config>(pucch.format_params).nof_prbs;
+      } break;
       case pucch_format::FORMAT_3: {
-        const auto& format_3   = std::get<pucch_format_3>(pucch.format_params);
-        pi_2_bpsk              = format_3.pi_2_bpsk;
-        additional_dmrs        = format_3.additional_dmrs;
-        intraslot_freq_hopping = not pucch.resources.second_hop_prbs.empty();
+        const auto& f3         = std::get<pucch_resource::f3_config>(pucch.res->format_params);
+        nof_prbs               = std::get<pucch_info::f3_config>(pucch.format_params).nof_prbs;
+        pi_2_bpsk              = f3.pi_2_bpsk;
+        additional_dmrs        = f3.additional_dmrs;
+        intraslot_freq_hopping = pucch.res->second_hop_prb.has_value();
       } break;
       case pucch_format::FORMAT_4: {
-        const auto& format_4   = std::get<pucch_format_4>(pucch.format_params);
-        pi_2_bpsk              = format_4.pi_2_bpsk;
-        additional_dmrs        = format_4.additional_dmrs;
-        intraslot_freq_hopping = not pucch.resources.second_hop_prbs.empty();
+        const auto& f4         = std::get<pucch_resource::f4_config>(pucch.res->format_params);
+        pi_2_bpsk              = f4.pi_2_bpsk;
+        additional_dmrs        = f4.additional_dmrs;
+        intraslot_freq_hopping = pucch.res->second_hop_prb.has_value();
       } break;
       default:
         break;
@@ -925,8 +964,8 @@ void ue_cell_grid_allocator::post_process_pucch_pw_ctrl_results(slot_point slot)
 
     user->get_pcell().get_pucch_power_controller().update_pucch_pw_ctrl_state(slot_alloc.slot,
                                                                               pucch.format(),
-                                                                              pucch.resources.prbs.length(),
-                                                                              pucch.resources.symbols.length(),
+                                                                              nof_prbs,
+                                                                              pucch.res->syms.length(),
                                                                               pucch_uci_bits,
                                                                               intraslot_freq_hopping,
                                                                               pi_2_bpsk,

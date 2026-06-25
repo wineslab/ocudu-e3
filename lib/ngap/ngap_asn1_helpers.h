@@ -9,8 +9,6 @@
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/ngap/ngap_ies.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
-#include "ocudu/cu_cp/cu_cp_location_reporting_types.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/cu_cp/inter_cu_handover_messages.h"
 #include "ocudu/ngap/ngap_context.h"
 #include "ocudu/ngap/ngap_handover.h"
@@ -18,7 +16,10 @@
 #include "ocudu/ngap/ngap_nas.h"
 #include "ocudu/ngap/ngap_rrc_inactive_transition.h"
 #include "ocudu/ngap/ngap_ue_context_mod.h"
+#include "ocudu/ran/cu_cp_location_reporting_types.h"
+#include "ocudu/ran/cu_cp_pdu_session.h"
 #include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/five_g_s_tmsi.h"
 #include "ocudu/ran/tac.h"
 #include <string>
 #include <variant>
@@ -79,7 +80,7 @@ inline void fill_asn1_ng_setup_request(asn1::ngap::ng_setup_request_s& asn1_requ
 /// \param[in] ue_index The index of the UE.
 /// \param[in] asn1_msg The ASN.1 type DLNASTransport.
 inline void fill_ngap_dl_nas_transport_message(ngap_dl_nas_transport_message&        msg,
-                                               ue_index_t                            ue_index,
+                                               cu_cp_ue_index_t                      ue_index,
                                                const asn1::ngap::dl_nas_transport_s& asn1_msg)
 {
   msg.ue_index = ue_index;
@@ -265,8 +266,8 @@ inline bool fill_cu_cp_pdu_session_resource_setup_item_base(cu_cp_pdu_session_re
 /// \param[out] cu_cp_pdu_session_res_setup_msg The cu_cp_pdu_session_res_setup_msg struct to fill.
 /// \param[in] asn1_pdu_session_res_setup_list The pdu_session_res_setup_list_su_req ASN1 struct.
 /// \returns True if the conversion was successful, false otherwise.
-inline bool fill_cu_cp_pdu_session_resource_setup_request(
-    cu_cp_pdu_session_resource_setup_request& cu_cp_pdu_session_resource_setup_msg,
+inline bool fill_ngap_pdu_session_resource_setup_request(
+    ngap_pdu_session_resource_setup_request& cu_cp_pdu_session_resource_setup_msg,
     const asn1::dyn_seq_of<asn1::ngap::pdu_session_res_setup_item_su_req_s, 1U, 256U, true>&
         asn1_pdu_session_res_setup_list)
 {
@@ -303,8 +304,8 @@ inline bool fill_cu_cp_pdu_session_resource_setup_request(
 /// \param[out] cu_cp_pdu_session_res_setup_msg The cu_cp_pdu_session_res_setup_msg struct to fill.
 /// \param[in] asn1_pdu_session_res_setup_list The pdu_session_res_setup_item_cxt_req_s ASN1 struct.
 /// \returns True if the conversion was successful, false otherwise.
-inline bool fill_cu_cp_pdu_session_resource_setup_request(
-    cu_cp_pdu_session_resource_setup_request& cu_cp_pdu_session_resource_setup_msg,
+inline bool fill_ngap_pdu_session_resource_setup_request(
+    ngap_pdu_session_resource_setup_request& cu_cp_pdu_session_resource_setup_msg,
     const asn1::dyn_seq_of<asn1::ngap::pdu_session_res_setup_item_cxt_req_s, 1U, 256U, true>&
         asn1_pdu_session_res_setup_list)
 {
@@ -365,8 +366,8 @@ inline bool fill_ngap_initial_context_setup_request(ngap_init_context_setup_requ
   // Fill PDU session resource setup list context request.
   if (asn1_request->pdu_session_res_setup_list_cxt_req_present) {
     request.pdu_session_res_setup_list_cxt_req.emplace();
-    if (!fill_cu_cp_pdu_session_resource_setup_request(request.pdu_session_res_setup_list_cxt_req.value(),
-                                                       asn1_request->pdu_session_res_setup_list_cxt_req)) {
+    if (!fill_ngap_pdu_session_resource_setup_request(request.pdu_session_res_setup_list_cxt_req.value(),
+                                                      asn1_request->pdu_session_res_setup_list_cxt_req)) {
       return false;
     }
   }
@@ -504,8 +505,8 @@ inline void fill_asn1_initial_context_setup_failure(asn1::ngap::init_context_set
 /// \param[out] modify_item The flat/common version
 /// \param[in] asn1_session_item The ASN1 struct to be converted.
 /// \return True on success, otherwise false.
-inline bool fill_cu_cp_pdu_session_resource_modify_item_base(
-    cu_cp_pdu_session_res_modify_item_mod_req&               modify_item,
+inline bool fill_ngap_pdu_session_resource_modify_item_base(
+    ngap_pdu_session_res_modify_item_mod_req&                modify_item,
     const asn1::ngap::pdu_session_res_modify_item_mod_req_s& asn1_session_item)
 {
   modify_item.pdu_session_id = uint_to_pdu_session_id(asn1_session_item.pdu_session_id);
@@ -519,7 +520,7 @@ inline bool fill_cu_cp_pdu_session_resource_modify_item_base(
 
   if (asn1_modify_req_transfer->qos_flow_add_or_modify_request_list_present) {
     for (const auto& asn1_flow_item : asn1_modify_req_transfer->qos_flow_add_or_modify_request_list) {
-      cu_cp_qos_flow_add_or_mod_item qos_flow_add_item;
+      ngap_qos_flow_add_or_mod_item qos_flow_add_item;
 
       // Fill QoS flow identifier.
       qos_flow_add_item.qos_flow_id = uint_to_qos_flow_id(asn1_flow_item.qos_flow_id);
@@ -567,7 +568,7 @@ inline bool fill_cu_cp_pdu_session_resource_modify_item_base(
 
   if (asn1_modify_req_transfer->qos_flow_to_release_list_present) {
     for (const auto& asn1_flow_item : asn1_modify_req_transfer->qos_flow_to_release_list) {
-      cu_cp_qos_flow_failed_to_setup_item qos_flow_release_item;
+      ngap_qos_flow_failed_to_setup_item qos_flow_release_item;
       qos_flow_release_item.qos_flow_id = uint_to_qos_flow_id(asn1_flow_item.qos_flow_id);
       qos_flow_release_item.cause       = asn1_to_cause(asn1_flow_item.cause);
       modify_item.transfer.qos_flow_to_release_list.emplace(qos_flow_release_item.qos_flow_id, qos_flow_release_item);
@@ -585,21 +586,21 @@ inline bool fill_cu_cp_pdu_session_resource_modify_item_base(
 }
 
 /// \brief Convert NGAP ASN1 PDU Session Resource Modify List ASN1 struct to common type.
-/// \param[out] cu_cp_pdu_session_resource_modify_msg The cu_cp_pdu_session_res_modify_msg struct to fill.
+/// \param[out] ngap_pdu_session_resource_modify_msg The ngap_pdu_session_res_modify_msg struct to fill.
 /// \param[in] asn1_pdu_session_res_modify_list The pdu_session_res_modify_list ASN1 struct.
 /// \return True on success, otherwise false.
-inline bool fill_cu_cp_pdu_session_resource_modify_request(
-    cu_cp_pdu_session_resource_modify_request& cu_cp_pdu_session_resource_modify_msg,
+inline bool fill_ngap_pdu_session_resource_modify_request(
+    ngap_pdu_session_resource_modify_request& ngap_pdu_session_resource_modify_msg,
     const asn1::dyn_seq_of<asn1::ngap::pdu_session_res_modify_item_mod_req_s, 1, 256, true>&
         asn1_pdu_session_res_modify_list)
 {
   for (const auto& asn1_session_item : asn1_pdu_session_res_modify_list) {
-    cu_cp_pdu_session_res_modify_item_mod_req modify_item;
-    if (!fill_cu_cp_pdu_session_resource_modify_item_base(modify_item, asn1_session_item)) {
+    ngap_pdu_session_res_modify_item_mod_req modify_item;
+    if (!fill_ngap_pdu_session_resource_modify_item_base(modify_item, asn1_session_item)) {
       return false;
     }
-    cu_cp_pdu_session_resource_modify_msg.pdu_session_res_modify_items.emplace(modify_item.pdu_session_id,
-                                                                               std::move(modify_item));
+    ngap_pdu_session_resource_modify_msg.pdu_session_res_modify_items.emplace(modify_item.pdu_session_id,
+                                                                              std::move(modify_item));
   }
 
   return true;
@@ -609,8 +610,8 @@ inline bool fill_cu_cp_pdu_session_resource_modify_request(
 /// message.
 /// \param[out] resp The ASN1 NGAP PDU Session Resource Setup Response message.
 /// \param[in] cu_cp_resp The CU-CP PDU Session Resource Setup Response message.
-inline void fill_asn1_pdu_session_res_setup_response(asn1::ngap::pdu_session_res_setup_resp_s&        resp,
-                                                     const cu_cp_pdu_session_resource_setup_response& cu_cp_resp)
+inline void fill_asn1_pdu_session_res_setup_response(asn1::ngap::pdu_session_res_setup_resp_s&       resp,
+                                                     const ngap_pdu_session_resource_setup_response& cu_cp_resp)
 {
   // Fill PDU session resource setup response list.
   if (!cu_cp_resp.pdu_session_res_setup_response_items.empty()) {
@@ -660,10 +661,10 @@ inline void fill_asn1_ue_context_release_request(asn1::ngap::ue_context_release_
 }
 
 /// \brief Convert NGAP ASN1 PDU Session Resource Release Command ASN1 struct to common type.
-/// \param[out] pdu_session_resource_release_cmd The cu_cp_pdu_session_resource_release_command struct to fill.
+/// \param[out] pdu_session_resource_release_cmd The ngap_pdu_session_resource_release_command struct to fill.
 /// \param[in] asn1_pdu_session_resource_release_cmd The pdu_session_res_release_cmd ASN1 struct.
-inline void fill_cu_cp_pdu_session_resource_release_command(
-    cu_cp_pdu_session_resource_release_command&      pdu_session_resource_release_cmd,
+inline void fill_ngap_pdu_session_resource_release_command(
+    ngap_pdu_session_resource_release_command&       pdu_session_resource_release_cmd,
     const asn1::ngap::pdu_session_res_release_cmd_s& asn1_pdu_session_resource_release_cmd)
 {
   if (asn1_pdu_session_resource_release_cmd->ran_paging_prio_present) {
@@ -676,7 +677,7 @@ inline void fill_cu_cp_pdu_session_resource_release_command(
 
   for (const auto& pdu_session_res_to_release_item :
        asn1_pdu_session_resource_release_cmd->pdu_session_res_to_release_list_rel_cmd) {
-    cu_cp_pdu_session_res_to_release_item_rel_cmd pdu_session_res_to_release_item_rel_cmd;
+    ngap_pdu_session_res_to_release_item_rel_cmd pdu_session_res_to_release_item_rel_cmd;
     pdu_session_res_to_release_item_rel_cmd.pdu_session_id =
         uint_to_pdu_session_id(pdu_session_res_to_release_item.pdu_session_id);
 
@@ -798,7 +799,7 @@ inline void fill_cu_cp_paging_message(cu_cp_paging_message& paging, const asn1::
   paging.ue_paging_id = ngap_asn1_to_ue_paging_id(asn1_paging->ue_paging_id);
 
   // UE Identity Index value is defined as: UE_ID 5G-S-TMSI mod 1024 (see TS 38.304 section 7.1).
-  paging.ue_id_idx_value = std::get<cu_cp_five_g_s_tmsi>(paging.ue_paging_id).to_number() % 1024;
+  paging.ue_id_idx_value = std::get<five_g_s_tmsi_t>(paging.ue_paging_id).to_number() % 1024;
 
   // Fill paging DRX.
   if (asn1_paging->paging_drx_present) {

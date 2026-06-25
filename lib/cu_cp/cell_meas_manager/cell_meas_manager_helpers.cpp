@@ -56,7 +56,9 @@ bool ocudu::ocucp::is_valid_configuration(
   for (const auto& cell : cfg.cells) {
     const auto& nci = cell.first;
     if (std::find(ncis.begin(), ncis.end(), nci) != ncis.end()) {
-      ocudulog::fetch_basic_logger(LOG_CHAN).error("Cell {:#x} already present, but must be unique", nci);
+      auto msg = fmt::format("Cell {:#x} already present, but must be unique", nci);
+      ocudulog::fetch_basic_logger(LOG_CHAN).error("{}", msg);
+      fmt::print("CU-CP: {}\n", msg);
       return false;
     }
     ncis.push_back(nci);
@@ -70,19 +72,45 @@ bool ocudu::ocucp::is_valid_configuration(
           rrc_meas_obj_nr meas_obj_nr = generate_measurement_object(serving_cell_cfg);
           if (!is_duplicate(meas_obj_nr, ssb_freq_to_meas_object.at(ssb_freq))) {
             // If a measurement object for this ssb_freq is already present but not an update, we reject the update.
-            ocudulog::fetch_basic_logger(LOG_CHAN).error(
+            auto msg = fmt::format(
                 "Measurement object for ssb_freq={} already exists, but has different ssb_scs, smtc1 and/or smtc2",
                 ssb_freq);
+            ocudulog::fetch_basic_logger(LOG_CHAN).error("{}", msg);
+            fmt::print("CU-CP: {}\n", msg);
             return false;
           }
         }
       }
     }
 
+    if (cell.second.periodic_report_cfg_id.has_value() &&
+        cfg.report_config_ids.find(cell.second.periodic_report_cfg_id.value()) == cfg.report_config_ids.end()) {
+      auto msg = fmt::format("Cell {:#x}: periodic report config id {} not found in configuration",
+                             nci,
+                             report_cfg_id_to_uint(cell.second.periodic_report_cfg_id.value()));
+      ocudulog::fetch_basic_logger(LOG_CHAN).error("{}", msg);
+      fmt::print("CU-CP: {}\n", msg);
+      return false;
+    }
+
     for (const auto& ncell_nci : cell.second.ncells) {
       if (nci == ncell_nci.nci) {
-        ocudulog::fetch_basic_logger(LOG_CHAN).error("Cell {:#x} must not be its own neighbor", nci);
+        auto msg = fmt::format("Cell {:#x} must not be its own neighbor", nci);
+        ocudulog::fetch_basic_logger(LOG_CHAN).error("{}", msg);
+        fmt::print("CU-CP: {}\n", msg);
         return false;
+      }
+
+      for (const auto& report_cfg_id : ncell_nci.report_cfg_ids) {
+        if (cfg.report_config_ids.find(report_cfg_id) == cfg.report_config_ids.end()) {
+          auto msg = fmt::format("Cell {:#x}: report config id {} for neighbor {:#x} not found in configuration",
+                                 nci,
+                                 report_cfg_id_to_uint(report_cfg_id),
+                                 ncell_nci.nci);
+          ocudulog::fetch_basic_logger(LOG_CHAN).error("{}", msg);
+          fmt::print("CU-CP: {}\n", msg);
+          return false;
+        }
       }
     }
   }
@@ -139,14 +167,14 @@ std::vector<ssb_frequency_t> ocudu::ocucp::generate_measurement_object_list(cons
 {
   ocudu_assert(cfg.cells.find(serving_nci) != cfg.cells.end(), "No cell config for nci={:#x}", serving_nci);
 
-  // Add cells to lookup if report is configured
+  // Add cells to lookup if report is configured.
   std::vector<ssb_frequency_t> ssb_freqs;
-  // Add serving cell if periodic report is configured
+  // Add the serving cell frequency measurement object. Required for inter-frequency handovers (e.g. A3 HO).
   const auto& serving_cell = cfg.cells.at(serving_nci);
-  if (serving_cell.periodic_report_cfg_id.has_value() && is_complete(serving_cell.serving_cell_cfg)) {
+  if (is_complete(serving_cell.serving_cell_cfg)) {
     ssb_freqs.push_back(serving_cell.serving_cell_cfg.ssb_arfcn.value().value());
   }
-  // Add neighbor cells if report is configured
+  // Add neighbor cells measurement objects if report is configured.
   for (const auto& ncell : serving_cell.ncells) {
     ocudu_assert(cfg.cells.find(ncell.nci) != cfg.cells.end(), "No cell config for nci={:#x}", ncell.nci);
     const auto& cell_cfg = cfg.cells.at(ncell.nci);
@@ -169,6 +197,12 @@ std::vector<ssb_frequency_t> ocudu::ocucp::generate_cho_measurement_object_list(
 
   std::unordered_set<pci_t>           candidate_pcis_set(candidate_pcis.begin(), candidate_pcis.end());
   std::unordered_set<ssb_frequency_t> freqs;
+
+  // Add the serving cell frequency measurement object. Required for inter-frequency handovers (e.g. A5 CHO).
+  const auto& serving_cell_cfg = cfg.cells.at(serving_nci).serving_cell_cfg;
+  if (is_complete(serving_cell_cfg)) {
+    freqs.insert(serving_cell_cfg.ssb_arfcn->value());
+  }
 
   for (const auto& ncell : cfg.cells.at(serving_nci).ncells) {
     auto it = cfg.cells.find(ncell.nci);
@@ -195,7 +229,12 @@ void ocudu::ocucp::generate_report_config(const cell_meas_manager_cfg&  cfg,
                                           rrc_meas_cfg&                 meas_cfg,
                                           cell_meas_manager_ue_context& ue_meas_context)
 {
-  // add report cfg to add mod
+  // Add report cfg to add mod
+  if (cfg.report_config_ids.find(report_cfg_id) == cfg.report_config_ids.end()) {
+    ocudulog::fetch_basic_logger("CU-CP").error("Report config ID {} not found in configuration",
+                                                report_cfg_id_to_uint(report_cfg_id));
+    return;
+  }
   rrc_report_cfg_to_add_mod report_cfg_to_add_mod;
   report_cfg_to_add_mod.report_cfg_id = report_cfg_id;
   report_cfg_to_add_mod.report_cfg    = cfg.report_config_ids.at(report_cfg_id);
@@ -208,7 +247,7 @@ void ocudu::ocucp::generate_report_config(const cell_meas_manager_cfg&  cfg,
   meas_id_to_add_mod.report_cfg_id = report_cfg_id;
   meas_cfg.meas_id_to_add_mod_list.push_back(meas_id_to_add_mod);
 
-  // add meas id to lookup
+  // Add meas id to lookup.
   const auto& serving_cell_cfg = cfg.cells.at(nci).serving_cell_cfg;
   ue_meas_context.meas_id_to_meas_context.emplace(meas_id_to_add_mod.meas_id,
                                                   meas_context_t{meas_id_to_add_mod.meas_obj_id,

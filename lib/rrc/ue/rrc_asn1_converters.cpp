@@ -57,38 +57,38 @@ asn1::rrc_nr::pdcp_cfg_s ocudu::ocucp::pdcp_config_to_rrc_nr_asn1(const pdcp_con
   if (pdcp_cfg.header_compression.has_value()) {
     const auto& rohc_cfg_in = *pdcp_cfg.header_compression;
     switch (rohc_cfg_in.rohc_type) {
-      case rohc::rohc_type_t::rohc: {
+      case rohc_type_t::rohc: {
         rrc_pdcp_cfg.drb.hdr_compress.set_rohc();
         auto& rrc_rohc = rrc_pdcp_cfg.drb.hdr_compress.rohc();
         // Only pack non-default max_cid (see TS 38.331 Sec. A.3.5 and Sec. 6.3.2)
-        if (rrc_rohc.max_c_id != rohc::default_rohc_max_cid) {
+        if (rrc_rohc.max_c_id != default_rohc_max_cid) {
           rrc_rohc.max_c_id_present = true;
           rrc_rohc.max_c_id         = rohc_cfg_in.max_cid;
         }
-        rrc_rohc.profiles.profile0x0001 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0001);
-        rrc_rohc.profiles.profile0x0002 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0002);
-        rrc_rohc.profiles.profile0x0003 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0003);
-        rrc_rohc.profiles.profile0x0004 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0004);
-        rrc_rohc.profiles.profile0x0006 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0006);
-        rrc_rohc.profiles.profile0x0101 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0101);
-        rrc_rohc.profiles.profile0x0102 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0102);
-        rrc_rohc.profiles.profile0x0103 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0103);
-        rrc_rohc.profiles.profile0x0104 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0104);
+        rrc_rohc.profiles.profile0x0001 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0001);
+        rrc_rohc.profiles.profile0x0002 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0002);
+        rrc_rohc.profiles.profile0x0003 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0003);
+        rrc_rohc.profiles.profile0x0004 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0004);
+        rrc_rohc.profiles.profile0x0006 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0006);
+        rrc_rohc.profiles.profile0x0101 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0101);
+        rrc_rohc.profiles.profile0x0102 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0102);
+        rrc_rohc.profiles.profile0x0103 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0103);
+        rrc_rohc.profiles.profile0x0104 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0104);
         if (rohc_cfg_in.continue_rohc) {
           rrc_rohc.drb_continue_rohc_present = true;
         }
       } break;
-      case rohc::rohc_type_t::uplink_only_rohc: {
+      case rohc_type_t::uplink_only_rohc: {
         rrc_pdcp_cfg.drb.hdr_compress.set_ul_only_rohc();
         auto& rrc_rohc = rrc_pdcp_cfg.drb.hdr_compress.ul_only_rohc();
         // Only pack non-default max_cid (see TS 38.331 Sec. A.3.5 and Sec. 6.3.2)
-        if (rrc_rohc.max_c_id != rohc::default_rohc_max_cid) {
+        if (rrc_rohc.max_c_id != default_rohc_max_cid) {
           rrc_rohc.max_c_id_present = true;
           rrc_rohc.max_c_id         = rohc_cfg_in.max_cid;
         }
         rrc_rohc.max_c_id_present       = true;
         rrc_rohc.max_c_id               = rohc_cfg_in.max_cid;
-        rrc_rohc.profiles.profile0x0006 = rohc_cfg_in.profiles.is_profile_enabled(rohc::rohc_profile::profile0x0006);
+        rrc_rohc.profiles.profile0x0006 = rohc_cfg_in.profiles.is_profile_enabled(rohc_profile::profile0x0006);
         if (rohc_cfg_in.continue_rohc) {
           rrc_rohc.drb_continue_rohc_present = true;
         }
@@ -231,26 +231,26 @@ ocudu::ocucp::integrity_prot_algorithm_to_rrc_asn1(const security::integrity_alg
   return asn1_integrity_prot_algo;
 }
 
-cu_cp_five_g_s_tmsi ocudu::ocucp::asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<48>& asn1_five_g_s_tmsi)
+five_g_s_tmsi_t ocudu::ocucp::asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<48>& asn1_five_g_s_tmsi)
 {
   bounded_bitset<48> five_g_s_tmsi(48);
   five_g_s_tmsi.from_uint64(asn1_five_g_s_tmsi.to_number());
 
-  return cu_cp_five_g_s_tmsi{five_g_s_tmsi};
+  return five_g_s_tmsi_t{five_g_s_tmsi};
 }
 
-cu_cp_five_g_s_tmsi ocudu::ocucp::asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<39>& asn1_five_g_s_tmsi_part1,
-                                                        const asn1::fixed_bitstring<9>&  asn1_five_g_s_tmsi_part2)
+five_g_s_tmsi_t ocudu::ocucp::asn1_to_five_g_s_tmsi(const asn1::fixed_bitstring<39>& asn1_five_g_s_tmsi_part1,
+                                                    const asn1::fixed_bitstring<9>&  asn1_five_g_s_tmsi_part2)
 {
   bounded_bitset<48> five_g_s_tmsi(48);
   five_g_s_tmsi.from_uint64((asn1_five_g_s_tmsi_part2.to_number() << 39) + asn1_five_g_s_tmsi_part1.to_number());
 
-  return cu_cp_five_g_s_tmsi{five_g_s_tmsi};
+  return five_g_s_tmsi_t{five_g_s_tmsi};
 }
 
-cu_cp_amf_identifier_t ocudu::ocucp::asn1_to_amf_identifier(const asn1::fixed_bitstring<24>& asn1_amf_id)
+amf_identifier_t ocudu::ocucp::asn1_to_amf_identifier(const asn1::fixed_bitstring<24>& asn1_amf_id)
 {
-  cu_cp_amf_identifier_t amf_id;
+  amf_identifier_t amf_id;
 
   uint32_t amf_identifier = 0;
   amf_identifier          = (uint32_t)asn1_amf_id.to_number();

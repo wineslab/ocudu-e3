@@ -26,7 +26,10 @@ public:
   ue_cell_repository(const cell_configuration& cell_cfg, cell_metrics_handler* cell_metrics);
 
   du_cell_index_t cell_index() const { return cell_idx; }
-  bool            contains(du_ue_index_t ue_index) const { return ues.contains(ue_index); }
+
+  /// Metrics handler for this cell (may be nullptr if metrics are disabled).
+  cell_metrics_handler* get_metrics() const { return metrics; }
+  bool                  contains(du_ue_index_t ue_index) const { return ues.contains(ue_index); }
   bool     contains(rnti_t rnti) const { return rnti_to_ue_index_lookup.find(rnti) != rnti_to_ue_index_lookup.end(); }
   size_t   size() const { return ues.size(); }
   bool     empty() const { return ues.empty(); }
@@ -63,14 +66,15 @@ private:
   friend class ue_repository;
 
   /// Add a new UE to the UE cell repository.
-  ue_cell& add_ue(const ue_configuration&   ue_cfg,
-                  serv_cell_index_t         serv_cell_index,
-                  ue_drx_controller&        drx,
-                  std::optional<slot_point> msg3_slot_rx);
+  ue_cell& add_ue(const ue_configuration& ue_cfg,
+                  serv_cell_index_t       serv_cell_index,
+                  ue_pcell_state*         ue_pcell_fsm,
+                  ue_drx_controller&      drx);
 
   void rem_ue(du_ue_index_t ue_index);
 
   const du_cell_index_t   cell_idx;
+  cell_metrics_handler*   metrics;
   ocudulog::basic_logger& logger;
 
   /// HARQs manager for the cell.

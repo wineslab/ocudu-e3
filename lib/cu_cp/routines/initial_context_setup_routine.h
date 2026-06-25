@@ -4,13 +4,16 @@
 
 #pragma once
 
+#include "../cu_cp_impl_interface.h"
 #include "../ue_location_manager/ue_location_manager.h"
-#include "../ue_manager/ue_manager_impl.h"
+#include "../ue_security_manager/ue_security_manager_impl.h"
+#include "ocudu/f1ap/cu_cp/f1ap_cu.h"
+#include "ocudu/ngap/ngap.h"
 #include "ocudu/ngap/ngap_init_context_setup.h"
 #include "ocudu/ngap/ngap_ue_radio_capability_management.h"
+#include "ocudu/rrc/rrc_ue.h"
 
-namespace ocudu {
-namespace ocucp {
+namespace ocudu::ocucp {
 
 /// \brief Handles the setup of PDU session resources from the RRC viewpoint.
 class initial_context_setup_routine
@@ -19,6 +22,7 @@ public:
   initial_context_setup_routine(const ngap_init_context_setup_request&       request_,
                                 rrc_ue_interface&                            rrc_ue_,
                                 ngap_ue_radio_capability_management_handler& ngap_ue_radio_cap_handler_,
+                                ngap_location_reporting_handler&             ngap_location_reporting_handler_,
                                 ue_security_manager&                         security_mng_,
                                 ue_location_manager&                         loc_mng_,
                                 f1ap_ue_context_manager&                     f1ap_ue_ctxt_mng_,
@@ -39,6 +43,7 @@ private:
 
   rrc_ue_interface&                            rrc_ue;
   ngap_ue_radio_capability_management_handler& ngap_ue_radio_cap_handler;
+  ngap_location_reporting_handler&             ngap_ue_location_reporting_handler;
   ue_security_manager&                         security_mng;
   ue_location_manager&                         loc_mng;
   f1ap_ue_context_manager&                     f1ap_ue_ctxt_mng;          // to trigger UE context setup at F1AP
@@ -53,13 +58,12 @@ private:
   rrc_reconfiguration_procedure_request    rrc_reconfig_args;
 
   // (sub-)routine results
-  f1ap_ue_context_setup_response            ue_context_setup_response;
-  bool                                      ue_capability_transfer_result = false; // to query the UE capabilities
-  cu_cp_pdu_session_resource_setup_response pdu_session_setup_response;
-  bool                                      security_mode_command_result = false;
-  ngap_init_context_setup_failure           fail_msg;
-  ngap_init_context_setup_response          resp_msg;
+  f1ap_ue_context_setup_response           ue_context_setup_response;
+  bool                                     ue_capability_transfer_result = false; // to query the UE capabilities
+  ngap_pdu_session_resource_setup_response pdu_session_setup_response;
+  bool                                     security_mode_command_result = false;
+  ngap_init_context_setup_failure          fail_msg;
+  ngap_init_context_setup_response         resp_msg;
 };
 
-} // namespace ocucp
-} // namespace ocudu
+} // namespace ocudu::ocucp

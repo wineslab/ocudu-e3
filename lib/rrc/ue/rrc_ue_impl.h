@@ -9,10 +9,9 @@
 #include "rrc_ue_logger.h"
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg.h"
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg_ies.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/rrc/rrc_cell_context.h"
 #include "ocudu/rrc/rrc_ue.h"
-#include "ocudu/support/ocudu_assert.h"
 
 namespace ocudu::ocucp {
 
@@ -26,7 +25,7 @@ public:
               rrc_ue_measurement_notifier&           measurement_notifier_,
               rrc_ue_cu_cp_ue_notifier&              cu_cp_ue_notifier_,
               rrc_ue_event_notifier&                 metrics_notifier_,
-              ue_index_t                             ue_index_,
+              cu_cp_ue_index_t                       ue_index_,
               rnti_t                                 c_rnti_,
               const rrc_cell_context&                cell_,
               const rrc_ue_cfg_t&                    cfg_,
@@ -66,15 +65,17 @@ public:
   bool             store_ue_capabilities(byte_buffer ue_capabilities) override;
   async_task<bool> handle_rrc_ue_capability_transfer_request(const rrc_ue_capability_transfer_request& msg) override;
   rrc_ue_release_context
-                          get_rrc_ue_release_context(bool                                  requires_rrc_message,
-                                                     std::optional<std::chrono::seconds>   release_wait_time = std::nullopt,
-                                                     std::optional<rrc_inactivity_context> inactivity_context = std::nullopt) override;
+                          get_rrc_ue_release_context(bool                                          requires_rrc_message,
+                                                     std::optional<std::chrono::seconds>           release_wait_time = std::nullopt,
+                                                     std::optional<rrc_inactivity_context>         inactivity_context = std::nullopt,
+                                                     std::optional<cu_cp_release_redirect_nr_info> redirect_nr_info = std::nullopt) override;
   rrc_ue_transfer_context get_transfer_context() override;
   std::optional<rrc_meas_cfg>
                          generate_meas_config(const std::optional<rrc_meas_cfg>& current_meas_config = std::nullopt,
                                               bool                               cond_meas           = false,
                                               span<const pci_t>                  candidate_pcis      = {}) override;
-  byte_buffer            get_packed_meas_config() override;
+  byte_buffer            get_packed_meas_config(span<const pci_t> candidate_pcis = {}) override;
+  void                   update_meas_config(const rrc_meas_cfg& cfg) override;
   std::optional<uint8_t> get_serving_cell_mo() override;
   byte_buffer            get_rrc_handover_command(const rrc_reconfiguration_procedure_request& request,
                                                   unsigned                                     transaction_id) override;
@@ -121,14 +122,15 @@ private:
   void stop() override;
 
   // message handlers
-  void handle_pdu(srb_id_t srb_id, byte_buffer rrc_pdu);
+  void handle_pdu(srb_id_t srb_id, byte_buffer rrc_pdu, bool integrity_verified);
   void handle_rrc_setup_request(const asn1::rrc_nr::rrc_setup_request_s& msg);
   void handle_rrc_reest_request(const asn1::rrc_nr::rrc_reest_request_s& msg);
   void handle_rrc_resume_request(const asn1::rrc_nr::rrc_resume_request_s& msg, rnti_t c_rnti);
   void handle_ul_info_transfer(const asn1::rrc_nr::ul_info_transfer_ies_s& ul_info_transfer);
-  void handle_rrc_transaction_complete(const asn1::rrc_nr::ul_dcch_msg_s& msg, uint8_t transaction_id_);
   void handle_security_mode_complete(const asn1::rrc_nr::security_mode_complete_s& msg);
   void handle_measurement_report(const asn1::rrc_nr::meas_report_s& msg);
+  void handle_rrc_transaction_complete(const asn1::rrc_nr::ul_dcch_msg_s& msg, uint8_t transaction_id_);
+  void cancel_rrc_transaction(uint8_t transaction_id_);
 
   // message senders
   /// Packs a DL-CCCH message and logs the message
@@ -141,7 +143,10 @@ private:
 
   // rrc_ue_security_mode_command_proc_notifier
   void on_new_dl_dcch(srb_id_t srb_id, const asn1::rrc_nr::dl_dcch_msg_s& dl_dcch_msg) override;
-  void on_new_as_security_context() override;
+  void on_new_as_security_context(bool security_mode_active) override;
+
+  // helpers
+  void handle_illegal_pdu_integrity(const char* msg, bool integrity_verified);
 
   rrc_ue_logger                   logger;
   rrc_ue_context_t                context;

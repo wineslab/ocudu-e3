@@ -32,7 +32,6 @@ struct mac_cell_sys_info_config {
 };
 
 /// Request to create Cell in MAC and Scheduler.
-/// \remark See O-RAN WG8, Section 9.2.1.1.
 struct mac_cell_creation_request {
   du_cell_index_t cell_index;
   pci_t           pci;
@@ -50,6 +49,11 @@ struct mac_cell_creation_request {
   ssb_configuration     ssb_cfg;
   coreset0_index        cs0_index;
   search_space0_index   ss0_index;
+
+  /// Total number of DL HARQ buffers the MAC preallocates for the cell. It accounts for the UEs the cell can support
+  /// (each using the configured number of DL HARQ processes) plus a margin for UEs that only need a single HARQ to be
+  /// RRC Rejected.
+  unsigned max_harq_buffers = MAX_NOF_HARQS * MAX_NOF_DU_UES_PER_CELL;
 
   /// Embedded scheduler cell configuration request.
   sched_cell_configuration_request_message sched_req;

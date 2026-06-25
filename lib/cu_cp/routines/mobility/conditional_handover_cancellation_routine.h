@@ -4,13 +4,12 @@
 
 #pragma once
 
-#include "../../cu_cp_impl_interface.h"
 #include "../../ue_manager/ue_manager_impl.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "../../xnap_repository.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/support/async/async_task.h"
 
-namespace ocudu {
-namespace ocucp {
+namespace ocudu::ocucp {
 
 /// \brief Cancels CHO if the UE never executes it after the execution timer fires.
 ///
@@ -19,8 +18,9 @@ namespace ocucp {
 class conditional_handover_cancellation_routine
 {
 public:
-  conditional_handover_cancellation_routine(ue_index_t              source_ue_index,
+  conditional_handover_cancellation_routine(cu_cp_ue_index_t        source_ue_index,
                                             ue_manager&             ue_mng,
+                                            xnap_repository*        xnap_db,
                                             ocudulog::basic_logger& logger);
 
   void operator()(coro_context<async_task<void>>& ctx);
@@ -28,8 +28,9 @@ public:
   static const char* name() { return "CHO Cancellation Routine"; }
 
 private:
-  const ue_index_t        source_ue_index;
+  const cu_cp_ue_index_t  source_ue_index;
   ue_manager&             ue_mng;
+  xnap_repository*        xnap_db;
   ocudulog::basic_logger& logger;
 
   cu_cp_ue*                             source_ue      = nullptr;
@@ -37,5 +38,4 @@ private:
   rrc_reconfiguration_procedure_request removal_request;
 };
 
-} // namespace ocucp
-} // namespace ocudu
+} // namespace ocudu::ocucp

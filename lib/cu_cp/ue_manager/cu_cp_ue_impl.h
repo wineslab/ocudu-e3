@@ -14,45 +14,59 @@
 #include "cu_cp_ue_impl_interface.h"
 #include "ue_task_scheduler_impl.h"
 #include "ocudu/cu_cp/cu_cp_cho_types.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp_bearer_context_update.h"
+#include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/ran/du_cell_index.h"
+#include "ocudu/ran/gnb_du_id.h"
 #include "ocudu/ran/plmn_identity.h"
+#include "ocudu/xnap/xnap_types.h"
 #include <optional>
 
 namespace ocudu::ocucp {
 
 /// \brief Context of a CU-CP UE.
 struct cu_cp_ue_context {
-  du_index_t                       du_idx       = du_index_t::invalid;
-  cu_up_index_t                    cu_up_idx    = cu_up_index_t::invalid;
-  xnc_peer_index_t                 xnc_peer_idx = xnc_peer_index_t::invalid;
-  plmn_identity                    plmn         = plmn_identity::test_value();
-  gnb_du_id_t                      du_id        = gnb_du_id_t::invalid;
-  ue_index_t                       ue_index     = ue_index_t::invalid;
-  rnti_t                           crnti        = rnti_t::INVALID_RNTI;
-  cu_cp_aggregate_maximum_bit_rate ue_ambr;
+  cu_cp_du_index_t             du_idx       = cu_cp_du_index_t::invalid;
+  cu_cp_cu_up_index_t          cu_up_idx    = cu_cp_cu_up_index_t::invalid;
+  xnc_peer_index_t             xnc_peer_idx = xnc_peer_index_t::invalid;
+  plmn_identity                plmn         = plmn_identity::test_value();
+  gnb_du_id_t                  du_id        = gnb_du_id_t::invalid;
+  cu_cp_ue_index_t             ue_index     = cu_cp_ue_index_t::invalid;
+  rnti_t                       crnti        = rnti_t::INVALID_RNTI;
+  aggregate_maximum_bit_rate_t ue_ambr;
   /// \brief Flag to disable new UE reconfigurations. This can be used, for instance, to reconfigure UE contexts
   /// that are in the process of handover.
   bool reconfiguration_disabled = false;
+  /// \brief Pending NR redirect target set before the NGAP round-trip (NGAP carries no redirectedCarrierInfo).
+  /// Consumed by ue_context_release_routine once the AMF responds with UE Context Release Command.
+  std::optional<cu_cp_release_redirect_nr_info> pending_redirect_nr_info;
 };
 
 struct cu_cp_ue_handover_context {
-  ue_index_t target_ue_index = ue_index_t::invalid;
-  uint8_t    rrc_reconfig_transaction_id;
+  cu_cp_ue_index_t target_ue_index = cu_cp_ue_index_t::invalid;
+  uint8_t          rrc_reconfig_transaction_id;
 };
 
 /// \brief Single CHO candidate cell context.
 struct cu_cp_cho_candidate {
   cond_recfg_id_t cond_recfg_id{
-      cond_recfg_id_t(bounded_integer_invalid_tag{})};       ///< Conditional reconfiguration ID (1-8 per 3GPP).
-  pci_t               target_pci = INVALID_PCI;              ///< Target cell PCI.
-  nr_cell_global_id_t target_cgi;                            ///< Target cell global identity.
-  ue_index_t          target_ue_index = ue_index_t::invalid; ///< Target UE index allocated for this candidate.
-  byte_buffer         prepared_rrc_recfg;                    ///< Pre-packed RRCReconfiguration for this target.
-  unsigned            rrc_reconfig_transaction_id = 0; ///< RRC transaction ID for this candidate's reconfiguration.
+      cond_recfg_id_t(bounded_integer_invalid_tag{})};          ///< Conditional reconfiguration ID (1-8 per 3GPP).
+  pci_t               target_pci = INVALID_PCI;                 ///< Target cell PCI.
+  nr_cell_global_id_t target_cgi;                               ///< Target cell global identity.
+  cu_cp_ue_index_t target_ue_index = cu_cp_ue_index_t::invalid; ///< Target UE index; invalid for inter-CU candidates.
+  byte_buffer      prepared_rrc_recfg;                          ///< Pre-packed RRCReconfiguration for this target.
+  unsigned         rrc_reconfig_transaction_id = 0; ///< RRC transaction ID for this candidate's reconfiguration.
 
   /// \brief E1AP bearer context modification request for CU-UP tunnel update after CHO completion.
   e1ap_bearer_context_modification_request bearer_context_mod_request;
+
+  /// Xn-C peer index; set when the target is served by a remote CU-CP (inter-CU CHO via Xn).
+  std::optional<xnc_peer_index_t> xnc_index;
+  /// Target XNAP UE ID returned in HO Request Ack; needed for ConditionalHandoverCancel.
+  peer_xnap_ue_id_t peer_xnap_ue_id = peer_xnap_ue_id_t::invalid;
+
+  /// \brief Returns true if this candidate targets a remote CU-CP (Xn-based CHO).
+  bool is_inter_cu() const { return xnc_index.has_value(); }
 };
 
 /// \brief CHO context for a UE (supports 1-8 candidates per 3GPP).
@@ -73,16 +87,16 @@ struct cu_cp_ue_cho_context {
     target, ///< This UE is a CHO target candidate, awaiting Access Success.
   };
 
-  role_t                           role            = role_t::source;      ///< CHO role of this UE.
-  ue_index_t                       source_ue_index = ue_index_t::invalid; ///< For target UEs: the source UE index.
-  state_t                          state           = state_t::idle;       ///< Current CHO state.
-  std::vector<cu_cp_cho_candidate> candidates;                            ///< CHO candidate cells (1-8).
+  role_t           role            = role_t::source;            ///< CHO role of this UE.
+  cu_cp_ue_index_t source_ue_index = cu_cp_ue_index_t::invalid; ///< For target UEs: the source UE index.
+  state_t          state           = state_t::idle;             ///< Current CHO state.
+  std::vector<cu_cp_cho_candidate> candidates;                  ///< CHO candidate cells (1-8).
   unique_timer cho_execution_timer; ///< Fires conditional_handover_cancellation_routine if UE never executes CHO.
 
   /// \brief Find candidate by target UE index.
   /// \param[in] target_ue_idx Target UE index to search for.
   /// \return Pointer to candidate if found, nullptr otherwise.
-  cu_cp_cho_candidate* find_candidate(ue_index_t target_ue_idx)
+  cu_cp_cho_candidate* find_candidate(cu_cp_ue_index_t target_ue_idx)
   {
     for (auto& candidate : candidates) {
       if (candidate.target_ue_index == target_ue_idx) {
@@ -111,7 +125,7 @@ struct cu_cp_ue_cho_context {
   {
     cho_execution_timer.stop();
     role            = role_t::source;
-    source_ue_index = ue_index_t::invalid;
+    source_ue_index = cu_cp_ue_index_t::invalid;
     state           = state_t::idle;
     candidates.clear();
   }
@@ -120,8 +134,8 @@ struct cu_cp_ue_cho_context {
 class cu_cp_ue : public cu_cp_ue_impl_interface
 {
 public:
-  cu_cp_ue(ue_index_t                     ue_index_,
-           du_index_t                     du_index_,
+  cu_cp_ue(cu_cp_ue_index_t               ue_index_,
+           cu_cp_du_index_t               du_index_,
            timer_manager&                 timers_,
            task_executor&                 task_exec_,
            const up_resource_manager_cfg& up_cfg,
@@ -136,7 +150,7 @@ public:
   void stop();
 
   /// \brief Get the UE index of the UE.
-  ue_index_t get_ue_index() const override { return ue_index; }
+  cu_cp_ue_index_t get_ue_index() const override { return ue_index; }
 
   /// \brief Get the PCI of the UE.
   [[nodiscard]] pci_t get_pci() const { return pci; }
@@ -147,10 +161,10 @@ public:
   [[nodiscard]] gnb_du_id_t get_du_id() const { return ue_ctxt.du_id; }
 
   /// \brief Get the DU index of the UE.
-  [[nodiscard]] du_index_t get_du_index() const override { return ue_ctxt.du_idx; }
+  [[nodiscard]] cu_cp_du_index_t get_du_index() const override { return ue_ctxt.du_idx; }
 
   /// \brief Get the CU-UP index of the UE.
-  [[nodiscard]] cu_up_index_t get_cu_up_index() const override { return ue_ctxt.cu_up_idx; }
+  [[nodiscard]] cu_cp_cu_up_index_t get_cu_up_index() const override { return ue_ctxt.cu_up_idx; }
 
   /// \brief Get the XN-C peer index of the UE.
   [[nodiscard]] xnc_peer_index_t get_xnc_peer_index() const override { return ue_ctxt.xnc_peer_idx; }
@@ -186,20 +200,20 @@ public:
   void update_du_ue(gnb_du_id_t     du_id_       = gnb_du_id_t::invalid,
                     pci_t           pci_         = INVALID_PCI,
                     rnti_t          c_rnti_      = rnti_t::INVALID_RNTI,
-                    du_cell_index_t pcell_index_ = du_cell_index_t::invalid);
+                    du_cell_index_t pcell_index_ = INVALID_DU_CELL_INDEX);
 
   /// \brief Set/update the measurement context of the UE.
   void update_meas_context(cell_meas_manager_ue_context meas_ctxt);
 
   /// \brief Check if the DU UE context is created.
   /// \return True if the DU UE context is created, false otherwise.
-  [[nodiscard]] bool du_ue_created() const { return ue_ctxt.du_idx != du_index_t::invalid; }
+  [[nodiscard]] bool du_ue_created() const { return ue_ctxt.du_idx != cu_cp_du_index_t::invalid; }
 
   /// \brief Set the RRC UE of the UE.
   void set_rrc_ue(rrc_ue_interface& rrc_ue_);
 
   /// \brief Set the CU-UP index of the UE.
-  void set_cu_up_index(cu_up_index_t cu_up_idx) { ue_ctxt.cu_up_idx = cu_up_idx; }
+  void set_cu_up_index(cu_cp_cu_up_index_t cu_up_idx) { ue_ctxt.cu_up_idx = cu_up_idx; }
 
   /// \brief Set the XN-C peer index of the UE.
   void set_xnc_peer_index(xnc_peer_index_t xnc_peer_idx) { ue_ctxt.xnc_peer_idx = xnc_peer_idx; }
@@ -241,10 +255,10 @@ public:
 
   /// \brief Set UE AMBR.
   /// \param[in] ue_ambr The AMBR to set for the UE.
-  void set_ue_ambr(cu_cp_aggregate_maximum_bit_rate ue_ambr) override;
+  void set_ue_ambr(aggregate_maximum_bit_rate_t ue_ambr) override;
 
   /// \brief Get UE AMBR.
-  cu_cp_aggregate_maximum_bit_rate get_ue_ambr() const override { return ue_ctxt.ue_ambr; }
+  aggregate_maximum_bit_rate_t get_ue_ambr() const override { return ue_ctxt.ue_ambr; }
 
   unique_timer& get_handover_ue_release_timer() { return handover_ue_release_timer; }
 
@@ -255,7 +269,7 @@ public:
 
 private:
   // Common context.
-  ue_index_t             ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t       ue_index = cu_cp_ue_index_t::invalid;
   ue_task_scheduler_impl task_sched;
   up_resource_manager    up_mng;
   ue_security_manager    sec_mng;
@@ -263,7 +277,7 @@ private:
 
   // DU/CU-UP UE context.
   cu_cp_ue_context ue_ctxt;
-  du_cell_index_t  pcell_index = du_cell_index_t::invalid;
+  du_cell_index_t  pcell_index = INVALID_DU_CELL_INDEX;
   pci_t            pci         = INVALID_PCI;
 
   // RRC UE context.

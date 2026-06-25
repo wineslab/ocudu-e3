@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/rnti.h"
+#include <chrono>
 #include <optional>
 
 namespace ocudu {
@@ -24,8 +25,14 @@ struct du_test_mode_config {
     unsigned                ri;
     unsigned                pmi;
     unsigned                i_1_1;
+    std::optional<unsigned> i_1_2;
     std::optional<unsigned> i_1_3;
     unsigned                i_2;
+    /// \brief Number of milliseconds of active traffic before all UEs in a cell are released. When set,
+    /// UEs cycle through attach, traffic, detach, and attach again indefinitely. Unset disables cycling.
+    std::optional<std::chrono::milliseconds> attach_detach_duration;
+    /// \brief Guard period duration between a release cycle and the next creation cycle.
+    std::chrono::milliseconds attach_detach_guard_duration{1000};
   };
 
   /// Creation of a phantom UE for test mode operation.

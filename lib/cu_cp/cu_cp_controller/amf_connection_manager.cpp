@@ -21,7 +21,7 @@ amf_connection_manager::amf_connection_manager(ngap_repository&                 
                                                cu_cp_amf_reconnection_handler&   cu_cp_notifier_,
                                                timer_manager&                    timers_,
                                                task_executor&                    cu_cp_exec_,
-                                               common_task_scheduler&            common_task_sched_,
+                                               async_task_scheduler&             common_task_sched_,
                                                cu_cp_ng_setup_complete_notifier* ng_setup_notifier_) :
   ngaps(ngaps_),
   cu_cp_notifier(cu_cp_notifier_),
@@ -36,7 +36,7 @@ amf_connection_manager::amf_connection_manager(ngap_repository&                 
 void amf_connection_manager::connect_to_amf(std::promise<bool>* completion_signal)
 {
   // Schedules setup routine to be executed in sequence with other CU-CP procedures.
-  common_task_sched.schedule_async_task(
+  common_task_sched.schedule(
       launch_async([this, success = false, p = completion_signal](coro_context<async_task<void>>& ctx) mutable {
         CORO_BEGIN(ctx);
 
@@ -64,12 +64,12 @@ async_task<void> amf_connection_manager::disconnect_amf()
   return start_amf_connection_removal(ngaps, amfs_connected);
 }
 
-void amf_connection_manager::handle_amf_connection_loss(amf_index_t amf_index)
+void amf_connection_manager::handle_amf_connection_loss(cu_cp_amf_index_t amf_index)
 {
   amfs_connected.erase(amf_index);
 }
 
-void amf_connection_manager::reconnect_to_amf(amf_index_t               amf_index,
+void amf_connection_manager::reconnect_to_amf(cu_cp_amf_index_t         amf_index,
                                               ue_manager*               ue_mng,
                                               std::chrono::milliseconds amf_reconnection_retry_time)
 {
@@ -115,7 +115,7 @@ void amf_connection_manager::stop()
 
   // Stop and delete AMF connections.
   while (not cu_cp_exec.defer([this, signal_stop = std::move(signal_stop)]() mutable {
-    common_task_sched.schedule_async_task(
+    common_task_sched.schedule(
         launch_async([this, signal_stop = std::move(signal_stop)](coro_context<async_task<void>>& ctx) mutable {
           CORO_BEGIN(ctx);
           // Disconnect AMF connection.
@@ -143,15 +143,15 @@ void amf_connection_manager::stop()
 
 bool amf_connection_manager::is_amf_connected(plmn_identity plmn) const
 {
-  amf_index_t amf_index = plmn_to_amf_index(plmn);
-  if (amf_index == amf_index_t::invalid) {
+  cu_cp_amf_index_t amf_index = plmn_to_amf_index(plmn);
+  if (amf_index == cu_cp_amf_index_t::invalid) {
     return false;
   }
 
   return is_amf_connected(amf_index);
 }
 
-bool amf_connection_manager::is_amf_connected(amf_index_t amf_index) const
+bool amf_connection_manager::is_amf_connected(cu_cp_amf_index_t amf_index) const
 {
   const auto& amf_connected = amfs_connected.find(amf_index);
   if (amf_connected == amfs_connected.end()) {
@@ -161,13 +161,13 @@ bool amf_connection_manager::is_amf_connected(amf_index_t amf_index) const
   return amf_connected->second.load(std::memory_order_relaxed);
 }
 
-void amf_connection_manager::handle_connection_setup_result(amf_index_t amf_index, bool success)
+void amf_connection_manager::handle_connection_setup_result(cu_cp_amf_index_t amf_index, bool success)
 {
   // Update AMF connection handler state.
   amfs_connected.emplace(amf_index, success);
 }
 
-amf_index_t amf_connection_manager::plmn_to_amf_index(plmn_identity plmn) const
+cu_cp_amf_index_t amf_connection_manager::plmn_to_amf_index(plmn_identity plmn) const
 {
   for (const auto& [amf_index, ngap] : ngaps.get_ngaps()) {
     for (auto& supported_plmn : ngap->get_ngap_context().get_supported_plmns()) {
@@ -177,5 +177,5 @@ amf_index_t amf_connection_manager::plmn_to_amf_index(plmn_identity plmn) const
     }
   }
 
-  return amf_index_t::invalid;
+  return cu_cp_amf_index_t::invalid;
 }

@@ -6,8 +6,8 @@
 #include "lib/ngap/ngap_validators/ngap_validators.h"
 #include "ngap_test_helpers.h"
 #include "ocudu/cu_cp/cu_cp_configuration_helpers.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/ngap/ngap_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/cu_types.h"
 #include <gtest/gtest.h>
 #include <sys/types.h>
@@ -93,7 +93,7 @@ public:
 
     asn1_setup_req_transfer->ul_ngu_up_tnl_info.set_gtp_tunnel();
     auto addr = transport_layer_address::create_from_string("127.0.0.1");
-    asn1_setup_req_transfer->ul_ngu_up_tnl_info.gtp_tunnel().transport_layer_address.from_string(addr.to_bitstring());
+    tla_to_asn1_bitstring(asn1_setup_req_transfer->ul_ngu_up_tnl_info.gtp_tunnel().transport_layer_address, addr);
     asn1_setup_req_transfer->ul_ngu_up_tnl_info.gtp_tunnel().gtp_teid.from_number(1);
 
     asn1_setup_req_transfer->pdu_session_type = asn1::ngap::pdu_session_type_opts::options::ipv4v6;
@@ -175,17 +175,17 @@ public:
 // Test handling of valid PDU session resource modification request.
 TEST_F(ngap_validator_test, when_valid_request_received_then_pdu_session_setup_succeeds)
 {
-  ue_index_t  ue_index  = uint_to_ue_index(0);
-  amf_ue_id_t amf_ue_id = uint_to_amf_ue_id(0);
-  ran_ue_id_t ran_ue_id = uint_to_ran_ue_id(0);
+  cu_cp_ue_index_t ue_index  = uint_to_ue_index(0);
+  amf_ue_id_t      amf_ue_id = uint_to_amf_ue_id(0);
+  ran_ue_id_t      ran_ue_id = uint_to_ran_ue_id(0);
 
   ngap_message ngap_msg = generate_valid_pdu_session_resource_setup_request_message(
       amf_ue_id, ran_ue_id, {{uint_to_pdu_session_id(1), {pdu_session_type_t::ipv4, {{uint_to_qos_flow_id(1), 9}}}}});
 
   auto& asn1_request = ngap_msg.pdu.init_msg().value.pdu_session_res_setup_request();
 
-  cu_cp_pdu_session_resource_setup_request request;
-  fill_cu_cp_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
+  ngap_pdu_session_resource_setup_request request;
+  fill_ngap_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
 
   ngap_ue_logger ue_logger{"NGAP", {ue_index, ran_ue_id}};
   // Verify PDU session resource setup request.
@@ -199,16 +199,16 @@ TEST_F(ngap_validator_test, when_valid_request_received_then_pdu_session_setup_s
 // Test handling of duplicate PDU session ids in PDU session resource setup request.
 TEST_F(ngap_validator_test, when_duplicate_pdu_session_id_then_pdu_session_setup_fails)
 {
-  ue_index_t  ue_index  = uint_to_ue_index(0);
-  amf_ue_id_t amf_ue_id = uint_to_amf_ue_id(0);
-  ran_ue_id_t ran_ue_id = uint_to_ran_ue_id(0);
+  cu_cp_ue_index_t ue_index  = uint_to_ue_index(0);
+  amf_ue_id_t      amf_ue_id = uint_to_amf_ue_id(0);
+  ran_ue_id_t      ran_ue_id = uint_to_ran_ue_id(0);
 
   ngap_message ngap_msg = generate_invalid_pdu_session_resource_setup_request_message(amf_ue_id, ran_ue_id);
 
   auto& asn1_request = ngap_msg.pdu.init_msg().value.pdu_session_res_setup_request();
 
-  cu_cp_pdu_session_resource_setup_request request;
-  fill_cu_cp_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
+  ngap_pdu_session_resource_setup_request request;
+  fill_ngap_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
 
   ngap_ue_logger ue_logger{"NGAP", {ue_index, ran_ue_id}};
   // Verify PDU session resource setup request.
@@ -220,17 +220,17 @@ TEST_F(ngap_validator_test, when_duplicate_pdu_session_id_then_pdu_session_setup
 
 TEST_F(ngap_validator_test, when_unique_and_duplicate_pdu_session_id_then_pdu_session_setup_partly_fails)
 {
-  ue_index_t  ue_index  = uint_to_ue_index(0);
-  amf_ue_id_t amf_ue_id = uint_to_amf_ue_id(0);
-  ran_ue_id_t ran_ue_id = uint_to_ran_ue_id(0);
+  cu_cp_ue_index_t ue_index  = uint_to_ue_index(0);
+  amf_ue_id_t      amf_ue_id = uint_to_amf_ue_id(0);
+  ran_ue_id_t      ran_ue_id = uint_to_ran_ue_id(0);
 
   ngap_message ngap_msg =
       generate_pdu_session_resource_setup_request_with_one_unique_and_two_duplicate_pdu_sessions(amf_ue_id, ran_ue_id);
 
   auto& asn1_request = ngap_msg.pdu.init_msg().value.pdu_session_res_setup_request();
 
-  cu_cp_pdu_session_resource_setup_request request;
-  fill_cu_cp_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
+  ngap_pdu_session_resource_setup_request request;
+  fill_ngap_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
 
   ngap_ue_logger ue_logger{"NGAP", {ue_index, ran_ue_id}};
   // Verify PDU session resource setup request.
@@ -247,7 +247,7 @@ TEST_F(
     when_request_pdu_session_contains_non_gbr_qos_flows_but_no_aggregate_maximum_bitrate_then_pdu_session_setup_fails)
 {
   pdu_session_id_t psi       = uint_to_pdu_session_id(1);
-  ue_index_t       ue_index  = uint_to_ue_index(0);
+  cu_cp_ue_index_t ue_index  = uint_to_ue_index(0);
   amf_ue_id_t      amf_ue_id = uint_to_amf_ue_id(0);
   ran_ue_id_t      ran_ue_id = uint_to_ran_ue_id(0);
 
@@ -257,8 +257,8 @@ TEST_F(
 
   auto& asn1_request = ngap_msg.pdu.init_msg().value.pdu_session_res_setup_request();
 
-  cu_cp_pdu_session_resource_setup_request request;
-  fill_cu_cp_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
+  ngap_pdu_session_resource_setup_request request;
+  fill_ngap_pdu_session_resource_setup_request(request, asn1_request->pdu_session_res_setup_list_su_req);
 
   ngap_ue_logger ue_logger{"NGAP", {ue_index, ran_ue_id}};
   // Verify PDU session resource setup request.
@@ -272,7 +272,7 @@ TEST_F(
 TEST_F(ngap_validator_test, when_valid_request_received_then_pdu_session_modify_succeeds)
 {
   pdu_session_id_t psi       = uint_to_pdu_session_id(1);
-  ue_index_t       ue_index  = uint_to_ue_index(0);
+  cu_cp_ue_index_t ue_index  = uint_to_ue_index(0);
   amf_ue_id_t      amf_ue_id = uint_to_amf_ue_id(0);
   ran_ue_id_t      ran_ue_id = uint_to_ran_ue_id(0);
 
@@ -280,8 +280,8 @@ TEST_F(ngap_validator_test, when_valid_request_received_then_pdu_session_modify_
 
   auto& asn1_request = ngap_msg.pdu.init_msg().value.pdu_session_res_modify_request();
 
-  cu_cp_pdu_session_resource_modify_request request;
-  fill_cu_cp_pdu_session_resource_modify_request(request, asn1_request->pdu_session_res_modify_list_mod_req);
+  ngap_pdu_session_resource_modify_request request;
+  fill_ngap_pdu_session_resource_modify_request(request, asn1_request->pdu_session_res_modify_list_mod_req);
 
   ngap_ue_logger ue_logger{"NGAP", {ue_index, ran_ue_id}};
   // Verify PDU session resource modify request.
@@ -295,17 +295,17 @@ TEST_F(ngap_validator_test, when_valid_request_received_then_pdu_session_modify_
 // Test handling of duplicate PDU session ids in PDU session resource modification request.
 TEST_F(ngap_validator_test, when_duplicate_pdu_session_id_then_pdu_session_modification_fails)
 {
-  ue_index_t  ue_index  = uint_to_ue_index(0);
-  amf_ue_id_t amf_ue_id = uint_to_amf_ue_id(0);
-  ran_ue_id_t ran_ue_id = uint_to_ran_ue_id(0);
+  cu_cp_ue_index_t ue_index  = uint_to_ue_index(0);
+  amf_ue_id_t      amf_ue_id = uint_to_amf_ue_id(0);
+  ran_ue_id_t      ran_ue_id = uint_to_ran_ue_id(0);
 
   ngap_message ngap_msg =
       generate_invalid_pdu_session_resource_modify_request_message(amf_ue_id, ran_ue_id, uint_to_pdu_session_id(1));
 
   auto& asn1_request = ngap_msg.pdu.init_msg().value.pdu_session_res_modify_request();
 
-  cu_cp_pdu_session_resource_modify_request request;
-  fill_cu_cp_pdu_session_resource_modify_request(request, asn1_request->pdu_session_res_modify_list_mod_req);
+  ngap_pdu_session_resource_modify_request request;
+  fill_ngap_pdu_session_resource_modify_request(request, asn1_request->pdu_session_res_modify_list_mod_req);
 
   ngap_ue_logger ue_logger{"NGAP", {ue_index, ran_ue_id}};
   // Verify PDU session resource modify request.
@@ -319,7 +319,7 @@ TEST_F(ngap_validator_test, when_unique_and_duplicate_pdu_session_id_then_pdu_se
 {
   pdu_session_id_t psi           = uint_to_pdu_session_id(1);
   pdu_session_id_t duplicate_psi = uint_to_pdu_session_id(2);
-  ue_index_t       ue_index      = uint_to_ue_index(0);
+  cu_cp_ue_index_t ue_index      = uint_to_ue_index(0);
   amf_ue_id_t      amf_ue_id     = uint_to_amf_ue_id(0);
   ran_ue_id_t      ran_ue_id     = uint_to_ran_ue_id(0);
 
@@ -328,8 +328,8 @@ TEST_F(ngap_validator_test, when_unique_and_duplicate_pdu_session_id_then_pdu_se
 
   auto& asn1_request = ngap_msg.pdu.init_msg().value.pdu_session_res_modify_request();
 
-  cu_cp_pdu_session_resource_modify_request request;
-  fill_cu_cp_pdu_session_resource_modify_request(request, asn1_request->pdu_session_res_modify_list_mod_req);
+  ngap_pdu_session_resource_modify_request request;
+  fill_ngap_pdu_session_resource_modify_request(request, asn1_request->pdu_session_res_modify_list_mod_req);
 
   ngap_ue_logger ue_logger{"NGAP", {ue_index, ran_ue_id}};
   // Verify PDU session resource modify request.

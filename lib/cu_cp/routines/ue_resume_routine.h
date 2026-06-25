@@ -7,6 +7,7 @@
 #include "../cu_cp_impl_interface.h"
 #include "../du_processor/du_processor.h"
 #include "../ue_manager/ue_manager_impl.h"
+#include "ocudu/e1ap/cu_cp/e1ap_cu_cp.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp_bearer_context_update.h"
 #include "ocudu/support/async/async_task.h"
 
@@ -16,7 +17,7 @@ namespace ocudu::ocucp {
 class ue_resume_routine
 {
 public:
-  ue_resume_routine(const cu_cp_rrc_resume_request&        request_,
+  ue_resume_routine(const rrc_resume_request&              request_,
                     const ue_configuration&                ue_cfg_,
                     du_processor&                          du_proc_,
                     cu_cp_ue_context_manipulation_handler& ue_context_handler_,
@@ -50,7 +51,7 @@ private:
                                         bool                                        reestablish_drbs,
                                         std::optional<security::sec_selected_algos> selected_algos);
 
-  const cu_cp_rrc_resume_request request;
+  const rrc_resume_request request;
 
   cu_cp_ue* ue = nullptr; // Pointer to UE in the DU
 
@@ -74,7 +75,7 @@ private:
 
   // (sub-)routine results
   rrc_resume_request_response               response_msg;
-  ue_index_t                                released_ue_index;
+  cu_cp_ue_index_t                          released_ue_index;
   f1ap_ue_context_setup_response            ue_context_setup_response;
   e1ap_bearer_context_modification_response bearer_context_modification_response;
 };

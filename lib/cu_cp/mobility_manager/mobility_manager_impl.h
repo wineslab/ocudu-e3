@@ -10,8 +10,8 @@
 #include "../xnap_repository.h"
 #include "metrics/mobility_manager_metrics_aggregator.h"
 #include "ocudu/cu_cp/cu_cp_command_handler.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/cu_cp/mobility_manager_config.h"
+#include "ocudu/ran/cu_cp_types.h"
 
 namespace ocudu::ocucp {
 
@@ -24,10 +24,12 @@ public:
   virtual ~mobility_manager_measurement_handler() = default;
 
   /// \brief Handle event where neighbor became better than serving cell.
-  virtual void handle_neighbor_better_than_spcell(ue_index_t       ue_index,
-                                                  gnb_id_t         neighbor_gnb_id,
-                                                  nr_cell_identity neighbor_nci,
-                                                  pci_t            neighbor_pci) = 0;
+  virtual void handle_neighbor_better_than_spcell(cu_cp_ue_index_t     ue_index,
+                                                  gnb_id_t             neighbor_gnb_id,
+                                                  nr_cell_identity     neighbor_nci,
+                                                  pci_t                neighbor_pci,
+                                                  plmn_identity        neighbor_plmn,
+                                                  std::optional<tac_t> neighbor_tac) = 0;
 };
 
 /// Interface used to capture the mobility management metrics to the CU-CP.
@@ -54,7 +56,11 @@ public:
                    ue_manager&                      ue_mng_,
                    cell_meas_manager&               cell_meas_mng_);
 
-  void trigger_handover(pci_t source_pci, rnti_t rnti, pci_t target_pci) override;
+  void trigger_handover(pci_t         source_pci,
+                        rnti_t        rnti,
+                        pci_t         target_pci,
+                        plmn_identity target_plmn,
+                        tac_t         target_tac) override;
 
   void trigger_conditional_handover(
       pci_t                                                source_pci,
@@ -65,12 +71,14 @@ public:
 
   /// \brief Trigger CHO automatically for an already known UE.
   /// This path is only active when enabled in gNB config.
-  void trigger_auto_conditional_handover(ue_index_t ue_index);
+  void trigger_auto_conditional_handover(cu_cp_ue_index_t ue_index);
 
-  void handle_neighbor_better_than_spcell(ue_index_t       ue_index,
-                                          gnb_id_t         neighbor_gnb_id,
-                                          nr_cell_identity neighbor_nci,
-                                          pci_t            neighbor_pci) override;
+  void handle_neighbor_better_than_spcell(cu_cp_ue_index_t     ue_index,
+                                          gnb_id_t             neighbor_gnb_id,
+                                          nr_cell_identity     neighbor_nci,
+                                          pci_t                neighbor_pci,
+                                          plmn_identity        neighbor_plmn,
+                                          std::optional<tac_t> neighbor_tac) override;
 
   mobility_manager_metrics_aggregator& get_metrics_handler() { return metrics_handler; }
 
@@ -80,20 +88,32 @@ public:
   }
 
 private:
-  void
-  handle_handover(ue_index_t ue_index, gnb_id_t neighbor_gnb_id, nr_cell_identity neighbor_nci, pci_t neighbor_pci);
-  void handle_inter_cu_handover(ue_index_t source_ue_index, gnb_id_t target_gnb_id, nr_cell_identity target_nci);
-  void handle_intra_cu_handover(ue_index_t source_ue_index,
-                                pci_t      neighbor_pci,
-                                du_index_t source_du_index,
-                                du_index_t target_du_index);
-  static void
-       handle_ngap_handover(ngap_interface& ngap, cu_cp_ue& ue, gnb_id_t target_gnb_id, nr_cell_identity target_nci);
-  void handle_xnap_handover(ngap_interface&  ngap,
-                            xnap_interface&  xnap,
-                            cu_cp_ue&        ue,
-                            plmn_identity    plmn,
-                            nr_cell_identity target_nci);
+  void        handle_handover(cu_cp_ue_index_t     ue_index,
+                              gnb_id_t             neighbor_gnb_id,
+                              nr_cell_identity     neighbor_nci,
+                              pci_t                neighbor_pci,
+                              plmn_identity        neighbor_plmn,
+                              std::optional<tac_t> neighbor_tac);
+  void        handle_inter_cu_handover(cu_cp_ue_index_t source_ue_index,
+                                       gnb_id_t         target_gnb_id,
+                                       plmn_identity    target_plmn,
+                                       tac_t            target_tac,
+                                       nr_cell_identity target_nci);
+  void        handle_intra_cu_handover(cu_cp_ue_index_t source_ue_index,
+                                       pci_t            neighbor_pci,
+                                       cu_cp_du_index_t source_du_index,
+                                       cu_cp_du_index_t target_du_index);
+  static void handle_ngap_handover(ngap_interface&  ngap,
+                                   cu_cp_ue&        ue,
+                                   gnb_id_t         target_gnb_id,
+                                   plmn_identity    target_plmn,
+                                   tac_t            target_tac,
+                                   nr_cell_identity target_nci);
+  void        handle_xnap_handover(ngap_interface&  ngap,
+                                   xnap_interface&  xnap,
+                                   cu_cp_ue&        ue,
+                                   plmn_identity    plmn,
+                                   nr_cell_identity target_nci);
 
   void handle_conditional_handover(pci_t                                                source_pci,
                                    rnti_t                                               rnti,

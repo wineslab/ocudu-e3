@@ -60,19 +60,18 @@ private:
 
   // Components
   std::atomic<bool>                                  e1ap_connected = {false};
-  std::unique_ptr<e1ap_interface>                    e1ap;
+  std::vector<std::unique_ptr<e1ap_interface>>       e1aps;
   std::unique_ptr<ngu_session_manager>               ngu_session_mngr;
   std::vector<std::unique_ptr<gtpu_tnl_pdu_session>> ngu_sessions;
   std::unique_ptr<gtpu_demux>                        ngu_demux;
   std::unique_ptr<gtpu_echo>                         ngu_echo;
   std::unique_ptr<gtpu_teid_pool>                    n3_teid_allocator;
-  std::unique_ptr<gtpu_teid_pool>                    f1u_teid_allocator;
   std::unique_ptr<cu_up_manager>                     cu_up_mng;
 
   // Adapters
   network_gateway_data_gtpu_demux_adapter gw_data_gtpu_demux_adapter;
   gtpu_network_gateway_adapter            gtpu_gw_adapter;
-  e1ap_cu_up_manager_adapter              e1ap_cu_up_mng_adapter;
+  std::vector<e1ap_cu_up_manager_adapter> e1ap_cu_up_mng_adapters;
 
   std::mutex        mutex;
   bool              running{false};

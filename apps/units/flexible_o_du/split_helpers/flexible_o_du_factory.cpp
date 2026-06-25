@@ -9,7 +9,7 @@
 #include "apps/units/flexible_o_du/o_du_high/du_high/du_high_config_translators.h"
 #include "apps/units/flexible_o_du/o_du_high/o_du_high_unit_factory.h"
 #include "apps/units/flexible_o_du/o_du_low/o_du_low_unit_factory.h"
-#include "commands/ntn_config_update_remote_command_factory.h"
+#include "commands/ntn_config_update_remote_command.h"
 #include "flexible_o_du_impl.h"
 #include "flexible_o_du_ntn_configuration_manager_factory.h"
 #include "metrics/flexible_o_du_metrics_builder.h"
@@ -92,6 +92,9 @@ static o_du_low_unit_config generate_o_du_low_config(const du_low_unit_config&  
     du_low_cell.max_puschs_per_slot  = du_hi_cell.cell.pusch_cfg.max_puschs_per_slot;
     du_low_cell.pusch_max_nof_layers = cell.ran.init_bwp.pusch.max_nof_layers;
     du_low_cell.tdd_pattern          = cell.ran.tdd_cfg;
+    if (du_hi_cell.cell.ntn_cfg) {
+      du_low_cell.ntn_cs_koffset = du_hi_cell.cell.ntn_cfg->cell_specific_koffset;
+    }
   }
 
   return odu_low_cfg;
@@ -156,6 +159,7 @@ static ocudu_ntn::ntn_assistance_info convert_ntn_config_to_assistance_info(cons
   info.use_state_vector     = cfg.use_state_vector;
   info.feeder_link_info     = cfg.feeder_link_info;
   info.ntn_gateway_location = cfg.ntn_gateway_location;
+  info.propagator_type      = cfg.propagator_type;
 
   return info;
 }
@@ -164,8 +168,8 @@ static ocudu_ntn::ntn_configuration_manager_config
 generate_ntn_configuration_manager_config(const gnb_id_t& gnb_id, span<const du_high_unit_cell_config> du_hi_cells)
 {
   ocudu_ntn::ntn_configuration_manager_config out_cfg = {};
-  for (const auto& cell : du_hi_cells) {
-    const auto& cell_cfg = cell.cell;
+  for (unsigned phy_sector_idx = 0; phy_sector_idx != du_hi_cells.size(); ++phy_sector_idx) {
+    const auto& cell_cfg = du_hi_cells[phy_sector_idx].cell;
     if (cell_cfg.ntn_cfg.has_value()) {
       auto&                      out_cell = out_cfg.cells.emplace_back();
       expected<plmn_identity>    plmn     = plmn_identity::parse(cell_cfg.plmn);
@@ -176,7 +180,7 @@ generate_ntn_configuration_manager_config(const gnb_id_t& gnb_id, span<const du_
       if (not nci.has_value()) {
         report_error("Invalid NR-NCI");
       }
-      out_cell.sector_id       = cell_cfg.sector_id;
+      out_cell.sector_id       = phy_sector_idx;
       out_cell.nr_cgi.plmn_id  = plmn.value();
       out_cell.nr_cgi.nci      = nci.value();
       out_cell.assistance_info = convert_ntn_config_to_assistance_info(*cell_cfg.ntn_cfg);
@@ -252,6 +256,7 @@ o_du_unit flexible_o_du_factory::create_flexible_o_du(const o_du_unit_dependenci
 
   o_du_high_unit_dependencies odu_hi_unit_dependencies = {dependencies.workers->get_du_high_executor_mapper(),
                                                           *dependencies.f1c_client_handler,
+                                                          *dependencies.f1u_teid_allocator,
                                                           *dependencies.f1u_gw,
                                                           *dependencies.timer_ctrl,
                                                           *dependencies.mac_p,
@@ -371,10 +376,8 @@ o_du_unit flexible_o_du_factory::create_flexible_o_du(const o_du_unit_dependenci
                                          ru->get_controller(),
                                          dependencies.timer_ctrl->get_timer_manager(),
                                          dependencies.workers->get_du_high_executor_mapper().du_control_executor());
-
-    if (o_du.ntn_configurator_manager) {
-      add_ntn_config_update_remote_command(o_du.commands, *o_du.ntn_configurator_manager);
-    }
+    o_du.commands.remote.push_back(
+        std::make_unique<ocudu_ntn::ntn_config_update_remote_command>(*o_du.ntn_configurator_manager));
   }
 
   // Configure the RU and DU in the dynamic DU.

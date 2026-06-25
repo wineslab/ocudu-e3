@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cell_meas_manager_test_helpers.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/plmn_identity.h"
 
 using namespace ocudu;
@@ -37,12 +38,48 @@ TEST_F(cell_meas_manager_test, when_empty_config_is_used_validation_succeeds)
   ASSERT_TRUE(is_valid_configuration(cfg));
 }
 
+TEST_F(cell_meas_manager_test, when_periodic_report_cfg_id_is_unknown_validation_fails)
+{
+  cell_meas_manager_cfg cfg;
+
+  cell_meas_config cell_cfg;
+  cell_cfg.serving_cell_cfg.nci               = nr_cell_identity::create(0x19b0).value();
+  cell_cfg.serving_cell_cfg.gnb_id_bit_length = 32;
+  cell_cfg.periodic_report_cfg_id             = uint_to_report_cfg_id(1);
+  cfg.cells.emplace(cell_cfg.serving_cell_cfg.nci, cell_cfg);
+
+  // Note: cfg.report_config_ids does not contain report_cfg_id 1.
+  ASSERT_FALSE(is_valid_configuration(cfg));
+}
+
+TEST_F(cell_meas_manager_test, when_neighbor_report_cfg_id_is_unknown_validation_fails)
+{
+  cell_meas_manager_cfg cfg;
+
+  nr_cell_identity nci1 = nr_cell_identity::create(0x19b0).value();
+  nr_cell_identity nci2 = nr_cell_identity::create(0x19b1).value();
+
+  cell_meas_config cell_cfg;
+  cell_cfg.serving_cell_cfg.nci               = nci1;
+  cell_cfg.serving_cell_cfg.gnb_id_bit_length = 32;
+
+  neighbor_cell_meas_config ncell_meas_cfg;
+  ncell_meas_cfg.nci = nci2;
+  ncell_meas_cfg.report_cfg_ids.push_back(uint_to_report_cfg_id(2));
+  cell_cfg.ncells.push_back(ncell_meas_cfg);
+
+  cfg.cells.emplace(nci1, cell_cfg);
+
+  // Note: cfg.report_config_ids does not contain report_cfg_id 2.
+  ASSERT_FALSE(is_valid_configuration(cfg));
+}
+
 TEST_F(cell_meas_manager_test, when_empty_config_is_used_then_no_neighbor_cells_are_available)
 {
   create_empty_manager();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   nr_cell_identity            nci      = nr_cell_identity::create(0x19b0).value();
@@ -56,8 +93,8 @@ TEST_F(cell_meas_manager_test, when_serving_cell_not_found_no_neighbor_cells_are
 {
   create_default_manager();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   nr_cell_identity            nci      = nr_cell_identity::create(0x19b5).value();
@@ -71,8 +108,8 @@ TEST_F(cell_meas_manager_test, when_serving_cell_found_then_neighbor_cells_are_a
 {
   create_default_manager();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
 
@@ -88,8 +125,8 @@ TEST_F(cell_meas_manager_test, when_inexisting_cell_config_is_updated_then_confi
 {
   create_default_manager();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   const nr_cell_identity nci = nr_cell_identity::create(0x19b1).value();
@@ -116,8 +153,8 @@ TEST_F(cell_meas_manager_test, when_incomplete_cell_config_is_updated_then_valid
 {
   create_default_manager();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   const nr_cell_identity nci = nr_cell_identity::create(0x19b1).value();
@@ -143,8 +180,8 @@ TEST_F(cell_meas_manager_test, when_empty_cell_config_is_used_then_meas_cfg_is_n
   // Create a manager without ncells and without report config.
   create_manager_without_ncells_and_periodic_report();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   nr_cell_identity            nci      = nr_cell_identity::create(0x19b0).value();
@@ -158,8 +195,8 @@ TEST_F(cell_meas_manager_test, when_old_meas_config_is_provided_old_ids_are_remo
 {
   create_default_manager();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   const nr_cell_identity initial_nci = nr_cell_identity::create(0x19b0).value();
@@ -191,8 +228,8 @@ TEST_F(cell_meas_manager_test, when_only_event_based_reports_configured_then_mea
 {
   create_manager_with_incomplete_cells_and_periodic_report_at_target_cell();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   const nr_cell_identity initial_nci = nr_cell_identity::create(0x19b0).value();
@@ -242,12 +279,44 @@ TEST_F(cell_meas_manager_test, when_only_event_based_reports_configured_then_mea
   ASSERT_EQ(target_meas_cfg.value().report_cfg_to_add_mod_list.size(), 2);
 }
 
+TEST_F(cell_meas_manager_test, when_serving_cell_has_no_periodic_report_then_serving_meas_obj_is_still_generated)
+{
+  // Inter-frequency setup: serving cell (632628) without periodic report, neighbor (633000) with A3 report.
+  create_manager_inter_freq_without_periodic_report();
+
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
+  ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity      serving_nci = nr_cell_identity::create(gnb_id_t{0x19b, 32}, 0).value();
+  std::optional<rrc_meas_cfg> meas_cfg    = manager->get_measurement_config(ue_index, serving_nci);
+  ASSERT_TRUE(meas_cfg.has_value());
+
+  // Both serving and neighbor frequencies must have a measurement object, even though only the neighbor has a report.
+  ASSERT_EQ(meas_cfg.value().meas_obj_to_add_mod_list.size(), 2);
+  auto has_ssb_freq = [&](uint32_t arfcn) {
+    return std::any_of(meas_cfg.value().meas_obj_to_add_mod_list.begin(),
+                       meas_cfg.value().meas_obj_to_add_mod_list.end(),
+                       [arfcn](const rrc_meas_obj_to_add_mod& mo) {
+                         return mo.meas_obj_nr.has_value() && mo.meas_obj_nr->ssb_freq == arfcn;
+                       });
+  };
+  ASSERT_TRUE(has_ssb_freq(632628)) << "Serving cell measurement object must be present for servingCellMO reference";
+  ASSERT_TRUE(has_ssb_freq(633000)) << "Neighbor cell measurement object missing";
+
+  // Only the neighbor's A3 report (and its meas id) is configured: the serving cell MO carries no report on its own.
+  ASSERT_EQ(meas_cfg.value().report_cfg_to_add_mod_list.size(), 1);
+  ASSERT_EQ(meas_cfg.value().meas_id_to_add_mod_list.size(), 1);
+  verify_meas_cfg(meas_cfg);
+}
+
 TEST_F(cell_meas_manager_test, when_invalid_cell_config_update_received_then_config_is_not_updated)
 {
   create_manager_with_incomplete_cells_and_periodic_report_at_target_cell();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   const nr_cell_identity initial_nci = nr_cell_identity::create(0x19b0).value();
@@ -281,10 +350,13 @@ TEST_F(cell_meas_manager_test, when_invalid_cell_config_update_received_then_con
 
   ASSERT_FALSE(manager->update_cell_config(target_nci, serving_cell_cfg));
 
-  // Make sure meas_cfg is created for cell 1 and contains measurement objects to add mod
+  // Make sure meas_cfg for cell 1 only contains the serving cell measurement object
   std::optional<rrc_meas_cfg> initial_meas_cfg = manager->get_measurement_config(ue_index, initial_nci);
   ASSERT_TRUE(initial_meas_cfg.has_value());
-  ASSERT_TRUE(initial_meas_cfg.value().meas_obj_to_add_mod_list.empty());
+  ASSERT_EQ(initial_meas_cfg.value().meas_obj_to_add_mod_list.size(), 1);
+  ASSERT_TRUE(initial_meas_cfg.value().meas_obj_to_add_mod_list.begin()->meas_obj_nr.has_value());
+  ASSERT_EQ(initial_meas_cfg.value().meas_obj_to_add_mod_list.begin()->meas_obj_nr.value().ssb_freq,
+            serving_cell_cfg.ssb_arfcn);
   ASSERT_TRUE(initial_meas_cfg.value().report_cfg_to_add_mod_list.empty());
 
   std::optional<rrc_meas_cfg> target_meas_cfg = manager->get_measurement_config(ue_index, target_nci, initial_meas_cfg);
@@ -295,8 +367,8 @@ TEST_F(cell_meas_manager_test, when_t312_is_configured_then_meas_obj_has_t312_an
 {
   create_default_manager(100);
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   nr_cell_identity nci = nr_cell_identity::create(0x19b0).value();
@@ -342,8 +414,8 @@ TEST_F(cell_meas_manager_test, cho_single_frequency_generates_correct_nci_to_mea
 {
   create_cho_manager_single_frequency();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   attach_rrc_ue(ue_index);
@@ -374,8 +446,8 @@ TEST_F(cell_meas_manager_test, cho_multi_frequency_generates_separate_meas_ids_p
 {
   create_cho_manager_multi_frequency();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   attach_rrc_ue(ue_index);
@@ -391,8 +463,8 @@ TEST_F(cell_meas_manager_test, cho_multi_frequency_generates_separate_meas_ids_p
 
   ASSERT_TRUE(cho_result.has_value());
 
-  // Multi-frequency: should have 2 measurement objects (one per frequency)
-  ASSERT_EQ(cho_result->meas_obj_to_add_mod_list.size(), 2);
+  // Multi-frequency: 2 target frequencies + 1 serving cell frequency = 3 measurement objects.
+  ASSERT_EQ(cho_result->meas_obj_to_add_mod_list.size(), 3);
 
   // Verify NCI-to-measId mapping contains both target NCIs
   ASSERT_TRUE(cho_result->nci_to_meas_ids.find(nci_target1) != cho_result->nci_to_meas_ids.end() &&
@@ -413,8 +485,8 @@ TEST_F(cell_meas_manager_test, cho_multi_trigger_creates_cross_product_meas_ids)
 {
   create_cho_manager_multi_trigger();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   attach_rrc_ue(ue_index);
@@ -447,8 +519,8 @@ TEST_F(cell_meas_manager_test, cho_empty_candidate_list_includes_all_neighbors)
 {
   create_cho_manager_single_frequency();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
   attach_rrc_ue(ue_index);
@@ -467,8 +539,8 @@ TEST_F(cell_meas_manager_test, cho_invalid_candidate_pci_filters_correctly)
 {
   create_cho_manager_single_frequency();
 
-  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
-  ASSERT_NE(ue_index, ue_index_t::invalid);
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
   ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
   ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
 
@@ -481,4 +553,45 @@ TEST_F(cell_meas_manager_test, cho_invalid_candidate_pci_filters_correctly)
 
   // Should return nullopt when no valid candidates exist
   ASSERT_FALSE(cho_result.has_value());
+}
+
+TEST_F(cell_meas_manager_test, cho_a5_inter_frequency_includes_serving_cell_meas_obj)
+{
+  create_cho_manager_a5_inter_frequency();
+
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(uint_to_cu_cp_du_index(0));
+  ASSERT_NE(ue_index, cu_cp_ue_index_t::invalid);
+  ASSERT_FALSE(ue_mng.ue_admission_limit_reached());
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+  attach_rrc_ue(ue_index);
+
+  gnb_id_t         gnb_id{0x19b, 32};
+  nr_cell_identity nci_serving = nr_cell_identity::create(gnb_id, 0).value();
+  nr_cell_identity nci_target  = nr_cell_identity::create(gnb_id, 1).value();
+
+  std::vector<pci_t> candidate_pcis = {2};
+  auto cho_result = manager->get_measurement_config(ue_index, nci_serving, std::nullopt, true, candidate_pcis);
+
+  ASSERT_TRUE(cho_result.has_value());
+
+  // Serving (632628) and target (633000) are on different frequencies: both must have measurement objects.
+  ASSERT_EQ(cho_result->meas_obj_to_add_mod_list.size(), 2);
+
+  auto has_ssb_freq = [&](uint32_t arfcn) {
+    return std::any_of(cho_result->meas_obj_to_add_mod_list.begin(),
+                       cho_result->meas_obj_to_add_mod_list.end(),
+                       [arfcn](const rrc_meas_obj_to_add_mod& mo) {
+                         return mo.meas_obj_nr.has_value() && mo.meas_obj_nr->ssb_freq.has_value() &&
+                                mo.meas_obj_nr->ssb_freq.value() == arfcn;
+                       });
+  };
+  ASSERT_TRUE(has_ssb_freq(632628)) << "Serving cell measurement object must be present for A5 threshold1 evaluation";
+  ASSERT_TRUE(has_ssb_freq(633000)) << "Target cell measurement object missing";
+
+  // Target NCI must have measurement IDs for condExecutionCond assignment.
+  ASSERT_NE(cho_result->nci_to_meas_ids.find(nci_target), cho_result->nci_to_meas_ids.end());
+  ASSERT_FALSE(cho_result->nci_to_meas_ids.at(nci_target).empty());
+
+  // Serving NCI must not appear as a CHO candidate target.
+  ASSERT_EQ(cho_result->nci_to_meas_ids.find(nci_serving), cho_result->nci_to_meas_ids.end());
 }

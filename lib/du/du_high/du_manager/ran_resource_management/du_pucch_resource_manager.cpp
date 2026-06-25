@@ -230,9 +230,8 @@ du_pucch_resource_manager::get_compatible_csi_cfg(const cell_resource_context&  
                                                   const std::vector<periodic_pucch_config>& free_csi_list,
                                                   unsigned                                  csi_report_size) const
 {
-  const pucch_resource& sr_res = cell_ctx.cell_bwp_cfg.ul.pucch.resources.at(
-      cell_ctx.cell_params.init_bwp.pucch.resources.get_sr_cell_res_idx(pucch_sr_resource_id(sr_cfg.res)));
-  const auto     sr_symbols        = ofdm_symbol_range::start_and_len(sr_res.starting_sym_idx, sr_res.nof_symbols);
+  const pucch_resource& sr_res = cell_ctx.cell_bwp_cfg.ul.pucch.get_ded(
+      cell_ctx.cell_params.init_bwp.pucch.resources.sr_res_id(pucch_sr_resource_id(sr_cfg.res)));
   const unsigned max_pucch_payload = cell_ctx.cell_params.init_bwp.pucch.resources.max_payload_234();
   const auto     is_compatible     = [&](const periodic_pucch_config& csi_cfg) {
     // Ensure the max PUCCH grants limit is not exceeded.
@@ -241,10 +240,9 @@ du_pucch_resource_manager::get_compatible_csi_cfg(const cell_resource_context&  
     }
 
     // Ensure the CSI and SR resources collide in OFDM symbols, so they are multiplexed.
-    const pucch_resource& csi_res = cell_ctx.cell_bwp_cfg.ul.pucch.resources.at(
-        cell_ctx.cell_params.init_bwp.pucch.resources.get_csi_cell_res_idx(pucch_csi_resource_id(csi_cfg.res)));
-    const auto csi_symbols = ofdm_symbol_range::start_and_len(csi_res.starting_sym_idx, csi_res.nof_symbols);
-    if (not csi_symbols.overlaps(sr_symbols)) {
+    const pucch_resource& csi_res = cell_ctx.cell_bwp_cfg.ul.pucch.get_ded(
+        cell_ctx.cell_params.init_bwp.pucch.resources.csi_res_id(pucch_csi_resource_id(csi_cfg.res)));
+    if (not csi_res.syms.overlaps(sr_res.syms)) {
       return false;
     }
 
@@ -258,9 +256,11 @@ du_pucch_resource_manager::get_compatible_csi_cfg(const cell_resource_context&  
   };
 
   // [Implementation-defined] CSI resource and report periods are the same.
-  // TODO: Support more than one nzp-CSI-RS resource for measurement.
+  // Note: We use the latest meas CSI-RS offset as the reference to derive the CSI report offset. We want all CSI-RS
+  // resources to be considered for the report.
   const unsigned csi_rs_period   = cell_ctx.csi_period_slots;
-  const unsigned csi_rs_offset   = cell_ctx.cell_params.init_bwp.csi->meas_csi_slot_offset;
+  const unsigned csi_rs_offset   = *std::max_element(cell_ctx.cell_params.init_bwp.csi->meas_csi_slot_offsets.begin(),
+                                                   cell_ctx.cell_params.init_bwp.csi->meas_csi_slot_offsets.end());
   const auto     weight_function = [&](const periodic_pucch_config& candidate_csi_cfg) -> unsigned {
     // [Implementation-defined] Given that it takes some time for a UE to process a CSI-RS and integrate its estimate
     // in the following CSI report, we consider a minimum slot distance before which CSI report slot offsets should be

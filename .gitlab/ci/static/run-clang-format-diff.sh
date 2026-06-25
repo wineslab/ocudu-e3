@@ -8,27 +8,37 @@
 #set -x
 set -o pipefail
 
-if [ ! "$1" ]; then
-  echo "Please call script with target branch name or git hash to perform diff with."
-  echo "E.g. ./run-clang-format-diff.sh [HASH]"
+# check for apps
+if [ -n "$OCUDU_CLANG_FORMAT" ] && [ -x "$OCUDU_CLANG_FORMAT" ]; then
+  clang_format=$OCUDU_CLANG_FORMAT
+elif app1=$(which clang-format) && [ -x "$app1" ]; then
+  clang_format=$app1
+else
+  echo "Please install clang-format or set OCUDU_CLANG_FORMAT to a valid executable"
   exit 1
 fi
 
-# check for apps
-app1=$(which clang-format)
 app2=$(which git)
-if [ ! -x "$app1" ] || [ ! -x "$app2" ]; then
-  echo "Please install clang-format and git"
+if [ ! -x "$app2" ]; then
+  echo "Please install git"
   exit 1
 fi
 
 FILE_EXTENSION_REGEX='.*\.(cpp|cc|c\+\+|cxx|c|cl|h|hh|hpp)$'
 target=$1
 
-echo "Running code format check between current state and ${target}"
+if [ "$target" ]; then
+  echo "Running code format check between current state and ${target}"
+  # Get modified files (added, removed or changed) compared with target branch
+  files=$(git diff --name-only --relative --diff-filter=d "${target}" | grep -E "${FILE_EXTENSION_REGEX}" | tr '\n' ' ')
+else
+  echo "Running code format check on all tracked files"
+  # Get all tracked files matching source extensions
+  files=$(git ls-files | grep -E "${FILE_EXTENSION_REGEX}" | tr '\n' ' ')
+fi
 
-# Get modified files (added, removed or changed) compared with target branch
-files=$(git diff --name-only --relative --diff-filter=d "${target}" | grep -E "${FILE_EXTENSION_REGEX}" | tr '\n' ' ')
+echo "Using clang-format version:"
+"$clang_format" --version
 
 # Run clang-format for those files and apply changes
-[ "$files" ] && clang-format -style=file -i ${files} || echo "No files changed"
+[ "$files" ] && "$clang_format" -style=file -i ${files} || echo "No files changed"

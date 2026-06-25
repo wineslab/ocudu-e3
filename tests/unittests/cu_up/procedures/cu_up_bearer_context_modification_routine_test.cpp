@@ -17,7 +17,8 @@ using namespace ocuup;
 class cu_up_bearer_context_modification_procedure_tester : public ::testing::Test
 {
 public:
-  cu_up_bearer_context_modification_procedure_tester() : task_sched(2048), timers(timer_mng, exec), f1u_gw(f1u_bearer)
+  cu_up_bearer_context_modification_procedure_tester() :
+    e1ap(cu_up_e1_index_t{0}), task_sched(2048), timers(timer_mng, exec), f1u_gw(f1u_bearer)
   {
   }
 
@@ -81,8 +82,14 @@ private:
   null_dlt_pcap                      pcap;
 
   // N3 Configs.
-  n3_interface_config
-      n3_cfg{GTPU_PORT, std::chrono::milliseconds{0}, std::chrono::milliseconds{200}, true, 2048, 1, false};
+  n3_interface_config n3_cfg{GTPU_PORT,
+                             std::chrono::milliseconds{0},
+                             std::chrono::milliseconds{200},
+                             GTPU_DEFAULT_TEID_RELEASE_LINGER_TIME,
+                             true,
+                             2048,
+                             1,
+                             false};
 
   // UE context cfg.
   ue_context_cfg ue_cfg{{}, activity_notification_level_t::ue, std::chrono::seconds{30}, {}, 1000000000, {}};

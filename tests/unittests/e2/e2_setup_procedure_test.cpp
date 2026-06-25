@@ -33,9 +33,93 @@ TEST_F(e2_entity_test, on_start_send_e2ap_setup_request)
       ->ran_functions_accepted[0]
       ->ran_function_id_item()
       .ran_function_id = e2sm_kpm_asn1_packer::ran_func_id;
+  ASSERT_FALSE(e2agent->is_ric_connected());
+
   test_logger.info("Injecting E2SetupResponse");
   e2agent->get_e2_interface().handle_message(e2_setup_response);
-  e2agent->stop();
+
+  ASSERT_TRUE(e2agent->is_ric_connected());
+}
+
+TEST_F(e2_entity_test, e2ap_setup_request_du_global_node_id_is_correct)
+{
+  const std::string test_plmn  = "99999";
+  const gnb_du_id_t test_du_id = static_cast<gnb_du_id_t>(42);
+
+  cfg.plmn             = test_plmn;
+  cfg.gnb_du_id        = test_du_id;
+  cfg.e2sm_kpm_enabled = true;
+  auto owned_collector = std::make_unique<e2_node_component_config_collector>(task_worker, 1);
+  owned_collector->deliver(e2_node_component_interface_type::f1, byte_buffer{}, byte_buffer{});
+  e2agent = create_e2_du_agent(cfg,
+                               *e2_client,
+                               &(*du_metrics),
+                               &(*f1ap_ue_id_mapper),
+                               &(*du_rc_param_configurator),
+                               factory,
+                               task_worker,
+                               std::move(owned_collector));
+  task_worker.run_pending_tasks();
+  e2agent->start();
+
+  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
+  const auto& e2setup       = e2_client->last_tx_e2_pdu.pdu.init_msg().value.e2setup_request();
+  const auto& gnb           = e2setup->global_e2node_id.gnb();
+  uint32_t    expected_plmn = bcd_helper::plmn_string_to_bcd(test_plmn);
+  ASSERT_EQ(gnb.global_gnb_id.plmn_id.to_number(), expected_plmn);
+  ASSERT_TRUE(gnb.gnb_du_id_present);
+  ASSERT_EQ(gnb.gnb_du_id, gnb_du_id_to_int(test_du_id));
+  ASSERT_FALSE(gnb.gnb_cu_up_id_present);
+}
+
+TEST_F(e2_entity_test, e2ap_setup_request_cu_cp_global_node_id_is_correct)
+{
+  const std::string test_plmn = "99999";
+
+  cfg.plmn              = test_plmn;
+  cfg.e2sm_kpm_enabled  = true;
+  auto owned_collector  = std::make_unique<e2_node_component_config_collector>(task_worker, 1);
+  auto cu_metrics       = std::make_unique<dummy_e2_cu_metrics>();
+  auto cu_configurator_ = std::make_unique<dummy_cu_configurator>();
+  owned_collector->deliver(e2_node_component_interface_type::ng, byte_buffer{}, byte_buffer{});
+  e2agent = create_e2_cu_cp_agent(
+      cfg, *e2_client, cu_metrics.get(), cu_configurator_.get(), factory, task_worker, std::move(owned_collector));
+  task_worker.run_pending_tasks();
+  e2agent->start();
+
+  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
+  const auto& e2setup       = e2_client->last_tx_e2_pdu.pdu.init_msg().value.e2setup_request();
+  const auto& gnb           = e2setup->global_e2node_id.gnb();
+  uint32_t    expected_plmn = bcd_helper::plmn_string_to_bcd(test_plmn);
+  ASSERT_EQ(gnb.global_gnb_id.plmn_id.to_number(), expected_plmn);
+  ASSERT_FALSE(gnb.gnb_du_id_present);
+  ASSERT_FALSE(gnb.gnb_cu_up_id_present);
+}
+
+TEST_F(e2_entity_test, e2ap_setup_request_cu_up_global_node_id_is_correct)
+{
+  const std::string test_plmn = "99999";
+
+  cfg.plmn              = test_plmn;
+  cfg.gnb_cu_up_id      = static_cast<gnb_cu_up_id_t>(1);
+  cfg.e2sm_kpm_enabled  = true;
+  auto owned_collector  = std::make_unique<e2_node_component_config_collector>(task_worker, 1);
+  auto cu_metrics       = std::make_unique<dummy_e2_cu_metrics>();
+  auto cu_configurator_ = std::make_unique<dummy_cu_configurator>();
+  owned_collector->deliver(e2_node_component_interface_type::e1, byte_buffer{}, byte_buffer{});
+  e2agent = create_e2_cu_up_agent(
+      cfg, *e2_client, cu_metrics.get(), cu_configurator_.get(), factory, task_worker, std::move(owned_collector));
+  task_worker.run_pending_tasks();
+  e2agent->start();
+
+  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
+  const auto& e2setup       = e2_client->last_tx_e2_pdu.pdu.init_msg().value.e2setup_request();
+  const auto& gnb           = e2setup->global_e2node_id.gnb();
+  uint32_t    expected_plmn = bcd_helper::plmn_string_to_bcd(test_plmn);
+  ASSERT_EQ(gnb.global_gnb_id.plmn_id.to_number(), expected_plmn);
+  ASSERT_FALSE(gnb.gnb_du_id_present);
+  ASSERT_TRUE(gnb.gnb_cu_up_id_present);
+  ASSERT_EQ(gnb.gnb_cu_up_id, gnb_cu_up_id_to_uint(static_cast<gnb_cu_up_id_t>(1)));
 }
 
 /// Test successful E2 setup procedure
@@ -43,10 +127,8 @@ TEST_F(e2_test, when_e2_setup_response_received_then_e2_connected)
 {
   report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
   // Action 1: Launch E2 setup procedure
-  e2_message request_msg = generate_e2_setup_request_message("1.3.6.1.4.1.53148.1.2.2.2");
   test_logger.info("Launch e2 setup request procedure...");
-  e2_setup_request_message request;
-  request.request                                 = request_msg.pdu.init_msg().value.e2setup_request();
+  e2_setup_request_message                      request;
   async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
   lazy_task_launcher<e2_setup_response_message> t_launcher(t);
 
@@ -71,10 +153,8 @@ TEST_F(e2_test, when_e2_setup_failure_received_then_e2_setup_failed)
 {
   report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
   // Action 1: Launch E2 setup procedure
-  e2_message request_msg = generate_e2_setup_request_message("1.3.6.1.4.1.53148.1.2.2.2");
   test_logger.info("Launch e2 setup request procedure...");
-  e2_setup_request_message request;
-  request.request                                 = request_msg.pdu.init_msg().value.e2setup_request();
+  e2_setup_request_message                      request;
   async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
   lazy_task_launcher<e2_setup_response_message> t_launcher(t);
 
@@ -95,123 +175,12 @@ TEST_F(e2_test, when_e2_setup_failure_received_then_e2_setup_failed)
   ASSERT_FALSE(t.get().success);
 }
 
-TEST_F(e2_test_setup, e2_sends_correct_kpm_ran_function_definition)
-{
-  using namespace asn1::e2sm;
-  using namespace asn1::e2ap;
-  report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
-  e2_message request_msg = generate_e2_setup_request_message("1.3.6.1.4.1.53148.1.2.2.2");
-  test_logger.info("Launch e2 setup request procedure...");
-  e2_setup_request_message request;
-  request.request                                 = request_msg.pdu.init_msg().value.e2setup_request();
-  async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
-  lazy_task_launcher<e2_setup_response_message> t_launcher(t);
-
-  // Status: received E2 Setup Request.
-  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
-  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.init_msg().value.type().value,
-            asn1::e2ap::e2ap_elem_procs_o::init_msg_c::types_opts::e2setup_request);
-
-  ran_function_item_s& ran_func_added1 = e2_client->last_tx_e2_pdu.pdu.init_msg()
-                                             .value.e2setup_request()
-                                             ->ran_functions_added[0]
-                                             .value()
-                                             .ran_function_item();
-  asn1::cbit_ref                                  bref1(ran_func_added1.ran_function_definition);
-  asn1::e2sm::e2sm_kpm_ran_function_description_s ran_func_def = {};
-  if (ran_func_def.unpack(bref1) != asn1::OCUDUASN_SUCCESS) {
-    printf("Couldn't unpack E2 PDU");
-  }
-  // check contents of E2SM-KPM-RANfunction-Description
-  ASSERT_EQ(ran_func_def.ran_function_name.ran_function_short_name.to_string(), "ORAN-E2SM-KPM");
-  ric_report_style_item_s& ric_report_style = ran_func_def.ric_report_style_list[2];
-  ASSERT_EQ(ric_report_style.ric_report_style_type, 3);
-  meas_info_action_item_s& meas_cond_it = ric_report_style.meas_info_action_list[2];
-  ASSERT_EQ(meas_cond_it.meas_name.to_string(), "RSRQ");
-
-  // Status: Procedure not yet ready.
-  ASSERT_FALSE(t.ready());
-  // Action 2: E2 setup response received.
-  unsigned   transaction_id    = get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value();
-  e2_message e2_setup_response = generate_e2_setup_response(transaction_id);
-  test_logger.info("Injecting E2SetupResponse");
-  e2->handle_message(e2_setup_response);
-
-  ASSERT_TRUE(t.ready());
-  ASSERT_TRUE(t.get().success);
-}
-
-TEST_F(e2_test_setup, e2_sends_correct_rc_ran_function_definition)
-{
-  using namespace asn1::e2sm;
-  using namespace asn1::e2ap;
-  report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
-  e2_message request_msg = generate_e2_setup_request_message("1.3.6.1.4.1.53148.1.1.2.3");
-  test_logger.info("Launch e2 setup request procedure...");
-  e2_setup_request_message request;
-  request.request                                 = request_msg.pdu.init_msg().value.e2setup_request();
-  async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
-  lazy_task_launcher<e2_setup_response_message> t_launcher(t);
-
-  // Status: received E2 Setup Request.
-  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
-  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.init_msg().value.type().value,
-            asn1::e2ap::e2ap_elem_procs_o::init_msg_c::types_opts::e2setup_request);
-
-  ran_function_item_s& ran_func_added1 = e2_client->last_tx_e2_pdu.pdu.init_msg()
-                                             .value.e2setup_request()
-                                             ->ran_functions_added[0]
-                                             .value()
-                                             .ran_function_item();
-  asn1::cbit_ref bref1(ran_func_added1.ran_function_definition);
-
-  asn1::e2sm::e2sm_rc_ran_function_definition_s ran_func_def = {};
-  if (ran_func_def.unpack(bref1) != asn1::OCUDUASN_SUCCESS) {
-    printf("Couldn't unpack E2 PDU");
-  }
-
-  ASSERT_EQ(ran_func_def.ran_function_name.ran_function_short_name.to_string(), "ORAN-E2SM-RC");
-
-  ASSERT_EQ(ran_func_def.ran_function_definition_ctrl.ric_ctrl_style_list[0].ric_ctrl_style_type, 2);
-  ASSERT_EQ(ran_func_def.ran_function_definition_ctrl.ric_ctrl_style_list[0].ric_ctrl_style_name.to_string(),
-            "Radio Resource Allocation Control");
-  ASSERT_EQ(ran_func_def.ran_function_definition_ctrl.ric_ctrl_style_list[0].ric_ctrl_action_list[0].ric_ctrl_action_id,
-            6);
-  ASSERT_EQ(ran_func_def.ran_function_definition_ctrl.ric_ctrl_style_list[0]
-                .ric_ctrl_action_list[0]
-                .ric_ctrl_action_name.to_string(),
-            "Slice-level PRB quota");
-  ASSERT_EQ(ran_func_def.ran_function_definition_ctrl.ric_ctrl_style_list[0]
-                .ric_ctrl_action_list[0]
-                .ran_ctrl_action_params_list[9]
-                .ran_param_id,
-            11);
-  ASSERT_EQ(ran_func_def.ran_function_definition_ctrl.ric_ctrl_style_list[0]
-                .ric_ctrl_action_list[0]
-                .ran_ctrl_action_params_list[9]
-                .ran_param_name.to_string(),
-            "Min PRB Policy Ratio");
-
-  // Status: Procedure not yet ready.
-  ASSERT_FALSE(t.ready());
-  // Action 2: E2 setup response received.
-  unsigned   transaction_id    = get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value();
-  e2_message e2_setup_response = generate_e2_setup_response(transaction_id);
-  test_logger.info("Injecting E2SetupResponse");
-  e2->handle_message(e2_setup_response);
-
-  ASSERT_TRUE(t.ready());
-  ASSERT_TRUE(t.get().success);
-}
-
 TEST_F(e2_test, correctly_unpack_e2_response)
 {
   report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
   // Action 1: Launch E2 setup procedure
-  e2_message request_msg = generate_e2_setup_request_message("1.3.6.1.4.1.53148.1.2.2.2");
   test_logger.info("Launch e2 setup request procedure...");
-  e2_setup_request_message request;
-  request.request                                 = request_msg.pdu.init_msg().value.e2setup_request();
+  e2_setup_request_message                      request;
   async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
   lazy_task_launcher<e2_setup_response_message> t_launcher(t);
 
@@ -276,13 +245,108 @@ TEST_F(e2_entity_test, when_node_cfg_timeout_fires_with_empty_collection_then_no
   ASSERT_NE(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
 }
 
+TEST_F(e2_test, when_e2_setup_failure_with_time_to_wait_received_then_retry_is_sent)
+{
+  report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
+
+  e2_setup_request_message                      request;
+  async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
+  lazy_task_launcher<e2_setup_response_message> t_launcher(t);
+
+  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
+  unsigned initial_transaction_id = get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value();
+
+  // Inject failure with TimeToWait = 1 second.
+  e2_message failure_msg     = generate_e2_setup_failure(initial_transaction_id);
+  auto&      fail            = failure_msg.pdu.unsuccessful_outcome().value.e2setup_fail();
+  fail->time_to_wait_present = true;
+  fail->time_to_wait.value   = asn1::e2ap::time_to_wait_opts::v1s;
+  e2->handle_message(failure_msg);
+
+  // Before the delay expires: task is suspended, no new request sent.
+  ASSERT_FALSE(t.ready());
+  for (unsigned i = 0; i < 999; ++i) {
+    tick();
+  }
+  ASSERT_FALSE(t.ready());
+  ASSERT_EQ(get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value(), initial_transaction_id);
+
+  // After the delay expires: a new E2SetupRequest with a fresh transaction ID is sent.
+  for (unsigned i = 0; i < 2; ++i) {
+    tick();
+  }
+  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::init_msg);
+  ASSERT_EQ(e2_client->last_tx_e2_pdu.pdu.init_msg().value.type().value,
+            asn1::e2ap::e2ap_elem_procs_o::init_msg_c::types_opts::e2setup_request);
+  ASSERT_NE(get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value(), initial_transaction_id);
+}
+
+TEST_F(e2_test, when_max_e2_setup_retries_exceeded_then_procedure_fails_without_retry)
+{
+  report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
+
+  e2_setup_request_message request;
+  request.max_setup_retries = 0;
+
+  async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
+  lazy_task_launcher<e2_setup_response_message> t_launcher(t);
+
+  unsigned   transaction_id  = get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value();
+  e2_message failure_msg     = generate_e2_setup_failure(transaction_id);
+  auto&      fail            = failure_msg.pdu.unsuccessful_outcome().value.e2setup_fail();
+  fail->time_to_wait_present = true;
+  fail->time_to_wait.value   = asn1::e2ap::time_to_wait_opts::v1s;
+  e2->handle_message(failure_msg);
+
+  // With max_setup_retries = 0 the retry guard fires immediately: task completes without waiting.
+  ASSERT_TRUE(t.ready());
+  ASSERT_FALSE(t.get().success);
+}
+
+TEST_F(e2_test, when_e2_setup_succeeds_after_retry_then_result_is_success)
+{
+  report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
+
+  e2_setup_request_message request;
+  request.max_setup_retries = 1;
+
+  async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
+  lazy_task_launcher<e2_setup_response_message> t_launcher(t);
+
+  unsigned   initial_transaction_id = get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value();
+  e2_message failure_msg            = generate_e2_setup_failure(initial_transaction_id);
+  auto&      fail                   = failure_msg.pdu.unsuccessful_outcome().value.e2setup_fail();
+  fail->time_to_wait_present        = true;
+  fail->time_to_wait.value          = asn1::e2ap::time_to_wait_opts::v1s;
+  e2->handle_message(failure_msg);
+
+  ASSERT_FALSE(t.ready());
+
+  // Advance past the 1-second retry delay.
+  for (unsigned i = 0; i < 1001; ++i) {
+    tick();
+  }
+
+  // A new E2SetupRequest should have been sent with a fresh transaction ID.
+  unsigned retry_transaction_id = get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value();
+  ASSERT_NE(retry_transaction_id, initial_transaction_id);
+
+  // Inject success on the retry transaction.
+  e2_message e2_setup_response = generate_e2_setup_response(retry_transaction_id);
+  e2->handle_message(e2_setup_response);
+
+  ASSERT_TRUE(t.ready());
+  ASSERT_TRUE(t.get().success);
+}
+
 /// fill_asn1_e2ap_setup_request: with a vector containing a real node_cfg entry the component
 /// bytes in the ASN.1 struct equal those provided; with an empty vector no entries are created.
 TEST_F(e2_test, fill_e2ap_setup_request_uses_real_bytes_when_node_cfg_vector_provided)
 {
   using namespace asn1::e2ap;
 
-  cfg = config_helpers::make_default_e2ap_config();
+  cfg           = config_helpers::make_default_e2ap_config();
+  cfg.gnb_du_id = static_cast<gnb_du_id_t>(42);
 
   uint8_t req_bytes[]  = {0xaa, 0xbb, 0xee};
   uint8_t resp_bytes[] = {0xdd, 0xee};
@@ -311,4 +375,13 @@ TEST_F(e2_test, fill_e2ap_setup_request_uses_real_bytes_when_node_cfg_vector_pro
   // Real-bytes path must reproduce the exact sizes supplied.
   ASSERT_EQ(real_comp.e2node_component_request_part.size(), sizeof(req_bytes));
   ASSERT_EQ(real_comp.e2node_component_resp_part.size(), sizeof(resp_bytes));
+
+  // Verify all global_e2node_id fields are correctly encoded from e2ap_configuration.
+  const auto& gnb = setup_real->global_e2node_id.gnb();
+  ASSERT_EQ(gnb.global_gnb_id.plmn_id.to_number(), bcd_helper::plmn_string_to_bcd(cfg.plmn));
+  ASSERT_EQ(gnb.global_gnb_id.gnb_id.gnb_id().to_number(), static_cast<uint64_t>(cfg.gnb_id.id));
+  ASSERT_EQ(gnb.global_gnb_id.gnb_id.gnb_id().length(), static_cast<uint32_t>(cfg.gnb_id.bit_length));
+  ASSERT_TRUE(gnb.gnb_du_id_present);
+  ASSERT_EQ(gnb.gnb_du_id, gnb_du_id_to_int(cfg.gnb_du_id.value()));
+  ASSERT_FALSE(gnb.gnb_cu_up_id_present);
 }

@@ -9,7 +9,6 @@
 #include "ocudu/mac/mac_pdu_handler.h"
 #include "ocudu/pcap/mac_pcap.h"
 #include "ocudu/scheduler/config/scheduler_expert_config.h"
-#include "ocudu/scheduler/scheduler_metrics.h"
 
 namespace ocudu {
 
@@ -39,6 +38,7 @@ struct mac_config {
     std::chrono::milliseconds period{1000};
     bool                      mac_enabled;
     bool                      sched_enabled;
+    bool                      sched_ue_enabled  = true;
     unsigned                  max_nof_ue_events = 64;
     mac_metrics_notifier&     notifier;
   };

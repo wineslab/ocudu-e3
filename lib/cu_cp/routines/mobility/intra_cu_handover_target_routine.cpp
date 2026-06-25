@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "intra_cu_handover_target_routine.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
+#include "ocudu/ran/cu_cp_types.h"
 
 using namespace ocudu;
 using namespace ocudu::ocucp;
@@ -151,21 +151,23 @@ bool intra_cu_handover_target_routine::add_security_context_to_bearer_context_mo
   return true;
 }
 
-void intra_cu_handover_target_routine::schedule_source_release_on_source_task_sched(ue_index_t source_ue_index)
+void intra_cu_handover_target_routine::schedule_source_release_on_source_task_sched(cu_cp_ue_index_t source_ue_index)
 {
   auto* src_ue = ue_mng.find_du_ue(source_ue_index);
   if (src_ue == nullptr) {
     logger.warning("target_ue={}: source_ue={} already removed", request.target_ue_index, source_ue_index);
     return;
   }
-  ue_context_release_command                      = {};
-  ue_context_release_command.ue_index             = source_ue_index;
-  ue_context_release_command.cause                = ngap_cause_radio_network_t::unspecified;
-  ue_context_release_command.requires_rrc_release = false;
-  src_ue->get_task_sched().schedule_async_task(launch_async([this](coro_context<async_task<void>>& ctx) {
-    CORO_BEGIN(ctx);
-    CORO_AWAIT(ue_context_release_handler.handle_ue_context_release_command(ue_context_release_command));
-    CORO_RETURN();
-  }));
+  // Note: Cannot capture [this] as routine may be destroyed before the lambda runs on the source UE's scheduler.
+  cu_cp_ue_context_release_command cmd = {};
+  cmd.ue_index                         = source_ue_index;
+  cmd.cause                            = ngap_cause_radio_network_t::unspecified;
+  cmd.requires_rrc_message             = false;
+  src_ue->get_task_sched().schedule_async_task(
+      launch_async([&handler = ue_context_release_handler, cmd](coro_context<async_task<void>>& ctx) {
+        CORO_BEGIN(ctx);
+        CORO_AWAIT(handler.handle_ue_context_release_command(cmd));
+        CORO_RETURN();
+      }));
   logger.debug("target_ue={}: scheduled source_ue={} context release", request.target_ue_index, source_ue_index);
 }

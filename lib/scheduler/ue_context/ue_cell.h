@@ -10,8 +10,8 @@
 #include "../support/pusch_power_controller.h"
 #include "ue_channel_state_manager.h"
 #include "ue_drx_controller.h"
+#include "ue_fsm_states.h"
 #include "ue_link_adaptation_controller.h"
-#include "ocudu/ran/serv_cell_index.h"
 #include "ocudu/scheduler/config/scheduler_expert_config.h"
 #include "ocudu/scheduler/scheduler_feedback_handler.h"
 
@@ -27,7 +27,20 @@ struct ue_shared_context {
   ue_drx_controller& drx_ctrl;
 };
 
+/// State of the UE PCell.
+struct ue_pcell_state {
+  /// RRC configuration progress state.
+  /// \note When in fallback mode, only the search spaces and the configuration of cellConfigCommon are used.
+  ue_config_state config_st = ue_config_state::config_applied;
+  /// Contention resolution state.
+  ue_conres_state conres_st = ue_conres_state::conres_completed;
+  /// MSG3 rx-slot, set for RACH-created UEs (conres_st == pending_conres_ce).
+  slot_point msg3_rx_slot;
+};
+
 struct ue_cell_components {
+  /// State relative to the PCell of the UE, if applicable.
+  ue_pcell_state*                pcell_state          = nullptr;
   ue_channel_state_manager*      channel_state        = nullptr;
   ue_link_adaptation_controller* ue_mcs_calculator    = nullptr;
   pusch_power_controller*        pusch_pwr_controller = nullptr;
@@ -38,29 +51,12 @@ struct ue_cell_components {
 class ue_cell
 {
 public:
-  /// State in case carrier corresponds to UE pcell.
-  struct ue_pcell_state {
-    /// Fallback state of the UE. When in "fallback" mode, only the search spaces and the configuration of
-    /// cellConfigCommon are used.
-    bool in_fallback_mode = true;
-    /// \brief Whether the MAC CE Contention Resolution has been transmitted and acked by the UE.
-    bool conres_complete = false;
-    /// Whether a UE reconfiguration is taking place.
-    bool reconf_ongoing = false;
-    /// Whether the UE has been reestablished.
-    bool reestablished = false;
-    /// MSG3 rx-slot, if applicable (e.g. The UE was created via RA procedure).
-    slot_point msg3_rx_slot;
-  };
-
   ue_cell(du_ue_index_t                ue_index_,
           rnti_t                       crnti_val,
-          serv_cell_index_t            serv_cell_index_,
           const ue_cell_configuration& ue_cell_cfg_,
           cell_harq_manager&           cell_harq_pool,
           ue_shared_context            shared_ctx,
           const ue_cell_components&    components,
-          std::optional<slot_point>    msg3_slot_rx,
           ocudulog::basic_logger&      logger_);
 
   const du_ue_index_t   ue_index;
@@ -77,7 +73,11 @@ public:
   bool is_active() const { return active; }
 
   /// Whether the UE is in fallback mode.
-  bool is_in_fallback_mode() const { return pcell_state.has_value() and pcell_state->in_fallback_mode; }
+  bool is_in_fallback_mode() const
+  {
+    return components.pcell_state != nullptr and
+           is_in_fallback(components.pcell_state->config_st, components.pcell_state->conres_st);
+  }
 
   const ue_cell_configuration& cfg() const { return *ue_cfg; }
 
@@ -85,9 +85,6 @@ public:
   void deactivate();
 
   void handle_reconfiguration_request(const ue_cell_configuration& ue_cell_cfg);
-
-  /// Update UE fallback state.
-  void set_fallback_state(bool in_fallback, bool is_reconfig, bool reestablished);
 
   bool is_pdcch_enabled(slot_point dl_slot) const
   {
@@ -179,13 +176,14 @@ public:
   /// \brief Returns an estimated UL rate in bytes per slot based on the given input parameters.
   double get_estimated_ul_rate(const pusch_config_params& pusch_cfg, sch_mcs_index mcs, unsigned nof_prbs) const;
 
-  bool is_pcell() const { return pcell_state.has_value(); }
-
-  /// Sets the Contention Resolution procedure state as started (if "false") or complete (if "true").
-  void set_conres_state(bool state);
+  bool is_pcell() const { return components.pcell_state != nullptr; }
 
   /// Retrieve the current Pcell state of the UE, if applicable.
-  const ue_pcell_state& get_pcell_state() const { return pcell_state.value(); }
+  const ue_pcell_state& get_pcell_state() const
+  {
+    ocudu_assert(components.pcell_state != nullptr, "Invalid access to Pcell state for SCell");
+    return *components.pcell_state;
+  }
 
 private:
   /// \brief Performs link adaptation procedures such as cancelling HARQs etc.
@@ -201,9 +199,6 @@ private:
 
   /// \brief Whether cell is currently active.
   bool active = true;
-
-  /// State relative to the PCell of the UE, if applicable.
-  std::optional<ue_pcell_state> pcell_state;
 };
 
 } // namespace ocudu

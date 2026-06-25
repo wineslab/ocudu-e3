@@ -184,7 +184,7 @@ protected:
     pdu.nof_tx_layers = 1;
     pdu.rx_ports.resize(nof_rx_ports);
     std::generate(pdu.rx_ports.begin(), pdu.rx_ports.end(), []() { return rx_port_dist(rgen); });
-    pdu.dmrs               = pusch_processor::dmrs_configuration{.dmrs                        = dmrs_type::TYPE1,
+    pdu.dmrs               = pusch_processor::dmrs_configuration{.dmrs                        = dmrs_config_type::type1,
                                                                  .scrambling_id               = scrambling_id_dist(rgen),
                                                                  .n_scid                      = n_scid_dist(rgen) == 0,
                                                                  .nof_cdm_groups_without_data = 2};
@@ -193,6 +193,7 @@ protected:
     pdu.nof_symbols        = nof_symbols_slot - pdu.start_symbol_index;
     pdu.tbs_lbrm           = units::bytes(tbs_lbrm_bytes_dist(rgen));
     pdu.dmrs_symbol_mask   = symbol_slot_mask(nof_symbols_slot);
+    pdu.n_rapid            = n_rapid_dist(rgen);
 
     for (unsigned i_symbol = pdu.start_symbol_index, i_symbol_end = pdu.start_symbol_index + pdu.nof_symbols;
          i_symbol != i_symbol_end;
@@ -251,6 +252,7 @@ protected:
   static std::uniform_int_distribution<unsigned> tbs_lbrm_bytes_dist;
   static std::uniform_int_distribution<unsigned> tbs_dist;
   static std::uniform_real_distribution<float>   target_code_rate_dist;
+  static std::uniform_int_distribution<unsigned> n_rapid_dist;
 
   pusch_processor::pdu_t pdu;
 };
@@ -284,6 +286,7 @@ std::uniform_int_distribution<unsigned> PuschProcessorFixture::start_symbol_inde
 std::uniform_int_distribution<unsigned> PuschProcessorFixture::tbs_lbrm_bytes_dist(1, ldpc::MAX_CODEBLOCK_SIZE / 8);
 std::uniform_int_distribution<unsigned> PuschProcessorFixture::tbs_dist(1, 1024);
 std::uniform_real_distribution<float>   PuschProcessorFixture::target_code_rate_dist(30.F, 772.F);
+std::uniform_int_distribution<unsigned> PuschProcessorFixture::n_rapid_dist(0, 64);
 
 TEST_P(PuschProcessorFixture, PuschProcessorUnittest)
 {
@@ -305,7 +308,7 @@ TEST_P(PuschProcessorFixture, PuschProcessorUnittest)
   // Calculate the total number of DM-RS per PRB.
   const auto& dmrs_config = std::get<pusch_processor::dmrs_configuration>(pdu.dmrs);
   unsigned    nof_dmrs_per_prb =
-      dmrs_config.dmrs.nof_dmrs_per_rb() * dmrs_config.nof_cdm_groups_without_data * nof_dmrs_symbols;
+      get_nof_re_per_prb(dmrs_config.dmrs) * dmrs_config.nof_cdm_groups_without_data * nof_dmrs_symbols;
 
   // Calculate the mnumber of data RE per PRB.
   unsigned nof_re_per_prb = NOF_SUBCARRIERS_PER_RB * pdu.nof_symbols - nof_dmrs_per_prb;
@@ -322,19 +325,19 @@ TEST_P(PuschProcessorFixture, PuschProcessorUnittest)
 
   // Get UL-SCH information.
   ulsch_configuration ulsch_config;
-  ulsch_config.tbs                   = units::bytes(transport_block.size()).to_bits();
-  ulsch_config.mcs_descr             = pdu.mcs_descr;
-  ulsch_config.nof_harq_ack_bits     = units::bits(pdu.uci.nof_harq_ack);
-  ulsch_config.nof_csi_part1_bits    = units::bits(pdu.uci.nof_csi_part1);
-  ulsch_config.nof_csi_part2_bits    = 0_bits;
-  ulsch_config.alpha_scaling         = pdu.uci.alpha_scaling;
-  ulsch_config.beta_offset_harq_ack  = pdu.uci.beta_offset_harq_ack;
-  ulsch_config.beta_offset_csi_part1 = pdu.uci.beta_offset_csi_part1;
-  ulsch_config.beta_offset_csi_part2 = pdu.uci.beta_offset_csi_part2;
-  ulsch_config.nof_rb                = rb_mask.count();
-  ulsch_config.start_symbol_index    = pdu.start_symbol_index;
-  ulsch_config.nof_symbols           = pdu.nof_symbols;
-  ulsch_config.dmrs_type = (dmrs_config.dmrs == dmrs_type::TYPE1 ? dmrs_config_type::type1 : dmrs_config_type::type2);
+  ulsch_config.tbs                         = units::bytes(transport_block.size()).to_bits();
+  ulsch_config.mcs_descr                   = pdu.mcs_descr;
+  ulsch_config.nof_harq_ack_bits           = units::bits(pdu.uci.nof_harq_ack);
+  ulsch_config.nof_csi_part1_bits          = units::bits(pdu.uci.nof_csi_part1);
+  ulsch_config.nof_csi_part2_bits          = 0_bits;
+  ulsch_config.alpha_scaling               = pdu.uci.alpha_scaling;
+  ulsch_config.beta_offset_harq_ack        = pdu.uci.beta_offset_harq_ack;
+  ulsch_config.beta_offset_csi_part1       = pdu.uci.beta_offset_csi_part1;
+  ulsch_config.beta_offset_csi_part2       = pdu.uci.beta_offset_csi_part2;
+  ulsch_config.nof_rb                      = rb_mask.count();
+  ulsch_config.start_symbol_index          = pdu.start_symbol_index;
+  ulsch_config.nof_symbols                 = pdu.nof_symbols;
+  ulsch_config.dmrs_type                   = dmrs_config.dmrs;
   ulsch_config.dmrs_symbol_mask            = pdu.dmrs_symbol_mask;
   ulsch_config.nof_cdm_groups_without_data = dmrs_config.nof_cdm_groups_without_data;
   ulsch_config.nof_layers                  = pdu.nof_tx_layers;
@@ -402,12 +405,13 @@ TEST_P(PuschProcessorFixture, PuschProcessorUnittest)
   ASSERT_EQ(pdu.start_symbol_index, demodulator_entry.config.start_symbol_index);
   ASSERT_EQ(pdu.nof_symbols, demodulator_entry.config.nof_symbols);
   ASSERT_EQ(pdu.dmrs_symbol_mask, demodulator_entry.config.dmrs_symb_pos);
-  ASSERT_EQ(dmrs_config.dmrs, demodulator_entry.config.dmrs_config_type);
+  ASSERT_EQ(dmrs_config.dmrs, demodulator_entry.config.dmrs_type);
   ASSERT_EQ(dmrs_config.nof_cdm_groups_without_data, demodulator_entry.config.nof_cdm_groups_without_data);
   ASSERT_EQ(pdu.n_id, demodulator_entry.config.n_id);
   ASSERT_EQ(pdu.nof_tx_layers, demodulator_entry.config.nof_tx_layers);
   ASSERT_EQ(false, demodulator_entry.config.enable_transform_precoding);
   ASSERT_EQ(span<const uint8_t>(pdu.rx_ports), span<const uint8_t>(demodulator_entry.config.rx_ports));
+  ASSERT_EQ(pdu.n_rapid, demodulator_entry.config.n_rapid);
 
   // Assert demux if UCI is multiplexed.
   ASSERT_EQ(1, demux_spy->get_demultiplex_entries().size());

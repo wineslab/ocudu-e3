@@ -5,8 +5,9 @@
 #pragma once
 
 #include "../ue_security_manager/ue_security_manager_impl.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/nrppa/nrppa.h"
+#include "ocudu/ran/aggregate_maximum_bit_rate.h"
+#include "ocudu/ran/cu_cp_types.h"
 
 namespace ocudu::ocucp {
 
@@ -23,13 +24,13 @@ public:
   virtual ~cu_cp_ue_impl_interface() = default;
 
   /// \brief Get the UE index of the UE.
-  virtual ue_index_t get_ue_index() const = 0;
+  virtual cu_cp_ue_index_t get_ue_index() const = 0;
 
   /// \brief Get the index of the DU where the UE is connected.
-  virtual du_index_t get_du_index() const = 0;
+  virtual cu_cp_du_index_t get_du_index() const = 0;
 
   /// \brief Get the CU-UP index of the UE.
-  virtual cu_up_index_t get_cu_up_index() const = 0;
+  virtual cu_cp_cu_up_index_t get_cu_up_index() const = 0;
 
   /// \brief Get the XN-C peer index of the UE.
   virtual xnc_peer_index_t get_xnc_peer_index() const = 0;
@@ -51,10 +52,10 @@ public:
 
   /// \brief Set UE AMBR.
   /// \param[in] ue_ambr The AMBR to set for the UE.
-  virtual void set_ue_ambr(cu_cp_aggregate_maximum_bit_rate ue_ambr) = 0;
+  virtual void set_ue_ambr(aggregate_maximum_bit_rate_t ue_ambr) = 0;
 
   /// \brief Get UE AMBR.
-  virtual cu_cp_aggregate_maximum_bit_rate get_ue_ambr() const = 0;
+  virtual aggregate_maximum_bit_rate_t get_ue_ambr() const = 0;
 };
 
 } // namespace ocudu::ocucp

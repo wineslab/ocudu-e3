@@ -231,6 +231,23 @@ async_task<mac_ue_create_response> ue_creation_procedure::create_mac_ue()
     mac_ue_create_msg.cfra_preamble_index = ue_ctx->resources->cfra->preamble_id;
   }
 
+  // Derive the number of DL HARQ processes configured for the UE on its PCell.
+  const auto& ue_pcell = ue_ctx->resources->cell_group.cells.at(SERVING_PCELL_IDX);
+  const auto& cell_ran = du_params.ran.cells[req.pcell_index].ran;
+  if (not ue_ctx->resources.resource_alloc_failed() and ue_pcell.serv_cell_cfg.pdsch_serv_cell_cfg.has_value()) {
+    // For NTN cells, pre-size the MAC DL HARQ buffer pool to the cell maximum. UE capabilities
+    // are unknown at creation time, so nof_harq_proc is capped at 16; after capability exchange
+    // the scheduler HARQ entity is extended up to max_harq_procs (e.g. 32). The MAC buffer must
+    // already be large enough at that point to avoid an out-of-bounds assertion.
+    mac_ue_create_msg.pdsch_harqs_per_cell =
+        cell_ran.ntn_params.has_value()
+            ? cell_ran.init_bwp.pdsch.max_harq_procs
+            : static_cast<unsigned>(ue_pcell.serv_cell_cfg.pdsch_serv_cell_cfg->nof_harq_proc);
+  } else {
+    // UE is going to be RRC Rejected. We only need one HARQ in such scenario.
+    mac_ue_create_msg.pdsch_harqs_per_cell = 1;
+  }
+
   // Create Scheduler UE Config Request that will be embedded in the mac UE creation request.
   mac_ue_create_msg.sched_cfg = create_scheduler_ue_config_request(*ue_ctx, *ue_ctx->resources);
 

@@ -7,6 +7,8 @@
 #include "../ue_manager.h"
 #include "ocudu/ocudulog/logger.h"
 #include "ocudu/support/async/async_task.h"
+#include <string>
+#include <vector>
 
 namespace ocudu::ocuup {
 
@@ -15,9 +17,9 @@ class cu_up_e1_connection_loss_routine
 public:
   cu_up_e1_connection_loss_routine(gnb_cu_up_id_t           cu_up_id_,
                                    std::string              cu_up_name_,
-                                   std::string              plmn_,
+                                   std::vector<std::string> plmns_,
                                    std::atomic<bool>&       stop_command,
-                                   e1ap_connection_manager& e1ap_conn_mng_,
+                                   e1ap_interface&          e1ap_,
                                    ue_manager&              ue_mng_,
                                    timer_manager&           timers,
                                    task_executor&           ctrl_exec);
@@ -27,15 +29,15 @@ public:
   static const char* name() { return "CU-UP E1 connection loss routine"; }
 
 private:
-  gnb_cu_up_id_t     cu_up_id;
-  std::string        cu_up_name;
-  std::string        plmn;
-  std::atomic<bool>& stop_command;
+  gnb_cu_up_id_t           cu_up_id;
+  std::string              cu_up_name;
+  std::vector<std::string> plmns;
+  std::atomic<bool>&       stop_command;
 
-  unique_timer             retry_timer;
-  e1ap_connection_manager& e1ap_conn_mng;
-  ue_manager&              ue_mng;
-  ocudulog::basic_logger&  logger;
+  unique_timer            retry_timer;
+  e1ap_interface&         e1ap;
+  ue_manager&             ue_mng;
+  ocudulog::basic_logger& logger;
 
   bool reconnected;
 };

@@ -9,7 +9,7 @@
 using namespace ocudu;
 
 scheduler_impl::scheduler_impl(const scheduler_config& sched_cfg_) :
-  expert_params(sched_cfg_.expert_params), logger(ocudulog::fetch_basic_logger("SCHED")), cfg_mng(sched_cfg_, metrics)
+  expert_params(sched_cfg_.expert_params), logger(ocudulog::fetch_basic_logger("SCHED")), cfg_mng(sched_cfg_)
 {
 }
 
@@ -28,8 +28,7 @@ bool scheduler_impl::handle_cell_configuration_request(const sched_cell_configur
 
   // Create a new cell scheduler instance.
   cells.emplace(msg.cell_index,
-                std::make_unique<cell_scheduler>(
-                    expert_params, msg, *cell_cfg, *groups[msg.cell_group_index], metrics.at(msg.cell_index)));
+                std::make_unique<cell_scheduler>(expert_params, msg, *cell_cfg, *groups[msg.cell_group_index]));
 
   return true;
 }
@@ -38,7 +37,7 @@ void scheduler_impl::handle_cell_removal_request(du_cell_index_t cell_index)
 {
   ocudu_assert(cells.contains(cell_index), "cell={} does not exist", fmt::underlying(cell_index));
 
-  // Remove cell.
+  // Remove cell. This also destroys the cell metrics owned by the cell scheduler.
   cells.erase(cell_index);
 
   // Remove cell from config.
@@ -81,8 +80,15 @@ void scheduler_impl::handle_ue_creation_request(const sched_ue_creation_request_
     return;
   }
 
-  // Dispatch UE creation to UE scheduler associated to the cell group.
+  // Fetch cell group associated with the UE PCell.
   const du_cell_index_t pcell_idx = ue_cfg_ev.next_config().pcell_common_cfg().cell_index;
+
+  if (ue_request.cfra_enabled) {
+    // Notify RA scheduler of upcoming CFRA-created UE ids.
+    cells[pcell_idx]->handle_cfra_mapping(ue_request.ue_index, ue_request.crnti);
+  }
+
+  // Create UE context.
   cells[pcell_idx]->get_ue_configurator().handle_ue_creation(std::move(ue_cfg_ev));
 }
 
@@ -194,6 +200,16 @@ void scheduler_impl::handle_dl_mac_ce_indication(const dl_mac_ce_indication& mac
     return;
   }
   cells[pcell_idx]->get_feedback_handler().handle_dl_mac_ce_indication(mac_ce);
+}
+
+void scheduler_impl::handle_crnti_ce_received(du_ue_index_t ue_index)
+{
+  const du_cell_index_t pcell_idx = cfg_mng.get_pcell_index(ue_index);
+  if (pcell_idx == INVALID_DU_CELL_INDEX) {
+    logger.warning("ue={}: Discarding MAC CE update. Cause: UE not recognized", ue_index);
+    return;
+  }
+  cells[pcell_idx]->get_feedback_handler().handle_crnti_ce_received(ue_index);
 }
 
 const sched_result& scheduler_impl::slot_indication(slot_point_extended sl_tx,

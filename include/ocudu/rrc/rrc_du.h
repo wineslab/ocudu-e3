@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/cause/common.h"
+#include "ocudu/ran/cu_cp_cell_configuration.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/rrc/rrc_cell_context.h"
 #include "ocudu/rrc/rrc_metrics.h"
@@ -46,7 +47,7 @@ struct rrc_resume_context_t {
 };
 
 struct rrc_ue_creation_message {
-  ue_index_t                             ue_index;
+  cu_cp_ue_index_t                       ue_index;
   rnti_t                                 c_rnti;
   rrc_cell_context                       cell;
   rrc_pdu_f1ap_notifier*                 f1ap_pdu_notifier;
@@ -68,6 +69,12 @@ public:
 
   /// \brief Get the RRC Reject message to send to the UE.
   virtual byte_buffer get_rrc_reject() = 0;
+
+  /// \brief Pack the RRC MeasConfig into ASN.1 PDU forwarded to the DU via F1AP CUtoDURRCInformation.
+  ///
+  /// Used on the target node of an inter-CU handover, where the MeasConfig must be delivered before the RRC UE
+  /// context exists. Returns an empty buffer on packing failure.
+  virtual byte_buffer pack_meas_config(const rrc_meas_cfg& meas_cfg) = 0;
 
   /// \brief Get the RRC Resume context containing the resume ID and resume cause from a RRC container.
   /// \param[in] rrc_container The RRC container from the DU.
@@ -94,11 +101,11 @@ class rrc_ue_handler
 public:
   virtual ~rrc_ue_handler() = default;
 
-  virtual rrc_ue_interface* find_ue(ue_index_t ue_index) = 0;
+  virtual rrc_ue_interface* find_ue(cu_cp_ue_index_t ue_index) = 0;
 
   /// Remove a RRC UE object.
   /// \param[in] ue_index The index of the UE object to remove.
-  virtual void remove_ue(ue_index_t ue_index) = 0;
+  virtual void remove_ue(cu_cp_ue_index_t ue_index) = 0;
 };
 
 class rrc_du_connection_event_handler

@@ -35,6 +35,7 @@ variables:
       artifacts: false
   variables:
     TEST_EXECUTION_TIMEOUT: 0
+    CTEST_XUNIT_NAME: "ctest"
   script:
     - &script_functions |
       build_ocudu_extended() {
@@ -48,27 +49,24 @@ variables:
         fi
       }
 
-      launch_tests() {
+      launch_tests_ocudu_extended() {
         cd ${CI_PROJECT_DIR}/${OCUDU_BUILD_DIR}
         if [ -n "${FINGERPRINT}" ]; then
           echo "Searching for changed tests"
           CTEST_SUBSET=$(/usr/local/builder_tools/bin/python /usr/local/bin/changed_tests.py -b . -i "../${FINGERPRINT}" -d md5)
           if [ -n "${CTEST_SUBSET}" ]; then
             echo "Tests with changed fingerprint: ${CTEST_SUBSET}"
-            CTEST_SUBSET_CMD="-I 0,0,0,${CTEST_SUBSET}"
+            CTEST_ARGS="-I 0,0,0,${CTEST_SUBSET} ${CTEST_ARGS}"
           else
             echo "No tests changed"
             ret=0
             exit $ret
           fi
         fi
-        echo "Using LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-        CTEST_CMD="ctest -j${CPU_JOBS} ${CTEST_SUBSET_CMD} $CTEST_ARGS --schedule-random --output-on-failure --output-junit xunit.xml"
-        echo "+ ${CTEST_CMD}"
-
+        export -f launch_tests_ocudu
         status_file=$(mktemp)
         timeout ${TEST_EXECUTION_TIMEOUT} \
-          bash -c "${CTEST_CMD}; echo \$? > ${status_file}" \
+          bash -c "launch_tests_ocudu; echo \$? > ${status_file}" \
           && ret=$(cat ${status_file}) || ret=124
 
         if [[ $TEST_MODE = "coverage" ]]; then
@@ -144,22 +142,22 @@ variables:
       }
 
     - build_ocudu_extended
-    - launch_tests
+    - launch_tests_ocudu_extended
   timeout: 3 hours
   after_script:
-    - mv ${CI_PROJECT_DIR}/${OCUDU_BUILD_DIR}/coverage_1.xml   ${CI_PROJECT_DIR}/${CI_JOB_ID}_coverage_1.xml  || true
-    - mv ${CI_PROJECT_DIR}/${OCUDU_BUILD_DIR}/coverage_2.xml   ${CI_PROJECT_DIR}/${CI_JOB_ID}_coverage_2.xml  || true
-    - mv ${CI_PROJECT_DIR}/${OCUDU_BUILD_DIR}/xunit.xml        ${CI_PROJECT_DIR}/${CI_JOB_ID}_xunit.xml       || true
+    - mv ${CI_PROJECT_DIR}/${OCUDU_BUILD_DIR}/coverage_1.xml   ${CI_PROJECT_DIR}/${CI_JOB_ID}_coverage_1.xml           || true
+    - mv ${CI_PROJECT_DIR}/${OCUDU_BUILD_DIR}/coverage_2.xml   ${CI_PROJECT_DIR}/${CI_JOB_ID}_coverage_2.xml           || true
+    - mv ${CI_PROJECT_DIR}/${OCUDU_BUILD_DIR}/xunit.xml        ${CI_PROJECT_DIR}/${CI_JOB_ID}_${CTEST_XUNIT_NAME}.xml  || true
   artifacts:
     when: always
     reports:
       coverage_report:
         coverage_format: cobertura
         path: ${CI_JOB_ID}_coverage*.xml
-      junit: ${CI_JOB_ID}_xunit.xml
+      junit: ${CI_JOB_ID}_${CTEST_XUNIT_NAME}.xml
     paths:
       - ${CI_JOB_ID}_coverage*.xml
-      - ${CI_JOB_ID}_xunit.xml
+      - ${CI_JOB_ID}_${CTEST_XUNIT_NAME}.xml
       - ${OCUDU_BUILD_DIR}/Testing/Temporary/MemoryChecker.*.log
     expire_in: 5 days
 
@@ -177,6 +175,7 @@ variables:
     ENABLE_GCOV: "True"
     MARCH: x86-64-v3
     LINKER: mold
+    CTEST_XUNIT_NAME: xunit
 
 .smoke relwithdeb:
   extends: .build_and_unit
@@ -368,10 +367,7 @@ intermediate commits cached:
       git config advice.detachedHead false
       UNSHALLOW=$([ "$(git rev-parse --is-shallow-repository)" = "true" ] && echo --unshallow || true)
       if [ "$CI_MERGE_REQUEST_SOURCE_PROJECT_PATH" != "$CI_PROJECT_PATH" ]; then
-        git remote add fork $CI_MERGE_REQUEST_SOURCE_PROJECT_URL
-        git fetch $UNSHALLOW origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
-        git fetch fork $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
-        git branch -f $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME fork/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+        git fetch $UNSHALLOW origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME "refs/merge-requests/$CI_MERGE_REQUEST_IID/head:$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
         git branch -f $CI_MERGE_REQUEST_TARGET_BRANCH_NAME origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
       else
         git fetch $UNSHALLOW origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
@@ -394,7 +390,7 @@ intermediate commits cached:
         fi
         build_ocudu_extended
       done
-    - launch_tests
+    - launch_tests_ocudu_extended
   cache:
     - *cache_build_get
 
@@ -430,7 +426,7 @@ valgrind changed tests:
       git checkout $SOURCE_SHA
       build_ocudu_extended
     - echo "This test execution has a timeout of ${TEST_EXECUTION_TIMEOUT}. If the execution excess that timer, the job will be marked as allowed_to_fail. This will avoid the job to have a huge duration in a MR pipeline."
-    - launch_tests
+    - launch_tests_ocudu_extended
   cache:
     - *cache_build_get
 
@@ -446,6 +442,7 @@ smoke coverage:
   extends: .smoke coverage
   rules:
     - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Nightly/
+    - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Smoke/
     - if: $ON_PROTECTED_BRANCH
 
 smoke asan:
@@ -786,6 +783,39 @@ debian 13 avx512:
       start_in: 5 hours
   variables:
     OS: debian-13
+    ENABLE_WERROR: "False"
+    MARCH: x86-64-v4
+    TEST_MODE: full
+  tags:
+    - ${OCUDU_RUNNER_TAG}-amd64
+    - avx512
+    - sctp
+  parallel:
+    matrix:
+      - <<: *basic_combinations
+
+fedora 44 avx2:
+  extends: .build_and_unit
+  rules:
+    - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Alternative OSs/
+      when: delayed
+      start_in: 6 hours
+  variables:
+    OS: fedora-44
+    ENABLE_WERROR: "False"
+    MARCH: x86-64-v3
+  parallel:
+    matrix:
+      - <<: *basic_combinations
+
+fedora 44 avx512:
+  extends: .build_and_unit
+  rules:
+    - if: $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /Alternative OSs/
+      when: delayed
+      start_in: 7 hours
+  variables:
+    OS: fedora-44
     ENABLE_WERROR: "False"
     MARCH: x86-64-v4
     TEST_MODE: full

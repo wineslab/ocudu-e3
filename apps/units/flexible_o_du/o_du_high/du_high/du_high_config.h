@@ -31,6 +31,7 @@
 #include "ocudu/ran/subcarrier_spacing.h"
 #include "ocudu/ran/tac.h"
 #include "ocudu/scheduler/config/scheduler_expert_config.h"
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -342,7 +343,9 @@ struct du_high_unit_pusch_config {
   /// Factor "alpha" for fractional path-loss compensation in PUSCH power control.
   /// Values: {0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}.
   float path_loss_compensation_factor{1.0f};
-
+  /// Smoothing factor "alpha" for Exponential Moving Average filter of PUSCH Closed-Loop Power Control SINR.
+  /// Range: (0, 1).
+  float ema_alpha_cl_pw_control_sinr{0.5f};
   /// Set to true to enable transform precoding in PUSCH.
   bool enable_transform_precoding = false;
 };
@@ -465,6 +468,17 @@ struct du_high_unit_pucch_config {
   float pucch_f0_sinr_target_dB{10.0f};
   float pucch_f2_sinr_target_dB{6.0f};
   float pucch_f3_sinr_target_dB{1.0f};
+  /// Smoothing factor "alpha" for Exponential Moving Average filter of PUCCH Closed-Loop Power Control SINR.
+  /// Range: (0, 1).
+  float ema_alpha_cl_pw_control_sinr{0.5f};
+
+  /// Thresholds for the mapping of SINR (in dB) to PUCCH repetition factor. The list is interpreted as
+  /// [max SINR for 2 reps, max SINR for 4 reps, max SINR for 8 reps]. Up to 3 entries. An empty list disables
+  /// PUCCH repetition.
+  std::vector<float> repetition_sinr_thresholds;
+  /// Repetition factor configured for each PUCCH resource within a HARQ-ACK PUCCH resource set. The size of this
+  /// list must equal \ref res_set_size when \ref repetition_sinr_thresholds is not empty. Allowed values: {1, 2, 4, 8}.
+  std::vector<unsigned> repetition_factors;
 
   template <typename T>
   bool almost_equal(T a, T b) const
@@ -495,7 +509,14 @@ struct du_high_unit_pucch_config {
            enable_closed_loop_pw_control == rhs.enable_closed_loop_pw_control &&
            almost_equal<float>(pucch_f0_sinr_target_dB, rhs.pucch_f0_sinr_target_dB) &&
            almost_equal<float>(pucch_f2_sinr_target_dB, rhs.pucch_f2_sinr_target_dB) &&
-           almost_equal<float>(pucch_f3_sinr_target_dB, rhs.pucch_f3_sinr_target_dB);
+           almost_equal<float>(pucch_f3_sinr_target_dB, rhs.pucch_f3_sinr_target_dB) &&
+           almost_equal<float>(ema_alpha_cl_pw_control_sinr, rhs.ema_alpha_cl_pw_control_sinr) &&
+           repetition_sinr_thresholds.size() == rhs.repetition_sinr_thresholds.size() &&
+           std::equal(repetition_sinr_thresholds.begin(),
+                      repetition_sinr_thresholds.end(),
+                      rhs.repetition_sinr_thresholds.begin(),
+                      [this](float a, float b) { return almost_equal<float>(a, b); }) &&
+           repetition_factors == rhs.repetition_factors;
   }
   bool operator!=(const du_high_unit_pucch_config& rhs) const { return !(*this == rhs); }
 };
@@ -597,7 +618,7 @@ struct pdcch_common_unit_config {
   std::optional<unsigned> coreset0_index;
   /// Number of PDCCH candidates per aggregation level for SearchSpace#1. The aggregation level for the array element
   /// with index "x" is L=1U << x. The possible values for each element are {0, 1, 2, 3, 4, 5, 6, 8}.
-  std::array<uint8_t, 5> ss1_n_candidates = {0, 0, 1, 0, 0};
+  std::array<uint8_t, 5> ss1_n_candidates = {0, 0, 2, 0, 0};
   /// SearchSpace#0 index as per tables in TS 38.213, clause 13.
   unsigned ss0_index = 0;
   /// Maximum CORESET#0 duration in OFDM symbols to consider when deriving CORESET#0 index.
@@ -930,8 +951,8 @@ struct du_high_unit_mac_cell_group_config {
   mac_sr_unit_config sr_cfg;
 };
 
-/// PRACH application configuration.
-struct du_high_unit_prach_config {
+/// RACH application configuration.
+struct du_high_unit_rach_config {
   struct ra_prioritization_slice_info {
     /// List of NSAG IDs with the provided RA prioritization slice information.
     std::vector<uint8_t> nsag_ids;
@@ -940,6 +961,27 @@ struct du_high_unit_prach_config {
     /// Scaling factor applied to the number of preamble transmissions for the prioritized RA procedure. Possible
     /// values: {0, 0.25, 0.5, 0.75}.
     std::optional<float> scaling_factor_bi;
+  };
+  /// Parameters for two-step RACH. Currently, only shared RACH occasions with 4-step RACH is supported.
+  struct two_step_info {
+    /// Number of CB preambles per SSB per shared RO for 2-step RA. Values: {1, ..., 60}.
+    uint8_t cb_preambles_per_ssb_per_shared_ro = 4;
+    /// RSRP threshold in dBm above which the UE selects 2-step RA over 4-step RA. Values: {-156, ..., -29}.
+    int msga_rsrp_thres_dbm = -100;
+    /// MsgB response window length in slots. Values: {1, 2, 4, 8, 10, 20, 40, 80, 160, 320}.
+    unsigned msgb_response_window_slots = 40;
+    /// Time-domain offset in slots from the PRACH slot to the MsgA PUSCH slot. Values: {1, ..., 32}.
+    uint8_t td_offset = 1;
+    /// Index into the PUSCH-TimeDomainAllocationResource table for MsgA PUSCH scheduling.
+    uint8_t pusch_td_res_index = 0;
+    /// MCS index for MsgA PUSCH transmission. Values: {0, ..., 28}.
+    uint8_t mcs = 0;
+    /// Number of PRBs per MsgA PUSCH occasion. Values: {1, ..., 32}.
+    uint8_t nof_prbs_per_msga_po = 3;
+    /// Frequency offset in PRBs of the lowest MsgA PUSCH occasion from PRB 0.
+    unsigned prb_start = 0;
+    /// Number of MsgA PUSCH occasions FDMed in one time instance. Values: {1, 2, 4, 8}.
+    uint8_t po_fdm = 1;
   };
 
   /// PRACH configuration index. If not specified, it is automatically derived to fit in an UL slot.
@@ -985,6 +1027,8 @@ struct du_high_unit_prach_config {
   unsigned nof_prach_guardbands_rbs = 3;
   /// Configuration of slice-specific RACH configurations.
   std::vector<ra_prioritization_slice_info> ra_prio_slice_info_list;
+  /// Parameters of two-step RACH, if enabled.
+  std::optional<two_step_info> two_step;
 };
 
 /// Slice scheduling configuration for a cell.
@@ -1069,7 +1113,7 @@ struct du_high_unit_base_cell_config {
   /// PDSCH configuration.
   du_high_unit_pdsch_config pdsch_cfg;
   /// PRACH configuration.
-  du_high_unit_prach_config prach_cfg;
+  du_high_unit_rach_config prach_cfg;
   /// PUSCH configuration.
   du_high_unit_pusch_config pusch_cfg;
   /// PUCCH configuration.
@@ -1111,6 +1155,11 @@ struct du_high_unit_test_mode_ue_config {
   /// This feature should be avoided if the OFH/UL PHY are operational, otherwise the auto-generated indications
   /// may interfere with the UL PHY HARQ handling.
   std::optional<unsigned> auto_ack_indication_delay;
+  /// \brief Duration in milliseconds of active traffic after all UEs are established before they are released and
+  /// recreated. When set, UEs cycle indefinitely through attach, traffic, and detach. Unset disables cycling.
+  std::optional<unsigned> attach_detach_duration_ms;
+  /// Guard period duration in milliseconds between a release cycle and the next creation cycle.
+  unsigned attach_detach_guard_duration_ms = 1000;
   /// Whether PDSCH grants are automatically assigned to the test UE.
   bool pdsch_active = true;
   /// Whether PUSCH grants are automatically assigned to the test UE.
@@ -1123,6 +1172,7 @@ struct du_high_unit_test_mode_ue_config {
   unsigned pmi = 0;
   /// Precoding codebook indexes to be used in case of more than 2 antenna ports.
   unsigned i_1_1 = 0;
+  unsigned i_1_2 = 0;
   unsigned i_1_3 = 0;
   unsigned i_2   = 0;
 };
@@ -1142,8 +1192,10 @@ struct du_high_unit_cell_config {
 /// Configuration to enable/disable metrics per layer.
 struct du_high_unit_metrics_layer_config {
   bool enable_scheduler = true;
-  bool enable_rlc       = false;
-  bool enable_mac       = false;
+  /// Enable per-UE scheduler metrics. Only takes effect when scheduler metrics are enabled.
+  bool enable_scheduler_ue = true;
+  bool enable_rlc          = false;
+  bool enable_mac          = false;
   /// Enable DU management and control procedure metrics.
   bool enable_du_proc = false;
 
@@ -1268,11 +1320,44 @@ struct du_high_unit_rlc_config {
   du_high_unit_rlc_am_config am;
 };
 
+/// Proactive UL grant triggered in reaction to a DL allocation, per 5QI.
+struct du_high_unit_triggered_ul_grant_config {
+  uint8_t  delay_slots = 3;   // Minimum slots delay between PDSCH and UL PDCCH grant.
+  unsigned grant_size  = 512; // Value of triggered ul grant in bytes.
+};
+
+/// MAC scheduler configuration per 5QI.
+struct du_high_unit_mac_config {
+  std::optional<du_high_unit_triggered_ul_grant_config> triggered_ul_grant;
+};
+
 /// QoS configuration
 struct du_high_unit_qos_config {
   five_qi_t                  five_qi = uint_to_five_qi(9);
   du_high_unit_rlc_config    rlc;
   du_high_unit_f1u_du_config f1u_du;
+  du_high_unit_mac_config    mac;
+};
+
+/// User-defined NR frequency band.
+struct du_high_unit_custom_band_config {
+  /// Band identifier (1-1024). Used as a lookup key; any value in range is accepted.
+  /// If the number matches an existing standard NR band, this custom definition takes priority.
+  uint16_t band_nr = 0;
+  /// DL frequency range in MHz.
+  double dl_freq_min = 0.0;
+  double dl_freq_max = 0.0;
+  /// UL frequency range in MHz. Absent for TDD (UL same as DL).
+  std::optional<double> ul_freq_min;
+  std::optional<double> ul_freq_max;
+  /// ARFCN raster (channel spacing). Determines dl_nref_step / ul_nref_step.
+  band_helper::delta_freq_raster f_raster     = band_helper::delta_freq_raster::kHz100;
+  subcarrier_spacing             ssb_scs      = subcarrier_spacing::kHz15;
+  bool                           ssb_case_c   = false;
+  bool                           min_40mhz_bw = false;
+  /// GSCN step for SSB candidate search. Valid values: 1, 3, 7, 16. Default = 1.
+  uint8_t delta_gscn = 1;
+  bool    ntn        = false;
 };
 
 /// DU high configuration.
@@ -1296,6 +1381,8 @@ struct du_high_unit_config {
   ///
   /// \note Add one cell by default.
   std::vector<du_high_unit_cell_config> cells_cfg = {{}};
+  /// User-defined non-standard NR frequency bands.
+  std::vector<du_high_unit_custom_band_config> custom_freq_bands;
   /// QoS configuration.
   std::vector<du_high_unit_qos_config> qos_cfg;
   /// DU high expert execution settings.

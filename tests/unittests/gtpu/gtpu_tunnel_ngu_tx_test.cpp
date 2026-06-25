@@ -3,11 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/gtpu/gtpu_pdu.h"
-#include "lib/gtpu/gtpu_tunnel_ngu_rx_impl.h"
 #include "lib/gtpu/gtpu_tunnel_ngu_tx_impl.h"
 #include "tests/unittests/gtpu/gtpu_test_shared.h"
-#include "ocudu/support/bit_encoding.h"
 #include "ocudu/support/executors/manual_task_worker.h"
+#include "ocudu/support/io/sockets.h"
 #include <gtest/gtest.h>
 #include <sys/socket.h>
 
@@ -15,12 +14,21 @@ using namespace ocudu;
 
 class gtpu_tunnel_tx_upper_dummy : public gtpu_tunnel_common_tx_upper_layer_notifier
 {
-  void on_new_pdu(byte_buffer buf, const ::sockaddr_storage& dest_addr) final { tx_ul_pdus.push_back(buf); }
+  void on_new_pdu(byte_buffer buf, const ::sockaddr_storage& dest_addr) final
+  {
+    tx_ul_pdus.push_back(buf);
+    last_dest_addr = dest_addr;
+  }
 
 public:
-  void clear() { tx_ul_pdus.clear(); }
+  void clear()
+  {
+    tx_ul_pdus.clear();
+    last_dest_addr = {};
+  }
 
   std::vector<byte_buffer> tx_ul_pdus;
+  ::sockaddr_storage       last_dest_addr = {};
 };
 
 /// Fixture class for GTP-U tunnel NG-U Rx tests
@@ -112,6 +120,13 @@ TEST_F(gtpu_tunnel_ngu_tx_test, tx_sdus)
 
     tx->handle_sdu(std::move(sdu), uint_to_qos_flow_id(1));
     ASSERT_EQ(pdu, tx_upper.tx_ul_pdus[i]);
+    gtpu_teid_t teid_out = {};
+    ASSERT_TRUE(gtpu_read_teid(teid_out.value(), tx_upper.tx_ul_pdus[i], gtpu_logger));
+    ASSERT_EQ(teid_out, tx_cfg.peer_teid);
+    std::string dest_addr_str;
+    ASSERT_TRUE(
+        ocudu::sockaddr_to_ip_str(reinterpret_cast<sockaddr*>(&tx_upper.last_dest_addr), dest_addr_str, logger));
+    ASSERT_EQ(dest_addr_str, "127.0.0.1");
   }
 }
 
@@ -142,6 +157,67 @@ TEST_F(gtpu_tunnel_ngu_tx_test, tx_stop)
     tx->handle_sdu(std::move(sdu), uint_to_qos_flow_id(1));
     ASSERT_TRUE(tx_upper.tx_ul_pdus.empty());
   }
+}
+
+/// \brief After update_tx_endpoint() subsequent SDUs carry the new TEID in the GTP-U header.
+TEST_F(gtpu_tunnel_ngu_tx_test, update_tx_endpoint_changes_teid_in_pdu)
+{
+  gtpu_tunnel_ngu_config::gtpu_tunnel_ngu_tx_config tx_cfg = {};
+  tx_cfg.peer_addr                                         = "127.0.0.1";
+  tx_cfg.peer_teid                                         = gtpu_teid_t{0x2};
+
+  tx = std::make_unique<gtpu_tunnel_ngu_tx_impl>(cu_up_ue_index_t::MIN_CU_UP_UE_INDEX, tx_cfg, dummy_pcap, tx_upper);
+  ASSERT_NE(tx, nullptr);
+
+  // SDU before the update should carry the original TEID (0x2).
+  byte_buffer sdu_before = byte_buffer::create(gtpu_ping_sdu).value();
+  tx->handle_sdu(std::move(sdu_before), uint_to_qos_flow_id(1));
+  ASSERT_EQ(tx_upper.tx_ul_pdus.size(), 1U);
+  gtpu_teid_t teid_out = {};
+  ASSERT_TRUE(gtpu_read_teid(teid_out.value(), tx_upper.tx_ul_pdus[0], gtpu_logger));
+  ASSERT_EQ(teid_out, tx_cfg.peer_teid);
+  tx_upper.clear();
+
+  // Update the endpoint to a new TEID.
+  tx->update_tx_endpoint("127.0.0.2", 2152, 0x5);
+
+  // SDU after the update must carry the new TEID (0x5).
+  byte_buffer sdu_after = byte_buffer::create(gtpu_ping_sdu).value();
+  tx->handle_sdu(std::move(sdu_after), uint_to_qos_flow_id(1));
+  ASSERT_EQ(tx_upper.tx_ul_pdus.size(), 1U);
+  gtpu_teid_t teid_out_after = {};
+  ASSERT_TRUE(gtpu_read_teid(teid_out_after.value(), tx_upper.tx_ul_pdus[0], gtpu_logger));
+  ASSERT_EQ(teid_out_after, gtpu_teid_t{0x5});
+
+  // Destination address should reflect the new peer.
+  std::string dest_addr_str;
+  ASSERT_TRUE(ocudu::sockaddr_to_ip_str(reinterpret_cast<sockaddr*>(&tx_upper.last_dest_addr), dest_addr_str, logger));
+  ASSERT_EQ(dest_addr_str, "127.0.0.2");
+}
+
+/// \brief Calling update_tx_endpoint() a second time overrides the first update.
+TEST_F(gtpu_tunnel_ngu_tx_test, update_tx_endpoint_second_call_overrides_first)
+{
+  gtpu_tunnel_ngu_config::gtpu_tunnel_ngu_tx_config tx_cfg = {};
+  tx_cfg.peer_addr                                         = "127.0.0.1";
+  tx_cfg.peer_teid                                         = gtpu_teid_t{0x1};
+
+  tx = std::make_unique<gtpu_tunnel_ngu_tx_impl>(cu_up_ue_index_t::MIN_CU_UP_UE_INDEX, tx_cfg, dummy_pcap, tx_upper);
+
+  tx->update_tx_endpoint("10.0.0.1", 2152, 0xaa);
+  tx->update_tx_endpoint("10.0.0.2", 2152, 0xbb);
+
+  byte_buffer sdu = byte_buffer::create(gtpu_ping_sdu).value();
+  tx->handle_sdu(std::move(sdu), uint_to_qos_flow_id(1));
+  ASSERT_EQ(tx_upper.tx_ul_pdus.size(), 1U);
+
+  // Only the second update should be in effect.
+  gtpu_teid_t teid_out = {};
+  ASSERT_TRUE(gtpu_read_teid(teid_out.value(), tx_upper.tx_ul_pdus[0], gtpu_logger));
+  ASSERT_EQ(teid_out, gtpu_teid_t{0xbb});
+  std::string dest_addr_str;
+  ASSERT_TRUE(ocudu::sockaddr_to_ip_str(reinterpret_cast<sockaddr*>(&tx_upper.last_dest_addr), dest_addr_str, logger));
+  ASSERT_EQ(dest_addr_str, "10.0.0.2");
 }
 
 int main(int argc, char** argv)

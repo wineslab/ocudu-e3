@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "conditional_handover_reconfiguration_routine.h"
+#include "mobility_helpers.h"
 #include <algorithm>
 
 using namespace ocudu;
@@ -17,15 +18,19 @@ conditional_handover_reconfiguration_routine::conditional_handover_reconfigurati
     cu_cp_ue_context_manipulation_handler&   cu_cp_handler_,
     cu_cp_ue_context_release_handler&        ue_context_release_handler_,
     ue_manager&                              ue_mng_,
+    mobility_manager&                        mobility_mng_,
     ocudulog::basic_logger&                  logger_) :
   request(request_),
   source_ue(source_ue_),
   source_du_f1ap_ue_ctxt_mng(source_du_f1ap_ue_ctxt_mng_),
   cu_cp_handler(cu_cp_handler_),
   ue_context_release_handler(ue_context_release_handler_),
+  ue_mng(ue_mng_),
+  mobility_mng(mobility_mng_),
   logger(logger_)
 {
-  ocudu_assert(source_ue.get_ue_index() != ue_index_t::invalid, "Invalid source UE index {}", source_ue.get_ue_index());
+  ocudu_assert(
+      source_ue.get_ue_index() != cu_cp_ue_index_t::invalid, "Invalid source UE index {}", source_ue.get_ue_index());
 }
 
 void conditional_handover_reconfiguration_routine::operator()(coro_context<async_task<bool>>& ctx)
@@ -48,12 +53,25 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
     }
   }
 
+  // Request measGapConfig from the source DU so the UE can perform inter-frequency measurements
+  // during CHO condition evaluation. The source DU is best positioned to choose a gapOffset that
+  // does not conflict with its own downlink scheduling (gapOffset is relative to PCell SFN per
+  // TS 38.331 Section 5.5.2.9 NOTE 2). The DU returns empty meas_gap_cfg for intra-frequency CHO.
+  generate_gap_request();
+  CORO_AWAIT_VALUE(gap_response,
+                   source_du_f1ap_ue_ctxt_mng.handle_ue_context_modification_request(ue_context_mod_request));
+  if (!gap_response.success) {
+    logger.warning("ue={}: \"{}\" - source DU gap request failed; CHO will proceed without measGapConfig",
+                   source_ue.get_ue_index(),
+                   name());
+  }
+
   // Build the conditional reconfiguration message.
-  rrc_container = build_conditional_reconfiguration_message();
+  rrc_container = build_conditional_reconfiguration_message(gap_response.du_to_cu_rrc_info.meas_gap_cfg);
   if (rrc_container.empty()) {
     logger.warning(
         "ue={}: \"{}\" failed. Could not build conditional reconfiguration", source_ue.get_ue_index(), name());
-    CORO_AWAIT(cleanup_targets());
+    cleanup_targets();
     CORO_EARLY_RETURN(false);
   }
 
@@ -61,10 +79,12 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
   {
     auto& cho_ctx = source_ue.get_cho_context();
     // Only one target observer per target UE index is required.
-    // In intra-DU CHO all candidates map to source_ue_index, so exactly one conditional_handover_target_routine is
-    // started.
-    std::vector<ue_index_t> armed_target_ues;
+    std::vector<cu_cp_ue_index_t> armed_target_ues;
     for (const auto& candidate : cho_ctx->candidates) {
+      if (candidate.is_inter_cu()) {
+        // Inter-CU candidates have no local target UE; completion is handled via Xn.
+        continue;
+      }
       if (std::find(armed_target_ues.begin(), armed_target_ues.end(), candidate.target_ue_index) !=
           armed_target_ues.end()) {
         logger.debug("ue={}: CHO observer already started for target_ue={}. Skipping duplicate candidate "
@@ -117,7 +137,7 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
 
   if (!ue_context_mod_response.success) {
     logger.warning("ue={}: \"{}\" failed. UE context modification failed", source_ue.get_ue_index(), name());
-    CORO_AWAIT(cleanup_targets());
+    cleanup_targets();
     CORO_EARLY_RETURN(false);
   }
 
@@ -130,8 +150,19 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
   if (!reconfig_result) {
     logger.warning(
         "ue={}: \"{}\" failed. RRCReconfigurationComplete not received on source", source_ue.get_ue_index(), name());
-    CORO_AWAIT(cleanup_targets());
+    // Target routines are armed by this point (we waited up to request.timeout on the source transaction). Cancel
+    // each target's RRC transaction; each target routine observes the cancellation and self-releases on its own fifo.
+    cancel_cho_candidates(source_ue, ue_mng);
+    if (source_ue.get_cho_context().has_value()) {
+      source_ue.get_cho_context()->clear();
+    }
     CORO_EARLY_RETURN(false);
+  }
+
+  // The UE has applied the CHO measConfig to its VarMeasConfig (TS 38.331 Section 5.3.5.3).
+  // Update the stored context so the gNB tracks the correct UE measurement state.
+  if (cho_meas_result.has_value()) {
+    source_ue.get_rrc_ue()->update_meas_config(cho_meas_result.value());
   }
 
   // Set CHO state to execution.
@@ -144,12 +175,15 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
     }
   }
 
+  mobility_mng.get_metrics_handler().aggregate_requested_handover_execution();
+
   logger.debug("ue={}: \"{}\" finished successfully", source_ue.get_ue_index(), name());
 
   CORO_RETURN(true);
 }
 
-byte_buffer conditional_handover_reconfiguration_routine::build_conditional_reconfiguration_message()
+byte_buffer conditional_handover_reconfiguration_routine::build_conditional_reconfiguration_message(
+    const byte_buffer& source_du_meas_gap_cfg)
 {
   auto& cho_ctx = source_ue.get_cho_context();
   if (!cho_ctx.has_value() || cho_ctx->candidates.empty()) {
@@ -171,7 +205,7 @@ byte_buffer conditional_handover_reconfiguration_routine::build_conditional_reco
   rrc_request.cho_candidates = std::vector<cu_cp_ue_cho_candidate>();
 
   // Generate CHO-specific measurement config filtered for candidate targets.
-  auto cho_meas_result =
+  cho_meas_result =
       source_ue.get_rrc_ue()->generate_meas_config(source_rrc_context.meas_cfg, true, candidate_target_pcis);
 
   if (!cho_meas_result.has_value()) {
@@ -179,8 +213,14 @@ byte_buffer conditional_handover_reconfiguration_routine::build_conditional_reco
     return {};
   }
   cho_meas_id_map_t cho_nci_to_meas_ids = cho_meas_result->nci_to_meas_ids;
-  rrc_request.meas_cfg                  = std::move(cho_meas_result);
-  rrc_request.cho_nci_to_meas_ids       = std::move(cho_nci_to_meas_ids);
+  // When candidates are on different ARFCNs the UE needs measurement gaps to evaluate CHO
+  // conditions. Use the measGapConfig provided by the source DU (gapOffset is relative to the
+  // source PCell SFN per TS 38.331 Section 5.5.2.9 NOTE 2).
+  if (cho_meas_result->meas_obj_to_add_mod_list.size() > 1 && !source_du_meas_gap_cfg.empty()) {
+    rrc_request.meas_gap_cfg = source_du_meas_gap_cfg.copy();
+  }
+  rrc_request.meas_cfg            = cho_meas_result; // copy; member kept for post-ack context update
+  rrc_request.cho_nci_to_meas_ids = std::move(cho_nci_to_meas_ids);
 
   // Apply runtime T1 threshold override.
   if (request.t1_thres_override.has_value() && rrc_request.meas_cfg.has_value()) {
@@ -231,8 +271,28 @@ byte_buffer conditional_handover_reconfiguration_routine::build_conditional_reco
   return std::move(cond_reconf_ctxt.rrc_ue_cond_reconfiguration_pdu);
 }
 
+void conditional_handover_reconfiguration_routine::generate_gap_request()
+{
+  ue_context_mod_request              = {};
+  ue_context_mod_request.ue_index     = source_ue.get_ue_index();
+  ue_context_mod_request.need_for_gap = true;
+
+  // Include the CHO measurement config so the source DU knows which inter-frequency candidates
+  // require gaps and can choose an appropriate gap pattern.
+  std::vector<pci_t> candidate_pcis;
+  for (const auto& candidate : source_ue.get_cho_context()->candidates) {
+    candidate_pcis.push_back(candidate.target_pci);
+  }
+  byte_buffer packed_meas = source_ue.get_rrc_ue()->get_packed_meas_config(candidate_pcis);
+  if (!packed_meas.empty()) {
+    ue_context_mod_request.cu_to_du_rrc_info.emplace();
+    ue_context_mod_request.cu_to_du_rrc_info->meas_cfg = std::move(packed_meas);
+  }
+}
+
 void conditional_handover_reconfiguration_routine::generate_ue_context_modification_request()
 {
+  ue_context_mod_request               = {};
   ue_context_mod_request.ue_index      = source_ue.get_ue_index();
   ue_context_mod_request.rrc_container = rrc_container.copy();
 
@@ -241,30 +301,37 @@ void conditional_handover_reconfiguration_routine::generate_ue_context_modificat
   // Traffic stop/switch is handled later by CHO completion on Access Success.
 }
 
-async_task<void> conditional_handover_reconfiguration_routine::cleanup_targets()
+void conditional_handover_reconfiguration_routine::cleanup_targets()
 {
-  return launch_async([this](coro_context<async_task<void>>& ctx) {
-    CORO_BEGIN(ctx);
-    candidates_to_release.clear();
-    if (source_ue.get_cho_context().has_value()) {
-      for (const auto& candidate : source_ue.get_cho_context()->candidates) {
-        // Release only externally prepared target UEs.
-        // Intra-DU candidates reuse the source UE and must be kept.
-        if (candidate.target_ue_index != ue_index_t::invalid && candidate.target_ue_index != source_ue.get_ue_index()) {
-          candidates_to_release.push_back(candidate.target_ue_index);
-        }
-      }
-      source_ue.get_cho_context()->clear();
+  if (!source_ue.get_cho_context().has_value()) {
+    return;
+  }
+
+  // Collect prepared candidate target UEs.
+  std::vector<cu_cp_ue_index_t> candidates;
+  for (const auto& candidate : source_ue.get_cho_context()->candidates) {
+    if (candidate.target_ue_index != cu_cp_ue_index_t::invalid &&
+        candidate.target_ue_index != source_ue.get_ue_index()) {
+      candidates.push_back(candidate.target_ue_index);
     }
-    release_idx = 0;
-    while (release_idx < candidates_to_release.size()) {
-      candidate_release_command.ue_index             = candidates_to_release[release_idx];
-      candidate_release_command.cause                = ngap_cause_radio_network_t::unspecified;
-      candidate_release_command.requires_rrc_release = false;
-      CORO_AWAIT_VALUE(candidate_release_complete,
-                       ue_context_release_handler.handle_ue_context_release_command(candidate_release_command));
-      ++release_idx;
+  }
+  source_ue.get_cho_context()->clear();
+
+  // Schedule release on each target's own task scheduler.
+  for (cu_cp_ue_index_t ue_idx : candidates) {
+    auto* cand_ue = ue_mng.find_du_ue(ue_idx);
+    if (cand_ue == nullptr) {
+      continue;
     }
-    CORO_RETURN();
-  });
+    cu_cp_ue_context_release_command cmd;
+    cmd.ue_index             = ue_idx;
+    cmd.cause                = ngap_cause_radio_network_t::unspecified;
+    cmd.requires_rrc_message = false;
+    cand_ue->get_task_sched().schedule_async_task(
+        launch_async([&h = ue_context_release_handler, cmd](coro_context<async_task<void>>& ctx) {
+          CORO_BEGIN(ctx);
+          CORO_AWAIT(h.handle_ue_context_release_command(cmd));
+          CORO_RETURN();
+        }));
+  }
 }

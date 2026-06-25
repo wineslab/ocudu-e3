@@ -6,7 +6,6 @@
 
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/adt/expected.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/cu_cp/cu_cp_ue_messages.h"
 #include "ocudu/f1ap/cu_cp/du_setup_notifier.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_configuration_update.h"
@@ -15,15 +14,18 @@
 #include "ocudu/f1ap/cu_cp/f1ap_nrppa_msg_handling.h"
 #include "ocudu/f1ap/cu_cp/f1ap_rrc_msg_transfer_handling.h"
 #include "ocudu/f1ap/f1ap_message_handler.h"
+#include "ocudu/ran/cu_cp_paging.h"
+#include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/support/async/async_task.h"
 
 namespace ocudu::ocucp {
 
 struct f1ap_ue_context_release_command {
-  ue_index_t              ue_index = ue_index_t::invalid;
-  f1ap_cause_t            cause;
-  byte_buffer             rrc_release_pdu;
+  cu_cp_ue_index_t ue_index = cu_cp_ue_index_t::invalid;
+  f1ap_cause_t     cause;
+  // RRC message e.g. RRCReject or RRCRelease to be contained as part of the context release message sent to the UE.
+  byte_buffer             rrc_pdu;
   std::optional<srb_id_t> srb_id;
 };
 
@@ -41,7 +43,8 @@ public:
   /// \brief Initiates the UE Context Release procedure as per TS 38.473 section 8.3.3.
   /// \param[in] msg The UE Context Release message to transmit.
   /// \return Retruns the index of the released UE.
-  virtual async_task<ue_index_t> handle_ue_context_release_command(const f1ap_ue_context_release_command& msg) = 0;
+  virtual async_task<cu_cp_ue_index_t>
+  handle_ue_context_release_command(const f1ap_ue_context_release_command& msg) = 0;
 
   /// \brief Initiates the UE Context Modification procedure as per TS 38.473 section 8.3.4.
   /// \param[in] request The UE Context Modification message to transmit.
@@ -54,7 +57,7 @@ public:
   /// \param[in] ue_index New index of the UE.
   /// \param[in] old_ue_index Old index of the UE.
   /// \return True if both the new and old UE exist, false otherwise.
-  virtual bool handle_ue_id_update(ue_index_t ue_index, ue_index_t old_ue_index) = 0;
+  virtual bool handle_ue_id_update(cu_cp_ue_index_t ue_index, cu_cp_ue_index_t old_ue_index) = 0;
 };
 
 /// Handle F1AP paging procedures as defined in TS 38.473 section 8.7.
@@ -72,7 +75,7 @@ public:
 /// a Initial UL RRC Message or a F1AP UE Context Setup Response are received.
 struct ue_rrc_context_creation_request {
   /// If ue_index is invalid, a new UE will be created.
-  ue_index_t                             ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t                       ue_index = cu_cp_ue_index_t::invalid;
   rnti_t                                 c_rnti;
   nr_cell_global_id_t                    cgi;
   byte_buffer                            du_to_cu_rrc_container;
@@ -83,14 +86,14 @@ struct ue_rrc_context_creation_request {
 
 /// \brief Response by CU-CP to F1AP-CU request to create UE RRC context.
 struct ue_rrc_context_creation_response {
-  ue_index_t ue_index = ue_index_t::invalid;
+  cu_cp_ue_index_t ue_index = cu_cp_ue_index_t::invalid;
   /// Notifier to be used by the F1AP to push new RRC PDUs to the UE RRC layer.
   f1ap_ul_ccch_notifier* f1ap_srb0_notifier = nullptr;
   f1ap_ul_dcch_notifier* f1ap_srb1_notifier = nullptr;
   f1ap_ul_dcch_notifier* f1ap_srb2_notifier = nullptr;
 };
 
-using ue_rrc_context_creation_outcome = expected<ue_rrc_context_creation_response, byte_buffer>;
+using ue_rrc_context_creation_outcome = expected<ue_rrc_context_creation_response>;
 
 /// Scheduler of F1AP async tasks using common signalling.
 class f1ap_common_du_task_notifier
@@ -107,6 +110,10 @@ class f1ap_du_processor_notifier : public du_setup_notifier, public f1ap_common_
 {
 public:
   virtual ~f1ap_du_processor_notifier() = default;
+
+  /// \brief Request UE creation.
+  /// \return The outcome of the UE creation request.
+  virtual cu_cp_ue_index_t request_new_ue_creation() = 0;
 
   /// \brief Notifies the CU-CP that an RRC context has been created for an existing CU-CP UE.
   virtual ue_rrc_context_creation_outcome
@@ -145,7 +152,7 @@ public:
 
   /// \brief Remove the context of an UE.
   /// \param[in] ue_index The index of the UE to remove.
-  virtual void remove_ue_context(ue_index_t ue_index) = 0;
+  virtual void remove_ue_context(cu_cp_ue_index_t ue_index) = 0;
 };
 
 /// Handle F1AP interface management procedures as defined in TS 38.473 section 8.2.

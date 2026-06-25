@@ -58,6 +58,7 @@ void rrc_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
   if (!transaction.has_response()) {
     if (transaction.failure_cause() == protocol_transaction_failure::timeout) {
       logger.log_warning("\"{}\" timed out after {}ms", name(), procedure_timeout.count());
+      metrics_notifier.on_failed_rrc_connection_establishment(establishment_fail_cause_t::no_reply);
       rrc_ue.on_ue_release_required(cause_protocol_t::unspecified);
     } else {
       logger.log_info("\"{}\" cancelled", name());
@@ -70,6 +71,7 @@ void rrc_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
       resp.msg.c1().type().value != ul_dcch_msg_type_c::c1_c_::types_opts::rrc_setup_complete) {
     logger.log_warning("Unexpected UL-DCCH message type {} in RRC Setup Procedure",
                        static_cast<int>(resp.msg.type().value));
+    metrics_notifier.on_failed_rrc_connection_establishment(establishment_fail_cause_t::no_reply);
     rrc_ue.on_ue_release_required(cause_protocol_t::unspecified);
     CORO_EARLY_RETURN();
   }
@@ -78,19 +80,20 @@ void rrc_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
 
   // Store selected PLMN in the RRC UE context and in the CU-CP UE.
   // Note: The selected PLMN starts at 1.
-  if (context.cell.plmn_identity_list.size() < rrc_setup_complete_msg.crit_exts.rrc_setup_complete().sel_plmn_id) {
-    logger.log_warning("Invalid selected PLMN id {} in RRC Setup Complete",
-                       rrc_setup_complete_msg.crit_exts.rrc_setup_complete().sel_plmn_id);
+  sel_plmn_id = rrc_setup_complete_msg.crit_exts.rrc_setup_complete().sel_plmn_id;
+  if (sel_plmn_id == 0 || sel_plmn_id > context.cell.plmn_identity_list.size()) {
+    logger.log_warning("Invalid selected PLMN id {} in RRC Setup Complete", sel_plmn_id);
+    metrics_notifier.on_failed_rrc_connection_establishment(establishment_fail_cause_t::network_reject);
     rrc_ue.on_ue_release_required(ngap_cause_radio_network_t::unspecified);
     CORO_EARLY_RETURN();
   }
 
-  selected_plmn =
-      context.cell.plmn_identity_list[rrc_setup_complete_msg.crit_exts.rrc_setup_complete().sel_plmn_id - 1];
+  selected_plmn = context.cell.plmn_identity_list[sel_plmn_id - 1];
 
   // Notify the CU-CP about the selected PLMN.
   if (!cu_cp_notifier.on_ue_setup_complete_received(selected_plmn)) {
     logger.log_warning("PLMN {} not supported, rejecting UE", selected_plmn);
+    metrics_notifier.on_failed_rrc_connection_establishment(establishment_fail_cause_t::network_reject);
     rrc_ue.on_ue_release_required(ngap_cause_radio_network_t::unspecified);
     CORO_EARLY_RETURN();
   }
@@ -174,8 +177,8 @@ void rrc_setup_procedure::send_initial_ue_msg()
   }
 
   if (rrc_setup_complete.registered_amf_present) {
-    cu_cp_amf_identifier_t amf_id = asn1_to_amf_identifier(rrc_setup_complete.registered_amf.amf_id);
-    init_ue_msg.amf_set_id        = amf_id.amf_set_id;
+    amf_identifier_t amf_id = asn1_to_amf_identifier(rrc_setup_complete.registered_amf.amf_id);
+    init_ue_msg.amf_set_id  = amf_id.amf_set_id;
   }
 
   ngap_notifier.on_initial_ue_message(init_ue_msg);

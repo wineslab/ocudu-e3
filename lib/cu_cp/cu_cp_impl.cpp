@@ -12,11 +12,14 @@
 #include "routines/mobility/conditional_handover_coordinator_routine.h"
 #include "routines/mobility/conditional_handover_source_routine.h"
 #include "routines/mobility/conditional_handover_target_routine.h"
+#include "routines/mobility/inter_cu_conditional_handover_source_completion_routine.h"
+#include "routines/mobility/inter_cu_conditional_handover_target_execution_routine.h"
 #include "routines/mobility/inter_cu_handover_execution_target_routine.h"
 #include "routines/mobility/inter_cu_handover_source_routine.h"
 #include "routines/mobility/inter_cu_handover_target_routine.h"
 #include "routines/mobility/intra_cu_handover_routine.h"
 #include "routines/mobility/intra_cu_handover_target_routine.h"
+#include "routines/mobility/mobility_helpers.h"
 #include "routines/pdu_session_resource_modification_routine.h"
 #include "routines/pdu_session_resource_release_routine.h"
 #include "routines/pdu_session_resource_setup_routine.h"
@@ -28,13 +31,13 @@
 #include "routines/ue_resume_routine.h"
 #include "routines/ue_suspend_routine.h"
 #include "routines/ue_transaction_info_release_routine.h"
-#include "ocudu/cu_cp/cu_cp_location_reporting_types.h"
-#include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu.h"
 #include "ocudu/nrppa/nrppa.h"
 #include "ocudu/nrppa/nrppa_factory.h"
 #include "ocudu/ran/cause/common.h"
+#include "ocudu/ran/cause/e1ap_cause_converters.h"
 #include "ocudu/ran/cause/ngap_cause.h"
+#include "ocudu/ran/cu_cp_location_reporting_types.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/ran/time/radio_frame.h"
 #include "ocudu/support/async/async_no_op_task.h"
@@ -57,12 +60,24 @@ static void assert_cu_cp_configuration_valid(const cu_cp_configuration& cfg)
     ocudu_assert(ngap.n2_gw != nullptr, "Invalid N2 GW client handler");
   }
   if (!cfg.xnap.xnaps.empty()) {
-    ocudu_assert(cfg.xnap.xnc_gw != nullptr, "Invalid XN-C GW client handler");
+    ocudu_assert(!cfg.xnap.xnc_gws.empty(), "No XN-C gateways configured for XNAP peers");
   }
   ocudu_assert(cfg.services.timers != nullptr, "Invalid timers");
 
-  report_error_if_not(cfg.admission.max_nof_dus <= MAX_NOF_DUS, "Invalid max number of DUs");
-  report_error_if_not(cfg.admission.max_nof_cu_ups <= MAX_NOF_CU_UPS, "Invalid max number of CU-UPs");
+  report_error_if_not(cfg.admission.max_nof_dus <= CU_CP_MAX_NOF_DUS, "Invalid max number of DUs");
+  report_error_if_not(cfg.admission.max_nof_cu_ups <= CU_CP_MAX_NOF_CU_UPS, "Invalid max number of CU-UPs");
+}
+
+static std::vector<supported_tracking_area>
+extract_supported_tas(const std::vector<cu_cp_configuration::ngap_config>& ngap_cfgs)
+{
+  std::vector<supported_tracking_area> supported_tas;
+  for (const auto& ngap_cfg : ngap_cfgs) {
+    for (const auto& supported_ta : ngap_cfg.supported_tas) {
+      supported_tas.push_back(supported_ta);
+    }
+  }
+  return supported_tas;
 }
 
 cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
@@ -107,7 +122,11 @@ cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
 {
   assert_cu_cp_configuration_valid(cfg);
 
-  nrppa_entity = create_nrppa(cfg, nrppa_cu_cp_ev_notifier, common_task_sched);
+  nrppa_entity = create_nrppa(extract_supported_tas(cfg.ngap.ngaps),
+                              nrppa_cu_cp_ev_notifier,
+                              common_task_sched,
+                              *cfg.services.timers,
+                              *cfg.services.cu_cp_executor);
 
   // Connect event notifiers to layers.
   ngap_cu_cp_ev_notifier.connect_cu_cp(get_cu_cp_ngap_handler(), paging_handler);
@@ -161,9 +180,17 @@ bool cu_cp_impl::start()
 
         uint32_t xnc_idx = 0;
         for (const auto& xnap : cfg.xnap.xnaps) {
-          xnap_interface* xnap_entity = xnap_db.add_xnap(uint_to_xnc_peer_index(xnc_idx), xnap.peer_addr, xnc_cfg);
+          const auto      peer_idx    = uint_to_xnc_peer_index(xnc_idx);
+          xnap_interface* xnap_entity = xnap_db.add_xnap(peer_idx, xnap.peer_addrs, xnc_cfg);
           if (xnap_entity == nullptr) {
-            report_fatal_error("Failed to create XNAP entity for peer address {}", xnap.peer_addr);
+            report_fatal_error("Failed to create XNAP entity for peer address {}",
+                               xnap.peer_addrs.empty() ? transport_layer_address{} : xnap.peer_addrs.front());
+          }
+          auto gw_it = cfg.xnap.peer_to_gateway.find(peer_idx);
+          if (gw_it != cfg.xnap.peer_to_gateway.end() &&
+              xnc_gateway_index_to_uint(gw_it->second) < cfg.xnap.xnc_gws.size()) {
+            controller.xnc_connection_handler().register_peer_gateway(
+                peer_idx, cfg.xnap.xnc_gws[xnc_gateway_index_to_uint(gw_it->second)]);
           }
           ++xnc_idx;
         }
@@ -232,10 +259,10 @@ void cu_cp_impl::handle_bearer_context_release_request(const cu_cp_bearer_contex
     return;
   }
 
-  request_ue_release(*ue, msg.cause);
+  request_ue_release(*ue, e1ap_to_ngap_cause(msg.cause));
 }
 
-void cu_cp_impl::handle_bearer_context_inactivity_notification(const cu_cp_inactivity_notification& msg)
+void cu_cp_impl::handle_bearer_context_inactivity_notification(const e1ap_inactivity_notification& msg)
 {
   if (msg.ue_inactive) {
     cu_cp_ue* ue = ue_mng.find_du_ue(msg.ue_index);
@@ -319,7 +346,7 @@ void cu_cp_impl::handle_bearer_context_inactivity_notification(const cu_cp_inact
   }
 }
 
-void cu_cp_impl::handle_dl_data_notification(ue_index_t ue_index)
+void cu_cp_impl::handle_dl_data_notification(cu_cp_ue_index_t ue_index)
 {
   std::optional<full_i_rnti_t> full_i_rnti = ue_mng.get_full_i_rnti(ue_index);
   if (!full_i_rnti.has_value()) {
@@ -331,12 +358,12 @@ void cu_cp_impl::handle_dl_data_notification(ue_index_t ue_index)
   send_ran_paging(ue_index, full_i_rnti.value());
 }
 
-void cu_cp_impl::handle_e1_release_request(cu_up_index_t cu_up_index)
+void cu_cp_impl::handle_e1_release_request(cu_cp_cu_up_index_t cu_up_index)
 {
   // TODO
 }
 
-bool cu_cp_impl::handle_ue_plmn_selected(ue_index_t ue_index, const plmn_identity& plmn)
+bool cu_cp_impl::handle_ue_plmn_selected(cu_cp_ue_index_t ue_index, const plmn_identity& plmn)
 {
   if (!controller.is_supported_plmn(plmn)) {
     logger.warning("ue={}: PLMN {} not supported, rejecting UE", ue_index, plmn);
@@ -356,12 +383,12 @@ bool cu_cp_impl::handle_ue_plmn_selected(ue_index_t ue_index, const plmn_identit
 }
 
 rrc_ue_reestablishment_context_response
-cu_cp_impl::handle_rrc_reestablishment_request(pci_t old_pci, rnti_t old_c_rnti, ue_index_t ue_index)
+cu_cp_impl::handle_rrc_reestablishment_request(pci_t old_pci, rnti_t old_c_rnti, cu_cp_ue_index_t ue_index)
 {
   rrc_ue_reestablishment_context_response reest_context{};
 
-  ue_index_t old_ue_index = ue_mng.get_ue_index(old_pci, old_c_rnti);
-  if (old_ue_index == ue_index_t::invalid || old_ue_index == ue_index) {
+  cu_cp_ue_index_t old_ue_index = ue_mng.get_ue_index(old_pci, old_c_rnti);
+  if (old_ue_index == cu_cp_ue_index_t::invalid || old_ue_index == ue_index) {
     return reest_context;
   }
 
@@ -388,6 +415,16 @@ cu_cp_impl::handle_rrc_reestablishment_request(pci_t old_pci, rnti_t old_c_rnti,
       target_ue->get_rrc_ue()->cancel_handover_reconfiguration_transaction(
           old_ue->get_ho_context().value().rrc_reconfig_transaction_id);
     }
+  }
+
+  // Cancel any ongoing CHO on this UE (as source). Each candidate's target routine observes the cancellation and
+  // self-releases.
+  if (old_ue->get_cho_context().has_value() &&
+      old_ue->get_cho_context()->role == cu_cp_ue_cho_context::role_t::source &&
+      !old_ue->get_cho_context()->candidates.empty()) {
+    logger.debug("ue={}: Cancelling CHO on reestablishment", old_ue_index);
+    cancel_cho_candidates(*old_ue, ue_mng, &xnap_db);
+    old_ue->get_cho_context()->clear();
   }
 
   // Check if a DRB and SRB2 were setup.
@@ -419,11 +456,12 @@ cu_cp_impl::handle_rrc_reestablishment_request(pci_t old_pci, rnti_t old_c_rnti,
   return reest_context;
 }
 
-async_task<bool> cu_cp_impl::handle_rrc_reestablishment_context_modification_required(ue_index_t ue_index)
+async_task<bool> cu_cp_impl::handle_rrc_reestablishment_context_modification_required(cu_cp_ue_index_t ue_index)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", ue_index);
-  ocudu_assert(ue->get_cu_up_index() != cu_up_index_t::invalid, "ue={}: could not find CU-UP of the UE", ue_index);
+  ocudu_assert(
+      ue->get_cu_up_index() != cu_cp_cu_up_index_t::invalid, "ue={}: could not find CU-UP of the UE", ue_index);
 
   return launch_async<reestablishment_context_modification_routine>(
       ue_index,
@@ -446,7 +484,7 @@ void cu_cp_impl::handle_rrc_reestablishment_failure(const cu_cp_ue_context_relea
   };
 }
 
-void cu_cp_impl::handle_rrc_reestablishment_complete(ue_index_t old_ue_index)
+void cu_cp_impl::handle_rrc_reestablishment_complete(cu_cp_ue_index_t old_ue_index)
 {
   auto* ue = ue_mng.find_ue(old_ue_index);
   if (ue != nullptr) {
@@ -454,37 +492,7 @@ void cu_cp_impl::handle_rrc_reestablishment_complete(ue_index_t old_ue_index)
   };
 }
 
-void cu_cp_impl::handle_rrc_reconf_complete_indicator(ue_index_t ue_index)
-{
-  cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
-  if (ue == nullptr) {
-    logger.warning("ue={}: Could not find UE, dropping RRC Reconfiguration Complete Indicator", ue_index);
-    return;
-  }
-
-  if (ue != nullptr) {
-    ue->get_task_sched().schedule_async_task(
-        launch_async([this, ue_index, ue_context_mod_request = f1ap_ue_context_modification_request{}](
-                         coro_context<async_task<void>>& ctx) mutable {
-          CORO_BEGIN(ctx);
-
-          if (ue_mng.find_du_ue(ue_index) == nullptr) {
-            CORO_EARLY_RETURN();
-          }
-
-          ue_context_mod_request.ue_index               = ue_index;
-          ue_context_mod_request.rrc_recfg_complete_ind = f1ap_rrc_recfg_complete_ind::true_value;
-
-          CORO_AWAIT(du_db.get_du_processor(ue_mng.find_du_ue(ue_index)->get_du_index())
-                         .get_f1ap_handler()
-                         .handle_ue_context_modification_request(ue_context_mod_request));
-
-          CORO_RETURN();
-        }));
-  }
-}
-
-async_task<bool> cu_cp_impl::handle_ue_context_transfer(ue_index_t ue_index, ue_index_t old_ue_index)
+async_task<bool> cu_cp_impl::handle_ue_context_transfer(cu_cp_ue_index_t ue_index, cu_cp_ue_index_t old_ue_index)
 {
   if (cu_up_db.get_nof_cu_ups() == 0) {
     logger.warning("No CU-UP connected");
@@ -522,7 +530,7 @@ async_task<bool> cu_cp_impl::handle_ue_context_transfer(ue_index_t ue_index, ue_
     }
 
     auto* source_ue = ue_mng.find_du_ue(old_ue_index);
-    if (source_ue->get_cu_up_index() == cu_up_index_t::invalid) {
+    if (source_ue->get_cu_up_index() == cu_cp_cu_up_index_t::invalid) {
       logger.warning("ue={}: could not find CU-UP of the old UE", old_ue_index);
       return false;
     }
@@ -570,12 +578,15 @@ async_task<bool> cu_cp_impl::handle_ue_context_transfer(ue_index_t ue_index, ue_
     // Transfer location reporting configuration from source UE to new UE.
     ue->get_location_manager().set_config(source_ue->get_location_manager().get_config());
 
+    // Transfer UE AMBR from source UE to new UE.
+    ue->set_ue_ambr(source_ue->get_ue_ambr());
+
     return true;
   };
 
   // Task that the caller will use to sync with the old UE task scheduler.
   struct transfer_context_task {
-    transfer_context_task(cu_cp_impl& parent_, ue_index_t old_ue_index_, unique_function<bool()> callable) :
+    transfer_context_task(cu_cp_impl& parent_, cu_cp_ue_index_t old_ue_index_, unique_function<bool()> callable) :
       parent(parent_),
       old_ue_index(old_ue_index_),
       task([this, callable = std::move(callable)]() { transfer_successful = callable(); })
@@ -593,9 +604,9 @@ async_task<bool> cu_cp_impl::handle_ue_context_transfer(ue_index_t ue_index, ue_
       CORO_RETURN(task_run and transfer_successful);
     }
 
-    cu_cp_impl& parent;
-    ue_index_t  old_ue_index;
-    unique_task task;
+    cu_cp_impl&      parent;
+    cu_cp_ue_index_t old_ue_index;
+    unique_task      task;
 
     bool transfer_successful = false;
   };
@@ -639,12 +650,13 @@ void cu_cp_impl::handle_cho_reconfiguration_sent(const cu_cp_cho_target_request&
       request, ue_mng, du_db, cu_up_db, *this, *this, mobility_mng, logger));
 }
 
-void cu_cp_impl::handle_handover_ue_context_push(ue_index_t source_ue_index, ue_index_t target_ue_index)
+void cu_cp_impl::handle_handover_ue_context_push(cu_cp_ue_index_t source_ue_index, cu_cp_ue_index_t target_ue_index)
 {
   auto* ue = ue_mng.find_ue(target_ue_index);
   ocudu_assert(ue != nullptr, "ue={} not found", target_ue_index);
-  ocudu_assert(
-      ue->get_cu_up_index() != cu_up_index_t::invalid, "ue={}: could not find CU-UP of the target UE", target_ue_index);
+  ocudu_assert(ue->get_cu_up_index() != cu_cp_cu_up_index_t::invalid,
+               "ue={}: could not find CU-UP of the target UE",
+               target_ue_index);
 
   auto* ngap = ngap_db.find_ngap(ue->get_ue_context().plmn);
   if (ngap == nullptr) {
@@ -660,11 +672,41 @@ void cu_cp_impl::handle_handover_ue_context_push(ue_index_t source_ue_index, ue_
   // Transfer E1AP UE Context to new UE and remove old context.
   cu_up_db.find_cu_up_processor(ue->get_cu_up_index())->update_ue_index(target_ue_index, source_ue_index);
 
-  // Transfer location reporting configuration from source UE to target UE.
+  // Transfer location reporting configuration and UE AMBR from source UE to target UE.
   auto* source_ue = ue_mng.find_ue(source_ue_index);
   if (source_ue != nullptr) {
     ue->get_location_manager().set_config(source_ue->get_location_manager().get_config());
+    ue->set_ue_ambr(source_ue->get_ue_ambr());
   }
+}
+
+void cu_cp_impl::trigger_release(pci_t                                         source_pci,
+                                 rnti_t                                        rnti,
+                                 std::optional<cu_cp_release_redirect_nr_info> redirect_info)
+{
+  cu_cp_ue_index_t ue_index = ue_mng.get_ue_index(source_pci, rnti);
+  if (ue_index == cu_cp_ue_index_t::invalid) {
+    logger.warning("Could not trigger release, UE invalid. rnti={} pci={}", rnti, source_pci);
+    return;
+  }
+  cu_cp_ue* u = ue_mng.find_du_ue(ue_index);
+  if (u == nullptr) {
+    logger.error("ue={}: Could not find UE for release", ue_index);
+    return;
+  }
+  if (redirect_info.has_value()) {
+    logger.info("ue={}: Triggering RRC Release with NR redirection, arfcn={}", ue_index, redirect_info->arfcn);
+  } else {
+    logger.info("ue={}: Triggering RRC Release", ue_index);
+  }
+
+  cu_cp_ue_context_release_request request;
+  request.ue_index = ue_index;
+  request.cause =
+      redirect_info.has_value() ? ngap_cause_radio_network_t::redirection : ngap_cause_radio_network_t::unspecified;
+  request.redirect_nr_info = redirect_info;
+
+  u->get_task_sched().schedule_async_task(handle_ue_context_release(request));
 }
 
 async_task<void> cu_cp_impl::handle_ue_context_release(const cu_cp_ue_context_release_request& request)
@@ -678,6 +720,10 @@ async_task<void> cu_cp_impl::handle_ue_context_release(const cu_cp_ue_context_re
     });
   }
 
+  // Store redirect target in UE context; it will be picked up by ue_context_release_routine after the AMF
+  // responds to the NGAP UE Context Release Request (NGAP has no field for redirectedCarrierInfo).
+  ue->get_ue_context().pending_redirect_nr_info = request.redirect_nr_info;
+
   auto* ngap = ngap_db.find_ngap(ue->get_ue_context().plmn);
 
   return launch_async<ue_amf_context_release_request_routine>(
@@ -686,10 +732,10 @@ async_task<void> cu_cp_impl::handle_ue_context_release(const cu_cp_ue_context_re
 
 async_task<void> cu_cp_impl::handle_access_success(const cu_cp_access_success_indication& msg)
 {
-  return launch_async<conditional_handover_source_routine>(msg, ue_mng, logger);
+  return launch_async<conditional_handover_source_routine>(msg, ue_mng, &xnap_db, logger);
 }
 
-async_task<rrc_resume_request_response> cu_cp_impl::handle_rrc_resume_request(const cu_cp_rrc_resume_request& request)
+async_task<rrc_resume_request_response> cu_cp_impl::handle_rrc_resume_request(const rrc_resume_request& request)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(request.ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", request.ue_index);
@@ -718,7 +764,7 @@ async_task<rrc_resume_request_response> cu_cp_impl::handle_rrc_resume_request(co
                                          logger);
 }
 
-void cu_cp_impl::handle_ran_paging_required(ue_index_t ue_index)
+void cu_cp_impl::handle_ran_paging_required(cu_cp_ue_index_t ue_index)
 {
   std::optional<full_i_rnti_t> full_i_rnti = ue_mng.get_full_i_rnti(ue_index);
   if (!full_i_rnti.has_value()) {
@@ -730,7 +776,7 @@ void cu_cp_impl::handle_ran_paging_required(ue_index_t ue_index)
   send_ran_paging(ue_index, full_i_rnti.value());
 }
 
-bool cu_cp_impl::handle_handover_request(ue_index_t                        ue_index,
+bool cu_cp_impl::handle_handover_request(cu_cp_ue_index_t                  ue_index,
                                          const plmn_identity&              selected_plmn,
                                          const security::security_context& sec_ctxt)
 {
@@ -776,6 +822,7 @@ cu_cp_impl::handle_new_initial_context_setup_request(const ngap_init_context_set
   return launch_async<initial_context_setup_routine>(request,
                                                      *rrc_ue,
                                                      ngap->get_ngap_ue_radio_cap_management_handler(),
+                                                     ngap->get_ngap_location_reporting_handler(),
                                                      ue->get_security_manager(),
                                                      ue->get_location_manager(),
                                                      du_db.get_du_processor(ue->get_du_index()).get_f1ap_handler(),
@@ -835,17 +882,17 @@ cu_cp_impl::handle_new_ue_context_modification_request(const ngap_ue_context_mod
       });
 }
 
-async_task<cu_cp_pdu_session_resource_setup_response>
-cu_cp_impl::handle_new_pdu_session_resource_setup_request(cu_cp_pdu_session_resource_setup_request& request)
+async_task<ngap_pdu_session_resource_setup_response>
+cu_cp_impl::handle_new_pdu_session_resource_setup_request(ngap_pdu_session_resource_setup_request& request)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(request.ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", request.ue_index);
 
   // Select a CU-UP to serve the UE if it is not already assigned.
-  if (ue->get_cu_up_index() == cu_up_index_t::invalid) {
+  if (ue->get_cu_up_index() == cu_cp_cu_up_index_t::invalid) {
     ue->set_cu_up_index(cu_up_db.select_cu_up());
   }
-  ocudu_assert(ue->get_cu_up_index() != cu_up_index_t::invalid,
+  ocudu_assert(ue->get_cu_up_index() != cu_cp_cu_up_index_t::invalid,
                "ue={}: could not find a CU-UP to serve the UE",
                request.ue_index);
   const size_t drbs_before = ue->get_up_resource_manager().get_nof_drbs();
@@ -867,8 +914,8 @@ cu_cp_impl::handle_new_pdu_session_resource_setup_request(cu_cp_pdu_session_reso
                                                                          logger);
 
   return launch_async([this, ue_index = request.ue_index, drbs_before, setup_task = std::move(pdu_setup_task)](
-                          coro_context<async_task<cu_cp_pdu_session_resource_setup_response>>& ctx) mutable {
-    cu_cp_pdu_session_resource_setup_response setup_response;
+                          coro_context<async_task<ngap_pdu_session_resource_setup_response>>& ctx) mutable {
+    ngap_pdu_session_resource_setup_response setup_response;
     CORO_BEGIN(ctx);
     CORO_AWAIT_VALUE(setup_response, std::move(setup_task));
 
@@ -884,13 +931,13 @@ cu_cp_impl::handle_new_pdu_session_resource_setup_request(cu_cp_pdu_session_reso
   });
 }
 
-async_task<cu_cp_pdu_session_resource_modify_response>
-cu_cp_impl::handle_new_pdu_session_resource_modify_request(const cu_cp_pdu_session_resource_modify_request& request)
+async_task<ngap_pdu_session_resource_modify_response>
+cu_cp_impl::handle_new_pdu_session_resource_modify_request(const ngap_pdu_session_resource_modify_request& request)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(request.ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", request.ue_index);
   ocudu_assert(
-      ue->get_cu_up_index() != cu_up_index_t::invalid, "ue={}: could not find CU-UP of the UE", request.ue_index);
+      ue->get_cu_up_index() != cu_cp_cu_up_index_t::invalid, "ue={}: could not find CU-UP of the UE", request.ue_index);
 
   return launch_async<pdu_session_resource_modification_routine>(
       request,
@@ -904,17 +951,17 @@ cu_cp_impl::handle_new_pdu_session_resource_modify_request(const cu_cp_pdu_sessi
       logger);
 }
 
-async_task<cu_cp_pdu_session_resource_release_response>
-cu_cp_impl::handle_new_pdu_session_resource_release_command(const cu_cp_pdu_session_resource_release_command& command)
+async_task<ngap_pdu_session_resource_release_response>
+cu_cp_impl::handle_new_pdu_session_resource_release_command(const ngap_pdu_session_resource_release_command& command)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(command.ue_index);
   if (ue == nullptr) {
     logger.error("ue={}: Dropping PDUSessionResourceReleaseCommand. Could not find DU UE", command.ue_index);
-    return launch_no_op_task(cu_cp_pdu_session_resource_release_response{});
+    return launch_no_op_task(ngap_pdu_session_resource_release_response{});
   }
-  if (ue->get_cu_up_index() == cu_up_index_t::invalid) {
+  if (ue->get_cu_up_index() == cu_cp_cu_up_index_t::invalid) {
     logger.error("ue={}: Dropping PDUSessionResourceReleaseCommand. Could not find CU-UP of the UE", command.ue_index);
-    return launch_no_op_task(cu_cp_pdu_session_resource_release_response{});
+    return launch_no_op_task(ngap_pdu_session_resource_release_response{});
   }
 
   return launch_async<pdu_session_resource_release_routine>(
@@ -934,14 +981,19 @@ cu_cp_impl::handle_ue_context_release_command(const cu_cp_ue_context_release_com
   cu_cp_ue* ue = ue_mng.find_du_ue(command.ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", command.ue_index);
 
+  if (ue->get_handover_ue_release_timer().is_running()) {
+    logger.debug("ue={}: Stopping handover UE release timer", command.ue_index);
+    ue->get_handover_ue_release_timer().stop();
+  }
+
   e1ap_bearer_context_manager* e1ap_bearer_ctxt_mng = nullptr;
-  if (ue->get_cu_up_index() != cu_up_index_t::invalid) {
+  if (ue->get_cu_up_index() != cu_cp_cu_up_index_t::invalid) {
     e1ap_bearer_ctxt_mng = &cu_up_db.find_cu_up_processor(ue->get_cu_up_index())->get_e1ap_bearer_context_manager();
   }
 
   return launch_async<ue_context_release_routine>(command,
                                                   e1ap_bearer_ctxt_mng,
-                                                  du_db.get_du_processor(ue->get_du_index()).get_f1ap_handler(),
+                                                  du_db.get_du_processor(ue->get_du_index()),
                                                   get_cu_cp_ue_removal_handler(),
                                                   ue_mng,
                                                   logger);
@@ -958,14 +1010,14 @@ cu_cp_impl::handle_ngap_handover_request(const ngap_handover_request& request)
 }
 
 void cu_cp_impl::handle_inter_cu_target_handover_execution(
-    ue_index_t                                                   ue_index,
+    cu_cp_ue_index_t                                             ue_index,
     const std::optional<xnap_handover_target_execution_context>& xnap_ho_target_execution_ctxt)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", ue_index);
-  ocudu_assert(cu_up_db.find_cu_up_processor(uint_to_cu_up_index(0)) != nullptr,
+  ocudu_assert(cu_up_db.find_cu_up_processor(uint_to_cu_cp_cu_up_index(0)) != nullptr,
                "cu_up_index={}: could not find CU-UP",
-               uint_to_cu_up_index(0));
+               uint_to_cu_cp_cu_up_index(0));
 
   ngap_interface* ngap = ngap_db.find_ngap(ue->get_ue_context().plmn);
   if (ngap == nullptr) {
@@ -973,8 +1025,17 @@ void cu_cp_impl::handle_inter_cu_target_handover_execution(
     return;
   }
 
-  cu_up_index_t    cu_up_index = uint_to_cu_up_index(0); // TODO: Update when mapping from UE index to CU-UP exists
-  cu_up_processor* cu_up       = cu_up_db.find_cu_up_processor(cu_up_index);
+  cu_cp_du_index_t du_index = ue_mng.find_du_ue(ue_index)->get_du_index();
+  du_processor*    du       = du_db.find_du_processor(du_index);
+  if (du == nullptr) {
+    logger.warning("ue={}: could not find DU for handover execution. du={}", ue_index, du_index);
+    return;
+  }
+  f1ap_ue_context_manager& f1ap = du->get_f1ap_handler();
+
+  cu_cp_cu_up_index_t cu_up_index =
+      uint_to_cu_cp_cu_up_index(0); // TODO: Update when mapping from UE index to CU-UP exists
+  cu_up_processor* cu_up = cu_up_db.find_cu_up_processor(cu_up_index);
   if (cu_up == nullptr) {
     logger.warning("ue={}: could not find CU-UP for handover execution. cu_up={}", ue_index, cu_up_index);
     return;
@@ -990,8 +1051,13 @@ void cu_cp_impl::handle_inter_cu_target_handover_execution(
     }
   }
 
-  ue->get_task_sched().schedule_async_task(launch_async<inter_cu_handover_execution_target_routine>(
-      ue, xnap_ho_target_execution_ctxt, e1ap, *ngap, xnap, logger));
+  if (xnap_ho_target_execution_ctxt.has_value() && xnap_ho_target_execution_ctxt->is_conditional_handover) {
+    ue->get_task_sched().schedule_async_task(launch_async<inter_cu_conditional_handover_target_execution_routine>(
+        ue, xnap_ho_target_execution_ctxt.value(), e1ap, *ngap, xnap, f1ap, *this, mobility_mng, logger));
+  } else {
+    ue->get_task_sched().schedule_async_task(launch_async<inter_cu_handover_execution_target_routine>(
+        ue, xnap_ho_target_execution_ctxt, e1ap, *ngap, xnap, f1ap, logger));
+  }
 }
 
 void cu_cp_impl::handle_transmission_of_handover_required()
@@ -1000,10 +1066,12 @@ void cu_cp_impl::handle_transmission_of_handover_required()
   mobility_mng.get_metrics_handler().aggregate_requested_handover_preparation();
 }
 
-async_task<bool> cu_cp_impl::handle_new_rrc_handover_command(ue_index_t                      ue_index,
+async_task<bool> cu_cp_impl::handle_new_rrc_handover_command(cu_cp_ue_index_t                ue_index,
                                                              byte_buffer                     command,
                                                              std::optional<xnc_peer_index_t> xnc_index)
 {
+  static constexpr std::chrono::milliseconds tng_reloc_overall_timeout{1000};
+
   // Notify mobility manager metrics handler about the successful handover preparation.
   mobility_mng.get_metrics_handler().aggregate_successful_handover_preparation();
 
@@ -1029,6 +1097,13 @@ async_task<bool> cu_cp_impl::handle_new_rrc_handover_command(ue_index_t         
     ue->set_xnc_peer_index(xnc_index.value());
   }
 
+  initialize_handover_ue_release_timer(
+      ue_index,
+      tng_reloc_overall_timeout,
+      cu_cp_ue_context_release_request{ue_index,
+                                       ue->get_up_resource_manager().get_pdu_sessions(),
+                                       ngap_cause_radio_network_t::tngrelocoverall_expiry});
+
   return launch_async<inter_cu_handover_source_routine>(
       ue_index, std::move(command), ue_mng, du_db, cu_up_db, ngap->get_ngap_control_message_handler(), xnap, logger);
 }
@@ -1052,7 +1127,7 @@ cu_cp_impl::handle_xnap_handover_request(const xnap_handover_request& request)
   return handle_inter_cu_handover_request(inter_cu_handover_request);
 }
 
-void cu_cp_impl::handle_handover_cancel_received(ue_index_t ue_index)
+void cu_cp_impl::handle_handover_cancel_received(cu_cp_ue_index_t ue_index)
 {
   cu_cp_ue* ue = ue_mng.find_ue(ue_index);
   if (ue == nullptr) {
@@ -1060,14 +1135,53 @@ void cu_cp_impl::handle_handover_cancel_received(ue_index_t ue_index)
     return;
   }
 
-  // Request UE release.
-  cu_cp_ue_context_release_request release_request;
-  release_request.ue_index = ue_index;
-  release_request.cause    = ngap_cause_radio_network_t::ho_cancelled;
-  ue->get_task_sched().schedule_async_task(handle_ue_context_release(release_request));
+  if (ue->get_rrc_ue() != nullptr) {
+    // Cancel the pending RRC reconfiguration transaction so the target execution routine unblocks
+    // immediately. Both immediate-HO and CHO routines handle their own UE release after the
+    // transaction is cancelled.
+    ue->get_rrc_ue()->cancel_handover_reconfiguration_transaction(0);
+  } else {
+    // If no RRC UE, release directly.
+    cu_cp_ue_context_release_request release_request;
+    release_request.ue_index = ue_index;
+    release_request.cause    = ngap_cause_radio_network_t::ho_cancelled;
+    ue->get_task_sched().schedule_async_task(handle_ue_context_release(release_request));
+  }
 }
 
-void cu_cp_impl::handle_xnap_ue_context_release_received(ue_index_t ue_index)
+void cu_cp_impl::handle_xnap_handover_success_received(cu_cp_ue_index_t  source_ue_index,
+                                                       peer_xnap_ue_id_t winner_peer_xnap_ue_id)
+{
+  cu_cp_ue* ue = ue_mng.find_du_ue(source_ue_index);
+  if (ue == nullptr || !ue->get_cho_context().has_value()) {
+    logger.warning("ue={}: HandoverSuccess ignored: source UE or CHO context missing", source_ue_index);
+    return;
+  }
+
+  // Stop the CHO execution timer; the UE has already executed CHO.
+  ue->get_cho_context()->cho_execution_timer.stop();
+
+  // Find the winning candidate to get the xnc_index for SN Status Transfer.
+  xnap_interface* winner_xnap = nullptr;
+  for (const auto& candidate : ue->get_cho_context()->candidates) {
+    if (candidate.peer_xnap_ue_id == winner_peer_xnap_ue_id && candidate.xnc_index.has_value()) {
+      winner_xnap = xnap_db.find_xnap(*candidate.xnc_index);
+      break;
+    }
+  }
+
+  if (winner_xnap == nullptr) {
+    logger.warning("ue={}: HandoverSuccess: could not find XNAP interface for winner peer_xnap_ue_id={}",
+                   source_ue_index,
+                   winner_peer_xnap_ue_id);
+    return;
+  }
+
+  ue->get_task_sched().schedule_async_task(launch_async<inter_cu_conditional_handover_source_completion_routine>(
+      source_ue_index, winner_peer_xnap_ue_id, ue_mng, cu_up_db, winner_xnap, &xnap_db, *this, logger));
+}
+
+void cu_cp_impl::handle_xnap_ue_context_release_received(cu_cp_ue_index_t ue_index)
 {
   cu_cp_ue* ue = ue_mng.find_ue(ue_index);
   if (ue == nullptr) {
@@ -1078,7 +1192,7 @@ void cu_cp_impl::handle_xnap_ue_context_release_received(ue_index_t ue_index)
   cu_cp_ue_context_release_command command;
   command.ue_index             = ue_index;
   command.cause                = ngap_cause_radio_network_t::release_due_to_ngran_generated_reason;
-  command.requires_rrc_release = false;
+  command.requires_rrc_message = false;
 
   // Schedule UE release.
   ue->get_task_sched().schedule_async_task(launch_async([this, command](coro_context<async_task<void>>& ctx) {
@@ -1088,47 +1202,50 @@ void cu_cp_impl::handle_xnap_ue_context_release_received(ue_index_t ue_index)
   }));
 }
 
-ue_index_t cu_cp_impl::handle_ue_index_allocation_request(const nr_cell_global_id_t& cgi, const plmn_identity& plmn)
+cu_cp_ue_index_t cu_cp_impl::handle_ue_index_allocation_request(const nr_cell_global_id_t& cgi,
+                                                                const plmn_identity&       plmn)
 {
-  du_index_t du_index = du_db.find_du(cgi);
-  if (du_index == du_index_t::invalid) {
+  cu_cp_du_index_t du_index = du_db.find_du(cgi);
+  if (du_index == cu_cp_du_index_t::invalid) {
     logger.warning("Could not find DU for CGI={}", cgi.nci);
-    return ue_index_t::invalid;
+    return cu_cp_ue_index_t::invalid;
   }
 
-  ue_index_t ue_index = ue_mng.add_ue(du_index);
-  if (ue_index == ue_index_t::invalid) {
+  cu_cp_ue_index_t ue_index = ue_mng.add_ue(du_index);
+  if (ue_index == cu_cp_ue_index_t::invalid) {
     logger.warning("Could not add new UE context for CGI={}", cgi.nci);
-    return ue_index_t::invalid;
+    return cu_cp_ue_index_t::invalid;
   }
 
   // Check if UE can be served.
   if (ue_mng.ue_admission_limit_reached()) {
     logger.warning("ue={}: Could not add new UE context for CGI={}. UE not servable", ue_index, cgi.nci);
     ue_mng.remove_ue(ue_index);
-    return ue_index_t::invalid;
+    return cu_cp_ue_index_t::invalid;
   }
 
   if (!handle_ue_plmn_selected(ue_index, plmn)) {
     logger.warning("ue={}: PLMN selection failed", ue_index);
     ue_mng.remove_ue(ue_index);
-    return ue_index_t::invalid;
+    return cu_cp_ue_index_t::invalid;
   }
 
   return ue_index;
 }
 
-void cu_cp_impl::handle_dl_ue_associated_nrppa_transport_pdu(ue_index_t ue_index, const byte_buffer& nrppa_pdu)
+void cu_cp_impl::handle_dl_ue_associated_nrppa_transport_pdu(cu_cp_ue_index_t ue_index, const byte_buffer& nrppa_pdu)
 {
   nrppa_entity->get_nrppa_message_handler().handle_new_nrppa_pdu(nrppa_pdu, ue_index);
 }
 
-void cu_cp_impl::handle_dl_non_ue_associated_nrppa_transport_pdu(amf_index_t amf_index, const byte_buffer& nrppa_pdu)
+void cu_cp_impl::handle_dl_non_ue_associated_nrppa_transport_pdu(cu_cp_amf_index_t  amf_index,
+                                                                 const byte_buffer& nrppa_pdu)
 {
   nrppa_entity->get_nrppa_message_handler().handle_new_nrppa_pdu(nrppa_pdu, amf_index);
 }
 
-void cu_cp_impl::handle_location_reporting_control_message(ue_index_t ue_index, const location_report_request& msg)
+void cu_cp_impl::handle_location_reporting_control_message(cu_cp_ue_index_t               ue_index,
+                                                           const location_report_request& msg)
 {
   auto* ue = ue_mng.find_du_ue(ue_index);
   if (ue == nullptr) {
@@ -1194,7 +1311,7 @@ void cu_cp_impl::handle_location_reporting_control_message(ue_index_t ue_index, 
   }
 }
 
-void cu_cp_impl::handle_location_update(ue_index_t ue_index)
+void cu_cp_impl::handle_location_update(cu_cp_ue_index_t ue_index)
 {
   auto* ue = ue_mng.find_du_ue(ue_index);
   if (ue == nullptr) {
@@ -1226,7 +1343,7 @@ void cu_cp_impl::handle_location_update(ue_index_t ue_index)
   ngap->handle_location_report_transmission(opt_report.value());
 }
 
-nrppa_cu_cp_ue_notifier* cu_cp_impl::handle_new_nrppa_ue(ue_index_t ue_index)
+nrppa_cu_cp_ue_notifier* cu_cp_impl::handle_new_nrppa_ue(cu_cp_ue_index_t ue_index)
 {
   auto* ue = ue_mng.find_ue(ue_index);
   if (ue == nullptr) {
@@ -1235,11 +1352,11 @@ nrppa_cu_cp_ue_notifier* cu_cp_impl::handle_new_nrppa_ue(ue_index_t ue_index)
   return &ue->get_nrppa_cu_cp_ue_notifier();
 }
 
-void cu_cp_impl::handle_ul_nrppa_pdu(const byte_buffer&                    nrppa_pdu,
-                                     std::variant<ue_index_t, amf_index_t> ue_or_amf_index)
+void cu_cp_impl::handle_ul_nrppa_pdu(const byte_buffer&                                nrppa_pdu,
+                                     std::variant<cu_cp_ue_index_t, cu_cp_amf_index_t> ue_or_amf_index)
 {
-  if (std::holds_alternative<ue_index_t>(ue_or_amf_index)) {
-    ue_index_t ue_index = std::get<ue_index_t>(ue_or_amf_index);
+  if (std::holds_alternative<cu_cp_ue_index_t>(ue_or_amf_index)) {
+    cu_cp_ue_index_t ue_index = std::get<cu_cp_ue_index_t>(ue_or_amf_index);
 
     if (ue_mng.find_du_ue(ue_index) == nullptr) {
       logger.warning("UE index={} got removed", ue_index);
@@ -1257,21 +1374,20 @@ void cu_cp_impl::handle_ul_nrppa_pdu(const byte_buffer&                    nrppa
     // Forward the NRPPa message to the NGAP.
     ngap->handle_ul_ue_associated_nrppa_transport(ue_index, nrppa_pdu);
   } else {
-    amf_index_t amf_index = std::get<amf_index_t>(ue_or_amf_index);
+    cu_cp_amf_index_t amf_index = std::get<cu_cp_amf_index_t>(ue_or_amf_index);
 
     // Forward the NRPPa message to the NGAP.
-    common_task_sched.schedule_async_task(
-        launch_async([this, amf_index, nrppa_pdu](coro_context<async_task<void>>& ctx) {
-          CORO_BEGIN(ctx);
+    common_task_sched.schedule(launch_async([this, amf_index, nrppa_pdu](coro_context<async_task<void>>& ctx) {
+      CORO_BEGIN(ctx);
 
-          if (ngap_db.find_ngap(amf_index) == nullptr) {
-            logger.warning("NGAP not found for AMF index={}", amf_index);
-            CORO_EARLY_RETURN();
-          }
+      if (ngap_db.find_ngap(amf_index) == nullptr) {
+        logger.warning("NGAP not found for AMF index={}", amf_index);
+        CORO_EARLY_RETURN();
+      }
 
-          CORO_AWAIT(ngap_db.find_ngap(amf_index)->handle_ul_non_ue_associated_nrppa_transport(nrppa_pdu));
-          CORO_RETURN();
-        }));
+      CORO_AWAIT(ngap_db.find_ngap(amf_index)->handle_ul_non_ue_associated_nrppa_transport(nrppa_pdu));
+      CORO_RETURN();
+    }));
   }
 }
 
@@ -1281,18 +1397,18 @@ cu_cp_impl::handle_trp_information_request(const trp_information_request_t& requ
   return launch_async<trp_information_exchange_routine>(request, du_db, nrppa_f1ap_ev_notifiers);
 }
 
-void cu_cp_impl::handle_n2_disconnection(amf_index_t amf_index)
+void cu_cp_impl::handle_n2_disconnection(cu_cp_amf_index_t amf_index)
 {
   std::vector<plmn_identity> plmns = ngap_db.find_ngap(amf_index)->get_ngap_context().get_supported_plmns();
 
   logger.warning("Handling N2 disconnection. Lost PLMNs: {}", fmt::format("{}", fmt::join(plmns, " ")));
 
-  common_task_sched.schedule_async_task(
+  common_task_sched.schedule(
       launch_async<amf_connection_loss_routine>(amf_index, cfg, plmns, du_db, *this, ue_mng, controller, logger));
 }
 
 std::optional<rrc_meas_cfg>
-cu_cp_impl::handle_measurement_config_request(ue_index_t                         ue_index,
+cu_cp_impl::handle_measurement_config_request(cu_cp_ue_index_t                   ue_index,
                                               nr_cell_identity                   nci,
                                               const std::optional<rrc_meas_cfg>& current_meas_config,
                                               bool                               cond_meas,
@@ -1301,7 +1417,7 @@ cu_cp_impl::handle_measurement_config_request(ue_index_t                        
   return cell_meas_mng.get_measurement_config(ue_index, nci, current_meas_config, cond_meas, candidate_pcis);
 }
 
-void cu_cp_impl::handle_measurement_report(ue_index_t ue_index, const rrc_meas_results& meas_results)
+void cu_cp_impl::handle_measurement_report(cu_cp_ue_index_t ue_index, const rrc_meas_results& meas_results)
 {
   cell_meas_mng.report_measurement(ue_index, meas_results);
 }
@@ -1313,8 +1429,8 @@ bool cu_cp_impl::handle_cell_config_update_request(nr_cell_identity nci, const s
 
 async_task<cu_cp_intra_cu_handover_response>
 cu_cp_impl::handle_intra_cu_handover_request(const cu_cp_intra_cu_handover_request& request,
-                                             du_index_t&                            source_du_index,
-                                             du_index_t&                            target_du_index)
+                                             cu_cp_du_index_t&                      source_du_index,
+                                             cu_cp_du_index_t&                      target_du_index)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(request.source_ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", request.source_ue_index);
@@ -1334,17 +1450,18 @@ cu_cp_impl::handle_intra_cu_handover_request(const cu_cp_intra_cu_handover_reque
 async_task<cu_cp_intra_cu_cho_response>
 cu_cp_impl::handle_intra_cu_cho_request(const cu_cp_intra_cu_cho_request& request)
 {
-  if (request.source_du_index == du_index_t::invalid) {
+  if (request.source_du_index == cu_cp_du_index_t::invalid) {
     logger.warning("ue={}: Invalid source DU index for intra-CU CHO coordinator", request.source_ue_index);
     return launch_async([](coro_context<async_task<cu_cp_intra_cu_cho_response>>& ctx) {
       CORO_BEGIN(ctx);
       CORO_RETURN(cu_cp_intra_cu_cho_response{});
     });
   }
-  return launch_async<conditional_handover_coordinator_routine>(request, du_db, *this, ue_mng, mobility_mng, logger);
+  return launch_async<conditional_handover_coordinator_routine>(
+      request, du_db, *this, ue_mng, mobility_mng, ngap_db, &xnap_db, logger);
 }
 
-void cu_cp_impl::handle_intra_cell_handover_required(ue_index_t ue_index)
+void cu_cp_impl::handle_intra_cell_handover_required(cu_cp_ue_index_t ue_index)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
   ocudu_assert(ue != nullptr, "ue={}: Could not find DU UE", ue_index);
@@ -1369,7 +1486,7 @@ void cu_cp_impl::handle_intra_cell_handover_required(ue_index_t ue_index)
   }
 }
 
-async_task<void> cu_cp_impl::handle_ue_removal_request(ue_index_t ue_index)
+async_task<void> cu_cp_impl::handle_ue_removal_request(cu_cp_ue_index_t ue_index)
 {
   if (ue_mng.find_du_ue(ue_index) == nullptr) {
     logger.warning("ue={}: Could not find DU UE", ue_index);
@@ -1380,18 +1497,27 @@ async_task<void> cu_cp_impl::handle_ue_removal_request(ue_index_t ue_index)
   }
   cu_cp_ue* ue = ue_mng.find_ue(ue_index);
 
-  du_index_t       du_index    = ue->get_du_index();
-  cu_up_index_t    cu_up_index = ue->get_cu_up_index();
-  xnc_peer_index_t xnc_index   = ue->get_xnc_peer_index();
+  // If the UE is being removed while still the source of an active CHO, cancel each candidate's RRC transaction so
+  // the orphaned candidate target UE contexts self-release before the source UE object is destroyed.
+  if (ue->get_cho_context().has_value() && ue->get_cho_context()->role == cu_cp_ue_cho_context::role_t::source &&
+      !ue->get_cho_context()->candidates.empty()) {
+    logger.debug("ue={}: Cancelling CHO as source UE is being removed", ue_index);
+    cancel_cho_candidates(*ue, ue_mng, &xnap_db);
+    ue->get_cho_context()->clear();
+  }
+
+  cu_cp_du_index_t    du_index    = ue->get_du_index();
+  cu_cp_cu_up_index_t cu_up_index = ue->get_cu_up_index();
+  xnc_peer_index_t    xnc_index   = ue->get_xnc_peer_index();
 
   e1ap_bearer_context_removal_handler* e1ap_removal_handler = nullptr;
-  if (cu_up_index != cu_up_index_t::invalid) {
+  if (cu_up_index != cu_cp_cu_up_index_t::invalid) {
     e1ap_removal_handler = &cu_up_db.find_cu_up_processor(cu_up_index)->get_e1ap_bearer_context_removal_handler();
   }
 
   rrc_ue_handler*                  rrc_ue_removal_handler = nullptr;
   f1ap_ue_context_removal_handler* f1ap_removal_handler   = nullptr;
-  if (du_index != du_index_t::invalid) {
+  if (du_index != cu_cp_du_index_t::invalid) {
     du_processor* du_proc = du_db.find_du_processor(du_index);
     if (du_proc != nullptr) {
       rrc_ue_removal_handler = &du_proc->get_rrc_du_handler();
@@ -1425,7 +1551,7 @@ async_task<void> cu_cp_impl::handle_ue_removal_request(ue_index_t ue_index)
                                           logger);
 }
 
-void cu_cp_impl::handle_pending_ue_task_cancellation(ue_index_t ue_index)
+void cu_cp_impl::handle_pending_ue_task_cancellation(cu_cp_ue_index_t ue_index)
 {
   ocudu_assert(ue_mng.find_du_ue(ue_index) != nullptr, "ue={}: Could not find DU UE", ue_index);
 
@@ -1439,7 +1565,7 @@ void cu_cp_impl::handle_pending_ue_task_cancellation(ue_index_t ue_index)
   }
 }
 
-void cu_cp_impl::handle_amf_reconnection(amf_index_t amf_index)
+void cu_cp_impl::handle_amf_reconnection(cu_cp_amf_index_t amf_index)
 {
   if (ngap_db.find_ngap(amf_index) == nullptr) {
     logger.warning("AMF index={} not found", amf_index);
@@ -1448,11 +1574,11 @@ void cu_cp_impl::handle_amf_reconnection(amf_index_t amf_index)
 
   std::vector<plmn_identity> served_plmns = ngap_db.find_ngap(amf_index)->get_ngap_context().get_supported_plmns();
 
-  common_task_sched.schedule_async_task(launch_async<cell_activation_routine>(cfg, served_plmns, du_db, logger));
+  common_task_sched.schedule(launch_async<cell_activation_routine>(cfg, served_plmns, du_db, logger));
 }
 
 void cu_cp_impl::initialize_handover_ue_release_timer(
-    ue_index_t                              ue_index,
+    cu_cp_ue_index_t                        ue_index,
     std::chrono::milliseconds               handover_ue_release_timeout,
     const cu_cp_ue_context_release_request& ue_context_release_request)
 {
@@ -1469,15 +1595,16 @@ void cu_cp_impl::initialize_handover_ue_release_timer(
   }
 
   // Start timer.
-  logger.debug("ue={}: Setting release timer to {}ms", ue_index, handover_ue_release_timeout.count());
+  logger.debug("ue={}: Setting handover UE release timer to {}ms", ue_index, handover_ue_release_timeout.count());
   ue->get_handover_ue_release_timer().set(
       handover_ue_release_timeout, [this, ue, ue_context_release_request](timer_id_t /*tid*/) {
+        logger.debug("ue={}: Handover UE release timer expired", ue_context_release_request.ue_index);
         ue->get_task_sched().schedule_async_task(handle_ue_context_release(ue_context_release_request));
       });
   ue->get_handover_ue_release_timer().run();
 }
 
-void cu_cp_impl::initialize_rna_update_timer(ue_index_t ue_index)
+void cu_cp_impl::initialize_rna_update_timer(cu_cp_ue_index_t ue_index)
 {
   if (ue_mng.find_du_ue(ue_index) == nullptr) {
     logger.warning("ue={}: Could not find UE", ue_index);
@@ -1505,7 +1632,7 @@ void cu_cp_impl::initialize_rna_update_timer(ue_index_t ue_index)
   rna_update_timer.run();
 }
 
-void cu_cp_impl::initialize_cho_execution_timer(ue_index_t ue_index, std::chrono::milliseconds timeout)
+void cu_cp_impl::initialize_cho_execution_timer(cu_cp_ue_index_t ue_index, std::chrono::milliseconds timeout)
 {
   if (timeout.count() == 0) {
     return;
@@ -1528,7 +1655,7 @@ void cu_cp_impl::initialize_cho_execution_timer(ue_index_t ue_index, std::chrono
       return;
     }
     ue2->get_task_sched().schedule_async_task(
-        launch_async<conditional_handover_cancellation_routine>(ue_index, ue_mng, logger));
+        launch_async<conditional_handover_cancellation_routine>(ue_index, ue_mng, &xnap_db, logger));
   });
   ue->get_cho_context()->cho_execution_timer.run();
   logger.debug("ue={}: CHO execution timer started ({}ms)", ue_index, timeout.count());
@@ -1536,7 +1663,7 @@ void cu_cp_impl::initialize_cho_execution_timer(ue_index_t ue_index, std::chrono
 
 // private
 
-void cu_cp_impl::handle_rrc_ue_creation(ue_index_t ue_index, rrc_ue_interface& rrc_ue)
+void cu_cp_impl::handle_rrc_ue_creation(cu_cp_ue_index_t ue_index, rrc_ue_interface& rrc_ue)
 {
   // Store the RRC UE in the UE manager.
   auto* ue = ue_mng.find_ue(ue_index);
@@ -1553,7 +1680,7 @@ void cu_cp_impl::handle_rrc_ue_creation(ue_index_t ue_index, rrc_ue_interface& r
                                                           get_cu_cp_measurement_handler());
 }
 
-byte_buffer cu_cp_impl::handle_target_cell_sib1_required(du_index_t du_index, nr_cell_global_id_t cgi)
+byte_buffer cu_cp_impl::handle_target_cell_sib1_required(cu_cp_du_index_t du_index, nr_cell_global_id_t cgi)
 {
   return du_db.get_du_processor(du_index).get_mobility_handler().get_packed_sib1(cgi);
 }
@@ -1563,7 +1690,7 @@ async_task<void> cu_cp_impl::handle_transaction_info_loss(const ue_transaction_i
   return launch_async<ue_transaction_info_release_routine>(ev, ue_mng, ngap_db, cu_up_db, *this, logger);
 }
 
-ngap_cu_cp_ue_notifier* cu_cp_impl::handle_new_ngap_ue(ue_index_t ue_index)
+ngap_cu_cp_ue_notifier* cu_cp_impl::handle_new_ngap_ue(cu_cp_ue_index_t ue_index)
 {
   auto* ue = ue_mng.find_ue(ue_index);
   if (ue == nullptr) {
@@ -1572,7 +1699,7 @@ ngap_cu_cp_ue_notifier* cu_cp_impl::handle_new_ngap_ue(ue_index_t ue_index)
   return &ue->get_ngap_cu_cp_ue_notifier();
 }
 
-bool cu_cp_impl::schedule_ue_task(ue_index_t ue_index, async_task<void> task)
+bool cu_cp_impl::schedule_ue_task(cu_cp_ue_index_t ue_index, async_task<void> task)
 {
   if (ue_mng.find_ue_task_scheduler(ue_index) == nullptr) {
     logger.debug("UE task scheduler not found for UE index={}", ue_index);
@@ -1603,7 +1730,7 @@ void cu_cp_impl::request_ue_release(cu_cp_ue& ue, const ngap_cause_t& cause)
   }));
 }
 
-void cu_cp_impl::send_ran_paging(ue_index_t ue_index, full_i_rnti_t full_i_rnti)
+void cu_cp_impl::send_ran_paging(cu_cp_ue_index_t ue_index, full_i_rnti_t full_i_rnti)
 {
   cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
   if (ue == nullptr) {
@@ -1682,7 +1809,7 @@ void cu_cp_impl::send_ran_paging(ue_index_t ue_index, full_i_rnti_t full_i_rnti)
   ran_paging_timer.run();
 }
 
-void cu_cp_impl::request_release_of_inactive_ue(ue_index_t ue_index)
+void cu_cp_impl::request_release_of_inactive_ue(cu_cp_ue_index_t ue_index)
 {
   cu_cp_ue* ue = ue_mng.find_ue(ue_index);
   if (ue == nullptr) {
@@ -1701,17 +1828,21 @@ cu_cp_impl::handle_inter_cu_handover_request(const cu_cp_inter_cu_handover_reque
 
   // Select a CU-UP to serve the UE.
   ue->set_cu_up_index(cu_up_db.select_cu_up());
-  ocudu_assert(ue->get_cu_up_index() != cu_up_index_t::invalid,
+  ocudu_assert(ue->get_cu_up_index() != cu_cp_cu_up_index_t::invalid,
                "ue={}: could not find a CU-UP to serve the UE",
                request.ue_index);
+
+  auto* ngap = ngap_db.find_ngap(request.guami.plmn);
+  ocudu_assert(ngap != nullptr, "ue={}: NGAP not found for PLMN={}", request.ue_index, request.guami.plmn);
 
   return launch_async<inter_cu_handover_target_routine>(
       request,
       cu_up_db.find_cu_up_processor(ue->get_cu_up_index())->get_e1ap_bearer_context_manager(),
-      du_db.get_du_processor(ue->get_du_index()).get_f1ap_handler(),
+      du_db.get_du_processor(ue->get_du_index()),
       get_cu_cp_ue_removal_handler(),
       ue_mng,
       cell_meas_mng,
+      ngap->get_ngap_location_reporting_handler(),
       cfg.security.default_security_indication,
       logger);
 }

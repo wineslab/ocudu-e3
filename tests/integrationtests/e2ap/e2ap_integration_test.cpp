@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/e2/common/e2_impl.h"
+#include "lib/e2/common/e2ap_asn1_helpers.h"
 #include "tests/unittests/e2/common/e2_test_helpers.h"
 #include "tests/unittests/e2/common/e2ap_asn1_packer.h"
 #include "ocudu/e2/e2_node_component_config_collector.h"
@@ -14,7 +15,9 @@
 #include "ocudu/support/executors/inline_task_executor.h"
 #include "ocudu/support/io/io_broker_factory.h"
 #include "ocudu/support/timers.h"
+#include <chrono>
 #include <gtest/gtest.h>
+#include <thread>
 
 using namespace ocudu;
 
@@ -33,9 +36,7 @@ private:
   sctp_association_sdu_notifier& parent;
 };
 
-class dummy_e2ap_network_adapter : public e2_message_notifier,
-                                   public sctp_network_gateway_control_notifier,
-                                   public sctp_association_sdu_notifier
+class dummy_e2ap_network_adapter : public e2_message_notifier, public sctp_association_sdu_notifier
 {
 public:
   dummy_e2ap_network_adapter(const sctp_network_connector_config& nw_config_) :
@@ -54,8 +55,9 @@ public:
 
   void connect_e2ap(e2_interface* e2ap_) { e2ap = e2ap_; }
 
+  bool is_connected() const { return sctp_sender != nullptr; }
+
   e2_message last_tx_e2_msg;
-  e2_message last_rx_e2_msg;
 
 private:
   // E2AP calls interface to send (unpacked) E2AP PDUs
@@ -85,15 +87,9 @@ private:
       return false;
     }
 
-    // Forward unpacked Rx PDU to the DU.
-    last_rx_e2_msg = msg;
     e2ap->handle_message(msg);
     return true;
   }
-
-  /// \brief Simply log those events for now
-  void on_connection_loss() override { test_logger.info("on_connection_loss"); }
-  void on_connection_established() override { test_logger.info("on_connection_established"); }
 
   /// We require a network gateway and a packer
   const sctp_network_connector_config&           nw_config;
@@ -174,55 +170,57 @@ protected:
     factory              = timer_factory{timers, ctrl_worker};
     e2_client            = std::make_unique<dummy_e2_con_client>(*adapter);
     e2agent_notifier     = std::make_unique<dummy_e2_agent_mng>();
-    e2ap                 = std::make_unique<e2_impl>(test_logger,
-                                     cfg,
-                                     *e2agent_notifier,
-                                     factory,
-                                     *e2_client,
-                                     *e2_subscription_mngr,
-                                     *e2sm_mngr,
-                                     ctrl_worker,
-                                     node_cfg_provider);
-    pcap                 = std::make_unique<dummy_e2ap_pcap>();
+    e2ap                 = std::make_unique<e2_impl>(
+        test_logger, *e2agent_notifier, factory, *e2_client, *e2_subscription_mngr, *e2sm_mngr, ctrl_worker);
+    pcap = std::make_unique<dummy_e2ap_pcap>();
     adapter->connect_e2ap(e2ap.get());
   }
 
-  e2ap_configuration                                  cfg = {};
-  timer_factory                                       factory;
-  timer_manager                                       timers;
-  std::unique_ptr<e2ap_e2agent_notifier>              e2agent_notifier;
-  std::unique_ptr<dummy_e2ap_network_adapter>         adapter;
-  manual_task_worker                                  ctrl_worker{128};
-  std::unique_ptr<dummy_e2ap_pcap>                    pcap;
-  std::unique_ptr<e2_subscription_manager>            e2_subscription_mngr;
-  std::unique_ptr<e2sm_handler>                       e2sm_packer;
-  std::unique_ptr<e2_du_metrics_interface>            du_metrics;
-  std::unique_ptr<e2sm_kpm_meas_provider>             du_meas_provider;
-  std::unique_ptr<e2sm_manager>                       e2sm_mngr;
-  std::unique_ptr<e2sm_interface>                     e2sm_iface;
-  std::unique_ptr<e2_interface>                       e2ap;
-  std::unique_ptr<dummy_e2_con_client>                e2_client;
-  manual_event<std::vector<e2_node_component_config>> node_cfg_event;
-  dummy_e2_node_component_config_provider             node_cfg_provider{node_cfg_event};
-  ocudulog::basic_logger&                             test_logger = ocudulog::fetch_basic_logger("TEST");
+  void TearDown() override { ocudulog::flush(); }
+
+  e2ap_configuration                          cfg = {};
+  timer_factory                               factory;
+  timer_manager                               timers;
+  std::unique_ptr<e2ap_e2agent_notifier>      e2agent_notifier;
+  std::unique_ptr<dummy_e2ap_network_adapter> adapter;
+  manual_task_worker                          ctrl_worker{128};
+  std::unique_ptr<dummy_e2ap_pcap>            pcap;
+  std::unique_ptr<e2_subscription_manager>    e2_subscription_mngr;
+  std::unique_ptr<e2sm_handler>               e2sm_packer;
+  std::unique_ptr<e2_du_metrics_interface>    du_metrics;
+  std::unique_ptr<e2sm_kpm_meas_provider>     du_meas_provider;
+  std::unique_ptr<e2sm_manager>               e2sm_mngr;
+  std::unique_ptr<e2sm_interface>             e2sm_iface;
+  std::unique_ptr<e2_interface>               e2ap;
+  std::unique_ptr<dummy_e2_con_client>        e2_client;
+  ocudulog::basic_logger&                     test_logger = ocudulog::fetch_basic_logger("TEST");
 };
 
 /// Test successful e2 setup procedure
 TEST_F(e2ap_integration_test, when_e2_setup_response_received_then_ric_connected)
 {
+  if (!adapter->is_connected()) {
+    GTEST_SKIP() << "No NearRT-RIC available at 127.0.0.1:36421";
+  }
   report_fatal_error_if_not(e2ap->handle_e2_tnl_connection_request(), "Unable to establish connection to RIC");
-
-  // Pre-fire the node component config event so the setup coroutine is not blocked awaiting it.
-  // This test exercises the network path, not the component-config path.
-  std::vector<e2_node_component_config> node_cfgs;
-  e2_node_component_config              dummy_cfg;
-  dummy_cfg.interface_type = e2_node_component_interface_type::ng;
-  node_cfgs.push_back(std::move(dummy_cfg));
-  node_cfg_event.set(std::move(node_cfgs));
 
   // Action 1: Launch E2 setup procedure
   test_logger.info("Launching E2 setup procedure...");
-  async_task<e2_setup_response_message>         t = e2ap->start_initial_e2_setup_routine();
+  e2_setup_request_message request;
+  {
+    uint8_t req_bytes[]  = {0xaa, 0xbb, 0xee};
+    uint8_t resp_bytes[] = {0xdd, 0xee};
+
+    std::vector<e2_node_component_config> node_cfgs;
+    e2_node_component_config              dummy_cfg;
+    dummy_cfg.interface_type = e2_node_component_interface_type::f1;
+    dummy_cfg.component_id   = e2_node_component_id{int_to_gnb_du_id(1)};
+    dummy_cfg.request_part   = byte_buffer::create(req_bytes, req_bytes + sizeof(req_bytes)).value();
+    dummy_cfg.response_part  = byte_buffer::create(resp_bytes, resp_bytes + sizeof(resp_bytes)).value();
+    node_cfgs.push_back(std::move(dummy_cfg));
+    fill_asn1_e2ap_setup_request(test_logger, request.request, cfg, *e2sm_mngr, node_cfgs);
+  }
+  async_task<e2_setup_response_message>         t = e2ap->handle_e2_setup_request(request);
   lazy_task_launcher<e2_setup_response_message> t_launcher(t);
 
   // Status: Procedure not yet ready.
@@ -233,11 +231,12 @@ TEST_F(e2ap_integration_test, when_e2_setup_response_received_then_ric_connected
   ASSERT_EQ(adapter->last_tx_e2_msg.pdu.init_msg().value.type().value,
             asn1::e2ap::e2ap_elem_procs_o::init_msg_c::types_opts::e2setup_request);
 
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-
-  ASSERT_EQ(adapter->last_rx_e2_msg.pdu.type().value, asn1::e2ap::e2ap_pdu_c::types_opts::successful_outcome);
-  ASSERT_EQ(adapter->last_rx_e2_msg.pdu.successful_outcome().value.type().value,
-            asn1::e2ap::e2ap_elem_procs_o::successful_outcome_c::types_opts::e2setup_resp);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!t.ready() && std::chrono::steady_clock::now() < deadline) {
+    tick();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(t.ready());
   e2ap->handle_e2_disconnection_request();
 }
 
@@ -277,6 +276,7 @@ protected:
         e2_sctp_gateway_config{nw_config, *epoll_broker, rx_executor, *pcap, ocudulog::fetch_basic_logger("E2")});
     du_param_configurator           = std::make_unique<dummy_du_configurator>();
     node_component_config_collector = std::make_unique<e2_node_component_config_collector>(ctrl_worker, 1);
+    collector_raw                   = node_component_config_collector.get();
     e2agent                         = create_e2_du_agent(cfg,
                                  *e2_client,
                                  &(*du_metrics),
@@ -286,6 +286,8 @@ protected:
                                  ctrl_worker,
                                  std::move(node_component_config_collector));
   }
+
+  void TearDown() override { ocudulog::flush(); }
 
   e2ap_configuration                                  cfg = {};
   inline_task_executor                                rx_executor;
@@ -299,6 +301,7 @@ protected:
   std::unique_ptr<odu::du_configurator>               du_param_configurator;
   std::unique_ptr<e2_connection_client>               e2_client;
   std::unique_ptr<e2_node_component_config_collector> node_component_config_collector;
+  e2_node_component_config_collector*                 collector_raw = nullptr;
   std::unique_ptr<e2_agent>                           e2agent;
   ocudulog::basic_logger&                             test_logger = ocudulog::fetch_basic_logger("TEST");
 };
@@ -310,8 +313,26 @@ TEST_F(e2ap_gw_connector_integration_test, when_e2_setup_response_received_then_
   test_logger.info("Launching E2 setup procedure...");
   e2agent->start();
 
-  std::this_thread::sleep_for(std::chrono::seconds(1));
+  // Unblock the setup routine — it waits for one F1 component config.
+  collector_raw->deliver(e2_node_component_interface_type::f1,
+                         byte_buffer{byte_buffer::fallback_allocation_tag{}, {0xaa, 0xbb, 0xee}},
+                         byte_buffer{byte_buffer::fallback_allocation_tag{}, {0xdd, 0xee}},
+                         int_to_gnb_du_id(1));
 
+  // Wait for the RIC to respond, then process incoming message.
+  std::this_thread::sleep_for(std::chrono::seconds(1));
   this->tick();
-  e2agent->stop();
+
+  // stop() uses baton::wait() internally, so drive ctrl_worker from main thread
+  // while stop() blocks on its background-thread baton.
+  std::atomic<bool> agent_stopped{false};
+  std::thread       stopper([&] {
+    e2agent->stop();
+    agent_stopped.store(true, std::memory_order_release);
+  });
+  while (!agent_stopped.load(std::memory_order_acquire)) {
+    ctrl_worker.run_pending_tasks();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  stopper.join();
 }

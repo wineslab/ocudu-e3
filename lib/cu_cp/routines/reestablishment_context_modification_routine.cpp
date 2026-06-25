@@ -12,7 +12,7 @@ using namespace ocucp;
 using namespace asn1::rrc_nr;
 
 reestablishment_context_modification_routine::reestablishment_context_modification_routine(
-    ue_index_t                            ue_index_,
+    cu_cp_ue_index_t                      ue_index_,
     const ocudu::security::sec_as_config& security_cfg_,
     e1ap_bearer_context_manager&          e1ap_bearer_ctxt_mng_,
     f1ap_ue_context_manager&              f1ap_ue_ctxt_mng_,
@@ -194,7 +194,7 @@ bool reestablishment_context_modification_routine::generate_ue_context_modificat
         e1ap_pdu_session_resource_modify_list)
 {
   for (const auto& e1ap_item : e1ap_pdu_session_resource_modify_list) {
-    cu_cp_pdu_session_resource_modify_response_item item;
+    ngap_pdu_session_resource_modify_response_item item;
     item.pdu_session_id = e1ap_item.pdu_session_id;
 
     for (const auto& e1ap_drb_item : e1ap_item.drb_modified_list_ng_ran) {

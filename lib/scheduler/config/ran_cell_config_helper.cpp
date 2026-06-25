@@ -6,6 +6,8 @@
 #include "ocudu/ran/pdcch/pdcch_candidates.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_coreset_config.h"
 #include "ocudu/ran/prach/prach_helper.h"
+#include "ocudu/ran/sib/sib_helper.h"
+#include "ocudu/ran/ssb/ssb_helper.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
 #include "ocudu/scheduler/config/time_domain_resource_helper.h"
 
@@ -253,18 +255,23 @@ make_default_csi_meas_builder_params(const config_helpers::cell_config_builder_p
     // Set a default CSI report slot offset that falls in an UL slot.
     const auto& tdd_pattern = *params.tdd_ul_dl_cfg_common;
 
-    constexpr unsigned default_ssb_period_ms = 10U;
-
     const unsigned max_csi_symbol = *std::max_element(csi_params.csi_params.tracking_csi_ofdm_symbol_indices.begin(),
                                                       csi_params.csi_params.tracking_csi_ofdm_symbol_indices.end());
 
+    const ssb_configuration ssb_cfg = make_default_ssb_config(params);
+    const auto ssb_slots = ssb_helper::get_occupied_slot_offsets(ssb_cfg, params.dl_carrier.band, tdd_pattern.ref_scs);
+    const auto sib1_occ  = sib_helper::get_occupied_slot_offsets(
+        ssb_cfg, params.dl_carrier.band, tdd_pattern.ref_scs, params.ss0_index, params.cs0_index->value());
     if (not csi_helper::derive_valid_csi_rs_slot_offsets(csi_params.csi_params,
                                                          std::nullopt,
                                                          std::nullopt,
-                                                         std::nullopt,
+                                                         {},
                                                          tdd_pattern,
                                                          max_csi_symbol,
-                                                         default_ssb_period_ms)) {
+                                                         ssb_cfg.ssb_period,
+                                                         ssb_slots,
+                                                         sib1_occ.window_period_slots,
+                                                         sib1_occ.slot_offsets)) {
       report_fatal_error("Failed to find valid csi-MeasConfig");
     }
 
@@ -274,6 +281,8 @@ make_default_csi_meas_builder_params(const config_helpers::cell_config_builder_p
         csi_params.csi_params.csi_report_slot_offset = i;
       }
     }
+  } else {
+    csi_params.csi_params.meas_csi_slot_offsets = {2U};
   }
 
   return csi_params;

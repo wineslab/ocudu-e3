@@ -7,6 +7,7 @@
 #include "lib/scheduler/common_scheduling/ra_scheduler.h"
 #include "lib/scheduler/support/config_helpers.h"
 #include "lib/scheduler/support/pdsch/pdsch_default_time_allocation.h"
+#include "lib/scheduler/support/pucch/pucch_collision.h"
 #include "lib/scheduler/support/sched_result_helpers.h"
 #include "scheduler_output_test_helpers.h"
 #include "tests/test_doubles/scheduler/scheduler_test_message_validators.h"
@@ -20,7 +21,6 @@
 #include "ocudu/ran/pucch/pucch_constants.h"
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 #include "ocudu/ran/resource_allocation/resource_allocation_frequency.h"
-#include "ocudu/scheduler/result/pucch_format.h"
 #include "ocudu/scheduler/scheduler_feedback_handler.h"
 #include "ocudu/support/error_handling.h"
 #include <gtest/gtest.h>
@@ -87,7 +87,7 @@ void ocudu::assert_tdd_pattern_consistency(const cell_configuration& cell_cfg,
       ASSERT_TRUE(ul_symbols.contains(prach_symbols));
     }
     for (const auto& pucch : result.ul.pucchs) {
-      ASSERT_TRUE(ul_symbols.contains(pucch.resources.symbols));
+      ASSERT_TRUE(ul_symbols.contains(pucch.res->syms));
     }
     for (const auto& srs : result.ul.srss) {
       ASSERT_TRUE(ul_symbols.contains(srs.symbols));
@@ -113,13 +113,13 @@ void ocudu::assert_pdcch_pdsch_common_consistency(const cell_configuration&   ce
   unsigned                                          freq_assignment = 0;
   unsigned                                          N_rb_dl_bwp     = 0;
   span<const pdsch_time_domain_resource_allocation> td_list;
-  switch (pdcch.dci.type) {
+  switch (pdcch.dci.type()) {
     case dci_dl_rnti_config_type::si_f1_0: {
       ASSERT_EQ(pdcch.ctx.rnti, rnti_t::SI_RNTI);
-      time_assignment = pdcch.dci.si_f1_0.time_resource;
-      freq_assignment = pdcch.dci.si_f1_0.frequency_resource;
-      N_rb_dl_bwp     = pdcch.dci.si_f1_0.N_rb_dl_bwp;
-      if (pdcch.dci.si_f1_0.system_information_indicator == 1) {
+      time_assignment = pdcch.dci.as_si_rnti_f1_0().time_resource;
+      freq_assignment = pdcch.dci.as_si_rnti_f1_0().frequency_resource;
+      N_rb_dl_bwp     = pdcch.dci.as_si_rnti_f1_0().N_rb_dl_bwp;
+      if (pdcch.dci.as_si_rnti_f1_0().system_information_indicator == 1) {
         td_list = get_si_rnti_type0A_common_pdsch_time_domain_list(
             cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common,
             cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.cp,
@@ -132,32 +132,32 @@ void ocudu::assert_pdcch_pdsch_common_consistency(const cell_configuration&   ce
       break;
     }
     case dci_dl_rnti_config_type::ra_f1_0: {
-      time_assignment = pdcch.dci.ra_f1_0.time_resource;
+      time_assignment = pdcch.dci.as_ra_rnti_f1_0().time_resource;
       td_list         = get_ra_rnti_pdsch_time_domain_list(cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common,
                                                    cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.cp,
                                                    cell_cfg.params.dmrs_typeA_pos);
-      freq_assignment = pdcch.dci.ra_f1_0.frequency_resource;
-      N_rb_dl_bwp     = pdcch.dci.ra_f1_0.N_rb_dl_bwp;
+      freq_assignment = pdcch.dci.as_ra_rnti_f1_0().frequency_resource;
+      N_rb_dl_bwp     = pdcch.dci.as_ra_rnti_f1_0().N_rb_dl_bwp;
       ASSERT_EQ(N_rb_dl_bwp, bwp_cfg.crbs.length());
       ASSERT_EQ(pdcch.ctx.context.ss_id, cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.ra_search_space_id);
     } break;
     case dci_dl_rnti_config_type::tc_rnti_f1_0: {
-      time_assignment = pdcch.dci.tc_rnti_f1_0.time_resource;
-      freq_assignment = pdcch.dci.tc_rnti_f1_0.frequency_resource;
-      N_rb_dl_bwp     = pdcch.dci.tc_rnti_f1_0.N_rb_dl_bwp;
+      time_assignment = pdcch.dci.as_tc_rnti_f1_0().time_resource;
+      freq_assignment = pdcch.dci.as_tc_rnti_f1_0().frequency_resource;
+      N_rb_dl_bwp     = pdcch.dci.as_tc_rnti_f1_0().N_rb_dl_bwp;
       td_list         = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list;
       ASSERT_EQ(N_rb_dl_bwp, cs_zero_crbs.length());
     } break;
     case dci_dl_rnti_config_type::c_rnti_f1_0: {
-      time_assignment = pdcch.dci.c_rnti_f1_0.time_resource;
-      freq_assignment = pdcch.dci.c_rnti_f1_0.frequency_resource;
+      time_assignment = pdcch.dci.as_c_rnti_f1_0().time_resource;
+      freq_assignment = pdcch.dci.as_c_rnti_f1_0().frequency_resource;
       N_rb_dl_bwp     = cs_zero_crbs.length();
       td_list         = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list;
     } break;
     case dci_dl_rnti_config_type::p_rnti_f1_0: {
-      time_assignment = pdcch.dci.p_rnti_f1_0.time_resource;
-      freq_assignment = pdcch.dci.p_rnti_f1_0.frequency_resource;
-      N_rb_dl_bwp     = pdcch.dci.p_rnti_f1_0.N_rb_dl_bwp;
+      time_assignment = pdcch.dci.as_p_rnti_f1_0().time_resource;
+      freq_assignment = pdcch.dci.as_p_rnti_f1_0().frequency_resource;
+      N_rb_dl_bwp     = pdcch.dci.as_p_rnti_f1_0().N_rb_dl_bwp;
       td_list         = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list;
       ASSERT_EQ(N_rb_dl_bwp, cs_zero_crbs.length());
     } break;
@@ -179,23 +179,25 @@ void ocudu::assert_pdcch_pdsch_common_consistency(const cell_configuration&     
   span<const pdcch_dl_information> pdcchs = cell_res_grid[0].result.dl.dl_pdcchs;
   for (const pdcch_dl_information& pdcch : pdcchs) {
     const pdsch_information* linked_pdsch = nullptr;
-    switch (pdcch.dci.type) {
+    switch (pdcch.dci.type()) {
       case dci_dl_rnti_config_type::si_f1_0: {
         const auto&     sibs = cell_res_grid[0].result.dl.bc.sibs;
         sib_information sib;
         const auto&     it = std::find_if(sibs.begin(), sibs.end(), [&pdcch](const auto& sib_) {
-          unsigned pdsch_freq_resource = ra_frequency_type1_get_riv(ra_frequency_type1_configuration{
-              pdcch.dci.si_f1_0.N_rb_dl_bwp, sib_.pdsch_cfg.rbs.type1().start(), sib_.pdsch_cfg.rbs.type1().length()});
+          unsigned pdsch_freq_resource =
+              ra_frequency_type1_get_riv(ra_frequency_type1_configuration{pdcch.dci.as_si_rnti_f1_0().N_rb_dl_bwp,
+                                                                          sib_.pdsch_cfg.rbs.type1().start(),
+                                                                          sib_.pdsch_cfg.rbs.type1().length()});
           return (sib_.pdsch_cfg.rnti == pdcch.ctx.rnti) &&
-                 (pdsch_freq_resource == pdcch.dci.si_f1_0.frequency_resource);
+                 (pdsch_freq_resource == pdcch.dci.as_si_rnti_f1_0().frequency_resource);
         });
         ASSERT_NE(it, sibs.end());
         linked_pdsch = &it->pdsch_cfg;
       } break;
       case dci_dl_rnti_config_type::ra_f1_0: {
-        uint8_t k0 =
-            cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list[pdcch.dci.ra_f1_0.time_resource]
-                .k0;
+        uint8_t k0 = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common
+                         .pdsch_td_alloc_list[pdcch.dci.as_ra_rnti_f1_0().time_resource]
+                         .k0;
         const auto& rars = cell_res_grid[k0].result.dl.rar_grants;
         const auto* it   = std::find_if(
             rars.begin(), rars.end(), [&pdcch](const auto& rar) { return rar.pdsch_cfg.rnti == pdcch.ctx.rnti; });
@@ -204,7 +206,7 @@ void ocudu::assert_pdcch_pdsch_common_consistency(const cell_configuration&     
       } break;
       case dci_dl_rnti_config_type::c_rnti_f1_0: {
         uint8_t k0 = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common
-                         .pdsch_td_alloc_list[pdcch.dci.c_rnti_f1_0.time_resource]
+                         .pdsch_td_alloc_list[pdcch.dci.as_c_rnti_f1_0().time_resource]
                          .k0;
         const auto& ue_grants = cell_res_grid[k0].result.dl.ue_grants;
         const auto* it        = std::find_if(ue_grants.begin(), ue_grants.end(), [&pdcch](const auto& grant) {
@@ -215,7 +217,7 @@ void ocudu::assert_pdcch_pdsch_common_consistency(const cell_configuration&     
       } break;
       case dci_dl_rnti_config_type::tc_rnti_f1_0: {
         uint8_t k0 = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common
-                         .pdsch_td_alloc_list[pdcch.dci.tc_rnti_f1_0.time_resource]
+                         .pdsch_td_alloc_list[pdcch.dci.as_tc_rnti_f1_0().time_resource]
                          .k0;
         const auto& ue_grants = cell_res_grid[k0].result.dl.ue_grants;
         const auto* it        = std::find_if(ue_grants.begin(), ue_grants.end(), [&pdcch](const auto& grant) {
@@ -226,12 +228,12 @@ void ocudu::assert_pdcch_pdsch_common_consistency(const cell_configuration&     
       } break;
       case dci_dl_rnti_config_type::p_rnti_f1_0: {
         // No corresponding PDSCH.
-        if (pdcch.dci.p_rnti_f1_0.short_messages_indicator ==
+        if (pdcch.dci.as_p_rnti_f1_0().short_messages_indicator ==
             dci_1_0_p_rnti_configuration::payload_info::short_messages) {
           break;
         }
         uint8_t k0 = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common
-                         .pdsch_td_alloc_list[pdcch.dci.p_rnti_f1_0.time_resource]
+                         .pdsch_td_alloc_list[pdcch.dci.as_p_rnti_f1_0().time_resource]
                          .k0;
         const auto& pg_grants = cell_res_grid[k0].result.dl.paging_grants;
         const auto* it        = std::find_if(pg_grants.begin(), pg_grants.end(), [&pdcch](const auto& grant) {
@@ -365,64 +367,58 @@ void ocudu::test_pucch_consistency(const cell_configuration& cell_cfg, span<cons
   cell_slot_resource_grid general_grid(cell_cfg.params.ul_cfg_common.freq_info_ul.scs_carrier_list);
 
   for (const pucch_info& pucch : pucchs) {
-    const auto pucch_grants = get_pucch_grant_info(pucch);
+    const unsigned mux_idx      = pucch_mux_idx(*pucch.res);
+    const auto     pucch_grants = get_pucch_grant_info(pucch);
     switch (pucch.format()) {
       case pucch_format::FORMAT_0: {
-        const auto&    f0_params        = std::get<pucch_format_0>(pucch.format_params);
-        const unsigned multiplexing_idx = f0_params.initial_cyclic_shift;
         // Multiplexed by initial cyclic shift only.
         // Check the general grid, the union of the F4 grids and the F0 specific grid.
         // Write to both the F0 union grid and the F0 specific grid.
         ASSERT_FALSE(general_grid.collides(pucch_grants.first));
         ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(pucch_grants.first));
-        ASSERT_FALSE(f0_or_f1_grids[multiplexing_idx].collides(pucch_grants.first));
+        ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(pucch_grants.first));
         f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(pucch_grants.first);
-        f0_or_f1_grids[multiplexing_idx].fill(pucch_grants.first);
-        if (not pucch.resources.second_hop_prbs.empty()) {
+        f0_or_f1_grids[mux_idx].fill(pucch_grants.first);
+        if (pucch.res->second_hop_prb.has_value()) {
           ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
           ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(*pucch_grants.second));
-          ASSERT_FALSE(f0_or_f1_grids[multiplexing_idx].collides(*pucch_grants.second));
+          ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(*pucch_grants.second));
           f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(*pucch_grants.second);
-          f0_or_f1_grids[multiplexing_idx].fill(*pucch_grants.second);
+          f0_or_f1_grids[mux_idx].fill(*pucch_grants.second);
         }
       } break;
       case pucch_format::FORMAT_1: {
-        const auto&    f1_params = std::get<pucch_format_1>(pucch.format_params);
-        const unsigned multiplexing_idx =
-            f1_params.initial_cyclic_shift + f1_params.time_domain_occ * pucch_constants::f0::NOF_ICS;
         // Multiplexed by initial cyclic shift and time domain OCC.
         // Check the general grid, the union of the F4 grids and the F1 specific grid.
         // Write to both the F1 union grid and the F1 specific grid.
         ASSERT_FALSE(general_grid.collides(pucch_grants.first));
         ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(pucch_grants.first));
-        ASSERT_FALSE(f0_or_f1_grids[multiplexing_idx].collides(pucch_grants.first));
+        ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(pucch_grants.first));
         f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(pucch_grants.first);
-        f0_or_f1_grids[multiplexing_idx].fill(pucch_grants.first);
-        if (not pucch.resources.second_hop_prbs.empty()) {
+        f0_or_f1_grids[mux_idx].fill(pucch_grants.first);
+        if (pucch.res->second_hop_prb.has_value()) {
           ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
           ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(*pucch_grants.second));
-          ASSERT_FALSE(f0_or_f1_grids[multiplexing_idx].collides(*pucch_grants.second));
+          ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(*pucch_grants.second));
           f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(*pucch_grants.second);
-          f0_or_f1_grids[multiplexing_idx].fill(*pucch_grants.second);
+          f0_or_f1_grids[mux_idx].fill(*pucch_grants.second);
         }
       } break;
       case pucch_format::FORMAT_4: {
-        const auto&    f4_params        = std::get<pucch_format_4>(pucch.format_params);
-        const unsigned multiplexing_idx = f4_params.orthog_seq_idx;
         // Multiplexed by orthogonal sequence index.
         // Check the general grid, the union of the F0/F1 grids and the F4 specific grid.
         // Write to both the F4 union grid and the F4 specific grid.
         ASSERT_FALSE(general_grid.collides(pucch_grants.first));
         ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(pucch_grants.first));
-        ASSERT_FALSE(f4_grids[multiplexing_idx].collides(pucch_grants.first));
+        ASSERT_FALSE(f4_grids[mux_idx].collides(pucch_grants.first));
         f4_grids[max_f4_multiplexing].fill(pucch_grants.first);
-        f4_grids[multiplexing_idx].fill(pucch_grants.first);
-        if (not pucch.resources.second_hop_prbs.empty()) {
+        f4_grids[mux_idx].fill(pucch_grants.first);
+        if (pucch.res->second_hop_prb.has_value()) {
           ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
           ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(*pucch_grants.second));
-          ASSERT_FALSE(f4_grids[multiplexing_idx].collides(*pucch_grants.second));
+          ASSERT_FALSE(f4_grids[mux_idx].collides(*pucch_grants.second));
           f4_grids[max_f4_multiplexing].fill(*pucch_grants.second);
-          f4_grids[multiplexing_idx].fill(*pucch_grants.second);
+          f4_grids[mux_idx].fill(*pucch_grants.second);
         }
       } break;
       default: {
@@ -433,7 +429,7 @@ void ocudu::test_pucch_consistency(const cell_configuration& cell_cfg, span<cons
         ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(pucch_grants.first));
         ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(pucch_grants.first));
         general_grid.fill(pucch_grants.first);
-        if (not pucch.resources.second_hop_prbs.empty()) {
+        if (pucch.res->second_hop_prb.has_value()) {
           ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
           ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(*pucch_grants.second));
           ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(*pucch_grants.second));
@@ -459,21 +455,21 @@ static void test_pdcch_common_consistency(const cell_configuration&        cell_
     span<const pdsch_time_domain_resource_allocation> pdsch_td_list;
     std::optional<unsigned>                           time_res;
     std::optional<unsigned>                           k1;
-    switch (pdcch.dci.type) {
+    switch (pdcch.dci.type()) {
       case dci_dl_rnti_config_type::si_f1_0:
         pdsch_td_list =
             get_si_rnti_pdsch_time_domain_list(init_dl_bwp.generic_params.cp, cell_cfg.params.dmrs_typeA_pos);
-        time_res = pdcch.dci.si_f1_0.time_resource;
+        time_res = pdcch.dci.as_si_rnti_f1_0().time_resource;
         break;
       case dci_dl_rnti_config_type::ra_f1_0:
         pdsch_td_list = get_ra_rnti_pdsch_time_domain_list(
             init_dl_bwp.pdsch_common, init_dl_bwp.generic_params.cp, cell_cfg.params.dmrs_typeA_pos);
-        time_res = pdcch.dci.ra_f1_0.time_resource;
+        time_res = pdcch.dci.as_ra_rnti_f1_0().time_resource;
         break;
       case dci_dl_rnti_config_type::tc_rnti_f1_0:
         pdsch_td_list = init_dl_bwp.pdsch_common.pdsch_td_alloc_list;
-        time_res      = pdcch.dci.tc_rnti_f1_0.time_resource;
-        k1            = pdcch.dci.tc_rnti_f1_0.pdsch_harq_fb_timing_indicator + 1;
+        time_res      = pdcch.dci.as_tc_rnti_f1_0().time_resource;
+        k1            = pdcch.dci.as_tc_rnti_f1_0().pdsch_harq_fb_timing_indicator + 1;
         break;
       default:
         break;
@@ -506,8 +502,8 @@ static void test_ul_pdcch_consistency(const cell_configuration&        cell_cfg,
 {
   const auto& pusch_td_list = cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common->pusch_td_alloc_list;
   for (const pdcch_ul_information& pdcch : ul_pdcchs) {
-    if (pdcch.dci.type == dci_ul_rnti_config_type::tc_rnti_f0_0) {
-      const auto& dci_tc = pdcch.dci.tc_rnti_f0_0;
+    if (pdcch.dci.type() == dci_ul_rnti_config_type::tc_rnti_f0_0) {
+      const auto& dci_tc = pdcch.dci.as_tc_rnti_f0_0();
       // Msg3 reTx.
       ASSERT_LT(dci_tc.time_resource, pusch_td_list.size());
     }
@@ -538,13 +534,14 @@ static void assert_rar_grant_msg3_pusch_consistency(const cell_configuration&   
 
   span<const pdcch_dl_information> pdcchs = res_grid[0].result.dl.dl_pdcchs;
   for (const pdcch_dl_information& pdcch : pdcchs) {
-    if (pdcch.dci.type != dci_dl_rnti_config_type::ra_f1_0) {
+    if (pdcch.dci.type() != dci_dl_rnti_config_type::ra_f1_0) {
       continue;
     }
 
     // For a given PDCCH for a RAR, search for the respective RAR PDSCH.
-    uint8_t k0 =
-        cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list[pdcch.dci.ra_f1_0.time_resource].k0;
+    uint8_t k0 = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common
+                     .pdsch_td_alloc_list[pdcch.dci.as_ra_rnti_f1_0().time_resource]
+                     .k0;
     span<const rar_information> rars   = res_grid[k0].result.dl.rar_grants;
     const auto*                 rar_it = std::find_if(
         rars.begin(), rars.end(), [&pdcch](const auto& rar) { return rar.pdsch_cfg.rnti == pdcch.ctx.rnti; });
@@ -819,7 +816,7 @@ static bool is_msg3_retx_consistent_with_ul_pdcch(const cell_configuration&   ce
                                                   const ul_sched_info&        ulgrant,
                                                   const pdcch_ul_information& ul_pdcch)
 {
-  if (ul_pdcch.dci.type != dci_ul_rnti_config_type::tc_rnti_f0_0) {
+  if (ul_pdcch.dci.type() != dci_ul_rnti_config_type::tc_rnti_f0_0) {
     // Not Msg3 PDCCH.
     return false;
   }
@@ -831,7 +828,7 @@ static bool is_msg3_retx_consistent_with_ul_pdcch(const cell_configuration&   ce
     return false;
   }
 
-  const auto& dci = ul_pdcch.dci.tc_rnti_f0_0;
+  const auto& dci = ul_pdcch.dci.as_tc_rnti_f0_0();
   const auto& td_list =
       get_pusch_time_domain_resource_table(*cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common);
   if (dci.time_resource >= td_list.size()) {
@@ -907,7 +904,7 @@ void test_helper::ra_scheduler_tracker::on_crc_indication(const ul_crc_indicatio
 void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sched_result& result)
 {
   for (auto& dl_pdcch : result.dl.dl_pdcchs) {
-    if (dl_pdcch.dci.type != dci_dl_rnti_config_type::ra_f1_0) {
+    if (dl_pdcch.dci.type() != dci_dl_rnti_config_type::ra_f1_0) {
       // Skip PDCCHs that are not for RAR or MsgB.
       continue;
     }
@@ -925,10 +922,10 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
     }
     ++ra_dl_pdcch_ack_counter;
 
-    const auto& td_res =
-        get_ra_rnti_pdsch_time_domain_list(cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common,
-                                           cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.cp,
-                                           cell_cfg.params.dmrs_typeA_pos)[dl_pdcch.dci.ra_f1_0.time_resource];
+    const auto& td_res = get_ra_rnti_pdsch_time_domain_list(
+        cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common,
+        cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.cp,
+        cell_cfg.params.dmrs_typeA_pos)[dl_pdcch.dci.as_ra_rnti_f1_0().time_resource];
     auto& expected_rar      = pending_rars.emplace_back();
     expected_rar.pdcch      = dl_pdcch;
     expected_rar.pdcch_slot = sl_tx;
@@ -998,7 +995,7 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
   const auto& pusch_td_list =
       get_pusch_time_domain_resource_table(*cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common);
   for (auto& ul_pdcch : result.dl.ul_pdcchs) {
-    if (ul_pdcch.dci.type != dci_ul_rnti_config_type::tc_rnti_f0_0) {
+    if (ul_pdcch.dci.type() != dci_ul_rnti_config_type::tc_rnti_f0_0) {
       continue;
     }
 
@@ -1009,7 +1006,7 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
     ASSERT_NE(preamble_it, pending_preambles.end()) << "Msg3 reTx UL PDCCH has no associated RACH preamble";
     ASSERT_GT(sl_tx, preamble_it->first_msg3_slot) << "Msg3 reTx UL PDCCH cannot be before Msg3 newTx";
 
-    const auto& dci    = ul_pdcch.dci.tc_rnti_f0_0;
+    const auto& dci    = ul_pdcch.dci.as_tc_rnti_f0_0();
     const auto& td_res = pusch_td_list[dci.time_resource];
 
     const slot_point pusch_slot      = sl_tx + td_res.k2;
@@ -1135,4 +1132,92 @@ bool test_helper::ra_scheduler_tracker::is_expired(const preamble_context& ctxt,
     return true;
   }
   return false;
+}
+
+void test_helper::harq_tracker::on_new_result(slot_point /*sl_tx*/, const sched_result& result)
+{
+  // Build DL NDI map from DL PDCCHs (UE-specific formats with NDI).
+  std::unordered_map<harq_key, bool, harq_key_hash> dl_ndi_map;
+  for (const pdcch_dl_information& pdcch : result.dl.dl_pdcchs) {
+    bool     ndi     = false;
+    unsigned harq_id = 0;
+    switch (pdcch.dci.type()) {
+      case dci_dl_rnti_config_type::c_rnti_f1_0:
+        ndi     = pdcch.dci.as_c_rnti_f1_0().new_data_indicator != 0;
+        harq_id = pdcch.dci.as_c_rnti_f1_0().harq_process_number;
+        break;
+      case dci_dl_rnti_config_type::tc_rnti_f1_0:
+        ndi     = pdcch.dci.as_tc_rnti_f1_0().new_data_indicator != 0;
+        harq_id = pdcch.dci.as_tc_rnti_f1_0().harq_process_number;
+        break;
+      case dci_dl_rnti_config_type::c_rnti_f1_1:
+        ndi     = pdcch.dci.as_c_rnti_f1_1().tb1_new_data_indicator != 0;
+        harq_id = pdcch.dci.as_c_rnti_f1_1().harq_process_number;
+        break;
+      default:
+        continue;
+    }
+    dl_ndi_map[{pdcch.ctx.rnti, static_cast<harq_id_t>(harq_id)}] = ndi;
+  }
+
+  for (const dl_msg_alloc& grant : result.dl.ue_grants) {
+    const pdsch_information& pdsch  = grant.pdsch_cfg;
+    const pdsch_codeword&    cw     = pdsch.codewords[0];
+    const harq_key           key    = {pdsch.rnti, pdsch.harq_id};
+    const auto               ndi_it = dl_ndi_map.find(key);
+    ASSERT_TRUE(ndi_it != dl_ndi_map.end()) << fmt::format(
+        "DL UE grant has no matching PDCCH for rnti={} h_id={}", pdsch.rnti, fmt::underlying(pdsch.harq_id));
+    const bool ndi = ndi_it->second;
+    const auto it  = dl_harqs.find(key);
+    if (cw.new_data) {
+      // newTx.
+      dl_harqs[key] = {ndi, cw.tb_size_bytes};
+    } else {
+      // reTx.
+      ASSERT_NE(it, dl_harqs.end()) << "PDSCH reTx but no previous PDSCH for the same HARQ";
+      ASSERT_EQ(it->second.ndi, ndi) << "NDI cannot flip in a HARQ reTx";
+      ASSERT_EQ(it->second.tbs, cw.tb_size_bytes) << "TBS mismatch for DL HARQ reTx";
+    }
+  }
+
+  // Build UL NDI map from UL PDCCHs (C-RNTI formats with NDI; tc_rnti_f0_0 has none).
+  std::unordered_map<harq_key, bool, harq_key_hash> ul_ndi_map;
+  for (const pdcch_ul_information& pdcch : result.dl.ul_pdcchs) {
+    bool     ndi     = false;
+    unsigned harq_id = 0;
+    switch (pdcch.dci.type()) {
+      case dci_ul_rnti_config_type::c_rnti_f0_0:
+        ndi     = pdcch.dci.as_c_rnti_f0_0().new_data_indicator != 0;
+        harq_id = pdcch.dci.as_c_rnti_f0_0().harq_process_number;
+        break;
+      case dci_ul_rnti_config_type::c_rnti_f0_1:
+        ndi     = pdcch.dci.as_c_rnti_f0_1().new_data_indicator != 0;
+        harq_id = pdcch.dci.as_c_rnti_f0_1().harq_process_number;
+        break;
+      default:
+        continue;
+    }
+    ul_ndi_map[{pdcch.ctx.rnti, static_cast<harq_id_t>(harq_id)}] = ndi;
+  }
+
+  for (const ul_sched_info& sched_info : result.ul.puschs) {
+    const pusch_information& pusch  = sched_info.pusch_cfg;
+    const harq_key           key    = {pusch.rnti, pusch.harq_id};
+    const auto               ndi_it = ul_ndi_map.find(key);
+    if (ndi_it == ul_ndi_map.end()) {
+      // No matching PDCCH (e.g. Msg3 newTx, MsgA-PUSCH, CGs) — skip NDI tracking.
+      continue;
+    }
+    const bool ndi = ndi_it->second;
+    const auto it  = ul_harqs.find(key);
+    if (pusch.new_data) {
+      // newTx.
+      ul_harqs[key] = {ndi, pusch.tb_size_bytes};
+    } else {
+      // reTx.
+      ASSERT_NE(it, ul_harqs.end()) << "PUSCH reTx but no previous PUSCH for the same HARQ";
+      ASSERT_EQ(it->second.ndi, ndi) << "NDI cannot flip in a UL HARQ reTx";
+      ASSERT_EQ(it->second.tbs, pusch.tb_size_bytes) << "TBS mismatch for UL HARQ reTx";
+    }
+  }
 }

@@ -20,6 +20,8 @@
 #include "ocudu/cu_cp/mobility_manager_config.h"
 #include "ocudu/e2/e2.h"
 #include "ocudu/e2/e2_cu.h"
+#include "ocudu/e2/e2_cu_cp_factory.h"
+#include "ocudu/e2/e2_cu_up_factory.h"
 #include "ocudu/e2/e2_du_factory.h"
 #include "ocudu/e2/e2_node_component_config_collector.h"
 #include "ocudu/e2/e2ap_configuration_helpers.h"
@@ -381,6 +383,18 @@ private:
   std::unique_ptr<scheduler_metrics_notifier> e2_meas_provider;
 };
 
+class dummy_e2_cu_metrics : public e2_cu_metrics_interface
+{
+public:
+  void connect_e2_cu_meas_provider(std::unique_ptr<e2_cu_metrics_notifier> meas_provider) override
+  {
+    e2_meas_provider = std::move(meas_provider);
+  }
+
+private:
+  std::unique_ptr<e2_cu_metrics_notifier> e2_meas_provider;
+};
+
 class dummy_f1ap_ue_id_translator : public odu::f1ap_ue_id_translator
 {
 public:
@@ -688,6 +702,26 @@ inline e2_message generate_e2_setup_failure(unsigned transaction_id)
   return e2_setup_failure;
 }
 
+inline e2_message generate_e2_removal_response(unsigned transaction_id)
+{
+  e2_message msg = {};
+  msg.pdu.set_successful_outcome();
+  msg.pdu.successful_outcome().load_info_obj(ASN1_E2AP_ID_E2REMOVAL);
+  msg.pdu.successful_outcome().value.e2_removal_resp()->transaction_id = transaction_id;
+  return msg;
+}
+
+inline e2_message generate_e2_removal_failure(unsigned transaction_id)
+{
+  e2_message msg = {};
+  msg.pdu.set_unsuccessful_outcome();
+  msg.pdu.unsuccessful_outcome().load_info_obj(ASN1_E2AP_ID_E2REMOVAL);
+  auto& fail           = msg.pdu.unsuccessful_outcome().value.e2_removal_fail();
+  fail->transaction_id = transaction_id;
+  fail->cause.set_misc();
+  return msg;
+}
+
 inline asn1::e2sm::ue_id_gnb_du_s generate_ueid_gnb_du(uint32_t ue_idx)
 {
   asn1::e2sm::ue_id_gnb_du_s ueid;
@@ -882,8 +916,8 @@ class dummy_e2_mobility_notifier : public ocucp::mobility_manager_cu_cp_notifier
 public:
   virtual async_task<ocucp::cu_cp_intra_cu_handover_response>
   on_intra_cu_handover_required(const ocucp::cu_cp_intra_cu_handover_request& request,
-                                ocucp::du_index_t                             source_du_index,
-                                ocucp::du_index_t                             target_du_index) override
+                                cu_cp_du_index_t                              source_du_index,
+                                cu_cp_du_index_t                              target_du_index) override
   {
     return launch_async([](coro_context<async_task<ocucp::cu_cp_intra_cu_handover_response>>& ctx) {
       CORO_BEGIN(ctx);
@@ -937,27 +971,21 @@ class dummy_cu_configurator : public cu_configurator
 public:
   dummy_cu_configurator() {}
 
-  ocucp::ue_index_t get_ue_index(const ocucp::amf_ue_id_t&  amf_ue_id,
-                                 const guami_t&             guami,
-                                 const gnb_cu_ue_f1ap_id_t& gnb_cu_ue_f1ap_id) const override
+  cu_cp_ue_index_t get_ue_index(const ocucp::amf_ue_id_t&  amf_ue_id,
+                                const guami_t&             guami,
+                                const gnb_cu_ue_f1ap_id_t& gnb_cu_ue_f1ap_id) const override
   {
-    return ocucp::uint_to_ue_index(1);
+    return uint_to_ue_index(1);
   }
 
-  ocucp::du_index_t get_du_index(const ocucp::ue_index_t& ue_index) const override
-  {
-    return ocucp::uint_to_du_index(1);
-  }
+  cu_cp_du_index_t get_du_index(const cu_cp_ue_index_t& ue_index) const override { return uint_to_cu_cp_du_index(1); }
 
-  ocucp::du_index_t get_du_index(const nr_cell_global_id_t& nr_cgi) const override
-  {
-    return ocucp::uint_to_du_index(1);
-  }
+  cu_cp_du_index_t get_du_index(const nr_cell_global_id_t& nr_cgi) const override { return uint_to_cu_cp_du_index(1); }
 
   pci_t get_pci(const nr_cell_global_id_t& nr_cgi) const override { return pci_t(1); }
 
   async_task<ocucp::cu_cp_intra_cu_handover_response>
-  trigger_handover(const ocucp::du_index_t&                      source_du_index,
+  trigger_handover(const cu_cp_du_index_t&                       source_du_index,
                    const ocucp::cu_cp_intra_cu_handover_request& handover_req) override
   {
     return launch_async([](coro_context<async_task<ocucp::cu_cp_intra_cu_handover_response>>& ctx) {
@@ -1033,9 +1061,6 @@ protected:
   std::unique_ptr<e2sm_manager>                           e2sm_mngr;
   std::unique_ptr<e2_interface>                           e2;
   std::unique_ptr<e2_agent>                               e2agent;
-  /// Used by e2_impl-based fixtures that drive the event directly.
-  manual_event<std::vector<e2_node_component_config>> node_cfg_event;
-  dummy_e2_node_component_config_provider             node_cfg_provider{node_cfg_event};
   /// Used by e2_entity_test which goes through the full aggregator path.
   /// Raw non-owning pointer; ownership is transferred to e2agent on construction.
   e2_node_component_config_collector* node_component_config_collector = nullptr;
@@ -1061,15 +1086,8 @@ class e2_test : public e2_test_base
     factory              = timer_factory{timers, task_worker};
     e2sm_mngr            = std::make_unique<e2sm_manager>(test_logger);
     agent_notifier       = std::make_unique<dummy_e2_agent_mng>();
-    e2                   = std::make_unique<e2_impl>(test_logger,
-                                   cfg,
-                                   *agent_notifier,
-                                   factory,
-                                   *e2_client,
-                                   *e2_subscription_mngr,
-                                   *e2sm_mngr,
-                                   task_worker,
-                                   node_cfg_provider);
+    e2                   = std::make_unique<e2_impl>(
+        test_logger, *agent_notifier, factory, *e2_client, *e2_subscription_mngr, *e2sm_mngr, task_worker);
     // Packer allows to inject packed message into E2 interface.
     gw     = std::make_unique<dummy_sctp_association_sdu_notifier>();
     pcap   = std::make_unique<dummy_e2ap_pcap>();
@@ -1143,15 +1161,8 @@ class e2_test_subscriber : public e2_test_base
     e2_subscription_mngr = std::make_unique<e2_subscription_manager_impl>(*e2sm_mngr);
     e2_subscription_mngr->add_ran_function_oid(1, "1.3.6.1.4.1.53148.1.2.2.2");
     agent_notifier = std::make_unique<dummy_e2_agent_mng>();
-    e2             = std::make_unique<e2_impl>(test_logger,
-                                   cfg,
-                                   *agent_notifier,
-                                   factory,
-                                   *e2_client,
-                                   *e2_subscription_mngr,
-                                   *e2sm_mngr,
-                                   task_worker,
-                                   node_cfg_provider);
+    e2             = std::make_unique<e2_impl>(
+        test_logger, *agent_notifier, factory, *e2_client, *e2_subscription_mngr, *e2sm_mngr, task_worker);
     // Packer allows to inject packed message into E2 interface.
     gw     = std::make_unique<dummy_sctp_association_sdu_notifier>();
     pcap   = std::make_unique<dummy_e2ap_pcap>();
@@ -1173,6 +1184,7 @@ class e2_test_setup : public e2_test_base
   {
     cfg                  = config_helpers::make_default_e2ap_config();
     cfg.e2sm_kpm_enabled = true;
+    cfg.e2sm_rc_enabled  = true;
 
     factory                        = timer_factory{timers, task_worker};
     e2_client                      = std::make_unique<dummy_e2_connection_client>();
@@ -1204,15 +1216,8 @@ class e2_test_setup : public e2_test_base
     e2sm_mngr->add_supported_ran_function(3, "1.3.6.1.4.1.53148.1.1.2.3");
     e2_subscription_mngr = std::make_unique<e2_subscription_manager_impl>(*e2sm_mngr);
     agent_notifier       = std::make_unique<dummy_e2_agent_mng>();
-    e2                   = std::make_unique<e2_impl>(test_logger,
-                                   cfg,
-                                   *agent_notifier,
-                                   factory,
-                                   *e2_client,
-                                   *e2_subscription_mngr,
-                                   *e2sm_mngr,
-                                   task_worker,
-                                   node_cfg_provider);
+    e2                   = std::make_unique<e2_impl>(
+        test_logger, *agent_notifier, factory, *e2_client, *e2_subscription_mngr, *e2sm_mngr, task_worker);
     // Packer allows to inject packed message into E2 interface.
     gw     = std::make_unique<dummy_sctp_association_sdu_notifier>();
     pcap   = std::make_unique<dummy_e2ap_pcap>();
@@ -1256,20 +1261,9 @@ public:
     });
   }
 
-  async_task<e2_setup_response_message> handle_e2_setup_request(e2_setup_request_message& request) override
+  async_task<e2_setup_response_message> handle_e2_setup_request(const e2_setup_request_message& /*request*/) override
   {
     logger.info("E2 setup request received");
-    return launch_async([](coro_context<async_task<e2_setup_response_message>>& ctx) {
-      CORO_BEGIN(ctx);
-      e2_setup_response_message response;
-      response.success = true;
-      CORO_RETURN(response);
-    });
-  }
-
-  async_task<e2_setup_response_message> start_initial_e2_setup_routine() override
-  {
-    logger.info("Starting initial E2 setup routine");
     return launch_async([](coro_context<async_task<e2_setup_response_message>>& ctx) {
       CORO_BEGIN(ctx);
       e2_setup_response_message response;
@@ -1282,6 +1276,14 @@ public:
   void start() override { logger.info("Starting dummy E2 interface"); }
 
   void stop() override { logger.info("Stopping dummy E2 interface"); }
+
+  async_task<void> handle_e2_node_initiated_removal_request() override
+  {
+    return launch_async([](coro_context<async_task<void>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN();
+    });
+  }
 
   e2_message last_msg;
 

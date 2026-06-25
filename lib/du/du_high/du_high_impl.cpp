@@ -4,11 +4,12 @@
 
 #include "du_high_impl.h"
 #include "adapters/adapters.h"
-#include "adapters/du_high_adapter_factories.h"
 #include "adapters/f1ap_adapters.h"
-#include "test_mode/f1ap_test_mode_adapter.h"
+#include "test_mode/du_test_mode_controller.h"
 #include "ocudu/du/du_high/du_high_clock_controller.h"
 #include "ocudu/du/du_high/du_manager/du_manager_factory.h"
+#include "ocudu/f1ap/du/f1ap_du_factory.h"
+#include "ocudu/mac/mac_factory.h"
 #include "ocudu/mac/mac_metrics_notifier.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/timers.h"
@@ -49,30 +50,42 @@ du_high_impl::du_high_impl(const du_high_configuration& config_, const du_high_d
   timers(dependencies.timer_ctrl->get_timer_manager()),
   adapters(std::make_unique<layer_connector>(timers, dependencies.exec_mapper->du_control_executor()))
 {
-  // Create layers
-  mac  = create_du_high_mac(mac_config{adapters->mac_ev_notifier,
-                                      dependencies.exec_mapper->ue_mapper(),
-                                      dependencies.exec_mapper->cell_mapper(),
-                                      dependencies.exec_mapper->du_control_executor(),
-                                      *dependencies.phy_adapter,
-                                      cfg.ran.mac_cfg,
-                                      *dependencies.mac_p,
-                                      *dependencies.timer_ctrl,
-                                      mac_config::metrics_config{cfg.metrics.period,
-                                                                 cfg.metrics.enable_mac,
-                                                                 cfg.metrics.enable_sched,
-                                                                 cfg.metrics.max_nof_sched_ue_events,
-                                                                 adapters->mac_ev_notifier},
-                                      cfg.ran.sched_cfg},
-                           cfg.test_cfg,
-                           cfg.ran.cells.size());
-  f1ap = create_du_high_f1ap(*dependencies.f1c_client,
-                             adapters->f1_to_du_notifier,
-                             dependencies.exec_mapper->du_control_executor(),
-                             dependencies.exec_mapper->ue_mapper(),
-                             adapters->f1ap_paging_notifier,
-                             timers,
-                             cfg.test_cfg);
+  if (cfg.test_cfg.test_ue.has_value()) {
+    test_mode_ctrl = std::make_unique<du_test_mode_controller>(*cfg.test_cfg.test_ue,
+                                                               *dependencies.f1c_client,
+                                                               *dependencies.phy_adapter,
+                                                               timers,
+                                                               dependencies.exec_mapper->du_control_executor(),
+                                                               cfg.ran.cells.size());
+  }
+
+  f1ap = create_f1ap(test_mode_ctrl ? test_mode_ctrl->get_f1c_client() : *dependencies.f1c_client,
+                     adapters->f1_to_du_notifier,
+                     dependencies.exec_mapper->du_control_executor(),
+                     dependencies.exec_mapper->ue_mapper(),
+                     adapters->f1ap_paging_notifier,
+                     timers);
+
+  mac = create_mac(mac_config{adapters->mac_ev_notifier,
+                              dependencies.exec_mapper->ue_mapper(),
+                              dependencies.exec_mapper->cell_mapper(),
+                              dependencies.exec_mapper->du_control_executor(),
+                              test_mode_ctrl ? test_mode_ctrl->get_phy_notifier() : *dependencies.phy_adapter,
+                              cfg.ran.mac_cfg,
+                              *dependencies.mac_p,
+                              *dependencies.timer_ctrl,
+                              mac_config::metrics_config{cfg.metrics.period,
+                                                         cfg.metrics.enable_mac,
+                                                         cfg.metrics.enable_sched,
+                                                         cfg.metrics.enable_sched_ue,
+                                                         cfg.metrics.max_nof_sched_ue_events,
+                                                         adapters->mac_ev_notifier},
+                              cfg.ran.sched_cfg});
+
+  if (test_mode_ctrl != nullptr) {
+    // In test mode, an adapting layer is placed in between MAC and other components.
+    mac = test_mode_ctrl->decorate(std::move(mac));
+  }
 
   du_mng = create_du_manager(du_manager_params{
       {cfg.ran.gnb_du_name, cfg.ran.gnb_du_id, 1, cfg.ran.cells, cfg.ran.srbs, cfg.ran.qos},
@@ -81,7 +94,7 @@ du_high_impl::du_high_impl(const du_high_configuration& config_, const du_high_d
        dependencies.exec_mapper->ue_mapper(),
        dependencies.exec_mapper->cell_mapper()},
       {*f1ap, *f1ap, f1ap->get_metrics_collector(), dependencies.f1_setup_notifier},
-      {*dependencies.f1u_gw},
+      {*dependencies.f1u_teid_allocator, *dependencies.f1u_gw},
       {mac->get_ue_control_info_handler(), *f1ap, *f1ap, *dependencies.rlc_p, dependencies.rlc_metrics_notif},
       {*mac, cfg.ran.sched_cfg},
       {cfg.metrics.period,
