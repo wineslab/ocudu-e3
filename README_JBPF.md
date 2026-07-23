@@ -97,10 +97,10 @@ The jbpf IPC **primary must be running before the gNB starts**:
    `/tmp/jbpf/jbpf_lcm_ipc`) when a dApp subscribes — the gNB only has to be
    up by the time the first subscription arrives.
 
-## 5. Containerized reference build
+<!-- ## 5. Containerized reference build
 
 A Dockerfile that reproduces this entire recipe end-to-end (both ocudu
 variants + E3Controller + libe3, on Ubuntu 22.04 with DPDK 25.11) is
 maintained in the workspace next to this repo at
 `ocudu_project/docker/Dockerfile.ocudu-jbpf`. When in doubt, that file is the
-executable version of this guide.
+executable version of this guide. -->
