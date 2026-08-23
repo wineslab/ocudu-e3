@@ -184,7 +184,8 @@ jobs:
           # install_dependencies.sh leaves the package lists stale, so jbpf's own
           # build dependencies have to be fetched against a fresh index.
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libelf-dev libpcap-dev
+          sudo apt-get install -y --no-install-recommends libelf-dev libpcap-dev \
+            libboost-dev libboost-program-options-dev libboost-filesystem-dev
 
       - name: Cache ccache
         uses: actions/cache@v4
