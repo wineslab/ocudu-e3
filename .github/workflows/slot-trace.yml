@@ -1,0 +1,218 @@
+# SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+# SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+
+# Build the slot-capture instrumentation both ways, and measure what it costs.
+#
+# The matrix leg is the one thing that has to vary: libe3's stage recorder is a
+# build-time decision (-DLIBE3_ENABLE_LATREC) that reaches us through libe3.pc's
+# Cflags, so "traced" and "untraced" are two different binaries rather than two
+# run modes. Building both is what stops the untraced path from rotting
+# unnoticed, and the untraced leg is what proves the stamps compile away.
+name: slot trace
+
+on:
+  push:
+    branches: [e3]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# libe3's latency-tracing branch. Pinned to a commit, not the branch head: the
+# branch is unmerged and gets rewritten, and the record layout plus the stage
+# catalog have to be the same ones the consumer was built against or the two
+# sides' records do not join. Moves to libe3 main once its latrec PR merges.
+env:
+  LIBE3_REF: a995d57
+
+jobs:
+  ablation:
+    name: ablation (latrec=${{ matrix.latrec }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        latrec: [ON, OFF]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential pkg-config git python3 python3-numpy \
+            nlohmann-json3-dev
+
+      # Headers-only consumer, so libe3 is built with every optional encoder and
+      # transport off. JSON stays on only because libe3 requires one encoder.
+      - name: Build and install libe3 (${{ matrix.latrec }})
+        run: |
+          git clone --no-checkout https://github.com/wineslab/libe3.git "$RUNNER_TEMP/libe3"
+          git -C "$RUNNER_TEMP/libe3" fetch --depth 50 origin feat/latency-tracing
+          git -C "$RUNNER_TEMP/libe3" checkout "$LIBE3_REF"
+          cmake -S "$RUNNER_TEMP/libe3" -B "$RUNNER_TEMP/libe3/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBE3_ENABLE_LATREC=${{ matrix.latrec }} \
+            -DLIBE3_BUILD_TESTS=OFF -DLIBE3_BUILD_EXAMPLES=OFF \
+            -DLIBE3_ENABLE_ASN1=OFF -DLIBE3_ENABLE_JSON=ON -DLIBE3_ENABLE_ZMQ=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/prefix"
+          cmake --build "$RUNNER_TEMP/libe3/build" -j"$(nproc)"
+          cmake --install "$RUNNER_TEMP/libe3/build"
+
+      # The gate, asserted rather than assumed. This is the whole reason this
+      # repository needs no switch of its own, so a libe3 that stopped exporting
+      # the definition has to fail here and not silently produce a build that
+      # records nothing.
+      - name: Check the gate reached us
+        run: |
+          export PKG_CONFIG_PATH="$RUNNER_TEMP/prefix/lib/pkgconfig"
+          cflags=$(pkg-config --cflags libe3)
+          echo "libe3 cflags: $cflags"
+          test -f "$RUNNER_TEMP/prefix/include/libe3/latrec.h"
+          if [ "${{ matrix.latrec }}" = "ON" ]; then
+            case "$cflags" in *-DLIBE3_ENABLE_LATREC*) ;; *) echo "::error::libe3 built with latrec but libe3.pc does not carry -DLIBE3_ENABLE_LATREC"; exit 1;; esac
+          else
+            case "$cflags" in *-DLIBE3_ENABLE_LATREC*) echo "::error::libe3 built without latrec but libe3.pc carries -DLIBE3_ENABLE_LATREC"; exit 1;; *) ;; esac
+          fi
+
+      - name: Build the benchmark
+        run: |
+          export PKG_CONFIG_PATH="$RUNNER_TEMP/prefix/lib/pkgconfig"
+          g++ -std=gnu++17 -O2 -Iinclude $(pkg-config --cflags libe3) \
+            -o "$RUNNER_TEMP/slot_trace_benchmark" \
+            tests/benchmarks/janus/slot_trace_benchmark.cpp
+
+      # An untraced build must carry none of the mechanism. Stated as "no
+      # defined or undefined latrec symbols" rather than "the string latrec does
+      # not appear": latrec.h's inline no-op stubs are still local, empty, and
+      # may leave a local symbol behind, so the stronger claim would be false.
+      - name: Check the untraced build carries no recorder
+        if: matrix.latrec == 'OFF'
+        run: |
+          if nm --defined-only --extern-only "$RUNNER_TEMP/slot_trace_benchmark" | grep -i latrec; then
+            echo "::error::untraced build exports latrec symbols"; exit 1
+          fi
+          if nm --undefined-only "$RUNNER_TEMP/slot_trace_benchmark" | grep -i latrec; then
+            echo "::error::untraced build references latrec symbols"; exit 1
+          fi
+
+      - name: Run the ablation
+        id: ablation
+        run: |
+          rm -rf "$RUNNER_TEMP/rings"
+          mkdir -p "$RUNNER_TEMP/rings"
+          # LATREC_DEFAULT_DIR is compiled in, so the run writes to /tmp/latrec;
+          # collect from there.
+          rm -rf /tmp/latrec
+          "$RUNNER_TEMP/slot_trace_benchmark" --batches 15 --slots 400 | tee "$RUNNER_TEMP/ablation.txt"
+          grep '^RESULT' "$RUNNER_TEMP/ablation.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      # Deadline misses are the number that decides whether this can run on a
+      # radio. Zero either way, or the instrumentation is not admissible.
+      - name: Check no deadline was missed
+        run: |
+          line=$(grep '^RESULT' "$RUNNER_TEMP/ablation.txt")
+          on=$(echo "$line" | tr ' ' '\n' | sed -n 's/^misses_on=//p')
+          off=$(echo "$line" | tr ' ' '\n' | sed -n 's/^misses_off=//p')
+          echo "deadline misses: on=$on off=$off"
+          if [ "$on" != "0" ] || [ "$off" != "0" ]; then
+            echo "::error::deadline misses on a slot path (on=$on off=$off)"; exit 1
+          fi
+
+      # Records lost off the front of a wrapped ring make any span across the
+      # wrap wrong, silently, so a capture that wrapped is not a capture.
+      - name: Convert the rings and check nothing wrapped
+        if: matrix.latrec == 'ON'
+        run: |
+          python3 "$RUNNER_TEMP/libe3/tools/latrec2csv.py" /tmp/latrec -o "$RUNNER_TEMP/csv"
+          python3 - <<'PY'
+          import csv, os, sys
+          path = os.path.join(os.environ["RUNNER_TEMP"], "csv", "rings.csv")
+          rows = list(csv.DictReader(open(path)))
+          if not rows:
+              sys.exit("no rings were produced")
+          bad = False
+          for r in rows:
+              print(r["ring"], "valid=", r["valid"], "wrapped=", r["wrapped"], "lost=", r["lost_records"])
+              if r["wrapped"] != "0" or r["lost_records"] != "0":
+                  bad = True
+          # The records have to land in ocudu.csv. A role latrec2csv.py's
+          # RING_COMPONENTS does not recognise is filed under other.csv, which
+          # is silent and would separate these records from the consumer's.
+          if not os.path.exists(os.path.join(os.environ["RUNNER_TEMP"], "csv", "ocudu.csv")):
+              sys.exit("records were not filed under ocudu.csv; check the ring role")
+          sys.exit("a ring wrapped" if bad else 0)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slot-trace-${{ matrix.latrec }}
+          path: |
+            ${{ runner.temp }}/ablation.txt
+            ${{ runner.temp }}/csv
+          if-no-files-found: ignore
+
+  gnb-build:
+    name: gNB build (latrec=${{ matrix.latrec }})
+    runs-on: ubuntu-24.04
+    # Cold, this is jbpf and its third-party tree (including the Prevail
+    # verifier) plus the gNB itself.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        latrec: [ON, OFF]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache ninja-build nlohmann-json3-dev
+          sudo docker/scripts/install_dependencies.sh
+          sudo apt-get install -y --no-install-recommends libelf-dev libpcap-dev gcc-multilib clang
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-jbpf-${{ matrix.latrec }}-${{ github.sha }}
+          restore-keys: ccache-jbpf-${{ matrix.latrec }}-
+
+      - name: Build and install libe3 (${{ matrix.latrec }})
+        run: |
+          git clone --no-checkout https://github.com/wineslab/libe3.git "$RUNNER_TEMP/libe3"
+          git -C "$RUNNER_TEMP/libe3" fetch --depth 50 origin feat/latency-tracing
+          git -C "$RUNNER_TEMP/libe3" checkout "$LIBE3_REF"
+          cmake -S "$RUNNER_TEMP/libe3" -B "$RUNNER_TEMP/libe3/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBE3_ENABLE_LATREC=${{ matrix.latrec }} \
+            -DLIBE3_BUILD_TESTS=OFF -DLIBE3_BUILD_EXAMPLES=OFF \
+            -DLIBE3_ENABLE_ASN1=OFF -DLIBE3_ENABLE_JSON=ON -DLIBE3_ENABLE_ZMQ=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/prefix"
+          cmake --build "$RUNNER_TEMP/libe3/build" -j"$(nproc)"
+          cmake --install "$RUNNER_TEMP/libe3/build"
+
+      - name: Patch jbpf's third-party submodules
+        run: ./apply_jbpf_patches.sh
+
+      # The build that matters: the instrumented translation unit compiled the
+      # way it is compiled on the radio, in both configurations.
+      - name: Build the gNB with jbpf
+        env:
+          PKG_CONFIG_PATH: ${{ runner.temp }}/prefix/lib/pkgconfig
+        run: |
+          export PATH="/usr/lib/ccache:${PATH}"
+          cmake -S . -B build -G Ninja \
+            -DENABLE_JBPF=ON -DENABLE_ZEROMQ=ON -DENABLE_UHD=OFF -DENABLE_DPDK=OFF \
+            -DBUILD_TESTING=OFF -DASSERT_LEVEL=MINIMAL -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)" --target gnb
