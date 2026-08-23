@@ -17,3 +17,7 @@ add_subdirectory(ofh)
 add_subdirectory(rlc)
 add_subdirectory(pdcp)
 add_subdirectory(support)
+
+if (ENABLE_JBPF)
+    add_subdirectory(janus)
+endif (ENABLE_JBPF)
