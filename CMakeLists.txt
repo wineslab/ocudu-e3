@@ -197,6 +197,40 @@ if (ENABLE_JBPF)
     include_directories(${CMAKE_SOURCE_DIR}/ocudu_janus/verifier/specs)
     include_directories(${CMAKE_SOURCE_DIR}/include/ocudu/janus)
 
+    # libe3's stage recorder, for the per-slot capture path.
+    #
+    # Headers only - latrec's explicit-ring API is static inline, so nothing is
+    # linked and the gNB takes on no runtime dependency on a library it has no
+    # other use for. What we need from the package is the header and its
+    # Cflags: LIBE3_ENABLE_LATREC is PUBLIC on libe3's own target and is
+    # therefore reflected in libe3.pc, so whether the gNB records is decided by
+    # which libe3 these headers came from and by nothing on this side. There is
+    # deliberately no ocudu option and no environment variable for it.
+    #
+    # Required rather than optional because the jbpf capture path exists only to
+    # feed an E3 controller, which links libe3 regardless: making it optional
+    # would buy a configuration nobody deploys at the cost of a second switch.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBE3 REQUIRED libe3)
+    # A libe3 predating the recorder installs a package without the header, and
+    # the failure that produces otherwise is a confusing include error deep in
+    # the PHY. Check for it here instead.
+    find_path(LIBE3_LATREC_INCLUDE_DIR libe3/latrec.h HINTS ${LIBE3_INCLUDE_DIRS} NO_DEFAULT_PATH)
+    if (NOT LIBE3_LATREC_INCLUDE_DIR)
+        message(FATAL_ERROR
+            "libe3 was found but does not install libe3/latrec.h, so the per-slot "
+            "capture path cannot be instrumented. Install a libe3 that ships the "
+            "stage recorder (see README_JBPF.md).")
+    endif ()
+    include_directories(SYSTEM ${LIBE3_INCLUDE_DIRS})
+    # CFLAGS_OTHER is where the -D's land; the -I's are in INCLUDE_DIRS above.
+    add_compile_options(${LIBE3_CFLAGS_OTHER})
+    if ("-DLIBE3_ENABLE_LATREC" IN_LIST LIBE3_CFLAGS_OTHER)
+        message(STATUS "Janus: libe3 ${LIBE3_VERSION} was built with latrec; slot stages will be recorded")
+    else ()
+        message(STATUS "Janus: libe3 ${LIBE3_VERSION} was built without latrec; slot stages compile out")
+    endif ()
+
     message(STATUS "Janus (jbpf) hooks enabled. Building jbpf from external/jbpf")
 endif (ENABLE_JBPF)
 
