@@ -10,9 +10,11 @@
 # unnoticed, and the untraced leg is what proves the stamps compile away.
 name: slot trace
 
+# Every push, matching ccpp.yml: a change to this path is most often developed on
+# a branch of a fork, where a base-branch filter would mean it never ran until
+# it was too late to be useful.
 on:
   push:
-    branches: [e3]
   pull_request:
   workflow_dispatch:
 
