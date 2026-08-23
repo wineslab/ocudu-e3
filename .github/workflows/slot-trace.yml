@@ -221,4 +221,11 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DENABLE_JBPF=ON -DENABLE_ZEROMQ=ON -DENABLE_UHD=OFF -DENABLE_DPDK=OFF \
             -DBUILD_TESTING=OFF -DASSERT_LEVEL=MINIMAL -DCMAKE_BUILD_TYPE=Release
+          # jbpf's two ExternalProjects first, explicitly. It wires both in behind
+          # IMPORTED targets, and add_dependencies() on an IMPORTED target puts no
+          # edge in the Ninja graph, so asking for `gnb` alone stops at generation
+          # time with "libubpf.a / libck.a missing and no known rule to make it". A
+          # pre-existing gap in jbpf's own CMake, worked around here rather than
+          # patched in a submodule.
+          cmake --build build -j"$(nproc)" --target ubpf jbpf_libck
           cmake --build build -j"$(nproc)" --target gnb
