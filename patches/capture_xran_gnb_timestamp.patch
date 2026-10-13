@@ -1,0 +1,75 @@
+diff --git a/include/ocudu/janus/jbpf_srsran_contexts.h b/include/ocudu/janus/jbpf_srsran_contexts.h
+index 8ce3e26d5c..fd7bafc607 100644
+--- a/include/ocudu/janus/jbpf_srsran_contexts.h
++++ b/include/ocudu/janus/jbpf_srsran_contexts.h
+@@ -26,7 +26,14 @@ typedef uint8_t JbpfDirection_t;
+ struct jbpf_ran_ofh_ctx {
+   uint64_t data; /* Pointer to beginning of buffer with int16_t IQ samples */
+   uint64_t data_end; /* Pointer to end+1 of packet */
+-  uint64_t meta_data; /* Used by ebpf */
++  /* Repurposed on the ecpri_iq path: carries the gNB-side CLOCK_REALTIME ns
++   * hand-off timestamp stamped by ofh_message_receiver_impl right before the
++   * hook fires. Anchor for RAN -> codelet latency (paired with
++   * jbpf_time_get_ns() in the codelet). Held in meta_data instead of a new
++   * field because the SDK verifier's OFH ctx descriptor is a fixed 27-byte
++   * layout; extending the struct would require rebuilding srsran_verifier_cli
++   * from source. Zero if the hook was fired by a caller that doesn't stamp. */
++  uint64_t meta_data;
+   /* Combination of frame, slot and cell_id, provide a unique
+      context for an execution pipeline */
+   uint16_t ctx_id; /* Context id (could be implementation specific) */
+diff --git a/lib/ofh/receiver/ofh_message_receiver_impl.cpp b/lib/ofh/receiver/ofh_message_receiver_impl.cpp
+index 34801d8d22..313e146492 100644
+--- a/lib/ofh/receiver/ofh_message_receiver_impl.cpp
++++ b/lib/ofh/receiver/ofh_message_receiver_impl.cpp
+@@ -8,6 +8,7 @@
+ 
+ #ifdef JBPF_ENABLED
+ #include "jbpf_srsran_hooks.h"
++#include <time.h>
+ DEFINE_JBPF_HOOK(capture_xran_packet);
+ #endif
+ 
+@@ -54,7 +55,16 @@ void message_receiver_impl::process_new_frame(ether::unique_rx_buffer buffer)
+ {
+   span<const uint8_t> payload = buffer.data();
+   #ifdef JBPF_ENABLED
+-  hook_capture_xran_packet(payload.data(), payload.size(), 1, JBPF_UL);
++  /* Stamp CLOCK_REALTIME ns right before the hook fires so gnb_ts_ns
++   * captures the RAN hand-off moment. Same clock domain as
++   * jbpf_time_get_ns() on the codelet side, so gnb_to_codelet_us
++   * subtracts cleanly. */
++  struct timespec ts;
++  clock_gettime(CLOCK_REALTIME, &ts);
++  const uint64_t gnb_ts_ns =
++      static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
++      static_cast<uint64_t>(ts.tv_nsec);
++  hook_capture_xran_packet(payload.data(), payload.size(), 1, JBPF_UL, gnb_ts_ns);
+   #endif
+ 
+   // Creates and starts the execution time measurer.
+diff --git a/ocudu_janus/verifier/specs/jbpf_srsran_hooks.h b/ocudu_janus/verifier/specs/jbpf_srsran_hooks.h
+index 7dbbb8f23b..8ebb58b604 100644
+--- a/ocudu_janus/verifier/specs/jbpf_srsran_hooks.h
++++ b/ocudu_janus/verifier/specs/jbpf_srsran_hooks.h
+@@ -26,13 +26,19 @@ DECLARE_JBPF_HOOK(capture_xran_packet,
+             const void* xran_packet,
+             uint32_t packet_len,
+             uint16_t ctx_id,
+-            JbpfDirection_t direction
++            JbpfDirection_t direction,
++            uint64_t gnb_ts_ns
+             ),
+         HOOK_ASSIGN(
+             ctx.ctx_id = ctx_id;
+             ctx.data = (uint64_t)xran_packet;
+             ctx.data_end = (uint64_t) ((uint8_t *)xran_packet + packet_len);
+             ctx.direction = direction;
++            /* Piggyback the RAN-side hand-off timestamp on meta_data;
++             * the ecpri_iq_collect codelet reads it back as gnb_ts_ns.
++             * See jbpf_ran_ofh_ctx.meta_data comment for the rationale
++             * (SDK verifier's fixed 27-byte OFH ctx layout). */
++            ctx.meta_data = gnb_ts_ns;
+             )
+         )
+ 

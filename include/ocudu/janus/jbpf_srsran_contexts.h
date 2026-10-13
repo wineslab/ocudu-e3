@@ -63,10 +63,11 @@ struct jbpf_ran_slot_ctx {
   uint64_t data;             /* Pointer to cbf16_t IQ snapshot */
   uint64_t data_end;         /* Pointer to end+1 of snapshot buffer */
   uint64_t meta_data;        /* Used by ebpf */
-  /* CLOCK_REALTIME ns stamped by the gNB at hook fire (right before
+  /* CLOCK_MONOTONIC ns stamped by the gNB at hook fire (right before
    * the slot is handed off to the codelet). Anchor for RAN -> dApp
    * end-to-end latency measurement. Same clock as jbpf_time_get_ns()
-   * (see external/jbpf/src/core/jbpf_helper_impl.c). */
+   * once jbpf_patches/jbpf_monotonic_time.patch is applied (see
+   * external/jbpf/src/core/jbpf_helper_impl.c). */
   uint64_t gnb_ts_ns;
   uint16_t ctx_id;           /* Sector id */
   uint16_t sfn;              /* 3GPP system frame number */

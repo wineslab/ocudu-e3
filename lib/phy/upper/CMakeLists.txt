@@ -50,7 +50,9 @@ target_link_libraries(ocudu_upper_phy
 # Plain form (no PRIVATE keyword) to match the existing target_link_libraries
 # call above - CMake forbids mixing keyword and plain on the same target.
 if (ENABLE_JBPF)
-    target_link_libraries(ocudu_upper_phy jbpf)
+    # ocudu_janus_e3 provides e3_set_src_window(), called just before the hook
+    # fires so the publish helper can bound-check the source at runtime.
+    target_link_libraries(ocudu_upper_phy jbpf ocudu_janus_e3)
 endif (ENABLE_JBPF)
 
 add_library(log_likelihood_ratio log_likelihood_ratio.cpp)

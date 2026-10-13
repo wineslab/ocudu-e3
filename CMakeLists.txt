@@ -197,6 +197,13 @@ if (ENABLE_JBPF)
     include_directories(${CMAKE_SOURCE_DIR}/ocudu_janus/verifier/specs)
     include_directories(${CMAKE_SOURCE_DIR}/include/ocudu/janus)
 
+    # E3 publish helpers: let a verified codelet hand a decompressed uplink slot
+    # to the E3Controller-owned /e3_ran_buffers region in the dApp's fp16 format.
+    # Its own target because the convert loop needs AVX2+F16C scoped to it —
+    # see ocudu_janus/e3/CMakeLists.txt for why -march=native is not enough.
+    add_subdirectory(ocudu_janus/e3)
+    include_directories(${CMAKE_SOURCE_DIR}/ocudu_janus/e3)
+
     message(STATUS "Janus (jbpf) hooks enabled. Building jbpf from external/jbpf")
 endif (ENABLE_JBPF)
 

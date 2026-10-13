@@ -35,6 +35,11 @@ if (DPDK_FOUND)
     target_link_libraries(gnb_base PRIVATE hal_dpdk)
 endif (DPDK_FOUND)
 
+# gnb.cpp registers the E3 publish helpers with the jbpf agent after jbpf_init().
+if (ENABLE_JBPF)
+    target_link_libraries(gnb_base PRIVATE ocudu_janus_e3)
+endif (ENABLE_JBPF)
+
 target_include_directories(gnb_base PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/external)
 
 # Default gNB target with dynamic split.

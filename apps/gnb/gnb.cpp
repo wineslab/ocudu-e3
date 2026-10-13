@@ -62,6 +62,7 @@
 #ifdef JBPF_ENABLED
 #include "jbpf.h"
 #include "jbpf_srsran_defs.h"
+#include "jbpf_e3_publish.h"
 
 static void
 io_channel_send_output(jbpf_io_stream_id_t* stream_id, void** bufs, int num_bufs, void* ctx)
@@ -374,6 +375,27 @@ int main(int argc, char** argv)
 
   // Register the callback invoked for every codelet output message.
   jbpf_register_io_output_cb(io_channel_send_output);
+
+  // Register the E3 publish helpers (e3_attach / e3_publish_slot).
+  //
+  // MUST be after jbpf_init() and BEFORE any codeletset is loaded:
+  // jbpf_register_helper_functions() copies the helper table into each VM at
+  // load time, so a codelet loaded earlier would not see these and would fail
+  // with "call to nonexistent function".
+  //
+  // Non-fatal: without them the slot codelet cannot publish, but the rest of
+  // the RAN is unaffected, and the L1 service model is only ever loaded on a
+  // dApp subscription.
+  if (ocudu::janus::e3_register_publish_helpers() != 0) {
+    gnb_logger.warning("E3 publish helpers not registered; the per-slot L1 codelet will fail to load");
+  }
+  if (!ocudu::janus::e3_publish_has_vector_path()) {
+    // Worth an error rather than a note: the scalar convert measures ~47x
+    // slower (2,490 us for a 4-port slot against a 500 us slot period) and runs
+    // inline in the PHY RX thread. This should be unreachable — the build
+    // #errors without a vector path — but say so loudly if it ever is not.
+    gnb_logger.error("E3 publish helper built WITHOUT a vector convert path; expect RX-thread overruns");
+  }
 #endif
 
   // Buffer pool service.

@@ -16,6 +16,7 @@
 #include <utility>
 
 #ifdef JBPF_ENABLED
+#include "jbpf_e3_publish.h"
 #include "jbpf_srsran_hooks.h"
 #include <time.h>
 DEFINE_JBPF_HOOK(capture_uplink_slot);
@@ -42,10 +43,14 @@ void upper_phy_rx_symbol_handler_impl::handle_rx_symbol(const upper_phy_rx_symbo
   // Fire the slot-level capture hook once per slot, on the last symbol.
   // We hand the codelet the resource grid's raw storage pointer - no
   // per-symbol memcpy on the gnb side. The grid is contiguous cbf16_t
-  // memory laid out as [port][symbol][subcarrier]; the codelet copies
-  // it out within the hook body. Grid lifetime is the slot-processor
-  // window - the demod pipeline above is about to consume the same
-  // buffer, so the pointer is live for the hook's duration.
+  // memory laid out as [port][symbol][subcarrier]. Grid lifetime is the
+  // slot-processor window - the demod pipeline above is about to consume
+  // the same buffer, so the pointer is live for the hook's duration.
+  //
+  // The codelet no longer copies the grid itself: it calls the native
+  // e3_publish_slot helper, which converts cbf16 -> fp16 and writes the
+  // row. eBPF cannot do that job - its ISA has no SIMD and no floating
+  // point at all, so it cannot express the conversion.
   //
   // Gated on is_valid: a partial/invalid slot (PRACH-only TDD pattern,
   // dropped last symbol) is skipped rather than published with stale
@@ -58,15 +63,17 @@ void upper_phy_rx_symbol_handler_impl::handle_rx_symbol(const upper_phy_rx_symbo
     const cbf16_t* buf       = reader.get_raw_storage();
     const uint32_t sz        = static_cast<uint32_t>(
         static_cast<size_t>(nof_ports) * nof_symbols * nof_subc * sizeof(cbf16_t));
-    // RAN-side anchor for end-to-end latency. CLOCK_REALTIME matches
-    // jbpf_time_get_ns() (CLOCK_REALTIME ns) so codelet-side codelet_ts_ns
-    // and this gnb_ts_ns subtract cleanly. Captured immediately before
-    // the hook fires so it represents the moment the gNB hands the slot
-    // off to the codelet.
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     const uint64_t gnb_ts_ns =
         static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+    // Publish the window the helper is allowed to read from, so the source
+    // bound is enforced at RUNTIME and not only proven offline. This matters
+    // because the gNB does no verification at load time (ubpf only, and its
+    // JIT emits no memory bounds checks) - the offline verifier is a build-time
+    // gate, and nothing guarantees the loaded object passed through it.
+    ocudu::janus::e3_set_src_window(buf, sz);
+
     hook_capture_uplink_slot(
         buf,
         sz,
