@@ -217,8 +217,7 @@ h_e3_attach(std::uint64_t cfg_, std::uint64_t cfg_len, std::uint64_t, std::uint6
     std::printf("[e3_publish] attached %s: %u buffers x %u rows x %u B "
                 "(%u ants x %u sym x %u subc), scale=%g, epoch=%u, vector=%s\n",
                 name, kNumBuffers, g_region.rows_per_buf, g_region.row_bytes, nof_ants, cfg->nof_symbols,
-                cfg->nof_subcarriers, static_cast<double>(cfg->scale), cfg->epoch,
-                e3_convert::has_vector_path() ? "AVX2+F16C" : "SCALAR(!!)");
+                cfg->nof_subcarriers, static_cast<double>(cfg->scale), cfg->epoch, e3_convert::vector_path_name());
     return 0;
 }
 
@@ -329,6 +328,12 @@ e3_publish_has_vector_path()
     return e3_convert::has_vector_path();
 }
 
+const char*
+e3_publish_vector_path_name()
+{
+    return e3_convert::vector_path_name();
+}
+
 int
 e3_register_publish_helpers()
 {
@@ -355,7 +360,7 @@ e3_register_publish_helpers()
     }
 
     std::printf("[e3_publish] registered e3_attach=%d e3_publish_slot=%d, convert path=%s\n", JBPF_E3_ATTACH_ID,
-                JBPF_E3_PUBLISH_SLOT_ID, e3_convert::has_vector_path() ? "AVX2+F16C" : "SCALAR(!!)");
+                JBPF_E3_PUBLISH_SLOT_ID, e3_convert::vector_path_name());
     return 0;
 }
 

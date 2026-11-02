@@ -34,6 +34,11 @@ if (DPDK_FOUND)
     endif(DEFINED ENV{DPDK_DIR})
 endif (DPDK_FOUND)
 
+if (DPDK_FOUND AND ${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+    # Without this, janus does not build on aarch64.
+    list(FILTER DPDK_CFLAGS EXCLUDE REGEX "^-march=")
+endif ()
+
 if (DPDK_FOUND)
     set(DPDK_LIBRARIES ${DPDK_LDFLAGS})
     message(STATUS "DPDK LIBRARIES: " ${DPDK_LIBRARIES})

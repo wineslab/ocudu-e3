@@ -148,7 +148,7 @@ int
 main()
 {
     std::printf("test_jbpf_e3_publish\n");
-    std::printf("vector path: %s\n\n", e3_publish_has_vector_path() ? "AVX2+F16C" : "SCALAR");
+    std::printf("vector path: %s\n\n", e3_publish_vector_path_name());
 
     std::size_t total = 0;
     void*       region = make_region(total);

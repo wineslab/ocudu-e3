@@ -52,11 +52,13 @@ int e3_register_publish_helpers();
 void e3_set_src_window(const void* base, std::uint32_t len);
 
 /*
- * True if a vector (AVX2+F16C) convert path was compiled in. Log at startup:
- * the scalar fallback is 47x slower — 2,490 us for a 4-port slot against a
- * 500 us slot period — and is otherwise completely invisible.
+ * True if a vector convert path (AVX2+F16C on x86, NEON on aarch64) was compiled
+ * in. Log it at startup.
  */
 bool e3_publish_has_vector_path();
+
+/* Its name for the log: "AVX2+F16C", "NEON" or "SCALAR(!!)". */
+const char* e3_publish_vector_path_name();
 
 } // namespace janus
 } // namespace ocudu
