@@ -7,7 +7,7 @@
 #
 # Equivalent to external/jbpf/init_and_patch_submodules.sh minus its rm +
 # re-clone of the submodules (unnecessary after a fresh recursive init), plus
-# the core patch that script knows nothing about.
+# the core patches that script knows nothing about.
 # Idempotent: already-patched trees are detected and skipped, so re-running
 # is always safe.
 set -euo pipefail
@@ -98,5 +98,9 @@ apply_patch 3p/ebpf-verifier ebpf_verifier.patch
 # unpatched puts codelet_ts_ns in a different epoch from gnb_ts_ns:
 # gnb_to_codelet_us then comes out silently wrong rather than failing.
 apply_patch .                jbpf_monotonic_time.patch "${OURS_DIR}"
+
+# jbpf core: jbpf_io_utils.c calls send() and recv() without <sys/socket.h>,
+# which GCC 14 and later reject as implicit declarations.
+apply_patch .                jbpf_io_socket_include.patch "${OURS_DIR}"
 
 echo "==> All jbpf patches applied."

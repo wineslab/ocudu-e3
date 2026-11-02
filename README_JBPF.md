@@ -79,16 +79,18 @@ The script ([apply_jbpf_patches.sh](apply_jbpf_patches.sh)) applies:
 - this repository's `jbpf_patches/jbpf_monotonic_time.patch`, to jbpf itself.
   With it, `jbpf_time_get_ns()` reads `CLOCK_MONOTONIC`, the clock the gNB
   hook, the E3Controller and the dApp use. Without it the codelet's timestamps
-  are in another epoch, and latency numbers come out silently wrong.
+  are in another epoch, and latency numbers come out silently wrong;
+- this repository's `jbpf_patches/jbpf_io_socket_include.patch`, to jbpf
+  itself, so jbpf builds with GCC 14 and later.
 
 It is idempotent (already-patched trees are skipped), and it uses `git apply`,
 or `patch(1)` on trees copied without `.git`. It replaces
 `external/jbpf/init_and_patch_submodules.sh`, minus that script's `rm` +
 re-clone step (unnecessary after a fresh `--recursive` init) and plus the
-monotonic patch. jbpf's usual configure-time auto-init is deliberately disabled
-by our top-level CMake (`INITIALIZE_SUBMODULES=OFF`), so this step is required.
-The E3Controller's `build.sh` runs the same script over this tree, which does
-nothing once it has run.
+two patches of this repository. jbpf's usual configure-time auto-init is
+deliberately disabled by our top-level CMake (`INITIALIZE_SUBMODULES=OFF`), so
+this step is required. The E3Controller's `build.sh` runs the same script over
+this tree, which does nothing once it has run.
 
 ## 3. Build
 
