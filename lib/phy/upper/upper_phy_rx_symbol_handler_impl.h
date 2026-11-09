@@ -7,6 +7,8 @@
 #include "ocudu/phy/support/shared_resource_grid.h"
 #include "ocudu/phy/upper/uplink_slot_processor.h"
 #include "ocudu/phy/upper/upper_phy_rx_symbol_handler.h"
+#include "ocudu/ran/tdd/tdd_ul_dl_config.h"
+#include <optional>
 
 namespace ocudu {
 
@@ -19,7 +21,10 @@ namespace ocudu {
 class upper_phy_rx_symbol_handler_impl : public upper_phy_rx_symbol_handler
 {
 public:
-  upper_phy_rx_symbol_handler_impl(uplink_slot_processor_pool& ul_processor_pool_);
+  /// \param tdd_pattern_ TDD pattern of the cell, empty for FDD. Used to tell the capture_uplink_slot hook which
+  ///                     symbols of the slot are uplink.
+  upper_phy_rx_symbol_handler_impl(uplink_slot_processor_pool&            ul_processor_pool_,
+                                   std::optional<tdd_ul_dl_config_common> tdd_pattern_ = std::nullopt);
 
   // See interface for documentation.
   void handle_rx_symbol(const upper_phy_rx_symbol_context& context,
@@ -32,6 +37,8 @@ public:
 private:
   /// Uplink processor pool.
   uplink_slot_processor_pool& ul_processor_pool;
+  /// TDD pattern of the cell, empty for FDD.
+  std::optional<tdd_ul_dl_config_common> tdd_pattern;
 };
 
 } // namespace ocudu

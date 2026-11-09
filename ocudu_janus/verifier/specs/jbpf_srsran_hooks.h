@@ -84,7 +84,8 @@ DECLARE_JBPF_HOOK(capture_uplane_iq,
  * decompressed (RU did the BFP decompression) and laid out in the
  * resource grid's natural order. No eCPRI/Open Fronthaul parsing
  * required on the codelet side; metadata (sfn, subframe, slot, sector,
- * grid dimensions) comes through the ctx struct.
+ * grid dimensions, which symbols are uplink, how many UEs the slot expects
+ * on PUSCH, PUCCH and SRS) comes through the ctx struct.
  *
  * Buffer lifetime: the snapshot is owned by the upper_phy_rx_symbol_
  * handler instance and reused across slots. The codelet must finish
@@ -104,6 +105,10 @@ DECLARE_JBPF_HOOK(capture_uplink_slot,
             uint16_t nof_ports,
             uint16_t nof_symbols,
             uint16_t nof_subcarriers,
+            uint16_t valid_symbol_mask,
+            uint8_t n_ue,
+            uint8_t n_pucch,
+            uint8_t n_srs_ue,
             uint16_t sector_id,
             JbpfDirection_t direction
             ),
@@ -118,6 +123,10 @@ DECLARE_JBPF_HOOK(capture_uplink_slot,
             ctx.nof_ports = nof_ports;
             ctx.nof_symbols = nof_symbols;
             ctx.nof_subcarriers = nof_subcarriers;
+            ctx.valid_symbol_mask = valid_symbol_mask;
+            ctx.n_ue = n_ue;
+            ctx.n_pucch = n_pucch;
+            ctx.n_srs_ue = n_srs_ue;
             ctx.direction = direction;
             )
         )

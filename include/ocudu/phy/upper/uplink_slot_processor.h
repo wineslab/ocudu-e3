@@ -8,6 +8,7 @@
 #pragma once
 
 #include "ocudu/phy/support/shared_prach_buffer.h"
+#include <optional>
 
 namespace ocudu {
 
@@ -18,6 +19,16 @@ struct srs_estimator_configuration;
 struct resource_grid_context;
 class shared_resource_grid;
 class uplink_pdu_slot_repository;
+
+/// Number of uplink reception requests of a slot, by channel.
+struct uplink_slot_reception_count {
+  /// PUSCH receptions, one for each scheduled UE.
+  unsigned nof_pusch = 0;
+  /// PUCCH receptions. PUCCH Format 1 receptions that share a configuration count once for each UE.
+  unsigned nof_pucch = 0;
+  /// SRS receptions.
+  unsigned nof_srs = 0;
+};
 
 /// \brief Uplink slot processor.
 ///
@@ -51,6 +62,15 @@ public:
 
   /// Discards the slot processing due to an error.
   virtual void discard_slot() = 0;
+
+  /// \brief Gets the number of reception requests of a slot, by channel.
+  ///
+  /// The count covers every request of the slot, also the ones already processed or discarded, so it is complete on
+  /// the last symbol of the slot.
+  ///
+  /// \param[in] slot Slot the count is for.
+  /// \return The count, or \c std::nullopt if the processor does not hold the requests of the slot.
+  virtual std::optional<uplink_slot_reception_count> get_reception_count(slot_point slot) const = 0;
 };
 
 /// \brief Pool of uplink processors.

@@ -742,4 +742,63 @@ TEST_F(UplinkProcessorFixture, pusch_discard_slot_after_stop)
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
 }
 
+TEST_F(UplinkProcessorFixture, reception_count)
+{
+  // Get PDU repository, add PDUs and release repository. Keep the grid alive until the end of the test.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  repository->add_pusch_pdu(pusch_pdu);
+  repository->add_pucch_pdu(pucch_pdu);
+  shared_resource_grid grid = repository.release();
+
+  // The count covers the requests before any symbol arrives.
+  std::optional<uplink_slot_reception_count> count = ul_processor->get_slot_processor(slot).get_reception_count(slot);
+  ASSERT_TRUE(count.has_value());
+  ASSERT_EQ(count->nof_pusch, 1U);
+  ASSERT_EQ(count->nof_pucch, 1U);
+  ASSERT_EQ(count->nof_srs, 0U);
+
+  // The processor does not hold the requests of another slot.
+  ASSERT_FALSE(ul_processor->get_slot_processor(slot).get_reception_count(slot + 1).has_value());
+
+  // Receive the slot and process every PDU. The processor has no pending request left, so the alternative processor
+  // answers, and the count is still the one of the slot.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(max_nof_symbols - 1, true);
+  pusch_executor.run_pending_tasks();
+  pucch_executor.run_pending_tasks();
+  count = ul_processor->get_slot_processor(slot).get_reception_count(slot);
+  ASSERT_TRUE(count.has_value());
+  ASSERT_EQ(count->nof_pusch, 1U);
+  ASSERT_EQ(count->nof_pucch, 1U);
+  ASSERT_EQ(count->nof_srs, 0U);
+}
+
+TEST_F(UplinkProcessorFixture, reception_count_empty_slot)
+{
+  // A slot requested with no PDU, as with allow_request_on_empty_ul_tti.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  shared_resource_grid              grid       = repository.release();
+
+  const std::optional<uplink_slot_reception_count> count =
+      ul_processor->get_slot_processor(slot).get_reception_count(slot);
+  ASSERT_TRUE(count.has_value());
+  ASSERT_EQ(count->nof_pusch, 0U);
+  ASSERT_EQ(count->nof_pucch, 0U);
+  ASSERT_EQ(count->nof_srs, 0U);
+}
+
+TEST_F(UplinkProcessorFixture, reception_count_discarded_slot)
+{
+  // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  repository->add_pusch_pdu(pusch_pdu);
+  shared_resource_grid grid = repository.release();
+
+  // An invalid symbol discards the requests, but the UE still transmitted: the count keeps them.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(0, false);
+  const std::optional<uplink_slot_reception_count> count =
+      ul_processor->get_slot_processor(slot).get_reception_count(slot);
+  ASSERT_TRUE(count.has_value());
+  ASSERT_EQ(count->nof_pusch, 1U);
+}
+
 } // namespace

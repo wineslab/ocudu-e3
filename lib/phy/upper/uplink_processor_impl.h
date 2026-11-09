@@ -202,6 +202,9 @@ private:
   // See uplink_slot_processor interface for documentation.
   void discard_slot() override;
 
+  // See uplink_slot_processor interface for documentation.
+  std::optional<uplink_slot_reception_count> get_reception_count(slot_point slot) const override;
+
   /// \brief Processes the physical layer PDUs associated to the received symbols.
   ///
   /// Retrieves the PDUs by which the last symbol in the allocation matches the given \c end_symbol_index and forwards

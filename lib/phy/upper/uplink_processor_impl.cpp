@@ -562,6 +562,26 @@ void uplink_processor_impl::discard_slot()
   state_machine.finish_discard_slot();
 }
 
+std::optional<uplink_slot_reception_count> uplink_processor_impl::get_reception_count(slot_point slot) const
+{
+  if (slot != current_slot) {
+    return std::nullopt;
+  }
+
+  // The repository keeps the requests of the slot until a new slot is configured, so the count also covers the
+  // requests that were already processed or discarded.
+  uplink_slot_reception_count count;
+  for (unsigned i_symbol = 0; i_symbol != MAX_NSYMB_PER_SLOT; ++i_symbol) {
+    count.nof_pusch += static_cast<unsigned>(pdu_repository.get_pusch_pdus(i_symbol).size());
+    count.nof_pucch += static_cast<unsigned>(pdu_repository.get_pucch_pdus(i_symbol).size());
+    for (const auto& collection : pdu_repository.get_pucch_f1_repository(i_symbol)) {
+      count.nof_pucch += static_cast<unsigned>(collection.ue_contexts.size());
+    }
+    count.nof_srs += static_cast<unsigned>(pdu_repository.get_srs_pdus(i_symbol).size());
+  }
+  return count;
+}
+
 std::atomic<unsigned>& uplink_processor_impl::get_grid_ref_counter()
 {
   static std::vector<std::unique_ptr<std::atomic<unsigned>>> ref_counters;

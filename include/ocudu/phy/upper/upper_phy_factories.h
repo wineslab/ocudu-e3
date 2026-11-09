@@ -286,6 +286,9 @@ struct upper_phy_factory_configuration {
   std::optional<std::string> phy_tap_arguments;
   /// Informs the PHY tap plugin if the TDD configuration if present.
   std::optional<tdd_ul_dl_config_common> phy_tap_tdd_pattern;
+  /// TDD pattern of the cell, empty for FDD. The RX symbol handler tells the capture_uplink_slot jbpf hook which
+  /// symbols of each slot are uplink.
+  std::optional<tdd_ul_dl_config_common> tdd_pattern;
   /// \brief LDPC encoder type.
   ///
   /// Use of these options:
@@ -394,8 +397,11 @@ public:
   virtual std::unique_ptr<upper_phy_rx_symbol_handler> create(uplink_slot_processor_pool& ul_processor_pool_) = 0;
 };
 
-/// Creates an RX symbol handler factory.
-std::shared_ptr<upper_phy_rx_symbol_handler_factory> create_rx_symbol_handler_factory();
+/// \brief Creates an RX symbol handler factory.
+/// \param tdd_pattern TDD pattern of the cell, empty for FDD. Tells the capture_uplink_slot jbpf hook which symbols of a
+///                    slot are uplink.
+std::shared_ptr<upper_phy_rx_symbol_handler_factory>
+create_rx_symbol_handler_factory(std::optional<tdd_ul_dl_config_common> tdd_pattern = std::nullopt);
 
 /// \brief Creates an RX symbol handler printer decorator factory.
 ///

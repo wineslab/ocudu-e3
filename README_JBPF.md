@@ -150,6 +150,24 @@ the same time. Run one after the other.
    serves LCM at `<jbpf_run_path>/<jbpf_namespace>/<jbpf_lcm_ipc_name>`, here
    `/dev/shm/jbpf/jbpf_lcm_ipc`. The E3Controller derives the same path from
    its run path unless `jbpf.lcm_socket_path` is set in its config.
+4. For sensing, the dApp often wants the uplink slots that no UE transmits in.
+   - **Capture the empty slots.** By default the gNB asks the RU only for
+     uplink slots that have something scheduled, so an empty slot never
+     reaches the hook. To capture them too, set:
+
+     ```yaml
+     expert_phy:
+       allow_request_on_empty_uplink_slot: true
+     ```
+
+     With a Foxconn RU, also set `tdd_ul_dl_cfg.nof_ul_symbols: 0`: that RU
+     breaks when it is asked for uplink in the special slot.
+   - **Tell the codelet who transmits.** `capture_uplink_slot` gives the codelet
+     the slot's expected receptions in `n_ue` (UEs with PUSCH), `n_pucch` and
+     `n_srs_ue`. All three are 0 when no UE transmits in the slot, and they are
+     `JBPF_SLOT_COUNT_UNKNOWN` when the PHY does not hold the slot's requests.
+   - **Turn on the filter.** With `slot_filter.ue_free_only: true`, the
+     E3Controller's slot codelet publishes only the slots where all three are 0.
 
 <!-- ## 5. Containerized reference build
 

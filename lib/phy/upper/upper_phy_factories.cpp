@@ -316,11 +316,19 @@ private:
 class upper_phy_rx_symbol_handler_factory_impl : public upper_phy_rx_symbol_handler_factory
 {
 public:
+  explicit upper_phy_rx_symbol_handler_factory_impl(std::optional<tdd_ul_dl_config_common> tdd_pattern_) :
+    tdd_pattern(std::move(tdd_pattern_))
+  {
+  }
+
   // See interface for documentation.
   std::unique_ptr<upper_phy_rx_symbol_handler> create(uplink_slot_processor_pool& ul_processor_pool_) override
   {
-    return std::make_unique<upper_phy_rx_symbol_handler_impl>(ul_processor_pool_);
+    return std::make_unique<upper_phy_rx_symbol_handler_impl>(ul_processor_pool_, tdd_pattern);
   }
+
+private:
+  std::optional<tdd_ul_dl_config_common> tdd_pattern;
 };
 
 /// Upper physical layer receive symbol handler factory with printer decorator.
@@ -410,7 +418,7 @@ public:
     uplink_proc_factory = create_ul_processor_factory(factory_config, factory_deps, rg_factory, metric_notifier);
     report_fatal_error_if_not(downlink_proc_factory, "Failed to create an UL processor factory.");
 
-    rx_symbol_handler_factory = create_rx_symbol_handler_factory();
+    rx_symbol_handler_factory = create_rx_symbol_handler_factory(factory_config.tdd_pattern);
     report_fatal_error_if_not(rx_symbol_handler_factory, "Invalid Rx symbol handler factory.");
 
     // If the RX symbol filename is set, create an RX symbol handler printer decorator.
@@ -999,9 +1007,10 @@ static std::vector<std::unique_ptr<prach_buffer>> create_prach_buffers(const upp
   return prach_buffers;
 }
 
-std::shared_ptr<upper_phy_rx_symbol_handler_factory> ocudu::create_rx_symbol_handler_factory()
+std::shared_ptr<upper_phy_rx_symbol_handler_factory>
+ocudu::create_rx_symbol_handler_factory(std::optional<tdd_ul_dl_config_common> tdd_pattern)
 {
-  return std::make_shared<upper_phy_rx_symbol_handler_factory_impl>();
+  return std::make_shared<upper_phy_rx_symbol_handler_factory_impl>(std::move(tdd_pattern));
 }
 
 std::shared_ptr<upper_phy_rx_symbol_handler_factory>

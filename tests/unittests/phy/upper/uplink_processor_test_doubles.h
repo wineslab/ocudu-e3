@@ -63,6 +63,11 @@ private:
 
   void discard_slot() override {}
 
+  std::optional<uplink_slot_reception_count> get_reception_count(slot_point slot) const override
+  {
+    return uplink_slot_reception_count{};
+  }
+
 private:
   bool     has_add_pusch_pdu_method_called = false;
   bool     has_add_pucch_pdu_method_called = false;

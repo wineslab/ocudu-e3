@@ -76,8 +76,20 @@ struct jbpf_ran_slot_ctx {
   uint16_t nof_ports;        /* number of antenna ports in the snapshot */
   uint16_t nof_symbols;      /* number of OFDM symbols in the slot (12 or 14) */
   uint16_t nof_subcarriers;  /* number of subcarriers per symbol (12 * nof_prbs) */
+  /* Bit s set = symbol s of this slot is uplink per the TDD pattern; DL and
+   * guard symbols of a mixed slot are 0. All nof_symbols bits set on FDD. */
+  uint16_t valid_symbol_mask;
+  /* Receptions the PHY expects in this slot: UEs with PUSCH, PUCCH
+   * receptions (one per UE) and SRS receptions. All three 0 = no UE
+   * transmits in the slot. Saturated at 254; JBPF_SLOT_COUNT_UNKNOWN in all
+   * three when the PHY does not hold the slot's requests. */
+  uint8_t n_ue;
+  uint8_t n_pucch;
+  uint8_t n_srs_ue;
   JbpfDirection_t direction; /* 0 DL, 1 UL */
 };
+
+#define JBPF_SLOT_COUNT_UNKNOWN (0xFF)
 
 /* L2 context*/
 struct jbpf_ran_layer2_ctx {

@@ -55,6 +55,14 @@ public:
     // Ignore.
   }
 
+  // See the uplink_slot_processor interface for documentation.
+  std::optional<uplink_slot_reception_count> get_reception_count(slot_point slot_) const override
+  {
+    // This processor stands in when the slot had no requests, or when they were all processed or discarded. The base
+    // processor still holds them in each case, until it configures a new slot.
+    return base.get_reception_count(slot_);
+  }
+
 private:
   /// Base processor, used for processing PRACH.
   uplink_slot_processor& base;

@@ -58,6 +58,8 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
   upper_phy_factory_config.pusch_max_nof_layers              = pusch_max_nof_layers;
   upper_phy_factory_config.enable_metrics                    = du_low.metrics_cfg.enable_du_low;
   upper_phy_factory_config.ldpc_decoder_type                 = "auto";
+  // One TDD pattern per upper PHY factory, like the PHY tap below: the first cell's.
+  upper_phy_factory_config.tdd_pattern = cells[0].tdd_pattern;
   if (du_low.expert_phy_cfg.enable_phy_tap) {
     upper_phy_factory_config.phy_tap_arguments = du_low.expert_phy_cfg.phy_tap_arguments;
     if (cells[0].tdd_pattern) {
