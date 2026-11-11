@@ -5,6 +5,7 @@
 #include "resource_grid.h"
 #include "ocudu/scheduler/resource_grid_util.h"
 #include "ocudu/support/compiler.h"
+#include <algorithm>
 
 using namespace ocudu;
 
@@ -246,24 +247,45 @@ bool cell_slot_resource_grid::collides(subcarrier_spacing   scs,
   return carrier.subslot_rbs.collides(ofdm_symbols, crbs);
 }
 
+/// Marks the blocked RBs as used in \c used, a bitmap whose bit 0 is RB \c first_rb of the carrier.
+template <typename Bitmap>
+static void mark_blocked_rbs(Bitmap& used, const crb_bitmap* blocked, unsigned first_rb)
+{
+  if (blocked == nullptr or blocked->none()) {
+    return;
+  }
+  const size_t stop = std::min(blocked->size(), static_cast<size_t>(first_rb) + used.size());
+  if (first_rb >= stop) {
+    return;
+  }
+  blocked->for_each(first_rb, stop, [&used, first_rb](size_t rb) { used.set(rb - first_rb); });
+}
+
 crb_bitmap cell_slot_resource_grid::used_crbs(const bwp_configuration& bwp_cfg, ofdm_symbol_range symbols) const
 {
   const carrier_resource_grid& carrier = get_carrier(bwp_cfg.scs);
-  return carrier.subslot_rbs.used_crbs(bwp_cfg.crbs, symbols);
+  crb_bitmap                   used    = carrier.subslot_rbs.used_crbs(bwp_cfg.crbs, symbols);
+  mark_blocked_rbs(used, blocked_rbs, 0);
+  return used;
 }
 
 crb_bitmap
 cell_slot_resource_grid::used_crbs(subcarrier_spacing scs, crb_interval crb_lims, ofdm_symbol_range symbols) const
 {
   const carrier_resource_grid& carrier = get_carrier(scs);
-  return carrier.subslot_rbs.used_crbs(crb_lims, symbols);
+  crb_bitmap                   used    = carrier.subslot_rbs.used_crbs(crb_lims, symbols);
+  mark_blocked_rbs(used, blocked_rbs, 0);
+  return used;
 }
 
 prb_bitmap
 cell_slot_resource_grid::used_prbs(subcarrier_spacing scs, crb_interval crb_lims, ofdm_symbol_range symbols) const
 {
   const carrier_resource_grid& carrier = get_carrier(scs);
-  return carrier.subslot_rbs.used_prbs(crb_lims, symbols);
+  prb_bitmap                   used    = carrier.subslot_rbs.used_prbs(crb_lims, symbols);
+  // Bit 0 of the PRB bitmap is the first RB of crb_lims, which carrier_subslot_resource_grid indexes like the carrier.
+  mark_blocked_rbs(used, blocked_rbs, crb_lims.start());
+  return used;
 }
 
 bool cell_slot_resource_grid::all_set(grant_info grant) const
@@ -349,7 +371,8 @@ void cell_slot_resource_allocator::clear()
 cell_resource_allocator::cell_resource_allocator(const cell_configuration& cfg_) :
   cfg(cfg_),
   max_dl_slot_alloc_delay(SCHEDULER_MAX_K0),
-  max_ul_slot_alloc_delay(get_max_slot_ul_alloc_delay(cfg.ntn_cs_koffset))
+  max_ul_slot_alloc_delay(get_max_slot_ul_alloc_delay(cfg.ntn_cs_koffset)),
+  blocked(std::make_unique<crb_bitmap>(MAX_NOF_PRBS))
 {
   // Create cell_slot_resource_allocator objects.
   std::vector<scs_specific_carrier> dl_scs_carriers;
@@ -377,6 +400,12 @@ cell_resource_allocator::cell_resource_allocator(const cell_configuration& cfg_)
     slots.emplace_back(cfg, dl_scs_carriers, ul_scs_carriers);
     dl_scs_carriers.clear();
     ul_scs_carriers.clear();
+  }
+
+  // Every slot grid reads the same block.
+  for (auto& slot : slots) {
+    slot.dl_res_grid.set_blocked_rbs(blocked.get());
+    slot.ul_res_grid.set_blocked_rbs(blocked.get());
   }
 }
 

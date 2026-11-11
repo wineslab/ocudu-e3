@@ -4,6 +4,12 @@
 
 #include "cell_scheduler.h"
 
+#ifdef JBPF_ENABLED
+#include "jbpf_srsran_hooks.h"
+#include <algorithm>
+DEFINE_JBPF_CTRL_HOOK(sched_prb_block);
+#endif
+
 using namespace ocudu;
 
 cell_scheduler::cell_scheduler(const scheduler_expert_config&                  sched_cfg,
@@ -74,6 +80,11 @@ void cell_scheduler::run_slot(slot_point_extended sl_tx_ext)
   // > Start with clearing old allocations from the grid.
   reset_resource_grid(sl_tx);
 
+#ifdef JBPF_ENABLED
+  // > Keep data allocations off the PRBs of a dApp's block, before anything is allocated in this slot.
+  run_prb_block_hook(sl_tx);
+#endif
+
   // > SSB scheduling.
   ssb_sch.run_slot(res_grid, sl_tx);
 
@@ -113,6 +124,51 @@ void cell_scheduler::handle_error_indication(slot_point sl_tx, scheduler_slot_ha
 {
   ue_sched->handle_error_indication(sl_tx, event);
 }
+
+#ifdef JBPF_ENABLED
+void cell_scheduler::run_prb_block_hook(slot_point sl_tx)
+{
+  const unsigned nof_prbs = cell_cfg.params.dl_cfg_common.freq_info_dl.scs_carrier_list.back().carrier_bandwidth;
+  const auto     cell     = static_cast<uint16_t>(cell_cfg.cell_index);
+
+  e3_prb_block_slot io = {};
+  io.sfn               = static_cast<uint16_t>(sl_tx.sfn());
+  io.slot              = static_cast<uint8_t>(sl_tx.slot_index());
+  io.cell              = cell;
+  io.nof_prbs          = static_cast<uint16_t>(nof_prbs);
+
+  const uint64_t verdict = ctrl_hook_sched_prb_block(&io, sizeof(io), cell);
+
+  if (verdict != E3_PRB_BLOCK_APPLY or io.n_prbs == 0) {
+    if (prb_block_on) {
+      res_grid.clear_blocked_rbs();
+      prb_block_on = false;
+      logger.info("cell={} slot={}: PRB block id={} cleared", fmt::underlying(cell_cfg.cell_index), sl_tx, prb_block_id);
+    }
+    return;
+  }
+  if (prb_block_on and io.id == prb_block_id and std::equal(std::begin(io.mask), std::end(io.mask), prb_block_mask)) {
+    return;
+  }
+
+  crb_bitmap rbs(MAX_NOF_PRBS);
+  for (unsigned rb = 0, end = std::min(nof_prbs, static_cast<unsigned>(E3_PRB_BLOCK_MAX_PRBS)); rb != end; ++rb) {
+    if ((io.mask[rb / 64] >> (rb % 64)) & 1U) {
+      rbs.set(rb);
+    }
+  }
+  res_grid.set_blocked_rbs(rbs);
+  prb_block_on = true;
+  prb_block_id = io.id;
+  std::copy(std::begin(io.mask), std::end(io.mask), prb_block_mask);
+  logger.info("cell={} slot={}: PRB block id={} n={} prbs={:i}",
+              fmt::underlying(cell_cfg.cell_index),
+              sl_tx,
+              io.id,
+              rbs.count(),
+              rbs);
+}
+#endif
 
 void cell_scheduler::reset_resource_grid(slot_point sl_tx)
 {

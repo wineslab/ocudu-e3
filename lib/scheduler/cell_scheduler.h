@@ -20,6 +20,9 @@
 #include "srs/srs_allocator_impl.h"
 #include "uci_scheduling/uci_allocator_impl.h"
 #include "ue_scheduling/ue_scheduler.h"
+#ifdef JBPF_ENABLED
+#include "jbpf_e3_prb_block_api.h"
+#endif
 
 namespace ocudu {
 
@@ -70,6 +73,17 @@ public:
 
 private:
   void reset_resource_grid(slot_point sl_tx);
+
+#ifdef JBPF_ENABLED
+  /// \brief Asks the E3 prb_block codelet, if one is loaded, which PRBs data allocations must avoid in this slot, and
+  /// applies its answer to the resource grid. With no codelet, no PRB is blocked.
+  void run_prb_block_hook(slot_point sl_tx);
+
+  /// The PRB block in force: E3 message id of the dApp control and its mask (bit i = carrier PRB i).
+  bool     prb_block_on = false;
+  uint32_t prb_block_id = 0;
+  uint64_t prb_block_mask[E3_PRB_BLOCK_MASK_WORDS] = {};
+#endif
 
   /// Resource grid of this cell.
   cell_resource_allocator res_grid;

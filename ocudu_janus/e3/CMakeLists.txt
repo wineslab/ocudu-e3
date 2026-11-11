@@ -41,7 +41,7 @@ set(E3CONTROLLER_DIR "${CMAKE_SOURCE_DIR}/../E3Controller"
 set(_e3_shared_src "${E3CONTROLLER_DIR}/codelets/include")
 
 if (EXISTS "${_e3_shared_src}/jbpf_e3_slot_api.h")
-    foreach (_hdr jbpf_e3_ids.h jbpf_e3_slot_api.h e3_slot_convert.h)
+    foreach (_hdr jbpf_e3_ids.h jbpf_e3_slot_api.h e3_slot_convert.h jbpf_e3_prb_block_api.h)
         execute_process(
             COMMAND ${CMAKE_COMMAND} -E compare_files
                     "${_e3_shared_src}/${_hdr}" "${CMAKE_CURRENT_SOURCE_DIR}/${_hdr}"

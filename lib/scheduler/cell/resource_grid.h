@@ -9,6 +9,7 @@
 #include "ocudu/adt/circular_vector.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/scheduler/result/sched_result.h"
+#include <memory>
 
 namespace ocudu {
 
@@ -244,6 +245,10 @@ public:
     return get_carrier(scs).subslot_rbs;
   }
 
+  /// \brief Points the grid at the RBs every data allocation must avoid (a dApp's PRB block); nullptr for none. The
+  /// bitmap is read, not copied, so it must outlive the grid.
+  void set_blocked_rbs(const crb_bitmap* rbs) { blocked_rbs = rbs; }
+
   bool operator==(const cell_slot_resource_grid& other) const
   {
     if (active_scs() != other.active_scs()) {
@@ -272,6 +277,13 @@ private:
   /// Carrier Resource Grids.
   std::vector<carrier_resource_grid>     carrier_grids;
   std::array<unsigned, NOF_NUMEROLOGIES> numerology_to_grid_idx;
+
+  /// \brief RBs every data allocation must avoid (a dApp's PRB block), or nullptr. Owned by cell_resource_allocator.
+  ///
+  /// Bit i is RB i of the carrier, as in the carrier grids. used_crbs() and used_prbs() report these RBs as used,
+  /// which is how PDSCH and PUSCH allocations avoid them. collides(), fill() and all_set() do not see them, so PUCCH,
+  /// PDCCH, SSB, PRACH, SRS and CSI-RS keep their RBs.
+  const crb_bitmap* blocked_rbs = nullptr;
 };
 
 /// Stores all the scheduled information relative to a {slot, cell}.
@@ -329,6 +341,18 @@ struct cell_resource_allocator {
 
   /// Called when cell is deactivated.
   void stop();
+
+  /// \brief Keeps every data allocation off these RBs, in every slot, DL and UL, until the next call.
+  ///
+  /// Data allocations are PDSCH and PUSCH: UE data, SIB1, RAR, Msg3, Msg4 and paging. Bit i is RB i of the carrier. The
+  /// other channels keep their RBs, see cell_slot_resource_grid::blocked_rbs. Grants already allocated are kept.
+  void set_blocked_rbs(const crb_bitmap& rbs) { *blocked = rbs; }
+
+  /// Lifts the block set by set_blocked_rbs().
+  void clear_blocked_rbs() { blocked->reset(); }
+
+  /// RBs data allocations avoid, see set_blocked_rbs().
+  const crb_bitmap& blocked_rbs() const { return *blocked; }
 
   /// Cell index of the resource grid.
   du_cell_index_t cell_index() const { return cfg.cell_index; }
@@ -393,6 +417,10 @@ private:
 
   /// Circular pool of cell resource grids, where each entry represents a separate slot.
   circular_vector<cell_slot_resource_allocator> slots;
+
+  /// RBs data allocations avoid, read by every slot grid of the ring. On the heap, so the grids' pointer to it stays
+  /// valid if this object moves.
+  std::unique_ptr<crb_bitmap> blocked;
 };
 
 } // namespace ocudu

@@ -203,3 +203,85 @@ TEST(pusch_resource_allocation_test, test_all)
   // Test: Current slot_tx allocations match the ones done with "slot_tx + 1" in the previous slot
   TESTASSERT_EQ(res_grid_alloc[0].ul_res_grid.used_crbs(bwp_cfg, {0, 14}).count(), ul_grant2.prbs.length());
 }
+
+/// A dApp's PRB block: data allocations, which search through used_crbs() and used_prbs(), see the blocked RBs; the
+/// other channels, which check collides(), do not.
+TEST(cell_resource_grid_test, blocked_rbs_reach_data_allocations_only)
+{
+  std::vector<scs_specific_carrier> carrier_cfgs = test_carriers();
+  cell_slot_resource_grid           cell_grid{carrier_cfgs};
+  bwp_configuration                 bwp_cfg{};
+  bwp_cfg.scs  = subcarrier_spacing::kHz15;
+  bwp_cfg.crbs = {0, 52};
+
+  crb_bitmap blocked(MAX_NOF_PRBS);
+  cell_grid.set_blocked_rbs(&blocked);
+  ASSERT_TRUE(cell_grid.used_crbs(bwp_cfg, {0, 14}).none());
+
+  // Every symbol of the slot: a data allocation over any symbol range avoids the blocked RBs.
+  blocked.fill(10, 20);
+  crb_bitmap used = cell_grid.used_crbs(bwp_cfg, {2, 14});
+  ASSERT_EQ(used.count(), 10U);
+  ASSERT_TRUE(used.all(10, 20));
+  ASSERT_EQ(cell_grid.used_crbs(subcarrier_spacing::kHz15, {0, 52}, {0, 1}), used);
+
+  // BWP-relative bitmap: a BWP starting at CRB 5 sees PRBs 5 to 14 blocked.
+  prb_bitmap prbs = cell_grid.used_prbs(subcarrier_spacing::kHz15, {5, 45}, {0, 14});
+  ASSERT_EQ(prbs.size(), 40U);
+  ASSERT_EQ(prbs.count(), 10U);
+  ASSERT_TRUE(prbs.all(5, 15));
+
+  // Allocations add to the block.
+  cell_grid.fill(bwp_sch_grant_info(bwp_cfg, {2, 14}, {30, 35}));
+  ASSERT_EQ(cell_grid.used_crbs(bwp_cfg, {2, 14}).count(), 15U);
+
+  // PUCCH, PDCCH, SSB, PRACH, SRS: collision checks read the grid only.
+  ASSERT_FALSE(cell_grid.collides(subcarrier_spacing::kHz15, {0, 14}, crb_interval{10, 20}));
+
+  // Lifting the block releases the RBs; the allocation stays.
+  blocked.reset();
+  ASSERT_EQ(cell_grid.used_crbs(bwp_cfg, {2, 14}).count(), 5U);
+}
+
+/// The block is set once per cell and applies to every slot of the ring, DL and UL, until it is cleared.
+TEST(cell_resource_grid_test, blocked_rbs_apply_to_every_slot_until_cleared)
+{
+  scheduler_expert_config                 sched_cfg = config_helpers::make_default_scheduler_expert_config();
+  test_helpers::test_sched_config_manager cfg_mng{sched_cfg};
+  const cell_configuration&               cell_cfg =
+      *cfg_mng.add_cell(sched_config_helper::make_default_sched_cell_configuration_request());
+  cell_resource_allocator res_grid_alloc{cell_cfg};
+  bwp_configuration       bwp_cfg{};
+  bwp_cfg.crbs = {0, 52};
+  bwp_cfg.scs  = cell_cfg.params.dl_cfg_common.freq_info_dl.scs_carrier_list[0].scs;
+
+  slot_point sl_tx{0, 0};
+  res_grid_alloc.slot_indication(sl_tx);
+
+  crb_bitmap blocked(MAX_NOF_PRBS);
+  blocked.fill(3, 7);
+  res_grid_alloc.set_blocked_rbs(blocked);
+  for (unsigned k = 0; k != 8; ++k) {
+    ASSERT_TRUE(res_grid_alloc[k].dl_res_grid.used_crbs(bwp_cfg, {0, 14}).all(3, 7)) << "slot +" << k;
+    ASSERT_TRUE(res_grid_alloc[k].ul_res_grid.used_crbs(bwp_cfg, {0, 14}).all(3, 7)) << "slot +" << k;
+    ASSERT_EQ(res_grid_alloc[k].ul_res_grid.used_crbs(bwp_cfg, {0, 14}).count(), 4U) << "slot +" << k;
+  }
+
+  // Slots that enter the ring later read the same block.
+  for (unsigned n = 0; n != 30; ++n) {
+    res_grid_alloc.slot_indication(++sl_tx);
+  }
+  ASSERT_EQ(res_grid_alloc[0].dl_res_grid.used_crbs(bwp_cfg, {0, 14}).count(), 4U);
+
+  // A new block replaces the old one whole.
+  crb_bitmap other(MAX_NOF_PRBS);
+  other.set(40);
+  res_grid_alloc.set_blocked_rbs(other);
+  crb_bitmap used = res_grid_alloc[1].ul_res_grid.used_crbs(bwp_cfg, {0, 14});
+  ASSERT_EQ(used.count(), 1U);
+  ASSERT_TRUE(used.test(40));
+
+  res_grid_alloc.clear_blocked_rbs();
+  ASSERT_TRUE(res_grid_alloc[0].dl_res_grid.used_crbs(bwp_cfg, {0, 14}).none());
+  ASSERT_TRUE(res_grid_alloc.blocked_rbs().none());
+}

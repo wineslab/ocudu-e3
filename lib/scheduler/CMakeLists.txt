@@ -42,3 +42,10 @@ add_library(ocudu_sched STATIC ${SOURCES}
         $<TARGET_OBJECTS:sched_ue_context>
         $<TARGET_OBJECTS:ue_sched>)
 target_link_libraries(ocudu_sched ocudu_ran sched_config sched_ue_context sched_support scheduler_logger)
+
+# The sched_prb_block control hook in cell_scheduler.cpp needs the jbpf runtime
+# symbols (hook list section, epoch tracking). Plain form, as above: CMake
+# forbids mixing keyword and plain on the same target.
+if (ENABLE_JBPF)
+    target_link_libraries(ocudu_sched jbpf)
+endif (ENABLE_JBPF)

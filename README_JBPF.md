@@ -11,6 +11,7 @@ attach to:
 | `capture_xran_packet` | `lib/ofh/receiver/ofh_message_receiver_impl.cpp` | per-eCPRI-packet U-plane IQ (BFP-compressed) |
 | `capture_uplane_iq` | `lib/ofh/receiver/ofh_data_flow_uplane_uplink_data_impl.cpp` | per-U-plane-section IQ, already decompressed (`cbf16_t`), with slot/symbol/eAxC metadata |
 | `capture_uplink_slot` | `lib/phy/upper/upper_phy_rx_symbol_handler_impl.cpp` | per-UL-slot resource-grid IQ (`cbf16_t`) |
+| `sched_prb_block` | `lib/scheduler/cell_scheduler.cpp` | control hook, at the start of every slot of every cell: the codelet answers which PRBs PDSCH and PUSCH must avoid (a dApp's PRB block) |
 
 The gNB runs as jbpf **IPC secondary**; codelet output is consumed by an IPC
 primary such as the [E3Controller](https://github.com/wineslab/E3Controller),
@@ -110,15 +111,16 @@ What `ENABLE_JBPF=ON` does (see the "Janus (jbpf) integration" block in
 [CMakeLists.txt](CMakeLists.txt)): builds `external/jbpf` via
 `add_subdirectory` with `JBPF_STATIC=ON` and
 `JBPF_EXPERIMENTAL_FEATURES=ON` forced, jbpf's tests silenced, the hooks
-above compiled into the OFH receiver and upper PHY, and the E3 publish helper
-in `ocudu_janus/e3/`.
+above compiled into the OFH receiver, the upper PHY and the scheduler, and
+the E3 publish helper in `ocudu_janus/e3/`.
 
 **E3 header check.** The E3 publish helper shares three headers with the
-E3Controller: `jbpf_e3_ids.h`, `jbpf_e3_slot_api.h` and `e3_slot_convert.h`.
+E3Controller: `jbpf_e3_ids.h`, `jbpf_e3_slot_api.h` and `e3_slot_convert.h`,
+and the scheduler's PRB block hook a fourth, `jbpf_e3_prb_block_api.h`.
 Configure compares them byte for byte with the E3Controller checkout at
 `../E3Controller` (pass `-DE3CONTROLLER_DIR=/path/to/E3Controller` for another
-place) and stops if they differ: build both sides from matching versions.
-Without an E3Controller checkout the check is skipped.
+place) and stops if one differs or is missing: build both sides from matching
+versions. Without an E3Controller checkout the check is skipped.
 
 The E3Controller builds against this tree's jbpf, and jbpf builds part of
 itself inside its source tree, so do not build ocudu and the E3Controller at
@@ -168,6 +170,18 @@ the same time. Run one after the other.
      `JBPF_SLOT_COUNT_UNKNOWN` when the PHY does not hold the slot's requests.
    - **Turn on the filter.** With `slot_filter.ue_free_only: true`, the
      E3Controller's slot codelet publishes only the slots where all three are 0.
+5. To let a dApp block PRBs, set `prb_block.enabled: true` in the E3Controller's
+   config. The gNB needs no setting of its own.
+   - **How it gets there.** The first dApp subscription to RAN function 1 loads
+     the E3Controller's `prb_block` codelet onto `sched_prb_block`. From its next
+     slot, the scheduler keeps PDSCH and PUSCH off the dApp's PRBs, UL and DL,
+     until the dApp's next control replaces the list.
+   - **What keeps its PRBs.** PUCCH, PDCCH, SSB, PRACH, SRS and CSI-RS. The other
+     limits are in the E3Controller's
+     [known limitations](https://github.com/wineslab/E3Controller/blob/main/docs/known-limitations.md#prb-block-data-channels-only).
+   - **When it ends.** Unloading the codelet clears the block.
+   - **Logs.** With `log: mac_level: info` (verbose under traffic), the scheduler
+     logs each new block (`PRB block id=...`) and each clear.
 
 <!-- ## 5. Containerized reference build
 

@@ -131,6 +131,38 @@ DECLARE_JBPF_HOOK(capture_uplink_slot,
             )
         )
 
+/*
+ * sched_prb_block: control hook, fired by the scheduler at the start of every
+ * slot of every cell, before any allocation (cell_scheduler::run_slot).
+ *
+ * The codelet answers which PRBs data allocations must avoid in this slot: it
+ * writes them into the buffer, a struct e3_prb_block_slot owned by the
+ * scheduler (ocudu_janus/e3/jbpf_e3_prb_block_api.h), and returns
+ * E3_PRB_BLOCK_APPLY, or returns E3_PRB_BLOCK_NONE. With no codelet loaded the
+ * hook returns jbpf's default, 0, which is E3_PRB_BLOCK_NONE.
+ *
+ * The ctx is the MAC scheduler one; only data, data_end and cell_id are set.
+ */
+DECLARE_JBPF_CTRL_HOOK(sched_prb_block,
+        struct jbpf_mac_sched_ctx ctx,
+        ctx,
+        HOOK_PROTO(
+            void* slot_io,
+            uint32_t slot_io_len,
+            uint16_t cell_index
+            ),
+        HOOK_ASSIGN(
+            ctx.data = (uint64_t)slot_io;
+            ctx.data_end = (uint64_t)((uint8_t*)slot_io + slot_io_len);
+            ctx.meta_data = 0;
+            ctx.srs_meta_data1 = 0;
+            ctx.ctx_id = 0;
+            ctx.du_ue_index = 0;
+            ctx.cell_id = cell_index;
+            ctx.rnti = 0;
+            )
+        )
+
 #ifdef __cplusplus
 }
 #endif
