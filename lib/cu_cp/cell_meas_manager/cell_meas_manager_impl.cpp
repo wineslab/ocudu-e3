@@ -4,23 +4,41 @@
 
 #include "cell_meas_manager_impl.h"
 #include "cell_meas_manager_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/cu_cp/cell_meas_manager_config.h"
+#include "ocudu/ran/meas_types.h"
 #include "ocudu/ran/plmn_identity.h"
-#include "ocudu/rrc/meas_types.h"
 #include "ocudu/support/ocudu_assert.h"
+#include <algorithm>
 #include <set>
 #include <utility>
 
 using namespace ocudu;
 using namespace ocucp;
 
-cell_meas_manager::cell_meas_manager(const cell_meas_manager_cfg&         cfg_,
-                                     cell_meas_mobility_manager_notifier& mobility_mng_notifier_,
-                                     ue_manager&                          ue_mng_) :
+/// Builds a config that only removes the measurement ids, objects and report configs of \c current, so a
+/// UE whose measurements no longer apply can be told to drop them. Returns nullopt when there is nothing to
+/// remove.
+static std::optional<rrc_meas_cfg> make_removal_only_meas_config(const std::optional<rrc_meas_cfg>& current)
+{
+  if (!current.has_value()) {
+    return std::nullopt;
+  }
+  rrc_meas_cfg rem_cfg;
+  add_old_meas_config_to_rem_list(current.value(), rem_cfg);
+  if (rem_cfg.meas_obj_to_rem_list.empty() && rem_cfg.meas_id_to_rem_list.empty() &&
+      rem_cfg.report_cfg_to_rem_list.empty()) {
+    return std::nullopt;
+  }
+  return rem_cfg;
+}
+
+cell_meas_manager::cell_meas_manager(const cell_meas_manager_config&       cfg_,
+                                     const cell_meas_manager_dependencies& dependencies) :
   cfg(cfg_),
-  mobility_mng_notifier(mobility_mng_notifier_),
-  ue_mng(ue_mng_),
-  logger(ocudulog::fetch_basic_logger("CU-CP"))
+  mobility_mng_notifier(dependencies.mobility_mng_notifier),
+  ue_mng(dependencies.ue_mng),
+  logger(dependencies.logger)
 {
   ocudu_assert(is_valid_configuration(cfg, ssb_freq_to_meas_object), "Invalid cell measurement configuration");
   generate_measurement_objects_for_serving_cells();
@@ -39,6 +57,9 @@ cell_meas_manager::get_measurement_config(cu_cp_ue_index_t                   ue_
   // Find cell.
   if (cfg.cells.find(serving_nci) == cfg.cells.end()) {
     logger.debug("Couldn't find cell config for nci={:#x}", serving_nci);
+    if (!cond_meas) {
+      return remove_current_meas_config(ue_index, current_meas_config);
+    }
     return meas_cfg;
   }
   const auto& cell_config = cfg.cells.at(serving_nci);
@@ -46,6 +67,9 @@ cell_meas_manager::get_measurement_config(cu_cp_ue_index_t                   ue_
   // Measurement config is only generated if serving cell config is complete.
   if (!is_complete(cell_config.serving_cell_cfg)) {
     logger.debug("ue={}: Serving cell config is incomplete for nci={:#x}", ue_index, serving_nci);
+    if (!cond_meas) {
+      return remove_current_meas_config(ue_index, current_meas_config);
+    }
     return meas_cfg;
   }
 
@@ -54,7 +78,7 @@ cell_meas_manager::get_measurement_config(cu_cp_ue_index_t                   ue_
     logger.debug("ue={}: No neighbor cells configured and periodic serving cell reports disabled for nci={:#x}",
                  ue_index,
                  serving_nci);
-    return meas_cfg;
+    return remove_current_meas_config(ue_index, current_meas_config);
   }
 
   auto& ue_meas_context = ue_mng.get_measurement_context(ue_index);
@@ -90,22 +114,55 @@ cell_meas_manager::get_measurement_config(cu_cp_ue_index_t                   ue_
 
   // Add measurement object (MO).
   for (const auto& ssb_freq : ssb_freqs) {
+    auto meas_obj_it  = ssb_freq_to_meas_object.find(ssb_freq);
+    auto freq_ncis_it = ssb_freq_to_ncis.find(ssb_freq);
+    if (meas_obj_it == ssb_freq_to_meas_object.end() or freq_ncis_it == ssb_freq_to_ncis.end()) {
+      logger.warning("ue={}: No measurement object for ssb_freq={}, skipping", ue_index, ssb_freq);
+      continue;
+    }
     rrc_meas_obj_to_add_mod meas_obj_to_add;
     meas_obj_to_add.meas_obj_id = ue_meas_context.allocate_meas_obj_id();
-    meas_obj_to_add.meas_obj_nr = ssb_freq_to_meas_object.at(ssb_freq);
+    meas_obj_to_add.meas_obj_nr = meas_obj_it->second;
 
     // Add meas obj id to lookup.
-    for (const auto& nci : ssb_freq_to_ncis.at(ssb_freq)) {
+    for (const auto& nci : freq_ncis_it->second) {
       if (cond_meas && nci == serving_nci) {
         // Skip the serving cell as is not a CHO candidate target.
         continue;
       }
       ue_meas_context.nci_to_meas_obj_id.emplace(nci, meas_obj_to_add.meas_obj_id);
+
+      // Find this NCI in the serving cell's neighbour list to retrieve NTN info.
+      const auto ncell_it = std::find_if(cell_config.ncells.begin(),
+                                         cell_config.ncells.end(),
+                                         [nci](const neighbor_cell_meas_config& nc) { return nc.nci == nci; });
+
+      auto nci_cfg_it = cfg.cells.find(nci);
+      if (nci_cfg_it == cfg.cells.end()) {
+        logger.warning("ue={}: No cell config for nci={:#x}, skipping", ue_index, nci.value());
+        continue;
+      }
       if (cond_meas) {
-        const auto&          ncell_cfg = cfg.cells.at(nci);
+        const auto&          ncell_cfg = nci_cfg_it->second;
         rrc_cells_to_add_mod cell_to_add;
         cell_to_add.pci = ncell_cfg.serving_cell_cfg.pci.value();
+        if (ncell_it != cell_config.ncells.end()) {
+          cell_to_add.ntn_neighbour_info = ncell_it->ntn_neighbour_info;
+          cell_to_add.ntn_polarization   = ncell_it->ntn_polarization;
+        }
         meas_obj_to_add.meas_obj_nr->cells_to_add_mod_list.push_back(cell_to_add);
+      } else if (ncell_it != cell_config.ncells.end() &&
+                 (ncell_it->ntn_neighbour_info.has_value() || ncell_it->ntn_polarization.has_value())) {
+        // For non-CHO: add cell to cells_to_add_mod_list only when NTN info is present (needed for
+        // cells_to_add_mod_list_ext_v1800/v1710 in MeasObjectNR).
+        const auto& ncell_cfg = nci_cfg_it->second;
+        if (ncell_cfg.serving_cell_cfg.pci.has_value()) {
+          rrc_cells_to_add_mod cell_to_add;
+          cell_to_add.pci                = ncell_cfg.serving_cell_cfg.pci.value();
+          cell_to_add.ntn_neighbour_info = ncell_it->ntn_neighbour_info;
+          cell_to_add.ntn_polarization   = ncell_it->ntn_polarization;
+          meas_obj_to_add.meas_obj_nr->cells_to_add_mod_list.push_back(cell_to_add);
+        }
       }
     }
     new_cfg.meas_obj_to_add_mod_list.push_back(std::move(meas_obj_to_add));
@@ -121,10 +178,19 @@ cell_meas_manager::get_measurement_config(cu_cp_ue_index_t                   ue_
       }
 
       for (const auto& ncell : cell_config.ncells) {
-        if (is_complete(cfg.cells.at(ncell.nci).serving_cell_cfg) &&
-            cfg.cells.at(ncell.nci).serving_cell_cfg.ssb_arfcn.value() == ssb_freq) {
+        auto ncell_it = cfg.cells.find(ncell.nci);
+        if (ncell_it == cfg.cells.end()) {
+          logger.warning("ue={}: No cell config for neighbor nci={:#x}, skipping", ue_index, ncell.nci.value());
+          continue;
+        }
+        if (is_complete(ncell_it->second.serving_cell_cfg) &&
+            ncell_it->second.serving_cell_cfg.ssb_arfcn.value() == ssb_freq) {
           logger.debug("ue={}: Adding neighbor cell nci={:#x} to measurement config", ue_index, ncell.nci);
           for (const auto& report_cfg_id : ncell.report_cfg_ids) {
+            // Skip conditional triggers.
+            if (is_cond_trigger_report_config(cfg, report_cfg_id)) {
+              continue;
+            }
             generate_report_config(cfg, ncell.nci, report_cfg_id, new_cfg, ue_meas_context);
           }
         }
@@ -179,7 +245,26 @@ cell_meas_manager::get_measurement_config(cu_cp_ue_index_t                   ue_
 
   new_cfg.quant_cfg = quant_cfg;
 
+  // Keep in the removal lists only what the new config does not set up again.
+  if (current_meas_config.has_value()) {
+    prune_redundant_rem_list_entries(current_meas_config.value(), new_cfg);
+  }
+
   return meas_cfg;
+}
+
+std::optional<rrc_meas_cfg>
+cell_meas_manager::remove_current_meas_config(cu_cp_ue_index_t                   ue_index,
+                                              const std::optional<rrc_meas_cfg>& current_meas_config)
+{
+  std::optional<rrc_meas_cfg> rem_cfg = make_removal_only_meas_config(current_meas_config);
+  if (rem_cfg.has_value()) {
+    // The UE is left without measurements: drop its measurement id bookkeeping.
+    auto& ue_meas_context = ue_mng.get_measurement_context(ue_index);
+    ue_meas_context.clear_meas_obj_ids();
+    ue_meas_context.clear_meas_ids();
+  }
+  return rem_cfg;
 }
 
 std::optional<cell_meas_config> cell_meas_manager::get_cell_config(nr_cell_identity nci)
@@ -216,7 +301,7 @@ std::vector<pci_t> cell_meas_manager::get_neighbor_pcis(nr_cell_identity serving
 bool cell_meas_manager::update_cell_config(nr_cell_identity nci, const serving_cell_meas_config& serv_cell_cfg)
 {
   // Store old config to revert if new config is invalid.
-  cell_meas_manager_cfg tmp_cfg = cfg;
+  cell_meas_manager_config tmp_cfg = cfg;
 
   if (cfg.cells.find(nci) == cfg.cells.end()) {
     logger.debug("No configuration to update for nci={:#x}. Adding configuration", nci);
@@ -239,6 +324,9 @@ bool cell_meas_manager::update_cell_config(nr_cell_identity nci, const serving_c
   }
 
   if (!is_complete(serv_cell_cfg)) {
+    // The parameters are replaced as a whole: a cell that stops being complete must not stay attached to its
+    // measurement object with the parameters it had before.
+    remove_measurement_object(nci);
     logger.debug("Added/Updated incomplete cell measurement configuration for nci={:#x}", nci);
   } else {
     // Only update measurement object if the configuration is complete.
@@ -249,6 +337,231 @@ bool cell_meas_manager::update_cell_config(nr_cell_identity nci, const serving_c
   log_cells(logger, cfg);
 
   return true;
+}
+
+bool cell_meas_manager::remove_cell_config(nr_cell_identity nci)
+{
+  auto cell_it = cfg.cells.find(nci);
+  if (cell_it == cfg.cells.end()) {
+    logger.warning("Cannot remove cell nci={:#x}. Cause: No cell config for this NCI", nci.value());
+    return false;
+  }
+
+  // Detach the cell from the measurement object lookups.
+  remove_measurement_object(nci);
+
+  cfg.cells.erase(cell_it);
+
+  // Cascade: drop the neighbor relations of other cells pointing at the removed cell.
+  for (auto& [other_nci, other_cell] : cfg.cells) {
+    auto removed_from = std::remove_if(other_cell.ncells.begin(),
+                                       other_cell.ncells.end(),
+                                       [nci](const neighbor_cell_meas_config& ncell) { return ncell.nci == nci; });
+    if (removed_from != other_cell.ncells.end()) {
+      other_cell.ncells.erase(removed_from, other_cell.ncells.end());
+      logger.info("Removed neighbor relation from nci={:#x} to removed cell nci={:#x}", other_nci.value(), nci.value());
+    }
+  }
+
+  logger.info("Removed cell nci={:#x}", nci.value());
+  log_cells(logger, cfg);
+
+  return true;
+}
+
+bool cell_meas_manager::add_or_update_neighbor(nr_cell_identity             serving_nci,
+                                               nr_cell_identity             neighbor_nci,
+                                               std::vector<report_cfg_id_t> report_cfg_ids)
+{
+  if (serving_nci == neighbor_nci) {
+    logger.warning("Cannot add neighbor relation for nci={:#x}. Cause: A cell cannot neighbor itself",
+                   serving_nci.value());
+    return false;
+  }
+  auto serving_it = cfg.cells.find(serving_nci);
+  if (serving_it == cfg.cells.end()) {
+    logger.warning("Cannot add neighbor relation. Cause: No cell config for serving nci={:#x}", serving_nci.value());
+    return false;
+  }
+  if (cfg.cells.find(neighbor_nci) == cfg.cells.end()) {
+    logger.warning("Cannot add neighbor relation. Cause: No cell config for neighbor nci={:#x}", neighbor_nci.value());
+    return false;
+  }
+  for (report_cfg_id_t report_cfg_id : report_cfg_ids) {
+    auto report_cfg_it = cfg.report_config_ids.find(report_cfg_id);
+    if (report_cfg_it == cfg.report_config_ids.end()) {
+      logger.warning("Cannot add neighbor relation. Cause: No report config with id={}", to_underlying(report_cfg_id));
+      return false;
+    }
+    if (std::holds_alternative<rrc_periodical_report_cfg>(report_cfg_it->second)) {
+      logger.warning("Cannot add neighbor relation. Cause: Report config id={} is periodical (serving cell only)",
+                     to_underlying(report_cfg_id));
+      return false;
+    }
+  }
+
+  auto ncell_it = std::find_if(serving_it->second.ncells.begin(),
+                               serving_it->second.ncells.end(),
+                               [neighbor_nci](const neighbor_cell_meas_config& nc) { return nc.nci == neighbor_nci; });
+  if (ncell_it != serving_it->second.ncells.end()) {
+    ncell_it->report_cfg_ids = std::move(report_cfg_ids);
+    logger.info("Updated neighbor relation from nci={:#x} to nci={:#x}", serving_nci.value(), neighbor_nci.value());
+  } else {
+    neighbor_cell_meas_config& ncell = serving_it->second.ncells.emplace_back();
+    ncell.nci                        = neighbor_nci;
+    ncell.report_cfg_ids             = std::move(report_cfg_ids);
+    logger.info("Added neighbor relation from nci={:#x} to nci={:#x}", serving_nci.value(), neighbor_nci.value());
+  }
+  log_cells(logger, cfg);
+
+  return true;
+}
+
+bool cell_meas_manager::remove_neighbor(nr_cell_identity serving_nci, nr_cell_identity neighbor_nci)
+{
+  auto serving_it = cfg.cells.find(serving_nci);
+  if (serving_it == cfg.cells.end()) {
+    logger.warning("Cannot remove neighbor relation. Cause: No cell config for serving nci={:#x}", serving_nci.value());
+    return false;
+  }
+  auto ncell_it = std::find_if(serving_it->second.ncells.begin(),
+                               serving_it->second.ncells.end(),
+                               [neighbor_nci](const neighbor_cell_meas_config& nc) { return nc.nci == neighbor_nci; });
+  if (ncell_it == serving_it->second.ncells.end()) {
+    logger.warning("Cannot remove neighbor relation. Cause: nci={:#x} is not a neighbor of nci={:#x}",
+                   neighbor_nci.value(),
+                   serving_nci.value());
+    return false;
+  }
+  serving_it->second.ncells.erase(ncell_it);
+  logger.info("Removed neighbor relation from nci={:#x} to nci={:#x}", serving_nci.value(), neighbor_nci.value());
+  log_cells(logger, cfg);
+
+  return true;
+}
+
+bool cell_meas_manager::add_or_update_report_config(report_cfg_id_t report_cfg_id, const rrc_report_cfg_nr& report_cfg)
+{
+  const bool is_periodical = std::holds_alternative<rrc_periodical_report_cfg>(report_cfg);
+
+  // A referenced report config must keep the report-type class its references rely on.
+  for (const auto& [nci, cell] : cfg.cells) {
+    if (is_periodical) {
+      for (const auto& ncell : cell.ncells) {
+        if (std::find(ncell.report_cfg_ids.begin(), ncell.report_cfg_ids.end(), report_cfg_id) !=
+            ncell.report_cfg_ids.end()) {
+          logger.warning("Cannot update report config id={} to periodical. Cause: Referenced by a neighbor "
+                         "relation of nci={:#x}",
+                         to_underlying(report_cfg_id),
+                         nci.value());
+          return false;
+        }
+      }
+    } else if (cell.periodic_report_cfg_id == report_cfg_id) {
+      logger.warning("Cannot update report config id={} to non-periodical. Cause: Used as periodic report of nci={:#x}",
+                     to_underlying(report_cfg_id),
+                     nci.value());
+      return false;
+    }
+  }
+
+  const bool existed                   = cfg.report_config_ids.count(report_cfg_id) > 0;
+  cfg.report_config_ids[report_cfg_id] = report_cfg;
+  logger.info("{} report config id={}", existed ? "Updated" : "Added", to_underlying(report_cfg_id));
+
+  return true;
+}
+
+bool cell_meas_manager::remove_report_config(report_cfg_id_t report_cfg_id)
+{
+  auto report_cfg_it = cfg.report_config_ids.find(report_cfg_id);
+  if (report_cfg_it == cfg.report_config_ids.end()) {
+    logger.warning("Cannot remove report config id={}. Cause: No report config with this id",
+                   to_underlying(report_cfg_id));
+    return false;
+  }
+  for (const auto& [nci, cell] : cfg.cells) {
+    if (cell.periodic_report_cfg_id == report_cfg_id) {
+      logger.warning("Cannot remove report config id={}. Cause: Used as periodic report of nci={:#x}",
+                     to_underlying(report_cfg_id),
+                     nci.value());
+      return false;
+    }
+    for (const auto& ncell : cell.ncells) {
+      if (std::find(ncell.report_cfg_ids.begin(), ncell.report_cfg_ids.end(), report_cfg_id) !=
+          ncell.report_cfg_ids.end()) {
+        logger.warning("Cannot remove report config id={}. Cause: Referenced by a neighbor relation of nci={:#x}",
+                       to_underlying(report_cfg_id),
+                       nci.value());
+        return false;
+      }
+    }
+  }
+  cfg.report_config_ids.erase(report_cfg_it);
+  logger.info("Removed report config id={}", to_underlying(report_cfg_id));
+
+  return true;
+}
+
+bool cell_meas_manager::set_periodic_report_config(nr_cell_identity nci, std::optional<report_cfg_id_t> report_cfg_id)
+{
+  auto cell_it = cfg.cells.find(nci);
+  if (cell_it == cfg.cells.end()) {
+    logger.warning("Cannot set periodic report. Cause: No cell config for nci={:#x}", nci.value());
+    return false;
+  }
+  if (report_cfg_id.has_value()) {
+    auto report_cfg_it = cfg.report_config_ids.find(report_cfg_id.value());
+    if (report_cfg_it == cfg.report_config_ids.end()) {
+      logger.warning("Cannot set periodic report for nci={:#x}. Cause: No report config with id={}",
+                     nci.value(),
+                     to_underlying(report_cfg_id.value()));
+      return false;
+    }
+    if (!std::holds_alternative<rrc_periodical_report_cfg>(report_cfg_it->second)) {
+      logger.warning("Cannot set periodic report for nci={:#x}. Cause: Report config id={} is not periodical",
+                     nci.value(),
+                     to_underlying(report_cfg_id.value()));
+      return false;
+    }
+  }
+  cell_it->second.periodic_report_cfg_id = report_cfg_id;
+  logger.info("Set periodic report of nci={:#x} to id={}",
+              nci.value(),
+              report_cfg_id.has_value() ? std::to_string(to_underlying(report_cfg_id.value())) : "none");
+
+  return true;
+}
+
+bool cell_meas_manager::update_ntn_neighbour_info(nr_cell_identity                             serving_nci,
+                                                  span<const rrc_ntn_neighbour_cell_info_item> ncells)
+{
+  auto cell_it = cfg.cells.find(serving_nci);
+  if (cell_it == cfg.cells.end()) {
+    logger.warning("Received NTN neighbour info update for unknown serving cell nci={:#x}", serving_nci);
+    return false;
+  }
+
+  bool updated = false;
+  for (const rrc_ntn_neighbour_cell_info_item& item : ncells) {
+    auto ncell_it = std::find_if(cell_it->second.ncells.begin(),
+                                 cell_it->second.ncells.end(),
+                                 [&item](const neighbor_cell_meas_config& nc) { return nc.nci == item.nci; });
+    if (ncell_it == cell_it->second.ncells.end()) {
+      logger.warning("Received NTN neighbour info update for unknown neighbour nci={:#x} of serving cell nci={:#x}",
+                     item.nci,
+                     serving_nci);
+      continue;
+    }
+    ncell_it->ntn_neighbour_info = item.info;
+    ncell_it->ntn_polarization   = item.polarization;
+    updated                      = true;
+  }
+
+  if (updated) {
+    logger.debug("Updated NTN neighbour info for serving cell nci={:#x}", serving_nci);
+  }
+  return updated;
 }
 
 static std::optional<uint8_t> get_ssb_rsrp(const rrc_meas_result_nr& meas_result)
@@ -323,12 +636,31 @@ void cell_meas_manager::report_measurement(cu_cp_ue_index_t ue_index, const rrc_
 
   auto& meas_ctxt = ue_meas_context.meas_id_to_meas_context.at(meas_results.meas_id);
 
+  // The measurement context references the cell configuration by NCI: look it up guarded, so a measurement
+  // report racing a configuration change cannot dereference an erased entry.
+  auto serving_cell_it = cfg.cells.find(meas_ctxt.nci);
+  if (serving_cell_it == cfg.cells.end()) {
+    logger.warning("ue={}: Ignoring measurement result for meas_id={}. Cause: No cell config for nci={:#x}",
+                   ue_index,
+                   fmt::underlying(meas_results.meas_id),
+                   meas_ctxt.nci.value());
+    return;
+  }
+  const cell_meas_config& serving_cell = serving_cell_it->second;
+
   // Handle periodic measurement results.
-  if (cfg.cells.at(meas_ctxt.nci).periodic_report_cfg_id.has_value() &&
-      cfg.cells.at(meas_ctxt.nci).periodic_report_cfg_id.value() == meas_ctxt.report_cfg_id) {
+  if (serving_cell.periodic_report_cfg_id.has_value() &&
+      serving_cell.periodic_report_cfg_id.value() == meas_ctxt.report_cfg_id) {
     uint8_t periodic_ho_rsrp_offset = 0;
-    if (const auto* periodical = std::get_if<rrc_periodical_report_cfg>(
-            &cfg.report_config_ids.at(cfg.cells.at(meas_ctxt.nci).periodic_report_cfg_id.value()));
+    auto    report_cfg_it           = cfg.report_config_ids.find(serving_cell.periodic_report_cfg_id.value());
+    if (report_cfg_it == cfg.report_config_ids.end()) {
+      logger.warning("ue={}: Ignoring measurement result for meas_id={}. Cause: No report config with id={}",
+                     ue_index,
+                     fmt::underlying(meas_results.meas_id),
+                     to_underlying(serving_cell.periodic_report_cfg_id.value()));
+      return;
+    }
+    if (const auto* periodical = std::get_if<rrc_periodical_report_cfg>(&report_cfg_it->second);
         periodical != nullptr) {
       if (periodical->periodic_ho_rsrp_offset == -1) {
         logger.debug("ue={}: Handover from periodic measurements is disabled", ue_index);
@@ -341,8 +673,13 @@ void cell_meas_manager::report_measurement(cu_cp_ue_index_t ue_index, const rrc_
     std::optional<pci_t> strongest_neighbor =
         find_strongest_neighbor(ue_index, meas_results, logger, periodic_ho_rsrp_offset);
     if (strongest_neighbor.has_value()) {
-      for (const auto& ncell : cfg.cells.at(meas_ctxt.nci).ncells) {
-        const cell_meas_config& ncell_cfg = cfg.cells.at(ncell.nci);
+      for (const auto& ncell : serving_cell.ncells) {
+        auto ncell_it = cfg.cells.find(ncell.nci);
+        if (ncell_it == cfg.cells.end()) {
+          logger.warning("ue={}: No cell config for neighbor nci={:#x}, skipping", ue_index, ncell.nci.value());
+          continue;
+        }
+        const cell_meas_config& ncell_cfg = ncell_it->second;
         if (ncell_cfg.serving_cell_cfg.pci.has_value() &&
             ncell_cfg.serving_cell_cfg.pci.value() == strongest_neighbor.value()) {
           // Report cell.
@@ -365,14 +702,13 @@ void cell_meas_manager::report_measurement(cu_cp_ue_index_t ue_index, const rrc_
       if (serv_cell.meas_result_best_neigh_cell.has_value()) {
         // Report this cell.
         if (serv_cell.meas_result_best_neigh_cell.value().pci.has_value()) {
-          const cell_meas_config& cell_cfg = cfg.cells.at(meas_ctxt.nci);
           mobility_mng_notifier.on_neighbor_better_than_spcell(
               ue_index,
               meas_ctxt.nci.gnb_id(meas_ctxt.gnb_id_bit_length),
               meas_ctxt.nci,
               serv_cell.meas_result_best_neigh_cell.value().pci.value(),
-              cell_cfg.serving_cell_cfg.plmn,
-              cell_cfg.serving_cell_cfg.tac);
+              serving_cell.serving_cell_cfg.plmn,
+              serving_cell.serving_cell_cfg.tac);
           return;
         }
       }
@@ -382,13 +718,12 @@ void cell_meas_manager::report_measurement(cu_cp_ue_index_t ue_index, const rrc_
     std::optional<pci_t> strongest_neighbor = find_strongest_neighbor(ue_index, meas_results, logger);
     if (strongest_neighbor.has_value()) {
       // Report cell.
-      const cell_meas_config& cell_cfg = cfg.cells.at(meas_ctxt.nci);
       mobility_mng_notifier.on_neighbor_better_than_spcell(ue_index,
                                                            meas_ctxt.nci.gnb_id(meas_ctxt.gnb_id_bit_length),
                                                            meas_ctxt.nci,
                                                            strongest_neighbor.value(),
-                                                           cell_cfg.serving_cell_cfg.plmn,
-                                                           cell_cfg.serving_cell_cfg.tac);
+                                                           serving_cell.serving_cell_cfg.plmn,
+                                                           serving_cell.serving_cell_cfg.tac);
       return;
     }
   }
@@ -410,15 +745,18 @@ void cell_meas_manager::update_measurement_object(nr_cell_identity              
 {
   ocudu_assert(is_complete(serving_cell_cfg), "Incomplete measurement object update for nci={:#x}", nci);
 
+  // Detach the cell from the frequency of any previous configuration first, so a repeated update (e.g. a DU
+  // re-attach) does not append a duplicate lookup entry and a frequency change does not leave a stale one.
+  remove_measurement_object(nci);
+
   ssb_frequency_t ssb_freq = serving_cell_cfg.ssb_arfcn.value().value();
 
   // Add to lookup.
-  if (ssb_freq_to_ncis.find(ssb_freq) != ssb_freq_to_ncis.end()) {
-    ssb_freq_to_ncis.at(ssb_freq).push_back(nci);
-  } else {
-    ssb_freq_to_ncis.emplace(ssb_freq, std::vector<nr_cell_identity>{nci});
+  auto& freq_ncis = ssb_freq_to_ncis[ssb_freq];
+  if (std::find(freq_ncis.begin(), freq_ncis.end(), nci) == freq_ncis.end()) {
+    freq_ncis.push_back(nci);
   }
-  nci_to_serving_cell_meas_config.emplace(serving_cell_cfg.nci, serving_cell_cfg);
+  nci_to_serving_cell_meas_config[serving_cell_cfg.nci] = serving_cell_cfg;
 
   if (ssb_freq_to_meas_object.find(ssb_freq) != ssb_freq_to_meas_object.end()) {
     // If the measurement object is already present, we ignore the duplicate.
@@ -426,6 +764,29 @@ void cell_meas_manager::update_measurement_object(nr_cell_identity              
     return;
   }
   ssb_freq_to_meas_object.emplace(ssb_freq, generate_measurement_object(serving_cell_cfg));
+}
+
+void cell_meas_manager::remove_measurement_object(nr_cell_identity nci)
+{
+  // The stored serving-cell config remembers the frequency the cell was last attached to.
+  auto old_cfg_it = nci_to_serving_cell_meas_config.find(nci);
+  if (old_cfg_it == nci_to_serving_cell_meas_config.end()) {
+    return;
+  }
+  ssb_frequency_t old_ssb_freq = old_cfg_it->second.ssb_arfcn.value().value();
+
+  auto freq_ncis_it = ssb_freq_to_ncis.find(old_ssb_freq);
+  if (freq_ncis_it != ssb_freq_to_ncis.end()) {
+    auto& freq_ncis = freq_ncis_it->second;
+    freq_ncis.erase(std::remove(freq_ncis.begin(), freq_ncis.end(), nci), freq_ncis.end());
+    if (freq_ncis.empty()) {
+      // Last cell on this frequency: drop the measurement object with it.
+      ssb_freq_to_ncis.erase(freq_ncis_it);
+      ssb_freq_to_meas_object.erase(old_ssb_freq);
+    }
+  }
+
+  nci_to_serving_cell_meas_config.erase(old_cfg_it);
 }
 
 expected<std::pair<unsigned, nr_cell_identity>> cell_meas_manager::find_neighbour_nci(pci_t pci)
@@ -438,7 +799,7 @@ expected<std::pair<unsigned, nr_cell_identity>> cell_meas_manager::find_neighbou
   return make_unexpected(default_error_t{});
 }
 
-static expected<nr_cell_identity, std::string> find_nci(const cell_meas_manager_cfg& meas_mng_cfg, pci_t pci)
+static expected<nr_cell_identity, std::string> find_nci(const cell_meas_manager_config& meas_mng_cfg, pci_t pci)
 {
   for (const auto& [nci, cell_cfg] : meas_mng_cfg.cells) {
     if (cell_cfg.serving_cell_cfg.pci == pci) {
@@ -451,7 +812,7 @@ static expected<nr_cell_identity, std::string> find_nci(const cell_meas_manager_
 static expected<cell_measurement_positioning_info, std::string> generate_measurement_objects_for_positioning(
     cu_cp_ue_index_t                                            ue_index,
     ue_manager&                                                 ue_mng,
-    const cell_meas_manager_cfg&                                cfg,
+    const cell_meas_manager_config&                             cfg,
     const std::map<nr_cell_identity, serving_cell_meas_config>& nci_to_serving_cell_meas_config,
     const rrc_meas_results&                                     meas_results,
     ocudulog::basic_logger&                                     logger)
@@ -465,7 +826,7 @@ static expected<cell_measurement_positioning_info, std::string> generate_measure
   ocudu_assert(ue_meas_context.meas_id_to_meas_context.find(meas_results.meas_id) !=
                    ue_meas_context.meas_id_to_meas_context.end(),
                "ue={}: Measurement result for unknown meas_id={} received",
-               fmt::underlying(ue_index),
+               ue_index,
                fmt::underlying(meas_results.meas_id));
 
   meas_context_t& meas_ctxt = ue_meas_context.meas_id_to_meas_context.at(meas_results.meas_id);

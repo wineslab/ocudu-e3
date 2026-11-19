@@ -27,7 +27,7 @@ public:
   void reconfigure(const ue_cell_configuration& ue_cell_cfg);
 
   /// Update UE with the latest PHR for a given cell.
-  void handle_phr(const cell_ph_report& phr, slot_point slot_rx);
+  void handle_phr(const cell_ph_report& phr, slot_point slot_rx, rnti_t phr_rnti);
 
   /// Save the PUSCH power control parameters after each PUSCH transmission.
   void update_pusch_pw_ctrl_state(slot_point slot, unsigned nof_prbs);

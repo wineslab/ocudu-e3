@@ -35,11 +35,11 @@ private:
   /// \brief Searches in PDSCH and PDCCH for space to allocate SIB1 and SIB1's DCI, respectively.
   ///
   /// \param[out,in] res_grid Resource grid with current allocations and scheduling results.
-  /// \param[in] beam_idx SSB or beam index which the SIB1 corresponds to.
+  /// \param[in] ssb_idx SSB candidate index which the SIB1 corresponds to.
   /// \param[in] time_resource PDSCH time domain resource.
-  bool allocate_sib1(cell_slot_resource_allocator& res_grid, unsigned beam_idx, unsigned time_resource);
+  bool allocate_sib1(cell_slot_resource_allocator& res_grid, unsigned ssb_idx, unsigned time_resource);
 
-  /// \brief Fills the SIB1 slots, at which each beam's SIB1 is allocated.
+  /// \brief Fills the SIB1 slots, at which each SSB candidate's SIB1 is allocated.
   ///
   /// These slots are computed and saved in the body of the constructor.
   /// \param[out,in] res_grid Resource grid with current allocations and scheduling results.
@@ -48,6 +48,7 @@ private:
   /// \param[in] dmrs_info DMRS information for SIB1.
   /// \param[in] tbs Transport block size.
   void fill_sib1_grant(cell_slot_resource_allocator& res_grid,
+                       unsigned                      ssb_idx,
                        crb_interval                  sib1_crbs_grant,
                        unsigned                      time_resource,
                        const dmrs_information&       dmrs_info,
@@ -67,7 +68,7 @@ private:
   std::chrono::milliseconds sib1_rtx_period;
   /// The SIB1 payload is in bytes.
   units::bytes sib1_payload_size;
-  /// Max number of SSB beams.
+  /// Max number of SSB candidates per SSB period.
   const uint8_t L_max;
   /// Current SIB version.
   unsigned current_version = 0;
@@ -75,8 +76,8 @@ private:
   /// This is a dummy BWP configuration dimensioned based on CORESET#0 RB limits. It's used for CRB-to-PRB conversion.
   bwp_configuration coreset0_bwp_cfg;
 
-  /// Array of Type0-PDCCH CSS slots  (1 per beam) that will be used for SIB1 scheduling [TS 38.213, Section 13].
-  std::array<slot_point, MAX_NUM_BEAMS> sib1_type0_pdcch_css_slots;
+  /// Array of Type0-PDCCH CSS slots (1 per SSB candidate) used for SIB1 scheduling [TS 38.213, Section 13].
+  std::array<slot_point, MAX_NOF_SSB_CANDIDATES> sib1_type0_pdcch_css_slots;
 
   /// Pending new SIB1 PDU to be applied.
   unsigned     pending_version = 0;

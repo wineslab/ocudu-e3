@@ -22,12 +22,14 @@ class eth_frame_pool;
 
 namespace ofh {
 
+class ofh_sector_executor_mapper;
+
 /// Creates a transmitter with the given configuration and dependencies.
 std::unique_ptr<transmitter>
 create_transmitter(const transmitter_config&                               transmitter_cfg,
                    ocudulog::basic_logger&                                 logger,
                    task_executor&                                          tx_executor,
-                   task_executor&                                          downlink_executor,
+                   ofh_sector_executor_mapper&                             exec_mapper,
                    error_notifier&                                         err_notifier,
                    std::unique_ptr<ether::transmitter>                     eth_transmitter,
                    std::shared_ptr<prach_context_repository>               prach_context_repo,

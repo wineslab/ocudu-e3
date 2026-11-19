@@ -4,7 +4,9 @@
 
 #include "f1ap_positioning_measurement_procedure.h"
 #include "asn1_helpers.h"
+#include "f1ap_asn1_utils.h"
 #include "ocudu/adt/expected.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
@@ -53,9 +55,15 @@ void f1ap_positioning_measurement_procedure::operator()(
 {
   CORO_BEGIN(ctx);
 
-  logger.debug("\"{}\" initialized", name());
+  logger.info("\"{}\" started...", name());
 
   transaction = ev_mng.transactions.create_transaction(f1ap_cfg.proc_timeout);
+
+  // The transaction may already be aborted at this point, e.g. if the F1AP is being stopped. Skip sending the
+  // request in that case, since nothing will ever observe its response.
+  if (transaction.aborted()) {
+    CORO_EARLY_RETURN(handle_procedure_outcome());
+  }
 
   // Send command to DU.
   send_positioning_measurement_request();
@@ -90,7 +98,7 @@ f1ap_positioning_measurement_procedure::handle_procedure_outcome()
 {
   if (transaction.aborted()) {
     // Timeout or cancellation case.
-    logger.debug("\"{}\" failed", name());
+    logger.warning("\"{}\" failed. Cause: Timeout or cancellation", name());
     return make_unexpected(create_positioning_measurement_failure(f1ap_cause_radio_network_t::unspecified));
   }
 
@@ -99,10 +107,12 @@ f1ap_positioning_measurement_procedure::handle_procedure_outcome()
   if (not du_pdu_response.has_value()) {
     procedure_outcome = make_unexpected(create_positioning_measurement_failure(
         asn1_to_cause(du_pdu_response.error().value.positioning_meas_fail()->cause)));
-    logger.debug("\"{}\" failed", name());
+    logger.warning("\"{}\" failed. Cause: {}",
+                   name(),
+                   get_cause_str(du_pdu_response.error().value.positioning_meas_fail()->cause));
   } else {
     procedure_outcome = create_positioning_measurement_response(du_pdu_response.value().value.positioning_meas_resp());
-    logger.debug("\"{}\" finished successfully", name());
+    logger.info("\"{}\" finished successfully", name());
   }
 
   // Send response to CU-CP.
@@ -818,13 +828,13 @@ static inline asn1::f1ap::srs_configuration_s srs_configuration_to_asn1(const sr
 static void fill_asn1_positioning_measurement_request(asn1::f1ap::positioning_meas_request_s& asn1_request,
                                                       const measurement_request_t&            request)
 {
-  asn1_request->lmf_meas_id = lmf_meas_id_to_uint(request.lmf_meas_id);
-  asn1_request->ran_meas_id = ran_meas_id_to_uint(request.ran_meas_id);
+  asn1_request->lmf_meas_id = to_underlying(request.lmf_meas_id);
+  asn1_request->ran_meas_id = to_underlying(request.ran_meas_id);
 
   // Fill TRP meas request list.
   for (const auto& trp_meas_request_item : request.trp_meas_request_list) {
     asn1::f1ap::trp_meas_request_item_s asn1_trp_meas_request_item;
-    asn1_trp_meas_request_item.trp_id = trp_id_to_uint(trp_meas_request_item.trp_id);
+    asn1_trp_meas_request_item.trp_id = to_underlying(trp_meas_request_item.trp_id);
     if (trp_meas_request_item.search_win_info.has_value()) {
       asn1_trp_meas_request_item.search_win_info_present = true;
       asn1_trp_meas_request_item.search_win_info.expected_propagation_delay =

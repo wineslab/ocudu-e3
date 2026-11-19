@@ -4,6 +4,7 @@
 
 #include "du_processor_factory.h"
 #include "du_processor_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/async_task_scheduler.h"
 
 /// Notice this would be the only place were we include concrete class implementation files.
@@ -11,13 +12,8 @@
 using namespace ocudu;
 using namespace ocucp;
 
-std::unique_ptr<du_processor> ocudu::ocucp::create_du_processor(du_processor_config_t        du_processor_config,
-                                                                du_processor_cu_cp_notifier& cu_cp_notifier_,
-                                                                f1ap_message_notifier&       f1ap_pdu_notifier_,
-                                                                async_task_scheduler&        common_task_sched_,
-                                                                ue_manager&                  ue_mng_)
+std::unique_ptr<du_processor> ocudu::ocucp::create_du_processor(const du_processor_config& cfg,
+                                                                du_processor_dependencies  dependencies)
 {
-  auto du_processor = std::make_unique<du_processor_impl>(
-      std::move(du_processor_config), cu_cp_notifier_, f1ap_pdu_notifier_, common_task_sched_, ue_mng_);
-  return du_processor;
+  return std::make_unique<du_processor_impl>(cfg, std::move(dependencies));
 }

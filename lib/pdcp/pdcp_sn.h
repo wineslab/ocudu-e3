@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "ocudu/pdcp/pdcp_config.h"
+#include "ocudu/ran/pdcp/pdcp_sn_size.h"
 #include "ocudu/support/ocudu_assert.h"
 
 namespace ocudu {
 
 constexpr uint32_t pdcp_compute_sn(uint32_t count, pdcp_sn_size sn_size)
 {
-  return count & (0xffffffffU >> (32U - pdcp_sn_size_to_uint(sn_size)));
+  return count & pdcp_compute_sn_mask(sn_size);
 }
 
 constexpr uint32_t pdcp_compute_hfn(uint32_t count, pdcp_sn_size sn_size)

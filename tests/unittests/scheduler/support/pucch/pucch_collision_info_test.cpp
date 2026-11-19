@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/support/pucch/pucch_collision.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/ran/pucch/pucch_configuration.h"
 #include "ocudu/ran/pucch/pucch_constants.h"

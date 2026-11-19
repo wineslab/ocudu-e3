@@ -71,7 +71,8 @@ protected:
 
   static rach_indication_message::preamble create_preamble()
   {
-    static auto next_rnti = test_rng::uniform_int<unsigned>(to_value(rnti_t::MIN_CRNTI), to_value(rnti_t::MAX_CRNTI));
+    static auto next_rnti =
+        test_rng::uniform_int<unsigned>(to_underlying(rnti_t::MIN_CRNTI), to_underlying(rnti_t::MAX_CRNTI));
     static const auto rnti_inc = test_rng::uniform_int<unsigned>(1, 5);
 
     rach_indication_message::preamble preamble =
@@ -89,8 +90,9 @@ protected:
     for (unsigned i = 0; i != nof_preambles; ++i) {
       preambles[i] = this->create_preamble();
     }
-    rach_indication_message rach_ind = test_helper::create_rach_indication(next_slot_rx() - 1, preambles);
-    rach_ind.cell_index              = cell_idx;
+    rach_indication_message rach_ind =
+        test_helper::create_rach_indication(cell_cfg(cell_idx), next_slot_rx() - 1, preambles);
+    rach_ind.cell_index = cell_idx;
 
     return rach_ind;
   }
@@ -110,8 +112,8 @@ protected:
       } break;
       case pucch_format::FORMAT_2: {
         uci_indication::uci_pdu::uci_pucch_f2_or_f3_or_f4_pdu pucch_pdu{};
-        pucch_pdu.sr_info.resize(sr_nof_bits_to_uint(pucch_res.uci_bits.sr_bits));
-        pucch_pdu.sr_info.fill(0, sr_nof_bits_to_uint(pucch_res.uci_bits.sr_bits), true);
+        pucch_pdu.sr_info.resize(to_underlying(pucch_res.uci_bits.sr_bits));
+        pucch_pdu.sr_info.fill(0, to_underlying(pucch_res.uci_bits.sr_bits), true);
       } break;
       default:
         report_fatal_error("Not handling SR grant over PUCCH format 0, 3 and 4");
@@ -130,11 +132,11 @@ protected:
     if (last_sched_result(to_du_cell_index(cell_idx)) == nullptr) {
       return {};
     }
-    const auto* pucch_res =
-        std::find_if(last_sched_result(to_du_cell_index(cell_idx))->ul.pucchs.begin(),
-                     last_sched_result(to_du_cell_index(cell_idx))->ul.pucchs.end(),
-                     [ue_idx](const pucch_info& pucch) { return pucch.crnti == get_ue_crnti(ue_idx); });
-    if (pucch_res == last_sched_result(to_du_cell_index(cell_idx))->ul.pucchs.end()) {
+    span<const pucch_info> pucchs    = last_sched_result(to_du_cell_index(cell_idx))->ul.pucchs.unsorted();
+    const auto*            pucch_res = std::find_if(pucchs.begin(), pucchs.end(), [ue_idx](const pucch_info& pucch) {
+      return pucch.crnti == get_ue_crnti(ue_idx);
+    });
+    if (pucch_res == pucchs.end()) {
       return {};
     }
 
@@ -161,7 +163,7 @@ public:
 TEST_P(multi_cell_scheduler_tester, test_ssb_allocation_for_multiple_cells)
 {
   const auto ssb_period_slots =
-      to_value(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period) *
+      to_underlying(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period) *
       get_nof_slots_per_subframe(cell_cfg_builder_params_list[to_du_cell_index(0)].scs_common);
 
   std::vector<bool> is_ssb_scheduled_atleast_once(cell_cfg_builder_params_list.size(), false);
@@ -183,8 +185,8 @@ TEST_P(multi_cell_scheduler_tester, test_ssb_allocation_for_multiple_cells)
 TEST_P(multi_cell_scheduler_tester, test_sib1_allocation_for_multiple_cells)
 {
   const auto sib1_period_slots =
-      std::max<unsigned>(to_value(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period),
-                         to_value(sched_cfg.si.sib1_retx_period)) *
+      std::max<unsigned>(to_underlying(cell_cfg(to_du_cell_index(0)).params.ssb_cfg.ssb_period),
+                         to_underlying(sched_cfg.si.sib1_retx_period)) *
       get_nof_slots_per_subframe(cell_cfg_builder_params_list[to_du_cell_index(0)].scs_common);
 
   std::vector<bool> is_sib1_scheduled_atleast_once(cell_cfg_builder_params_list.size(), false);

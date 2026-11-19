@@ -72,13 +72,38 @@ public:
       dummy_cu_cp_handler& parent;
     };
 
+    nof_connection_requests++;
+
+    if (nof_connections_to_reject > 0) {
+      // Simulate a CU-CP that is not reachable. Dropping the Rx notifier tears the E1 interface down again.
+      nof_connections_to_reject--;
+      return nullptr;
+    }
+
     cu_up_rx_pdu_notifier = std::move(cu_up_rx_pdu_notifier_);
 
     return std::make_unique<dummy_cu_up_tx_pdu_notifier>(*this);
   }
 
+  /// Number of connection requests that are rejected before the CU-CP starts accepting them.
+  std::atomic<unsigned> nof_connections_to_reject{0};
+  /// Number of connection requests received so far.
+  std::atomic<unsigned> nof_connection_requests{0};
+
 private:
   std::unique_ptr<e1ap_message_notifier> cu_up_rx_pdu_notifier;
+};
+
+/// Counts the successful E1 Setup procedures.
+class dummy_e1_setup_notifier : public cu_up_e1_setup_complete_notifier
+{
+public:
+  void on_e1_setup_complete(byte_buffer req, byte_buffer resp, gnb_cu_up_id_t gnb_cu_up_id) override
+  {
+    nof_setups_completed++;
+  }
+
+  std::atomic<unsigned> nof_setups_completed{0};
 };
 
 /// Fixture class for CU-UP test
@@ -119,29 +144,47 @@ protected:
     cfg.plmns                   = {"00101"};
     cfg.qos[uint_to_five_qi(9)] = {};
 
-    cfg.n3_cfg.gtpu_reordering_timer     = std::chrono::milliseconds(0);
-    cfg.n3_cfg.gtpu_rate_limiting_period = std::chrono::milliseconds(100);
-    cfg.n3_cfg.gtpu_queue_size           = 8192;
-    cfg.n3_cfg.gtpu_batch_size           = 256;
-    cfg.n3_cfg.gtpu_ignore_ue_ambr       = false;
-    cfg.n3_cfg.warn_on_drop              = false;
-    cfg.statistics_report_period         = std::chrono::seconds(1);
+    cfg.ngu_cfg.gtpu_reordering_timer     = std::chrono::milliseconds(0);
+    cfg.ngu_cfg.gtpu_rate_limiting_period = std::chrono::milliseconds(100);
+    cfg.ngu_cfg.gtpu_queue_size           = 8192;
+    cfg.ngu_cfg.gtpu_batch_size           = 256;
+    cfg.ngu_cfg.gtpu_ignore_ue_ambr       = false;
+    cfg.ngu_cfg.warn_on_drop              = false;
+    cfg.statistics_report_period          = std::chrono::seconds(1);
 
     return cfg;
   }
 
   cu_up_dependencies get_default_cu_up_dependencies()
   {
-    cu_up_dependencies deps;
-    deps.gtpu_pcap          = &dummy_pcap;
-    deps.exec_mapper        = exec_pool.get();
-    deps.e1_conn_clients    = {&e1ap_client};
-    deps.f1u_teid_allocator = f1u_teid_allocator.get();
-    deps.f1u_gateway        = f1u_gw.get();
-    ngu_gw                  = create_udp_gtpu_gateway(cu_up_udp_cfg, *broker, *executor, *executor);
-    deps.ngu_gws.push_back(ngu_gw.get());
-    deps.timers = app_timers.get();
+    auto setup_notifier = std::make_unique<dummy_e1_setup_notifier>();
+    e1_setup_notifier   = setup_notifier.get();
+
+    cu_up_dependencies deps{.exec_mapper          = *exec_pool,
+                            .f1u_teid_allocator   = *f1u_teid_allocator,
+                            .f1u_gateway          = *f1u_gw,
+                            .timers               = *app_timers,
+                            .gtpu_pcap            = dummy_pcap,
+                            .logger               = ocudulog::fetch_basic_logger("TEST"),
+                            .pdcp_metric_notifier = nullptr,
+                            .e1_conn_clients      = {&e1ap_client},
+                            .ngu_gws              = {},
+                            .e1_setup_notifier    = std::move(setup_notifier)};
+    deps.ngu_gws.push_back(create_udp_gtpu_gateway(cu_up_udp_cfg, *broker, *executor, *executor));
     return deps;
+  }
+
+  /// Polls \c predicate until it holds or the timeout elapses.
+  static bool wait_until(const std::function<bool()>& predicate, std::chrono::milliseconds timeout)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (not predicate()) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return true;
   }
 
   void init(const cu_up_config& cfg, cu_up_dependencies&& deps)
@@ -164,6 +207,7 @@ protected:
   std::unique_ptr<timer_manager> app_timers;
 
   dummy_cu_cp_handler                e1ap_client;
+  dummy_e1_setup_notifier*           e1_setup_notifier = nullptr;
   dummy_inner_f1u_bearer             f1u_bearer;
   std::unique_ptr<gtpu_teid_pool>    f1u_teid_allocator;
   std::unique_ptr<dummy_f1u_gateway> f1u_gw;
@@ -235,6 +279,32 @@ protected:
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
+/* E1 Connection                                                                    */
+//////////////////////////////////////////////////////////////////////////////////////
+TEST_F(cu_up_test, when_cu_cp_is_reachable_on_startup_then_e1_is_setup_on_the_first_attempt)
+{
+  init(get_default_cu_up_config(), get_default_cu_up_dependencies());
+
+  ASSERT_EQ(e1ap_client.nof_connection_requests, 1U);
+  ASSERT_EQ(e1_setup_notifier->nof_setups_completed, 1U);
+}
+
+TEST_F(cu_up_test, when_cu_cp_is_not_reachable_on_startup_then_cu_up_starts_and_retries_the_e1_connection)
+{
+  // Simulate a CU-CP that is not reachable for the first connection attempt.
+  e1ap_client.nof_connections_to_reject = 1;
+
+  // The CU-UP must start, even though the E1 connection could not be established.
+  init(get_default_cu_up_config(), get_default_cu_up_dependencies());
+
+  // The scheduled reconnection must establish the E1 connection and run the E1 Setup.
+  ASSERT_TRUE(
+      wait_until([this]() { return e1_setup_notifier->nof_setups_completed == 1U; }, std::chrono::milliseconds{5000}))
+      << "CU-UP did not retry the E1 connection after the failed attempt on startup";
+  ASSERT_EQ(e1ap_client.nof_connection_requests, 2U);
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
 /* User Data Flow                                                                   */
 //////////////////////////////////////////////////////////////////////////////////////
 TEST_F(cu_up_test, dl_data_flow)
@@ -244,7 +314,7 @@ TEST_F(cu_up_test, dl_data_flow)
   // Initialize UPF simulator on a random port.
   upf_info_t upf_info = init_upf();
   ASSERT_GE(upf_info.sock_fd, 0);
-  cfg.n3_cfg.upf_port = ntohs(upf_info.upf_addr.sin_port);
+  cfg.ngu_cfg.upf_port = ntohs(upf_info.upf_addr.sin_port);
 
   cu_up_dependencies dependencies = get_default_cu_up_dependencies();
 
@@ -285,7 +355,7 @@ TEST_F(cu_up_test, dl_data_flow)
   // Now that the disered buffer size is updated, we push DL PDUs
   sockaddr_in cu_up_addr;
   cu_up_addr.sin_family      = AF_INET;
-  cu_up_addr.sin_port        = htons(cu_up->get_n3_bind_port().value());
+  cu_up_addr.sin_port        = htons(cu_up->get_ngu_bind_port().value());
   cu_up_addr.sin_addr.s_addr = inet_addr(cu_up_udp_cfg.bind_address.c_str());
 
   // DL PDU teid=2, qfi=1
@@ -300,13 +370,13 @@ TEST_F(cu_up_test, dl_data_flow)
   // send message 1
   ret = sendto(upf_info.sock_fd, gtpu_ping_vec, sizeof(gtpu_ping_vec), 0, (sockaddr*)&cu_up_addr, sizeof(cu_up_addr));
   ASSERT_GE(ret, 0) << "Failed to send message via sock_fd=" << upf_info.sock_fd << " to `"
-                    << cu_up_udp_cfg.bind_address << ":" << cu_up->get_n3_bind_port().value() << "` - "
+                    << cu_up_udp_cfg.bind_address << ":" << cu_up->get_ngu_bind_port().value() << "` - "
                     << ::strerror(errno);
 
   // send message 2
   ret = sendto(upf_info.sock_fd, gtpu_ping_vec, sizeof(gtpu_ping_vec), 0, (sockaddr*)&cu_up_addr, sizeof(cu_up_addr));
   ASSERT_GE(ret, 0) << "Failed to send message via sock_fd=" << upf_info.sock_fd << " to `"
-                    << cu_up_udp_cfg.bind_address << ":" << cu_up->get_n3_bind_port().value() << "` - "
+                    << cu_up_udp_cfg.bind_address << ":" << cu_up->get_ngu_bind_port().value() << "` - "
                     << ::strerror(errno);
   ::close(upf_info.sock_fd);
 
@@ -334,8 +404,8 @@ TEST_F(cu_up_test, ul_data_flow)
   cu_up_config cfg = get_default_cu_up_config();
 
   //> Test preamble: listen on a free port
-  upf_info_t upf_info = init_upf();
-  cfg.n3_cfg.upf_port = ntohs(upf_info.upf_addr.sin_port);
+  upf_info_t upf_info  = init_upf();
+  cfg.ngu_cfg.upf_port = ntohs(upf_info.upf_addr.sin_port);
 
   //> Test main part: create CU-UP and transmit data
   cu_up_dependencies dependencies = get_default_cu_up_dependencies();
@@ -395,8 +465,8 @@ TEST_F(cu_up_test, echo_data_flow)
   cu_up_config cfg = get_default_cu_up_config();
 
   //> Test preamble: listen on a free port
-  upf_info_t upf_info = init_upf();
-  cfg.n3_cfg.upf_port = ntohs(upf_info.upf_addr.sin_port);
+  upf_info_t upf_info  = init_upf();
+  cfg.ngu_cfg.upf_port = ntohs(upf_info.upf_addr.sin_port);
 
   //> Test main part: create CU-UP and transmit data
   cu_up_dependencies dependencies = get_default_cu_up_dependencies();
@@ -405,7 +475,7 @@ TEST_F(cu_up_test, echo_data_flow)
   // Now that the disered buffer size is updated, we push DL PDUs
   sockaddr_in cu_up_addr;
   cu_up_addr.sin_family      = AF_INET;
-  cu_up_addr.sin_port        = htons(cu_up->get_n3_bind_port().value());
+  cu_up_addr.sin_port        = htons(cu_up->get_ngu_bind_port().value());
   cu_up_addr.sin_addr.s_addr = inet_addr(cu_up_udp_cfg.bind_address.c_str());
 
   // Send GTP-U echo request test message.
@@ -415,7 +485,7 @@ TEST_F(cu_up_test, echo_data_flow)
   ret = sendto(
       upf_info.sock_fd, gtpu_echo_req_vec, sizeof(gtpu_echo_req_vec), 0, (sockaddr*)&cu_up_addr, sizeof(cu_up_addr));
   ASSERT_GE(ret, 0) << "Failed to send message via sock_fd=" << upf_info.sock_fd << " to `"
-                    << cu_up_udp_cfg.bind_address << ":" << cu_up->get_n3_bind_port().value() << "` - "
+                    << cu_up_udp_cfg.bind_address << ":" << cu_up->get_ngu_bind_port().value() << "` - "
                     << ::strerror(errno);
 
   // Receive GTP-U echo response message and check result.

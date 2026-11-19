@@ -3,25 +3,13 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "message_builder_helpers.h"
+#include "ocudu/adt/format.h"
 #include <random>
 
 static std::mt19937 gen(0);
 
 using namespace ocudu;
 using namespace fapi;
-
-static unsigned generate_sfn()
-{
-  std::uniform_int_distribution<unsigned> dist(0, 1023);
-  return dist(gen);
-}
-
-static unsigned generate_slot()
-{
-  std::uniform_int_distribution<unsigned> dist(0, 159);
-
-  return dist(gen);
-}
 
 static ofdm_symbol_range generate_symbols()
 {
@@ -174,6 +162,10 @@ dl_ssb_pdu unittest::build_valid_dl_ssb_pdu()
   pdu.scs               = subcarrier_spacing::kHz240;
   pdu.L_max             = 4;
 
+  // One beam carries the complete SS/PBCH block.
+  pdu.precoding_and_beamforming           = build_valid_tx_precoding_and_beamforming_pdu();
+  pdu.precoding_and_beamforming.prg.beams = ocudu::precoding_beam_list({ocudu::to_beam_id(0)});
+
   return pdu;
 }
 
@@ -269,7 +261,7 @@ ocudu::fapi::dl_prs_pdu unittest::build_valid_dl_prs_pdu()
   // Precoding.
   pdu.precoding_and_beamforming.prg_size = 276;
   // Use identity matrix
-  pdu.precoding_and_beamforming.prg.pm_index = 0;
+  pdu.precoding_and_beamforming.prg.precoding = fapi::precoding_matrix_index{0};
 
   return pdu;
 }
@@ -379,164 +371,6 @@ ul_prach_pdu unittest::build_valid_ul_prach_pdu()
   pdu.num_cs             = generate_num_cs();
   pdu.num_fd_ra          = generate_index_fd_ra() + 1U;
   pdu.preambles          = generate_preambles();
-
-  return pdu;
-}
-
-static int generate_ul_sinr_metric()
-{
-  std::uniform_int_distribution<int> dist(-32768, 32767);
-  return dist(gen);
-}
-
-static phy_time_unit generate_timing_advance_offset()
-{
-  std::uniform_int_distribution<unsigned> dist(0, 100);
-  unsigned                                value = dist(gen);
-
-  return phy_time_unit::from_seconds((value < 64U) ? value : 65535U);
-}
-
-static unsigned generate_rssi_or_rsrp()
-{
-  std::uniform_int_distribution<unsigned> dist(0, 2500);
-  unsigned                                value = dist(gen);
-
-  return (value <= 1280U) ? value : 65535;
-}
-
-static units::bits generate_bit_length()
-{
-  std::uniform_int_distribution<unsigned> dist(1, 1706);
-  return units::bits(dist(gen));
-}
-
-static uci_harq_pdu generate_harq_pdu()
-{
-  uci_harq_pdu pdu;
-
-  pdu.detection_status    = uci_pusch_or_pucch_f2_3_4_detection_status::crc_pass;
-  pdu.expected_bit_length = generate_bit_length();
-  pdu.payload.resize(pdu.expected_bit_length.value());
-
-  return pdu;
-}
-
-static uci_csi_part1 generate_csi_part1_pdu()
-{
-  uci_csi_part1 pdu;
-
-  pdu.detection_status    = uci_pusch_or_pucch_f2_3_4_detection_status::crc_pass;
-  pdu.expected_bit_length = generate_bit_length();
-  pdu.payload.resize(pdu.expected_bit_length.value());
-
-  return pdu;
-}
-
-static uci_csi_part2 generate_csi_part2_pdu()
-{
-  uci_csi_part2 pdu;
-
-  pdu.detection_status    = uci_pusch_or_pucch_f2_3_4_detection_status::crc_pass;
-  pdu.expected_bit_length = generate_bit_length();
-  pdu.payload.resize(pdu.expected_bit_length.value());
-
-  return pdu;
-}
-
-uci_pusch_pdu unittest::build_valid_uci_pusch_pdu()
-{
-  uci_pusch_pdu pdu;
-
-  pdu.handle                = generate_handle();
-  pdu.rnti                  = generate_rnti();
-  pdu.ul_sinr_metric        = static_cast<int16_t>(generate_ul_sinr_metric());
-  pdu.timing_advance_offset = generate_timing_advance_offset();
-  pdu.rssi                  = generate_rssi_or_rsrp();
-  pdu.rsrp                  = generate_rssi_or_rsrp();
-
-  // Enable HARQ, CSI Part 1 and CSI Part 2.
-  pdu.harq      = generate_harq_pdu();
-  pdu.csi_part1 = generate_csi_part1_pdu();
-  pdu.csi_part2 = generate_csi_part2_pdu();
-
-  return pdu;
-}
-
-static sr_pdu_format_0_1 generate_sr_format01_pdu()
-{
-  sr_pdu_format_0_1 pdu;
-
-  std::uniform_int_distribution<unsigned> dist(0, 3);
-  pdu.sr_detected = std::min(1U, dist(gen));
-
-  return pdu;
-}
-
-static uci_harq_format_0_1 generate_harq_format01_pdu()
-{
-  uci_harq_format_0_1 pdu;
-
-  std::uniform_int_distribution<unsigned> dist(0, 2);
-
-  std::uniform_int_distribution<unsigned> nof_dist(1, 2);
-  for (unsigned i = 0, e = nof_dist(gen); i != e; ++i) {
-    pdu.harq_values.emplace_back(static_cast<uci_pucch_f0_or_f1_harq_values>(dist(gen)));
-  }
-
-  return pdu;
-}
-
-uci_pucch_pdu_format_0_1 unittest::build_valid_uci_pucch_format01_pdu()
-{
-  uci_pucch_pdu_format_0_1 pdu;
-
-  pdu.handle                = generate_handle();
-  pdu.rnti                  = generate_rnti();
-  pdu.ul_sinr_metric        = static_cast<int16_t>(generate_ul_sinr_metric());
-  pdu.timing_advance_offset = generate_timing_advance_offset();
-  pdu.rssi                  = generate_rssi_or_rsrp();
-  pdu.rsrp                  = generate_rssi_or_rsrp();
-
-  std::uniform_int_distribution<unsigned> dist(0, 1);
-  pdu.pucch_format = static_cast<uci_pucch_pdu_format_0_1::format_type>(dist(gen));
-
-  // Enable SR and HARQ for PUCCH format 0/1.
-  pdu.sr   = generate_sr_format01_pdu();
-  pdu.harq = generate_harq_format01_pdu();
-
-  return pdu;
-}
-
-static sr_pdu_format_2_3_4 generate_sr_format234_pdu()
-{
-  sr_pdu_format_2_3_4 pdu;
-
-  std::uniform_int_distribution<unsigned> dist(1, 4);
-  pdu.sr_payload.resize(std::ceil(static_cast<float>(dist(gen)) / 8.F));
-
-  return pdu;
-}
-
-uci_pucch_pdu_format_2_3_4 unittest::build_valid_uci_pucch_format234_pdu()
-{
-  uci_pucch_pdu_format_2_3_4 pdu;
-
-  pdu.handle                = generate_handle();
-  pdu.rnti                  = generate_rnti();
-  pdu.ul_sinr_metric        = static_cast<int16_t>(generate_ul_sinr_metric());
-  pdu.timing_advance_offset = generate_timing_advance_offset();
-  pdu.rssi                  = generate_rssi_or_rsrp();
-  pdu.rsrp                  = generate_rssi_or_rsrp();
-
-  std::uniform_int_distribution<unsigned> dist(0, 2);
-  pdu.pucch_format = static_cast<uci_pucch_pdu_format_2_3_4::format_type>(dist(gen));
-
-  // Enable SR, HARQ, CSI Part 1. CSI Part 2, UCI payload Part 1 and UCI payload Part 2.
-  pdu.sr        = generate_sr_format234_pdu();
-  pdu.harq      = generate_harq_pdu();
-  pdu.csi_part1 = generate_csi_part1_pdu();
-  pdu.csi_part2 = generate_csi_part2_pdu();
 
   return pdu;
 }
@@ -770,6 +604,7 @@ ul_pusch_pdu unittest::build_valid_ul_pusch_pdu()
 
   pdu.pusch_data = std::make_optional(ul_pusch_data{
       .rv_index = 2, .harq_process_id = to_harq_id(2), .new_data = false, .tb_size = units::bytes{213131}});
+  pdu.harq_id    = to_harq_id(2);
 
   pdu.pusch_uci = std::make_optional(ul_pusch_uci{.harq_ack_bit         = units::bits(3),
                                                   .csi_part1_bit        = units::bits(4),
@@ -789,79 +624,17 @@ ul_pusch_pdu unittest::build_valid_ul_pusch_pdu()
   pdu.ldpc_base_graph    = generate_ldpc_graph_type();
   pdu.tb_size_lbrm_bytes = units::bytes{32323242};
 
-  return pdu;
-}
-
-ul_srs_pdu unittest::build_valid_ul_srs_pdu()
-{
-  ul_srs_pdu pdu;
-  pdu.rnti                               = to_rnti(23);
-  pdu.handle                             = 8;
-  pdu.bwp                                = {230, 10};
-  pdu.scs                                = subcarrier_spacing::kHz240;
-  pdu.cp                                 = cyclic_prefix::NORMAL;
-  pdu.num_ant_ports                      = srs_resource_configuration::one_two_four_enum::two;
-  pdu.ofdm_symbols                       = ofdm_symbol_range();
-  pdu.num_repetitions                    = n1;
-  pdu.time_start_position                = 3;
-  pdu.config_index                       = 4;
-  pdu.sequence_id                        = 6;
-  pdu.bandwidth_index                    = 1;
-  pdu.comb_size                          = tx_comb_size::n2;
-  pdu.comb_offset                        = 1;
-  pdu.cyclic_shift                       = 0;
-  pdu.frequency_position                 = 3;
-  pdu.frequency_shift                    = 10;
-  pdu.frequency_hopping                  = 2;
-  pdu.group_or_sequence_hopping          = srs_group_or_sequence_hopping::neither;
-  pdu.resource_type                      = srs_resource_type::periodic;
-  pdu.t_srs                              = srs_periodicity::sl4;
-  pdu.t_offset                           = 2;
-  pdu.enable_normalized_iq_matrix_report = false;
-  pdu.enable_positioning_report          = false;
+  pdu.rapid = 123;
 
   return pdu;
-}
-
-ul_tti_request unittest::build_valid_ul_tti_request()
-{
-  ul_tti_request msg;
-
-  auto     scs        = subcarrier_spacing::kHz240;
-  unsigned sfn        = generate_sfn();
-  auto     slot_index = generate_slot();
-  msg.slot            = slot_point(scs, sfn, slot_index);
-
-  {
-    auto& pdu       = msg.pdus.emplace_back();
-    auto& prach_pdu = pdu.pdu.emplace<ul_prach_pdu>();
-    prach_pdu       = build_valid_ul_prach_pdu();
-  }
-  {
-    auto& pdu          = msg.pdus.emplace_back();
-    auto& pucch_f0_pdu = pdu.pdu.emplace<ul_pucch_pdu>();
-    pucch_f0_pdu       = build_valid_ul_pucch_f0_pdu();
-  }
-  {
-    auto& pdu          = msg.pdus.emplace_back();
-    auto& pucch_f3_pdu = pdu.pdu.emplace<ul_pucch_pdu>();
-    pucch_f3_pdu       = build_valid_ul_pucch_f3_pdu();
-  }
-  {
-    auto& pdu       = msg.pdus.emplace_back();
-    auto& pusch_pdu = pdu.pdu.emplace<ul_pusch_pdu>();
-    pusch_pdu       = build_valid_ul_pusch_pdu();
-  }
-
-  return msg;
 }
 
 ocudu::fapi::tx_precoding_and_beamforming_pdu unittest::build_valid_tx_precoding_and_beamforming_pdu()
 {
   ocudu::fapi::tx_precoding_and_beamforming_pdu pdu;
 
-  pdu.prg_size = 1U;
-  pdu.prg      = {3U};
+  pdu.prg_size      = 1U;
+  pdu.prg.precoding = ocudu::fapi::precoding_matrix_index{3U};
 
   return pdu;
 }

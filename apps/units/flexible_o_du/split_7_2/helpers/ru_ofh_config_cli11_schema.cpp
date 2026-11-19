@@ -9,8 +9,37 @@
 #include "ru_ofh_config.h"
 #include "ocudu/support/cli11_utils.h"
 #include "ocudu/support/config_parsers.h"
+#include "ocudu/support/string_parsing_utils.h"
 
 using namespace ocudu;
+
+static void configure_cli11_ru_ofh_beamforming_args(CLI::App& app, std::optional<ru_ofh_beamforming_config>& config)
+{
+  // Parse into a separate buffer. The current value might be inherited from the base cell beamforming configuration,
+  // while the schema allows the cell to define its own params.
+  auto bf_cfg = std::make_shared<ru_ofh_beamforming_config>(config.value_or(ru_ofh_beamforming_config{}));
+
+  CLI::App* bf_subcmd =
+      add_subcommand(app, "beamforming", "Downlink beamforming (Category B) configuration. Omit it for Category A");
+  add_option(*bf_subcmd, "--bfw_compr_method", bf_cfg->compression_method, "Beamforming weights compression method")
+      ->capture_default_str()
+      ->check(CLI::IsMember({"none", "bfp"}));
+  add_option(
+      *bf_subcmd, "--bfw_compr_bitwidth", bf_cfg->compression_bitwidth, "Beamforming weights compression bit width")
+      ->capture_default_str()
+      ->range(1, 16);
+
+  bf_subcmd->parse_complete_callback([&config, bf_subcmd, bf_cfg]() {
+    if (bf_subcmd->count() == 0) {
+      return;
+    }
+    if (bf_subcmd->count("--bfw_compr_method") != bf_subcmd->count("--bfw_compr_bitwidth")) {
+      report_error("Invalid Open Fronthaul Radio Unit configuration detected: both compression method and compression "
+                   "bitwidth must be specified for the beamforming weights\n");
+    }
+    config.emplace(*bf_cfg);
+  });
+}
 
 static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_base_cell_config& config)
 {
@@ -18,9 +47,9 @@ static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_bas
       app,
       "--ru_bandwidth_MHz",
       [&config](const std::string& value) {
-        unsigned bandwidth;
-        if (CLI::detail::lexical_cast(value, bandwidth)) {
-          config.ru_operating_bw = MHz_to_bs_channel_bandwidth(bandwidth);
+        auto bandwidth = parse_int<unsigned>(value);
+        if (bandwidth.has_value()) {
+          config.ru_operating_bw = MHz_to_bs_channel_bandwidth(*bandwidth);
         } else {
           config.ru_operating_bw.reset();
         }
@@ -59,28 +88,28 @@ static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_bas
   // Note: For the timing parameters, worst case is 2 slots for scs 15KHz and 14 symbols. Implementation defined.
   add_option(app, "--t1a_max_cp_dl", config.T1a_max_cp_dl, "T1a maximum value for downlink Control-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
   add_option(app, "--t1a_min_cp_dl", config.T1a_min_cp_dl, "T1a minimum value for downlink Control-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
   add_option(app, "--t1a_max_cp_ul", config.T1a_max_cp_ul, "T1a maximum value for uplink Control-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
   add_option(app, "--t1a_min_cp_ul", config.T1a_min_cp_ul, "T1a minimum value for uplink Control-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
   add_option(app, "--t1a_max_up", config.T1a_max_up, "T1a maximum value for User-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
   add_option(app, "--t1a_min_up", config.T1a_min_up, "T1a minimum value for User-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
   add_option(app, "--ta4_max", config.Ta4_max, "Ta4 maximum value for User-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
   add_option(app, "--ta4_min", config.Ta4_min, "Ta4 minimum value for User-Plane")
       ->capture_default_str()
-      ->check(CLI::Range(0, 1960));
+      ->range(0, 1960);
 
   if (config.T1a_min_cp_dl > config.T1a_max_cp_dl) {
     report_error("Invalid Open Fronthaul Radio Unit configuration detected. T1a maximum value must be greater than "
@@ -147,19 +176,19 @@ static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_bas
       ->check(compression_method_check);
   add_option(app, "--compr_bitwidth_ul", config.compression_bitwidth_ul, "Uplink compression bit width")
       ->capture_default_str()
-      ->check(CLI::Range(1, 16));
+      ->range(1, 16);
   add_option(app, "--compr_method_dl", config.compression_method_dl, "Downlink compression method")
       ->capture_default_str()
       ->check(compression_method_check);
   add_option(app, "--compr_bitwidth_dl", config.compression_bitwidth_dl, "Downlink compression bit width")
       ->capture_default_str()
-      ->check(CLI::Range(1, 16));
+      ->range(1, 16);
   add_option(app, "--compr_method_prach", config.compression_method_prach, "PRACH compression method")
       ->capture_default_str()
       ->check(compression_method_check);
   add_option(app, "--compr_bitwidth_prach", config.compression_bitwidth_prach, "PRACH compression bit width")
       ->capture_default_str()
-      ->check(CLI::Range(1, 16));
+      ->range(1, 16);
   add_option(app,
              "--enable_ul_static_compr_hdr",
              config.is_uplink_static_comp_hdr_enabled,
@@ -171,16 +200,17 @@ static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_bas
              "Downlink static compression header enabled flag")
       ->capture_default_str();
 
-  app.add_option_function<float>(
-         "--ru_reference_level_dBFS",
-         [&config](float value) {
-           if (!std::holds_alternative<ru_ofh_scaling_config>(config.iq_scaling_config)) {
-             config.iq_scaling_config.emplace<ru_ofh_scaling_config>();
-           }
-           std::get<ru_ofh_scaling_config>(config.iq_scaling_config).ru_reference_level_dBFS = value;
-         },
-         "RU IQ reference level mapped to the maximum RF power")
-      ->check(CLI::Range(-std::numeric_limits<float>::infinity(), 0.0f))
+  add_option_function<float>(
+      app,
+      "--ru_reference_level_dBFS",
+      [&config](float value) {
+        if (!std::holds_alternative<ru_ofh_scaling_config>(config.iq_scaling_config)) {
+          config.iq_scaling_config.emplace<ru_ofh_scaling_config>();
+        }
+        std::get<ru_ofh_scaling_config>(config.iq_scaling_config).ru_reference_level_dBFS = value;
+      },
+      "RU IQ reference level mapped to the maximum RF power")
+      ->range(-std::numeric_limits<float>::infinity(), 0.0f)
       ->check([&config](const std::string& value) -> std::string {
         if (std::holds_alternative<ru_ofh_legacy_scaling_config>(config.iq_scaling_config)) {
           return "IQ scaling and RU reference level cannot be set at the same time";
@@ -188,21 +218,22 @@ static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_bas
         return "";
       });
 
-  app.add_option_function<std::string>(
-         "--subcarrier_rms_backoff_dB",
-         [&config](std::string value) {
-           if (!std::holds_alternative<ru_ofh_scaling_config>(config.iq_scaling_config)) {
-             config.iq_scaling_config.emplace<ru_ofh_scaling_config>();
-           }
-           // By default, subcarrier backoff is set to 'auto', i.e., normalize bandwidth based on number of
-           // subcarriers. If another value is specified, it is parsed.
-           if (value != "auto") {
-             // It is safe to convert the value without try-catch because it has been already checked.
-             float backoff                                                                       = std::stof(value);
-             std::get<ru_ofh_scaling_config>(config.iq_scaling_config).subcarrier_rms_backoff_dB = backoff;
-           }
-         },
-         "Power back-off attenuation applied to all subcarriers with respect to the RU reference level")
+  add_option_function<std::string>(
+      app,
+      "--subcarrier_rms_backoff_dB",
+      [&config](std::string value) {
+        if (!std::holds_alternative<ru_ofh_scaling_config>(config.iq_scaling_config)) {
+          config.iq_scaling_config.emplace<ru_ofh_scaling_config>();
+        }
+        // By default, subcarrier backoff is set to 'auto', i.e., normalize bandwidth based on number of
+        // subcarriers. If another value is specified, it is parsed.
+        if (value != "auto") {
+          // It is safe to convert the value without try-catch because it has been already checked.
+          float backoff                                                                       = std::stof(value);
+          std::get<ru_ofh_scaling_config>(config.iq_scaling_config).subcarrier_rms_backoff_dB = backoff;
+        }
+      },
+      "Power back-off attenuation applied to all subcarriers with respect to the RU reference level")
       ->check(CLI::Range(0.0f, std::numeric_limits<float>::infinity()) | CLI::IsMember({"auto"}))
       ->check([&config](const std::string& value) -> std::string {
         if (std::holds_alternative<ru_ofh_legacy_scaling_config>(config.iq_scaling_config)) {
@@ -211,16 +242,17 @@ static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_bas
         return "";
       });
 
-  app.add_option_function<float>(
-         "--iq_scaling",
-         [&config](float value) {
-           if (!std::holds_alternative<ru_ofh_legacy_scaling_config>(config.iq_scaling_config)) {
-             config.iq_scaling_config.emplace<ru_ofh_legacy_scaling_config>();
-           }
-           std::get<ru_ofh_legacy_scaling_config>(config.iq_scaling_config).iq_scaling = value;
-         },
-         "Linear IQ scaling factor. It replaces the RU reference level and subarrier back-off")
-      ->check(CLI::Range(0.0, 100.0))
+  add_option_function<float>(
+      app,
+      "--iq_scaling",
+      [&config](float value) {
+        if (!std::holds_alternative<ru_ofh_legacy_scaling_config>(config.iq_scaling_config)) {
+          config.iq_scaling_config.emplace<ru_ofh_legacy_scaling_config>();
+        }
+        std::get<ru_ofh_legacy_scaling_config>(config.iq_scaling_config).iq_scaling = value;
+      },
+      "Linear IQ scaling factor. It replaces the RU reference level and subarrier back-off")
+      ->range(0.0, 100.0)
       ->check([&config](const std::string& value) -> std::string {
         if (std::holds_alternative<ru_ofh_scaling_config>(config.iq_scaling_config)) {
           return "IQ scaling cannot be used in conjunction with other scaling parameters.";
@@ -238,27 +270,30 @@ static void configure_cli11_ru_ofh_base_cell_args(CLI::App& app, ru_ofh_unit_bas
            "4096]";
   };
 
-  app.add_option_function<unsigned>(
-         "--cplane_prach_fft_len",
-         [&config](unsigned value) {
-           switch (value) {
-             case 0:
-               config.c_plane_prach_fft_len = ofh::cplane_fft_size::fft_noop;
-               break;
-             case 1536:
-               config.c_plane_prach_fft_len = ofh::cplane_fft_size::fft_1536;
-               break;
-             case 3072:
-               config.c_plane_prach_fft_len = ofh::cplane_fft_size::fft_3072;
-               break;
-             default:
-               config.c_plane_prach_fft_len = static_cast<ofh::cplane_fft_size>(std::log2(value));
-               break;
-           }
-         },
-         "PRACH FFT length (used in C-Plane Type-3 messages)")
+  add_option_function<unsigned>(
+      app,
+      "--cplane_prach_fft_len",
+      [&config](unsigned value) {
+        switch (value) {
+          case 0:
+            config.c_plane_prach_fft_len = ofh::cplane_fft_size::fft_noop;
+            break;
+          case 1536:
+            config.c_plane_prach_fft_len = ofh::cplane_fft_size::fft_1536;
+            break;
+          case 3072:
+            config.c_plane_prach_fft_len = ofh::cplane_fft_size::fft_3072;
+            break;
+          default:
+            config.c_plane_prach_fft_len = static_cast<ofh::cplane_fft_size>(std::log2(value));
+            break;
+        }
+      },
+      "PRACH FFT length (used in C-Plane Type-3 messages)")
       ->capture_default_str()
       ->check(cplane_prach_fft_size_check);
+
+  configure_cli11_ru_ofh_beamforming_args(app, config.dl_beamforming);
 
   // Callback function for validating that both compression method and bitwidth parameters were specified.
   auto validate_compression_input = [](CLI::App& cli_app, const std::string& direction) {
@@ -309,26 +344,24 @@ static void configure_cli11_ru_ofh_cells_args(CLI::App& app, ru_ofh_unit_cell_co
       ->capture_default_str();
   add_option(app, "--check_link_status", config.check_link_status, "Ethernet link status checking flag")
       ->capture_default_str();
-  add_option(app, "--mtu", config.mtu_size, "NIC interface MTU size")
-      ->capture_default_str()
-      ->check(CLI::Range(1500, 9600));
+  add_option(app, "--mtu", config.mtu_size, "NIC interface MTU size")->capture_default_str()->range(1500, 9600);
   add_option(app, "--ru_mac_addr", config.ru_mac_address, "Radio Unit MAC address")->capture_default_str();
   add_option(app, "--du_mac_addr", config.du_mac_address, "Distributed Unit MAC address")->capture_default_str();
 
-  auto* vlan_tag_cp_opt = add_option(app, "--vlan_tag_cp", config.vlan_tag_cp, "C-Plane VLAN identifier")
-                              ->capture_default_str()
-                              ->check(CLI::Range(1, 4094));
-  auto* vlan_tag_up_opt = add_option(app, "--vlan_tag_up", config.vlan_tag_up, "U-Plane VLAN identifier")
-                              ->capture_default_str()
-                              ->check(CLI::Range(1, 4094));
+  CLI::Option* vlan_tag_cp_opt = add_option(app, "--vlan_tag_cp", config.vlan_tag_cp, "C-Plane VLAN identifier")
+                                     ->capture_default_str()
+                                     ->range(1, 4094);
+  CLI::Option* vlan_tag_up_opt = add_option(app, "--vlan_tag_up", config.vlan_tag_up, "U-Plane VLAN identifier")
+                                     ->capture_default_str()
+                                     ->range(1, 4094);
 
   add_option(app, "--vlan_pcp_cp", config.vlan_pcp_cp, "C-Plane VLAN PCP")
       ->capture_default_str()
-      ->check(CLI::Range(0, 7))
+      ->range(0, 7)
       ->needs(vlan_tag_cp_opt);
   add_option(app, "--vlan_pcp_up", config.vlan_pcp_up, "U-Plane VLAN PCP")
       ->capture_default_str()
-      ->check(CLI::Range(0, 7))
+      ->range(0, 7)
       ->needs(vlan_tag_up_opt);
 
   add_option(app, "--prach_port_id", config.ru_prach_port_id, "RU PRACH port identifier")->capture_default_str();
@@ -339,13 +372,11 @@ static void configure_cli11_ru_ofh_cells_args(CLI::App& app, ru_ofh_unit_cell_co
 static void configure_cli11_ru_ofh_args(CLI::App& app, ru_ofh_unit_parsed_config& config)
 {
   ru_ofh_unit_config& ofh_cfg = config.config;
-  add_option(app, "--gps_alpha", ofh_cfg.gps_Alpha, "GPS Alpha")
-      ->capture_default_str()
-      ->check(CLI::Range(0.0, 1.2288e7));
-  add_option(app, "--gps_beta", ofh_cfg.gps_Beta, "GPS Beta")->capture_default_str()->check(CLI::Range(-32768, 32767));
+  add_option(app, "--gps_alpha", ofh_cfg.gps_Alpha, "GPS Alpha")->capture_default_str()->range(0.0, 1.2288e7);
+  add_option(app, "--gps_beta", ofh_cfg.gps_Beta, "GPS Beta")->capture_default_str()->range(-32768, 32767);
 
   // Common cell parameters.
-  auto* base_cell_group = app.add_option_group("base_cell");
+  auto* base_cell_group = add_option_group(app, "base_cell");
   configure_cli11_ru_ofh_base_cell_args(*base_cell_group, config.base_cell_cfg);
   base_cell_group->parse_complete_callback([&config, &app]() {
     for (auto& cell : config.config.cells) {
@@ -353,30 +384,20 @@ static void configure_cli11_ru_ofh_args(CLI::App& app, ru_ofh_unit_parsed_config
     };
     if (app.get_option("--cells")->get_callback_run()) {
       app.get_option("--cells")->run_callback();
+      // Keep one cell-affinity entry per cell (previously done inside the --cells parse lambda).
+      config.config.expert_execution_cfg.cell_affinities.resize(config.config.cells.size());
     }
   });
 
-  // Cell parameters.
-  add_option_cell(
+  // Cell parameters. Each cell defaults to the base-cell configuration (seeded per element); the sibling
+  // cell_affinities list is sized to the cell count in the base_cell parse-complete callback above.
+  add_option_object_list<ru_ofh_unit_cell_config>(
       app,
       "--cells",
-      [&config, &ofh_cfg](const std::vector<std::string>& values) {
-        ofh_cfg.cells.resize(values.size());
-        ofh_cfg.expert_execution_cfg.cell_affinities.resize(values.size());
-        for (auto& cell : ofh_cfg.cells) {
-          cell.cell = config.base_cell_cfg;
-        };
-
-        for (unsigned i = 0, e = values.size(); i != e; ++i) {
-          CLI::App subapp("RU OFH cells", "RU OFH cells config, item #" + std::to_string(i));
-          subapp.config_formatter(create_yaml_config_parser());
-          subapp.allow_config_extras(CLI::config_extras_mode::capture);
-          configure_cli11_ru_ofh_cells_args(subapp, ofh_cfg.cells[i]);
-          std::istringstream ss(values[i]);
-          subapp.parse_from_stream(ss);
-        }
-      },
-      "Sets the cell configuration on a per cell basis, overwriting the default configuration defined by cell_cfg");
+      ofh_cfg.cells,
+      configure_cli11_ru_ofh_cells_args,
+      "Sets the cell configuration on a per cell basis, overwriting the default configuration defined by cell_cfg",
+      [&config](ru_ofh_unit_cell_config& cell) { cell.cell = config.base_cell_cfg; });
 }
 
 static void configure_cli11_log_args(CLI::App& app, ru_ofh_unit_logger_config& log_params)
@@ -392,7 +413,8 @@ static void configure_cli11_cell_affinity_args(CLI::App& app, ru_ofh_unit_cpu_af
       [&config](const std::string& value) { parse_affinity_mask(config.ru_cpu_cfg.mask, value, "ru_cpus"); },
       "Number of CPUs used for the Radio Unit tasks");
 
-  app.add_option_function<std::string>(
+  add_option_function<std::string>(
+      app,
       "--ru_pinning",
       [&config](const std::string& value) {
         config.ru_cpu_cfg.pinning_policy = to_affinity_mask_policy(value);
@@ -415,8 +437,9 @@ static void configure_cli11_expert_execution_args(CLI::App& app, ru_ofh_unit_exp
       [&config](const std::string& value) { parse_affinity_mask(config.ru_timing_cpu, value, "timing_cpu"); },
       "CPU used for timing in the Radio Unit");
 
-  // RU txrx affinity section.
-  add_option_cell(
+  // RU txrx affinity section. A list of CPU-mask strings (one per tx-rx thread), each custom-parsed; recorded in
+  // the schema as a string array.
+  add_option_function<std::vector<std::string>>(
       *ofh_subcmd,
       "--txrx_cpus",
       [&config](const std::vector<std::string>& values) {
@@ -431,22 +454,11 @@ static void configure_cli11_expert_execution_args(CLI::App& app, ru_ofh_unit_exp
       "number of RU cells");
 
   // Cell affinity section.
-  add_option_cell(
+  add_option_object_list<ru_ofh_unit_cpu_affinities_cell_config>(
       app,
       "--cell_affinities",
-      [&config](const std::vector<std::string>& values) {
-        config.cell_affinities.resize(values.size());
-
-        for (unsigned i = 0, e = values.size(); i != e; ++i) {
-          CLI::App subapp("OFH expert execution cell CPU affinities",
-                          "OFH expert execution cell CPU affinities config, item #" + std::to_string(i));
-          subapp.config_formatter(create_yaml_config_parser());
-          subapp.allow_config_extras();
-          configure_cli11_cell_affinity_args(subapp, config.cell_affinities[i]);
-          std::istringstream ss(values[i]);
-          subapp.parse_from_stream(ss);
-        }
-      },
+      config.cell_affinities,
+      configure_cli11_cell_affinity_args,
       "Sets the cell CPU affinities configuration on a per cell basis");
 
   // Threads section.
@@ -459,15 +471,6 @@ static void configure_cli11_expert_execution_args(CLI::App& app, ru_ofh_unit_exp
       *ofh_threads, "--enable_busy_waiting", config.enable_busy_waiting, "Enable busy waiting of the RU timing worker")
       ->capture_default_str();
 }
-
-#ifdef DPDK_FOUND
-static void configure_cli11_hal_args(CLI::App& app, std::optional<ru_ofh_unit_hal_config>& config)
-{
-  config.emplace();
-
-  add_option(app, "--eal_args", config->eal_args, "EAL configuration parameters used to initialize DPDK");
-}
-#endif
 
 static void configure_cli11_metrics_args(CLI::App& app, ru_ofh_unit_metrics_config& config)
 {
@@ -490,33 +493,8 @@ void ocudu::configure_cli11_with_ru_ofh_config_schema(CLI::App& app, ru_ofh_unit
   CLI::App* expert_subcmd = add_subcommand(app, "expert_execution", "Expert execution configuration")->configurable();
   configure_cli11_expert_execution_args(*expert_subcmd, parsed_cfg.config.expert_execution_cfg);
 
-  // HAL section only available when DPDK is present.
-#ifdef DPDK_FOUND
-  CLI::App* hal_subcmd = add_subcommand(app, "hal", "HAL configuration")->configurable();
-  configure_cli11_hal_args(*hal_subcmd, parsed_cfg.config.hal_config);
-#endif
-
   // Metrics section.
   app_helpers::configure_cli11_with_metrics_appconfig_schema(app, parsed_cfg.config.metrics_cfg.metrics_cfg);
   CLI::App* metrics_subcmd = add_subcommand(app, "metrics", "Metrics configuration")->configurable();
   configure_cli11_metrics_args(*metrics_subcmd, parsed_cfg.config.metrics_cfg);
-}
-
-#ifdef DPDK_FOUND
-static void manage_hal_optional(CLI::App& app, std::optional<ru_ofh_unit_hal_config>& hal_config)
-{
-  // Clean the HAL optional.
-  if (auto subcmd = app.get_subcommand("hal"); subcmd->count_all() == 0) {
-    hal_config.reset();
-    // As HAL configuration is optional, disable the command when it is not present in the configuration.
-    subcmd->disabled();
-  }
-}
-#endif
-
-void ocudu::autoderive_ru_ofh_parameters_after_parsing(CLI::App& app, ru_ofh_unit_parsed_config& parsed_cfg)
-{
-#ifdef DPDK_FOUND
-  manage_hal_optional(app, parsed_cfg.config.hal_config);
-#endif
 }

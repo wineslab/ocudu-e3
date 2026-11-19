@@ -4,6 +4,7 @@
 
 #include "ocudu/phy/upper/signal_processors/channel_estimator/factories.h"
 #include "port_channel_estimator_average_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/support_factories.h"
 
 using namespace ocudu;

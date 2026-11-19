@@ -6,6 +6,7 @@
 #include "../converters/asn1_rrc_config_helpers.h"
 #include "../converters/rlc_config_helpers.h"
 #include "../converters/scheduler_configuration_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/mac/mac_ue_configurator.h"
 #include "ocudu/rlc/rlc_factory.h"
 #include <algorithm>
@@ -16,15 +17,17 @@ using namespace odu;
 ue_configuration_procedure::ue_configuration_procedure(const f1ap_ue_context_update_request& request_,
                                                        du_ue_manager_repository&             ue_mng_,
                                                        const du_cell_manager&                cell_mng_,
-                                                       const du_manager_params&              du_params_) :
+                                                       const du_manager_params&              du_params_,
+                                                       const du_manager_mem_resources&       du_mem_resources_) :
   request(request_),
   ue_mng(ue_mng_),
   cell_mng(cell_mng_),
   du_params(du_params_),
+  du_mem_resources(du_mem_resources_),
   ue(ue_mng.find_ue(request.ue_index)),
   proc_logger(logger, name(), request.ue_index, ue != nullptr ? ue->rnti : rnti_t::INVALID_RNTI)
 {
-  ocudu_assert(ue != nullptr, "ueId={} not found", fmt::underlying(request.ue_index));
+  ocudu_assert(ue != nullptr, "ueId={} not found", request.ue_index);
 }
 
 void ue_configuration_procedure::operator()(coro_context<async_task<f1ap_ue_context_update_response>>& ctx)
@@ -66,7 +69,17 @@ void ue_configuration_procedure::operator()(coro_context<async_task<f1ap_ue_cont
   update_ue_context();
 
   // > Update MAC bearers.
-  CORO_AWAIT_VALUE(mac_res, update_mac_and_sched());
+  CORO_AWAIT_VALUE(mac_res, update_mac_and_sched(ue_res_cfg_resp.cs_rnti_requested));
+
+  // > Store CS-RNTI allocated by MAC back into the UE resource configuration, so that it is included in the
+  // > RRC cellGroupConfig sent to the CU in the F1AP response.
+  if (mac_res.result) {
+    if (mac_res.cs_rnti_allocated.has_value()) {
+      ue->resources.set_cs_rnti(mac_res.cs_rnti_allocated.value());
+    } else {
+      ue->resources.clear_cs_rnti();
+    }
+  }
 
   // > Destroy old DU UE bearers that are now detached from remaining layers.
   clear_old_ue_context();
@@ -104,7 +117,8 @@ void ue_configuration_procedure::update_ue_context()
                                                                         srb_cfg.rlc_cfg,
                                                                         du_params.services,
                                                                         ue->get_rlc_rlf_notifier(),
-                                                                        du_params.rlc.pcap_writer));
+                                                                        du_params.rlc,
+                                                                        du_mem_resources.rlc));
   }
 
   // > Create F1-C bearers.
@@ -165,6 +179,7 @@ void ue_configuration_procedure::update_ue_context()
                                                                   drbtoadd.uluptnl_info_list,
                                                                   ue_mng.get_f1u_teid_pool(),
                                                                   du_params,
+                                                                  du_mem_resources,
                                                                   ue->get_rlc_rlf_notifier()});
     if (drb == nullptr) {
       failed_drbs.push_back(drbtoadd.drb_id);
@@ -201,6 +216,7 @@ void ue_configuration_procedure::update_ue_context()
                                                                     drbtomod.uluptnl_info_list,
                                                                     ue_mng.get_f1u_teid_pool(),
                                                                     du_params,
+                                                                    du_mem_resources,
                                                                     ue->get_rlc_rlf_notifier()});
       if (drb == nullptr) {
         proc_logger.log_proc_warning("Failed to create {}. Cause: Failed to allocate DU UE resources.",
@@ -223,12 +239,12 @@ void ue_configuration_procedure::clear_old_ue_context()
     if (not exec.defer([drbs = std::move(drbs_to_rem)]() mutable { drbs.clear(); })) {
       logger.warning("ue={}: Could not dispatch DRB removal task to UE executor. Destroying it the main DU manager "
                      "execution context",
-                     fmt::underlying(ue->ue_index));
+                     ue->ue_index);
     }
   }
 }
 
-async_task<mac_ue_reconfiguration_response> ue_configuration_procedure::update_mac_and_sched()
+async_task<mac_ue_reconfiguration_response> ue_configuration_procedure::update_mac_and_sched(bool cs_rnti_requested)
 {
   // Create Request to MAC to reconfigure existing UE.
   mac_ue_reconfiguration_request mac_ue_reconf_req;
@@ -282,6 +298,8 @@ async_task<mac_ue_reconfiguration_response> ue_configuration_procedure::update_m
   mac_ue_reconf_req.sched_cfg.cause = ue->reestablished_cfg_pending != nullptr
                                           ? sched_ue_config_request::causes::rrc_reconf_after_reest
                                           : sched_ue_config_request::causes::other_rrc_proc;
+
+  mac_ue_reconf_req.cs_rnti_requested = cs_rnti_requested;
 
   return du_params.mac.mgr.get_ue_configurator().handle_ue_reconfiguration_request(mac_ue_reconf_req);
 }
@@ -509,6 +527,6 @@ void ue_configuration_procedure::handle_rrc_reconfiguration_complete_ind()
       })) {
     logger.warning("ue={}: Could not dispatch DRB removal task to UE executor. Destroying it the main DU manager "
                    "execution context",
-                   fmt::underlying(ue->ue_index));
+                   ue->ue_index);
   }
 }

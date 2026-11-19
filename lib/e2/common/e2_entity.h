@@ -6,11 +6,10 @@
 
 #include "ocudu/e2/e2_agent_dependencies.h"
 #include "ocudu/e2/e2_node_component_config_provider.h"
-#include "ocudu/e2/e2ap_configuration.h"
+#include "ocudu/e2/e2ap_config.h"
 #include "ocudu/e2/e2sm/e2sm_manager.h"
 #include "ocudu/e2/subscription/e2_subscription.h"
 #include "ocudu/support/async/fifo_async_task_scheduler.h"
-#include "ocudu/support/async/manual_event.h"
 #include "ocudu/support/timers.h"
 #include <atomic>
 
@@ -20,7 +19,7 @@ namespace ocudu {
 class e2_entity final : public e2_agent
 {
 public:
-  e2_entity(e2_agent_dependencies&& dependencies);
+  e2_entity(const e2ap_config& cfg_, e2_agent_dependencies dependencies);
 
   // E2 Agent interface.
   void          start() override;
@@ -34,8 +33,8 @@ private:
   async_task<void> disconnect_ric();
   void             reconnect_to_ric();
 
-  ocudulog::basic_logger&  logger;
-  const e2ap_configuration cfg;
+  ocudulog::basic_logger& logger;
+  const e2ap_config       cfg;
 
   // Handler for E2AP tasks.
   task_executor&            task_exec;

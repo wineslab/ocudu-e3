@@ -22,7 +22,7 @@ public:
   template <typename FormatContext>
   auto format(const ocudu::pdsch_context& context, FormatContext& ctx) const
   {
-    helper.format_always(ctx, "h_id={}", fmt::underlying(context.h_id));
+    helper.format_always(ctx, "h_id={}", context.h_id);
     helper.format_always(ctx, "k1={}", context.k1);
     return ctx.out();
   }

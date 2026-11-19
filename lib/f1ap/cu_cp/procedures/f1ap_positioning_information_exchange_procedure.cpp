@@ -5,6 +5,7 @@
 #include "f1ap_positioning_information_exchange_procedure.h"
 #include "../../f1ap_asn1_utils.h"
 #include "asn1_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
@@ -77,8 +78,8 @@ void f1ap_positioning_information_exchange_procedure::send_positioning_informati
   f1ap_message f1ap_pos_info_request_msg;
   f1ap_pos_info_request_msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_POSITIONING_INFO_EXCHANGE);
   positioning_info_request_s& pos_info_req = f1ap_pos_info_request_msg.pdu.init_msg().value.positioning_info_request();
-  pos_info_req->gnb_du_ue_f1ap_id          = gnb_du_ue_f1ap_id_to_uint(*ue_ctxt.ue_ids.du_ue_f1ap_id);
-  pos_info_req->gnb_cu_ue_f1ap_id          = gnb_cu_ue_f1ap_id_to_uint(ue_ctxt.ue_ids.cu_ue_f1ap_id);
+  pos_info_req->gnb_du_ue_f1ap_id          = to_underlying(*ue_ctxt.ue_ids.du_ue_f1ap_id);
+  pos_info_req->gnb_cu_ue_f1ap_id          = to_underlying(ue_ctxt.ue_ids.cu_ue_f1ap_id);
 
   fill_asn1_positioning_information_request(pos_info_req, request);
 
@@ -254,7 +255,8 @@ static void fill_asn1_positioning_information_request(asn1::f1ap::positioning_in
         asn1::string_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_subcarrier_spacing,
                              to_string(ssb_info_item.ssb_cfg.ssb_subcarrier_spacing));
         asn1_ssb_info_item.ssb_cfg.ssb_tx_pwr = ssb_info_item.ssb_cfg.ssb_tx_pwr;
-        asn1::number_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_periodicity, to_value(ssb_info_item.ssb_cfg.ssb_period));
+        asn1::number_to_enum(asn1_ssb_info_item.ssb_cfg.ssb_periodicity,
+                             to_underlying(ssb_info_item.ssb_cfg.ssb_period));
         asn1_ssb_info_item.ssb_cfg.ssb_half_frame_offset = ssb_info_item.ssb_cfg.ssb_half_frame_offset;
         asn1_ssb_info_item.ssb_cfg.ssb_sfn_offset        = ssb_info_item.ssb_cfg.ssb_sfn_offset;
         if (ssb_info_item.ssb_cfg.ssb_burst_position.has_value()) {

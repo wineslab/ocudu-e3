@@ -8,9 +8,16 @@
 
 #include "ocudu/adt/complex.h"
 #include "ocudu/ocuduvec/types.h"
+#include <limits>
 
 namespace ocudu {
 namespace ocuduvec {
+
+/// Default scaling factor for converting \c ci16_t samples to \c cf_t (maps int16 full scale to approximately 1.0).
+inline constexpr float scaling_factor_ci16_to_cf = std::numeric_limits<int16_t>::max();
+
+/// Default scaling factor for converting \c cf_t samples to \c ci16_t.
+inline constexpr float scaling_factor_cf_to_ci16 = std::numeric_limits<int16_t>::max();
 
 /// \brief Converts a sequence of numbers from complex float to int16 applying the given scaling and rounding the result
 /// to the nearest integer.

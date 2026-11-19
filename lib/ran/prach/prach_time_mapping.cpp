@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/prach/prach_time_mapping.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/prach/prach_configuration.h"
 #include "ocudu/ran/prach/prach_preamble_information.h"

@@ -4,6 +4,8 @@
 
 #include "ocudu/ran/prach/prach_cyclic_shifts.h"
 #include "ocudu/adt/span.h"
+#include "ocudu/ran/prach/prach_subcarrier_spacing.h"
+#include "ocudu/ran/prach/restricted_set_config.h"
 #include <array>
 
 using namespace ocudu;

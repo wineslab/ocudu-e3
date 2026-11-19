@@ -8,13 +8,16 @@ add_library(ocudu_f1ap_cu
         f1ap_cu_impl.cpp
         f1ap_cu_factory.cpp
         procedures/f1_setup_procedure.cpp
+        procedures/du_config_update_procedure.cpp
         procedures/f1_removal_procedure.cpp
+        procedures/f1ap_e_cid_measurement_initiation_procedure.cpp
         procedures/f1ap_positioning_information_exchange_procedure.cpp
         procedures/f1ap_positioning_activation_procedure.cpp
         procedures/f1ap_positioning_measurement_procedure.cpp
         procedures/f1ap_stop_procedure.cpp
         procedures/f1ap_trp_information_exchange_procedure.cpp
         procedures/gnb_cu_configuration_update_procedure.cpp
+        procedures/write_replace_warning_procedure.cpp
         procedures/ue_context_setup_procedure.cpp
         procedures/ue_context_modification_procedure.cpp
         procedures/ue_context_release_procedure.cpp

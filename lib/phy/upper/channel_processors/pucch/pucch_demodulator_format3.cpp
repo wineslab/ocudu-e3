@@ -6,6 +6,7 @@
 /// \brief PUCCH Format 3 demodulator definition.
 
 #include "pucch_demodulator_format3.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/mask_types.h"
 #include "ocudu/phy/support/resource_grid_reader.h"
 #include "ocudu/phy/upper/pucch_formats3_4_helpers.h"

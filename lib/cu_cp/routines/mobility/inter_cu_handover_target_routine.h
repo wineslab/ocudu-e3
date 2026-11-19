@@ -16,17 +16,16 @@ namespace ocudu::ocucp {
 
 struct cu_cp_inter_cu_handover_request {
   // NG handover specific fields.
-  ngap_handov_type                                           handov_type;
-  std::optional<ngap_core_network_assist_info_for_inactive>  core_network_assist_info_for_inactive;
-  std::optional<bool>                                        new_security_context_ind;
-  byte_buffer                                                nasc;
-  std::vector<s_nssai_t>                                     allowed_nssai;
-  std::optional<uint64_t>                                    masked_imeisv;
-  std::optional<ngap_rrc_inactive_transition_report_request> rrc_inactive_transition_report_request;
-  std::vector<ngap_pdu_session_res_info_item>                pdu_session_res_info_list;
-  std::vector<ngap_erab_info_item>                           erab_info_list;
-  std::optional<uint16_t>                                    idx_to_rfsp;
-  std::vector<ngap_last_visited_cell_item>                   ue_history_info;
+  ngap_handov_type                                            handov_type;
+  std::optional<cu_cp_core_network_assist_info_for_inactive>  core_network_assist_info_for_inactive;
+  std::optional<bool>                                         new_security_context_ind;
+  byte_buffer                                                 nasc;
+  std::vector<s_nssai_t>                                      allowed_nssai;
+  std::optional<uint64_t>                                     masked_imeisv;
+  std::optional<cu_cp_rrc_inactive_transition_report_request> rrc_inactive_transition_report_request;
+  std::vector<ngap_erab_info_item>                            erab_info_list;
+  std::optional<uint16_t>                                     idx_to_rfsp;
+  std::vector<ngap_last_visited_cell_item>                    ue_history_info;
   // TODO: Add missing optional fields.
 
   // XNAP handover specific fields.
@@ -45,6 +44,10 @@ struct cu_cp_inter_cu_handover_request {
   byte_buffer                                                           rrc_handover_preparation_information;
   std::optional<location_report_request>                                location_report_request_type;
   bool                                                                  is_conditional_handover = false;
+  /// Source DRB-to-QoS-flow mapping, when known (TS 38.413 Section 9.3.1.29 for NG, TS 38.423 Section 9.2.1.17 for
+  /// Xn). Used to prefer the source's DRB ID at the target during admission, since DRB IDs are otherwise allocated
+  /// independently by each RAN node.
+  std::vector<cu_cp_pdu_session_res_info_item> pdu_session_res_info_list;
 
   void from_ngap_handover_request(const ngap_handover_request& ng_handover_request)
   {
@@ -61,6 +64,7 @@ struct cu_cp_inter_cu_handover_request {
     rrc_handover_preparation_information =
         ng_handover_request.source_to_target_transparent_container.rrc_container.copy();
     location_report_request_type = ng_handover_request.location_report_request_type;
+    pdu_session_res_info_list    = ng_handover_request.source_to_target_transparent_container.pdu_session_res_info_list;
 
     // Fill NG handover specific fields.
     handov_type                            = ng_handover_request.handov_type;
@@ -70,10 +74,9 @@ struct cu_cp_inter_cu_handover_request {
     allowed_nssai                          = ng_handover_request.allowed_nssai;
     masked_imeisv                          = ng_handover_request.masked_imeisv;
     rrc_inactive_transition_report_request = ng_handover_request.rrc_inactive_transition_report_request;
-    pdu_session_res_info_list = ng_handover_request.source_to_target_transparent_container.pdu_session_res_info_list;
-    erab_info_list            = ng_handover_request.source_to_target_transparent_container.erab_info_list;
-    idx_to_rfsp               = ng_handover_request.source_to_target_transparent_container.idx_to_rfsp;
-    ue_history_info           = ng_handover_request.source_to_target_transparent_container.ue_history_info;
+    erab_info_list                         = ng_handover_request.source_to_target_transparent_container.erab_info_list;
+    idx_to_rfsp                            = ng_handover_request.source_to_target_transparent_container.idx_to_rfsp;
+    ue_history_info                        = ng_handover_request.source_to_target_transparent_container.ue_history_info;
   }
 
   void from_xnap_handover_request(const xnap_handover_request& xnap_request)
@@ -91,6 +94,7 @@ struct cu_cp_inter_cu_handover_request {
     rrc_handover_preparation_information =
         xnap_request.ue_context_info_ho_request.rrc_handover_preparation_information.copy();
     location_report_request_type = xnap_request.ue_context_info_ho_request.location_report_info;
+    pdu_session_res_info_list    = xnap_request.ue_context_info_ho_request.pdu_session_res_info_list;
 
     // Fill XNAP handover specific fields.
     amf_ue_id               = xnap_request.ue_context_info_ho_request.amf_ue_id;
@@ -118,6 +122,7 @@ public:
 
 private:
   bool fill_e1ap_bearer_context_setup_request(const security::sec_as_config& sec_info);
+  void fill_e1ap_data_forwarding_info_requests();
   void create_srb(srb_id_t srb_id);
   cu_cp_handover_resource_allocation_response generate_handover_resource_allocation_response(bool success);
   bool                                        is_xn_handover() const { return request.amf_ue_id.has_value(); }
@@ -150,8 +155,6 @@ private:
   f1ap_ue_context_setup_response            ue_context_setup_response;
   e1ap_bearer_context_modification_response bearer_context_modification_response;
   byte_buffer                               handover_command_pdu;
-
-  std::optional<cell_meas_config> cell_cfg;
 };
 
 } // namespace ocudu::ocucp

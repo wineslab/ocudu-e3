@@ -20,11 +20,14 @@ TEST(dl_ssb_pdu_builder, valid_basic_parameters_passes)
   ssb_pattern_case      case_type         = ssb_pattern_case::A;
   subcarrier_spacing    scs               = subcarrier_spacing::kHz15;
   unsigned              L_max             = 8;
+  beam_identifier       beam_id           = to_beam_id(5);
 
   builder.set_carrier_parameters(scs)
       .set_cell_parameters(pci)
       .set_nr_power_parameters(pss_profile)
-      .set_ssb_parameters(block_index, subcarrier_offset, offset_pointA, case_type, L_max);
+      .set_ssb_parameters(block_index, subcarrier_offset, offset_pointA, case_type, L_max)
+      .get_tx_precoding_and_beamforming_pdu_builder()
+      .set_beams({beam_id});
 
   ASSERT_EQ(pci, pdu.phys_cell_id);
   const auto* profile_nr = std::get_if<dl_ssb_pdu::power_profile_nr>(&pdu.power_config);
@@ -36,6 +39,7 @@ TEST(dl_ssb_pdu_builder, valid_basic_parameters_passes)
   ASSERT_EQ(case_type, pdu.case_type);
   ASSERT_EQ(scs, pdu.scs);
   ASSERT_EQ(L_max, pdu.L_max);
+  ASSERT_EQ(precoding_beam_list({beam_id}), pdu.precoding_and_beamforming.prg.beams);
 }
 
 TEST(dl_ssb_pdu_builder, valid_bch_payload_mixed_passes)

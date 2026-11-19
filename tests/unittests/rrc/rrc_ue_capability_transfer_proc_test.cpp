@@ -4,6 +4,7 @@
 
 #include "rrc_ue_test_helpers.h"
 #include "rrc_ue_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/async_test_utils.h"
 #include <gtest/gtest.h>
 

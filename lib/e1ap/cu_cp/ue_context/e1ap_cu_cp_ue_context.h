@@ -18,12 +18,15 @@ class e1ap_ue_context
 public:
   e1ap_ue_ids ue_ids;
 
-  e1ap_bearer_transaction_manager bearer_ev_mng;
-
+  // Declare the logger before the transaction manager. Destroying "bearer_ev_mng" cancels its pending
+  // transactions, which resumes the awaiting procedures from within this destructor; those procedures resolve
+  // the logger through the UE context, so it must still be alive.
   e1ap_ue_logger logger;
 
+  e1ap_bearer_transaction_manager bearer_ev_mng;
+
   e1ap_ue_context(cu_cp_ue_index_t ue_index_, gnb_cu_cp_ue_e1ap_id_t cu_cp_ue_e1ap_id_, timer_factory timers_) :
-    ue_ids({ue_index_, cu_cp_ue_e1ap_id_}), bearer_ev_mng(timers_), logger("CU-CP-E1", {ue_index_, cu_cp_ue_e1ap_id_})
+    ue_ids({ue_index_, cu_cp_ue_e1ap_id_}), logger("CU-CP-E1", {ue_index_, cu_cp_ue_e1ap_id_}), bearer_ev_mng(timers_)
   {
   }
 
@@ -103,7 +106,7 @@ public:
   {
     ocudu_assert(ue_index_to_ue_e1ap_id.find(ue_index) != ue_index_to_ue_e1ap_id.end(),
                  "ue={} gNB-CU-CP-UE-E1AP-ID not found",
-                 fmt::underlying(ue_index));
+                 ue_index);
     ocudu_assert(ues.find(ue_index_to_ue_e1ap_id.at(ue_index)) != ues.end(),
                  "cu_cp_ue_e1ap_id={}: E1AP UE context not found",
                  fmt::underlying(ue_index_to_ue_e1ap_id.at(ue_index)));

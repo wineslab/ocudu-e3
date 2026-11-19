@@ -5,8 +5,12 @@
 #include "inter_cu_handover_target_routine.h"
 #include "../../cell_meas_manager/cell_meas_manager_impl.h"
 #include "../pdu_session_routine_helpers.h"
+#include "mobility_helpers.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/asn1/rrc_nr/rrc_nr.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_ue_context_update.h"
 #include "ocudu/ran/cause/e1ap_cause_converters.h"
+#include <set>
 
 using namespace ocudu;
 using namespace ocucp;
@@ -19,6 +23,7 @@ static bool handle_bearer_context_setup_response(
     const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_list,
     const e1ap_bearer_context_setup_response&                                    bearer_context_setup_resp,
     up_resource_manager&                                                         up_resource_mng,
+    const security_indication_t&                                                 default_sec_ind,
     ocudulog::basic_logger&                                                      logger);
 
 // This free function takes the F1AP UE Context Setup Response and pre-fills the subsequent E1AP Bearer Context
@@ -27,6 +32,23 @@ static bool handle_ue_context_setup_response(e1ap_bearer_context_modification_re
                                              const f1ap_ue_context_setup_response&     ue_context_setup_response,
                                              const up_config_update&                   next_config,
                                              const ocudulog::basic_logger&             logger);
+
+// Builds the source's DRB-to-QoS-flow mapping, when known, so DRB allocation at this target can prefer reusing the
+// same DRB ID for the same QoS flow, keeping DRB numbering consistent with the source where possible (DRB IDs are
+// otherwise allocated independently by each RAN node; see TS 38.300 Section 9.2.3.2.3).
+static up_old_drb_association
+build_old_drb_association(const std::vector<cu_cp_pdu_session_res_info_item>& pdu_session_res_info_list)
+{
+  up_old_drb_association old_drb_association;
+  for (const auto& pdu_session : pdu_session_res_info_list) {
+    for (const auto& drb_item : pdu_session.drbs_to_qos_flows_map_list) {
+      for (const auto& assoc_flow : drb_item.associated_qos_flow_list) {
+        old_drb_association[pdu_session.pdu_session_id][assoc_flow.qos_flow_id] = drb_item.drb_id;
+      }
+    }
+  }
+  return old_drb_association;
+}
 
 inter_cu_handover_target_routine::inter_cu_handover_target_routine(
     const cu_cp_inter_cu_handover_request& request_,
@@ -72,26 +94,31 @@ void inter_cu_handover_target_routine::operator()(
 
   {
     // Calculate next user-plane configuration based on incoming setup message.
-    next_config = ue->get_up_resource_manager().calculate_update(request.pdu_session_res_setup_list);
+    up_old_drb_association old_drb_association = build_old_drb_association(request.pdu_session_res_info_list);
+    merge_old_drb_association_from_as_config(old_drb_association, request.rrc_handover_preparation_information, logger);
+    next_config =
+        ue->get_up_resource_manager().calculate_update(request.pdu_session_res_setup_list, old_drb_association);
   }
 
   // Prepare E1AP Bearer Context Setup Request and call E1AP notifier.
   {
-    // Get security keys for Bearer Context Setup Request (RRC UE is not created yet).
     if (!ue->get_security_manager().is_security_context_initialized()) {
       logger.warning("ue={}: \"{}\" failed. Cause: Security context not initialized", request.ue_index, name());
       CORO_EARLY_RETURN(generate_handover_resource_allocation_response(false));
     }
 
-    // Perform horizontal key derivation.
-    cell_cfg = cell_meas_mng.get_cell_config(request.target_cell_id.nci);
-    if (!cell_cfg.has_value() || !cell_cfg->serving_cell_cfg.pci.has_value() ||
-        !cell_cfg->serving_cell_cfg.ssb_arfcn.has_value()) {
-      logger.warning("ue={}: \"{}\" failed. Cause: Could not find PCI and SSB-ARFCN", request.ue_index, name());
-      CORO_EARLY_RETURN(generate_handover_resource_allocation_response(false));
+    // On Xn the source already derived K_NG-RAN* for this cell (TS 33.501 Section 6.9.2.3.2); on N2 the AMF supplies
+    // the {NH, NCC} pair and this node derives from it (Section 6.9.2.3.3).
+    if (!is_xn_handover()) {
+      std::optional<cell_meas_config> cell_cfg = cell_meas_mng.get_cell_config(request.target_cell_id.nci);
+      if (!cell_cfg.has_value() || !cell_cfg->serving_cell_cfg.pci.has_value() ||
+          !cell_cfg->serving_cell_cfg.ssb_arfcn.has_value()) {
+        logger.warning("ue={}: \"{}\" failed. Cause: Could not find PCI and SSB-ARFCN", request.ue_index, name());
+        CORO_EARLY_RETURN(generate_handover_resource_allocation_response(false));
+      }
+      ue->get_security_manager().perform_horizontal_key_derivation(
+          cell_cfg->serving_cell_cfg.pci.value(), cell_cfg->serving_cell_cfg.ssb_arfcn.value().value());
     }
-    ue->get_security_manager().perform_horizontal_key_derivation(cell_cfg->serving_cell_cfg.pci.value(),
-                                                                 cell_cfg->serving_cell_cfg.ssb_arfcn.value().value());
 
     if (!fill_e1ap_bearer_context_setup_request(ue->get_security_manager().get_up_as_config())) {
       logger.warning("ue={}: \"{}\" failed. Cause: Could not fill context at CU-UP", request.ue_index, name());
@@ -108,6 +135,7 @@ void inter_cu_handover_target_routine::operator()(
                                               request.pdu_session_res_setup_list,
                                               bearer_context_setup_response,
                                               ue->get_up_resource_manager(),
+                                              default_security_indication,
                                               logger)) {
       logger.warning("ue={}: \"{}\" failed. Cause: Could not setup bearer at CU-UP", request.ue_index, name());
       CORO_EARLY_RETURN(generate_handover_resource_allocation_response(false));
@@ -136,7 +164,7 @@ void inter_cu_handover_target_routine::operator()(
     if (meas_cfg.has_value()) {
       if (ue_mng.get_measurement_context(request.ue_index).nci_to_meas_obj_id.find(request.target_cell_id.nci) !=
           ue_mng.get_measurement_context(request.ue_index).nci_to_meas_obj_id.end()) {
-        ue_context_setup_request.serving_cell_mo = meas_obj_id_to_uint(
+        ue_context_setup_request.serving_cell_mo = to_underlying(
             ue_mng.get_measurement_context(request.ue_index).nci_to_meas_obj_id.at(request.target_cell_id.nci));
       }
       // Forward the MeasConfig to the target DU so it can derive the measurement gap. The RRC UE doesn't exist yet on
@@ -265,8 +293,10 @@ void inter_cu_handover_target_routine::operator()(
                        request.target_cell_id);
       } else {
         cu_cp_user_location_info_nr user_location_info;
-        user_location_info.nr_cgi = {request.guami.plmn, target_cell->cgi.nci};
-        user_location_info.tai    = {request.guami.plmn, target_cell->tac};
+        user_location_info.nr_cgi   = {request.guami.plmn, target_cell->cgi.nci};
+        user_location_info.tai      = {request.guami.plmn, target_cell->tac};
+        user_location_info.tac_list = target_cell->tac_list;
+        ue->get_rrc_ue()->fill_ue_derived_location(user_location_info);
         auto report =
             ue->get_location_manager().get_direct_location_report(request.ue_index, user_location_info, loc_req);
         ngap_loc_report_handler.handle_location_report_transmission(report);
@@ -277,80 +307,6 @@ void inter_cu_handover_target_routine::operator()(
   CORO_RETURN(generate_handover_resource_allocation_response(true));
 }
 
-/// \brief Processes the response of a Bearer Context Setup Request.
-/// \param[out] srb_setup_mod_list Reference to the successful SRB setup list.
-/// \param[out] drb_setup_mod_list Reference to the successful DRB setup list.
-/// \param[out] next_config Const reference to the calculated config update.
-/// \param[out] ngap_setup_list Const reference to the original NGAP request.
-/// \param[in] bearer_context_setup_resp Const reference to the the Bearer Context Setup Response.
-/// \param[in] up_resource_mng Reference to the UP resource manager.
-/// \param[in] logger Reference to the logger.
-/// \return True on success, false otherwise.
-static bool update_setup_list_with_bearer_ctxt_setup_response(
-    std::vector<f1ap_srb_to_setup>&                                              srb_setup_mod_list,
-    std::vector<f1ap_drb_to_setup>&                                              drb_setup_mod_list,
-    up_config_update&                                                            next_config,
-    const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& ngap_setup_list,
-    const e1ap_bearer_context_setup_response&                                    bearer_context_setup_resp,
-    up_resource_manager&                                                         up_resource_mng,
-    const ocudulog::basic_logger&                                                logger)
-{
-  // Set up SRB1 and SRB2 (this is for inter CU handover, so no SRBs are setup yet).
-  for (unsigned srb_id = 1; srb_id < 3; ++srb_id) {
-    f1ap_srb_to_setup srb_item;
-    srb_item.srb_id = int_to_srb_id(srb_id);
-    srb_setup_mod_list.push_back(srb_item);
-  }
-
-  for (const auto& e1ap_item : bearer_context_setup_resp.pdu_session_resource_setup_list) {
-    const auto& psi = e1ap_item.pdu_session_id;
-
-    // Sanity check - make sure this session ID is present in the original setup message.
-    if (!ngap_setup_list.contains(e1ap_item.pdu_session_id)) {
-      logger.warning("PduSessionResourceSetupRequest doesn't include setup for {}", e1ap_item.pdu_session_id);
-      return false;
-    }
-    // Also check if PDU session is included in expected next configuration.
-    if (next_config.pdu_sessions_to_setup_list.find(e1ap_item.pdu_session_id) ==
-        next_config.pdu_sessions_to_setup_list.end()) {
-      logger.warning("Didn't expect setup for {}", e1ap_item.pdu_session_id);
-      return false;
-    }
-
-    for (const auto& e1ap_drb_item : e1ap_item.drb_setup_list_ng_ran) {
-      const auto& drb_id = e1ap_drb_item.drb_id;
-      if (next_config.pdu_sessions_to_setup_list.at(psi).drb_to_add.find(drb_id) ==
-          next_config.pdu_sessions_to_setup_list.at(psi).drb_to_add.end()) {
-        logger.warning("{} not part of next configuration", drb_id);
-        return false;
-      }
-
-      // Prepare DRB item for DU.
-      f1ap_drb_to_setup drb_setup_mod_item;
-      if (!fill_f1ap_drb_setup_mod_item(drb_setup_mod_item,
-                                        {},
-                                        e1ap_item.pdu_session_id,
-                                        drb_id,
-                                        next_config.pdu_sessions_to_setup_list.at(psi).drb_to_add.at(drb_id),
-                                        e1ap_drb_item,
-                                        ngap_setup_list[e1ap_item.pdu_session_id].qos_flow_setup_request_items,
-                                        logger)) {
-        logger.warning("Couldn't populate DRB setup/mod item {}", e1ap_drb_item.drb_id);
-        return false;
-      }
-      drb_setup_mod_list.push_back(drb_setup_mod_item);
-    }
-
-    // Fail on any DRB that fails to be setup.
-    if (!e1ap_item.drb_failed_list_ng_ran.empty()) {
-      logger.warning("Non-empty DRB failed list not supported");
-      return false;
-    }
-  }
-
-  return true;
-}
-
 // Same as above but taking the result from E1AP Bearer Context Setup message.
 bool handle_bearer_context_setup_response(
     f1ap_ue_context_setup_request&                                               ue_context_setup_req,
@@ -358,15 +314,23 @@ bool handle_bearer_context_setup_response(
     const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_list,
     const e1ap_bearer_context_setup_response&                                    bearer_context_setup_resp,
     up_resource_manager&                                                         up_resource_mng,
+    const security_indication_t&                                                 default_sec_ind,
     ocudulog::basic_logger&                                                      logger)
 {
+  // Set up SRB1 and SRB2 (this is for inter CU handover, so no SRBs are setup yet).
+  for (unsigned srb_id = 1; srb_id < 3; ++srb_id) {
+    f1ap_srb_to_setup srb_item;
+    srb_item.srb_id = int_to_srb_id(srb_id);
+    ue_context_setup_req.srbs_to_be_setup_list.push_back(srb_item);
+  }
+
   // Traverse setup list.
-  if (!update_setup_list_with_bearer_ctxt_setup_response(ue_context_setup_req.srbs_to_be_setup_list,
-                                                         ue_context_setup_req.drbs_to_be_setup_list,
+  if (!update_setup_list_with_bearer_ctxt_setup_response(ue_context_setup_req.drbs_to_be_setup_list,
                                                          next_config,
                                                          setup_list,
                                                          bearer_context_setup_resp,
                                                          up_resource_mng,
+                                                         default_sec_ind,
                                                          logger)) {
     return false;
   }
@@ -433,7 +397,59 @@ bool inter_cu_handover_target_routine::fill_e1ap_bearer_context_setup_request(co
                                           ue_mng.get_ue_config(),
                                           default_security_indication);
 
+  fill_e1ap_data_forwarding_info_requests();
+
   return true;
+}
+
+void inter_cu_handover_target_routine::fill_e1ap_data_forwarding_info_requests()
+{
+  for (auto& pdu_session : bearer_context_setup_request.pdu_session_res_to_setup_list) {
+    const pdu_session_id_t psi = pdu_session.pdu_session_id;
+
+    // The 5GC may rule out data forwarding for a PDU session (TS 38.413 section 9.3.1.63).
+    if (request.pdu_session_res_setup_list[psi].data_forwarding_not_possible.value_or(false)) {
+      logger.debug(
+          "ue={}: Skipping data forwarding for {}. Cause: data forwarding not possible", request.ue_index, psi);
+      continue;
+    }
+
+    // Collect the QoS flows the source proposed for DL forwarding (TS 38.413 section 9.3.1.33).
+    std::set<qos_flow_id_t> proposed_flows;
+    for (const cu_cp_pdu_session_res_info_item& res_info : request.pdu_session_res_info_list) {
+      if (res_info.pdu_session_id != psi) {
+        continue;
+      }
+      for (const cu_cp_qos_flow_info_item& flow_info : res_info.qos_flow_info_list) {
+        if (flow_info.dl_forwarding.value_or(false)) {
+          proposed_flows.insert(flow_info.qos_flow_id);
+        }
+      }
+    }
+    if (proposed_flows.empty()) {
+      continue;
+    }
+
+    // Request a single PDU session level forwarding tunnel for every admitted QoS flow the source proposed. The
+    // forwarded packets are SDAP SDUs, so their PDCP sequence numbers are not preserved
+    // (TS 38.300 section 9.2.3.2.3).
+    slotted_id_vector<qos_flow_id_t, e1ap_qos_flow_map_item> flows_on_pdu_session_tunnel;
+    const auto& next_session = next_config.pdu_sessions_to_setup_list.at(psi);
+    for (const auto& [drb_id, drb_ctx] : next_session.drb_to_add) {
+      for (const auto& [qfi, flow_ctx] : drb_ctx.qos_flows) {
+        if (proposed_flows.count(qfi) != 0) {
+          flows_on_pdu_session_tunnel.emplace(qfi, e1ap_qos_flow_map_item{qfi, std::nullopt});
+        }
+      }
+    }
+
+    if (not flows_on_pdu_session_tunnel.empty()) {
+      e1ap_data_forwarding_info_request session_request;
+      session_request.data_forwarding_request              = e1ap_data_forwarding_request::dl;
+      session_request.qos_flows_forwarded_on_fwd_tunnels   = std::move(flows_on_pdu_session_tunnel);
+      pdu_session.pdu_session_data_forwarding_info_request = session_request;
+    }
+  }
 }
 
 void inter_cu_handover_target_routine::create_srb(srb_id_t srb_id)
@@ -447,94 +463,131 @@ void inter_cu_handover_target_routine::create_srb(srb_id_t srb_id)
   ue_mng.find_du_ue(request.ue_index)->get_rrc_ue()->create_srb(srb_msg);
 }
 
+// The DL forwarding tunnel the CU-UP established for a PDU session, together with the QoS flows this target accepts
+// for forwarding over it.
+struct pdu_session_dl_data_forwarding {
+  std::optional<up_transport_layer_info> tnl_info;
+  std::set<qos_flow_id_t>                accepted_flows;
+};
+
+// Determines what this target can accept for data forwarding: the QoS flows that were both requested to be forwarded
+// over the PDU session level tunnel and actually set up, and the tunnel the CU-UP established for them. Returns
+// nothing when no such flow remains, since the tunnel must not be advertised unless forwarding is accepted for at
+// least one QoS flow (TS 38.413 section 8.4.2.2).
+static pdu_session_dl_data_forwarding
+get_pdu_session_dl_data_forwarding(const e1ap_pdu_session_res_to_setup_item&                requested_session,
+                                   const e1ap_pdu_session_resource_setup_modification_item& setup_session)
+{
+  pdu_session_dl_data_forwarding forwarding;
+  if (not setup_session.pdu_session_data_forwarding_info_resp.has_value() or
+      not setup_session.pdu_session_data_forwarding_info_resp->dl_data_forwarding.has_value() or
+      not requested_session.pdu_session_data_forwarding_info_request.has_value()) {
+    return forwarding;
+  }
+
+  for (const e1ap_qos_flow_map_item& requested_flow :
+       requested_session.pdu_session_data_forwarding_info_request->qos_flows_forwarded_on_fwd_tunnels) {
+    for (const auto& drb_setup_item : setup_session.drb_setup_list_ng_ran) {
+      if (drb_setup_item.flow_setup_list.contains(requested_flow.qos_flow_id)) {
+        forwarding.accepted_flows.insert(requested_flow.qos_flow_id);
+        break;
+      }
+    }
+  }
+
+  if (not forwarding.accepted_flows.empty()) {
+    forwarding.tnl_info = setup_session.pdu_session_data_forwarding_info_resp->dl_data_forwarding;
+  }
+  return forwarding;
+}
+
+// Fills the parts of an admitted PDU session item that NG and Xn report alike, marking every QoS flow accepted for
+// data forwarding (TS 38.413 section 9.3.2.13).
+template <typename admitted_item_type>
+static void fill_admitted_item_common(admitted_item_type&                                      admitted_item,
+                                      const e1ap_pdu_session_resource_setup_modification_item& setup_session,
+                                      const std::set<qos_flow_id_t>&                           accepted_flows)
+{
+  admitted_item.pdu_session_id     = setup_session.pdu_session_id;
+  admitted_item.dl_ngu_up_tnl_info = setup_session.ng_dl_up_tnl_info;
+
+  for (const auto& drb_setup_item : setup_session.drb_setup_list_ng_ran) {
+    // Fill QoS flow setup resp list.
+    for (const auto& flow_setup_item : drb_setup_item.flow_setup_list) {
+      cu_cp_qos_flow_with_data_forwarding_item qos_flow_item;
+      qos_flow_item.qos_flow_id = flow_setup_item.qos_flow_id;
+      if (accepted_flows.count(flow_setup_item.qos_flow_id) != 0) {
+        qos_flow_item.data_forwarding_accepted = true;
+      }
+      admitted_item.qos_flows_setup_list.push_back(qos_flow_item);
+    }
+
+    // Fill QoS flow failed to setup list.
+    for (const auto& flow_failed_item : drb_setup_item.flow_failed_list) {
+      cu_cp_qos_flow_with_cause_item qos_flow_item;
+      qos_flow_item.qos_flow_id = flow_failed_item.qos_flow_id;
+      qos_flow_item.cause       = e1ap_to_ngap_cause(flow_failed_item.cause);
+
+      admitted_item.qos_flows_failed_to_setup_list.push_back(qos_flow_item);
+    }
+  }
+}
+
+// Fills the PDU sessions admitted for an NG handover, reporting the DL forwarding tunnel the CU-UP allocated
+// (TS 38.413 section 9.3.4.11).
 static inline void fill_ng_pdu_session_res_admitted_list(
-    std::vector<cu_cp_pdu_session_res_admitted_item>& pdu_session_res_admitted_list,
+    std::vector<cu_cp_pdu_session_res_admitted_item>&                              pdu_session_res_admitted_list,
+    const slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_res_to_setup_item>& pdu_session_res_to_setup_list,
     const slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_resource_setup_modification_item>&
-        pdu_session_resource_setup_list)
+                            pdu_session_resource_setup_list,
+    ocudulog::basic_logger& logger)
 {
   for (const auto& pdu_session : pdu_session_resource_setup_list) {
-    cu_cp_ng_pdu_session_res_admitted_item admitted_item;
-
-    // Fill PDU session ID.
-    admitted_item.pdu_session_id = pdu_session.pdu_session_id;
-
-    // Fill HO request ack transfer.
-    // Fill DL NGU UP TNL info.
-    admitted_item.dl_ngu_up_tnl_info = pdu_session.ng_dl_up_tnl_info;
-
-    for (const auto& drb_setup_item : pdu_session.drb_setup_list_ng_ran) {
-      // Fill QoS flow setup resp list.
-      for (const auto& flow_setup_item : drb_setup_item.flow_setup_list) {
-        cu_cp_qos_flow_with_data_forwarding_item qos_flow_item;
-        // Fill QoS flow ID.
-        qos_flow_item.qos_flow_id = flow_setup_item.qos_flow_id;
-
-        admitted_item.qos_flows_setup_list.push_back(qos_flow_item);
-      }
-
-      // Fill QoS flow failed to setup list.
-      for (const auto& flow_failed_item : drb_setup_item.flow_failed_list) {
-        cu_cp_qos_flow_with_cause_item qos_flow_item;
-        // Fill QoS flow ID.
-        qos_flow_item.qos_flow_id = flow_failed_item.qos_flow_id;
-        // Fill Cause.
-        qos_flow_item.cause = e1ap_to_ngap_cause(flow_failed_item.cause);
-
-        admitted_item.qos_flows_failed_to_setup_list.push_back(qos_flow_item);
-      }
-
-      // Fill Data forwarding resp DRB list.
-      cu_cp_data_forwarding_resp_drb_item drb_item;
-      drb_item.drb_id = drb_setup_item.drb_id;
-      admitted_item.data_forwarding_info_from_target.data_forwarding_resp_drb_item_list.push_back(drb_item);
+    // Sanity check - make sure this session ID is present in the original setup message.
+    if (not pdu_session_res_to_setup_list.contains(pdu_session.pdu_session_id)) {
+      logger.warning("Ignoring {} of the Bearer Context Setup Response. Cause: it was not requested",
+                     pdu_session.pdu_session_id);
+      continue;
     }
+
+    const pdu_session_dl_data_forwarding forwarding =
+        get_pdu_session_dl_data_forwarding(pdu_session_res_to_setup_list[pdu_session.pdu_session_id], pdu_session);
+
+    cu_cp_ng_pdu_session_res_admitted_item admitted_item;
+    fill_admitted_item_common(admitted_item, pdu_session, forwarding.accepted_flows);
+    admitted_item.dl_forwarding_up_tnl_info = forwarding.tnl_info;
 
     pdu_session_res_admitted_list.push_back(admitted_item);
   }
 }
 
+// Fills the PDU sessions admitted for an Xn handover, reporting the DL forwarding tunnel the CU-UP allocated
+// (TS 38.423 section 9.2.1.19).
 static inline void fill_xn_pdu_session_res_admitted_list(
-    std::vector<cu_cp_pdu_session_res_admitted_item>& pdu_session_res_admitted_list,
+    std::vector<cu_cp_pdu_session_res_admitted_item>&                              pdu_session_res_admitted_list,
+    const slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_res_to_setup_item>& pdu_session_res_to_setup_list,
     const slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_resource_setup_modification_item>&
-        pdu_session_resource_setup_list)
+                            pdu_session_resource_setup_list,
+    ocudulog::basic_logger& logger)
 {
   for (const auto& pdu_session : pdu_session_resource_setup_list) {
+    // Sanity check - make sure this session ID is present in the original setup message.
+    if (not pdu_session_res_to_setup_list.contains(pdu_session.pdu_session_id)) {
+      logger.warning("Ignoring {} of the Bearer Context Setup Response. Cause: it was not requested",
+                     pdu_session.pdu_session_id);
+      continue;
+    }
+
+    const pdu_session_dl_data_forwarding forwarding =
+        get_pdu_session_dl_data_forwarding(pdu_session_res_to_setup_list[pdu_session.pdu_session_id], pdu_session);
+
     cu_cp_xn_pdu_session_res_admitted_item admitted_item;
-
-    // Fill PDU session ID.
-    admitted_item.pdu_session_id = pdu_session.pdu_session_id;
-
-    // Fill HO request ack transfer.
-    // Fill DL NGU UP TNL info.
-    admitted_item.dl_ngu_up_tnl_info = pdu_session.ng_dl_up_tnl_info;
+    fill_admitted_item_common(admitted_item, pdu_session, forwarding.accepted_flows);
 
     admitted_item.data_forwarding_info_from_target.emplace();
-    for (const auto& drb_setup_item : pdu_session.drb_setup_list_ng_ran) {
-      // Fill QoS flow setup resp list.
-      for (const auto& flow_setup_item : drb_setup_item.flow_setup_list) {
-        cu_cp_qos_flow_with_data_forwarding_item qos_flow_item;
-        // Fill QoS flow ID.
-        qos_flow_item.qos_flow_id = flow_setup_item.qos_flow_id;
-
-        admitted_item.qos_flows_setup_list.push_back(qos_flow_item);
-      }
-
-      // Fill QoS flow failed to setup list.
-      for (const auto& flow_failed_item : drb_setup_item.flow_failed_list) {
-        cu_cp_qos_flow_with_cause_item qos_flow_item;
-        // Fill QoS flow ID.
-        qos_flow_item.qos_flow_id = flow_failed_item.qos_flow_id;
-        // Fill Cause.
-        qos_flow_item.cause = e1ap_to_ngap_cause(flow_failed_item.cause);
-
-        admitted_item.qos_flows_failed_to_setup_list.push_back(qos_flow_item);
-      }
-
-      // Fill Data forwarding resp DRB list.
-      cu_cp_data_forwarding_resp_drb_item drb_item;
-      drb_item.drb_id = drb_setup_item.drb_id;
-      admitted_item.data_forwarding_info_from_target->data_forwarding_resp_drb_item_list.push_back(drb_item);
-    }
+    admitted_item.data_forwarding_info_from_target->pdu_session_level_dl_data_forwarding_info = forwarding.tnl_info;
+    admitted_item.data_forwarding_info_from_target->qos_flows_accepted_for_data_forwarding_list.assign(
+        forwarding.accepted_flows.begin(), forwarding.accepted_flows.end());
 
     pdu_session_res_admitted_list.push_back(admitted_item);
   }
@@ -559,10 +612,14 @@ inter_cu_handover_target_routine::generate_handover_resource_allocation_response
     // > Fill PDU session res admitted list.
     if (is_xn_handover()) {
       fill_xn_pdu_session_res_admitted_list(ho_request_ack.pdu_session_res_admitted_list,
-                                            bearer_context_setup_response.pdu_session_resource_setup_list);
+                                            bearer_context_setup_request.pdu_session_res_to_setup_list,
+                                            bearer_context_setup_response.pdu_session_resource_setup_list,
+                                            logger);
     } else {
       fill_ng_pdu_session_res_admitted_list(ho_request_ack.pdu_session_res_admitted_list,
-                                            bearer_context_setup_response.pdu_session_resource_setup_list);
+                                            bearer_context_setup_request.pdu_session_res_to_setup_list,
+                                            bearer_context_setup_response.pdu_session_resource_setup_list,
+                                            logger);
     }
 
     // > Fill PDU session res failed to setup list HO ack.

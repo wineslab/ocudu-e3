@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "nrppa_du_context.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -23,7 +24,7 @@ nrppa_du_context& nrppa_du_context_list::operator[](cu_cp_du_index_t du_index)
 
 nrppa_du_context& nrppa_du_context_list::add_du(cu_cp_du_index_t du_index, nrppa_f1ap_notifier& f1ap_notifier)
 {
-  logger.debug("du={} : NRPPA DU context created", fmt::underlying(du_index));
+  logger.debug("du={} : NRPPA DU context created", du_index);
   dus.emplace(
       std::piecewise_construct, std::forward_as_tuple(du_index), std::forward_as_tuple(du_index, f1ap_notifier));
   return dus.at(du_index);

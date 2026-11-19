@@ -7,6 +7,7 @@
 ///
 /// Ensures short block messages encoded can be detected.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/bit.h"
 #include "ocudu/phy/upper/channel_coding/channel_coding_factories.h"
 #include "ocudu/phy/upper/channel_coding/short/short_block_encoder.h"

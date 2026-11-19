@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include "../test_helpers.h"
 #include "lib/cu_cp/ue_manager/ue_manager_impl.h"
 #include "tests/unittests/ngap/test_helpers.h"
-#include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/cu_cp/cu_cp_configuration.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include <gtest/gtest.h>
-#include <memory>
 
 namespace ocudu {
 namespace ocucp {
@@ -20,6 +18,8 @@ class ue_manager_test : public ::testing::Test
 {
 protected:
   ue_manager_test();
+  /// Creates the fixture with a specific gNB ID, which the I-RNTIs of suspended UEs are derived from.
+  explicit ue_manager_test(gnb_id_t gnb_id_);
   ~ue_manager_test() override;
 
   ocudulog::basic_logger& test_logger   = ocudulog::fetch_basic_logger("TEST");
@@ -27,11 +27,13 @@ protected:
 
   unsigned ues_per_du = 1024;
 
-  timer_manager       timers;
-  manual_task_worker  cu_worker{128};
-  cu_cp_configuration cu_cp_cfg;
+  timer_manager           timers;
+  manual_task_worker      cu_worker{128};
+  cu_cp_configuration     cu_cp_cfg;
+  ue_manager_config       ue_cfg;
+  ue_manager_dependencies ue_dependencies;
 
-  ue_manager ue_mng{cu_cp_cfg};
+  ue_manager ue_mng{ue_cfg, ue_dependencies};
 
   // DU processor to RRC UE adapters
   dummy_ngap_rrc_ue_notifier rrc_ue_pdu_notifier;

@@ -4,6 +4,7 @@
 #include "tests/test_doubles/utils/test_rng.h"
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/adt/detail/byte_buffer_segment_pool.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/executors/unique_thread.h"
 #include <condition_variable>
 #include <gtest/gtest.h>

@@ -83,8 +83,8 @@ class du_high_ue_simulator::rlc_bearer_adapter : public rlc_tx_lower_layer_notif
 public:
   void on_buffer_state_update(const rlc_buffer_state& bsr) override { last_reported_bo = bsr; }
 
-  void on_protocol_failure() override {}
-  void on_max_retx() override {}
+  void on_protocol_failure(rb_id_t rb_id) override {}
+  void on_max_retx(rb_id_t rb_id) override {}
 
   void on_transmitted_sdu(uint32_t max_tx_pdcp_sn, uint32_t desired_buf_size) override {}
   void on_delivered_sdu(uint32_t max_deliv_pdcp_sn) override {}
@@ -139,11 +139,13 @@ du_high_ue_simulator::du_high_ue_simulator(const du_high_ue_simulator_config& cf
       msg.ue_executor       = &test_exec;
       msg.rlc_metrics_notif = nullptr;
       msg.pcap_writer       = &pcap_sink;
+      msg.srb_am_rx_pool    = &srb_rx_seg_pool->get_pool_of_type<rlc_rx_am_sdu_info>();
+      msg.srb_am_tx_pool    = &srb_tx_seg_pool->get_pool_of_type<rlc_tx_am_sdu_info>();
       auto entity           = create_rlc_entity(msg);
       bc.rlc                = std::move(entity);
     }
     auto ret = bearers.insert(std::make_pair(srb_id_to_lcid(srb_id), std::move(bc)));
-    ocudu_assert(ret.second, "Failed to create RLC entity for SRB {}", fmt::underlying(srb_id));
+    ocudu_assert(ret.second, "Failed to create RLC entity for SRB {}", srb_id);
   }
 }
 
@@ -160,8 +162,7 @@ void du_high_ue_simulator::handle_dl_pdu(const mac_dl_data_result::dl_pdu& pdu)
     }
 
     auto it = bearers.find(sdu.lcid);
-    ocudu_assert(
-        it != bearers.end(), "Received DL PDU for LCID {} without existing RLC entity", fmt::underlying(sdu.lcid));
+    ocudu_assert(it != bearers.end(), "Received DL PDU for LCID {} without existing RLC entity", sdu.lcid);
     it->second.rlc->get_rx_lower_layer_interface()->handle_pdu(sdu.payload);
   }
 }
@@ -182,7 +183,7 @@ std::optional<byte_buffer> du_high_ue_simulator::build_next_ul_mac_pdu()
           test_helpers::prepend_mac_subheader(lcid, byte_buffer::create(span<uint8_t>(buffer.data(), n)).value());
       *bearer.adapter->last_reported_bo = bearer.rlc->get_tx_lower_layer_interface()->get_buffer_state();
       report_fatal_error_if_not(
-          pdu.append(sdu_and_subhr), "Failed to append UL MAC SDU for LCID {} to UL MAC PDU", fmt::underlying(lcid));
+          pdu.append(sdu_and_subhr), "Failed to append UL MAC SDU for LCID {} to UL MAC PDU", lcid);
     }
   }
   if (pdu.empty()) {
@@ -194,7 +195,7 @@ std::optional<byte_buffer> du_high_ue_simulator::build_next_ul_mac_pdu()
 void du_high_ue_simulator::enqueue_ul_mac_sdu(lcid_t lcid, byte_buffer ul_mac_sdu)
 {
   auto it = bearers.find(lcid);
-  report_fatal_error_if_not(it != bearers.end(), "No RLC entity for LCID {}", fmt::underlying(lcid));
+  report_fatal_error_if_not(it != bearers.end(), "No RLC entity for LCID {}", lcid);
   it->second.rlc->get_tx_upper_layer_data_interface()->handle_sdu(std::move(ul_mac_sdu), false);
 }
 

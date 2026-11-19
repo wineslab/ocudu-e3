@@ -8,6 +8,7 @@
 #include "ocudu/phy/generic_functions/dft_processor.h"
 #include "ocudu/phy/lower/modulation/ofdm_demodulator.h"
 #include <memory>
+#include <vector>
 
 namespace ocudu {
 
@@ -78,7 +79,7 @@ public:
 
   // See interface for documentation.
   void
-  demodulate(resource_grid_writer& grid, span<const cf_t> input, unsigned port_index, unsigned symbol_index) override;
+  demodulate(resource_grid_writer& grid, span<const ci16_t> input, unsigned port_index, unsigned symbol_index) override;
 };
 
 /// Describes a generic OFDM slot demodulator.
@@ -105,7 +106,7 @@ public:
 
   // See interface for documentation;
   void
-  demodulate(resource_grid_writer& grid, span<const cf_t> input, unsigned port_index, unsigned slot_index) override;
+  demodulate(resource_grid_writer& grid, span<const ci16_t> input, unsigned port_index, unsigned slot_index) override;
 };
 
 } // namespace ocudu

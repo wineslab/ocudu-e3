@@ -3,9 +3,12 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "../../../support/resource_grid_test_doubles.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/phy/antenna_ports.h"
 #include "ocudu/phy/phys_cell_id.h"
 #include "ocudu/phy/upper/signal_processors/ssb/factories.h"
 #include "ocudu/ran/ssb/ssb_properties.h"
+#include <gtest/gtest.h>
 #include <random>
 
 using namespace ocudu;
@@ -38,7 +41,7 @@ void generate_sequence_gold(std::array<cf_t, 127>& sequence, unsigned NID, float
   }
 }
 
-static void test_case(pss_processor& pss, const pss_processor::config_t& pss_args)
+static error_type<std::string> test_case(pss_processor& pss, const pss_processor::config_t& pss_args)
 {
   // Create resource grid.
   resource_grid_writer_spy grid(MAX_PORTS,
@@ -56,26 +59,26 @@ static void test_case(pss_processor& pss, const pss_processor::config_t& pss_arg
   std::vector<resource_grid_writer_spy::expected_entry_t> expected_grid_entries;
   for (unsigned i = 0; i != 127; ++i) {
     resource_grid_writer_spy::expected_entry_t entry = {};
-    entry.port                                       = pss_args.ports[0];
-    entry.symbol                                     = pss_args.ssb_first_symbol + 0;
-    entry.subcarrier                                 = pss_args.ssb_first_subcarrier + 56 + i;
-    entry.value                                      = sequence_gold[i];
+    entry.port       = to_underlying(pss_args.precoding_and_beamforming.get_prg(0).beams[0]);
+    entry.symbol     = pss_args.ssb_first_symbol + 0;
+    entry.subcarrier = pss_args.ssb_first_subcarrier + 56 + i;
+    entry.value      = sequence_gold[i];
 
     expected_grid_entries.emplace_back(entry);
   }
 
   // Assert grid entries.
-  grid.assert_entries(expected_grid_entries);
+  return grid.assert_entries(expected_grid_entries);
 }
 
-int main()
+TEST(pss_processor_test, map)
 {
   std::shared_ptr<pss_processor_factory> pss_factory = create_pss_processor_factory_sw();
-  TESTASSERT(pss_factory);
+  ASSERT_TRUE(pss_factory);
 
   // Create PSS processor.
   std::unique_ptr<pss_processor> pss = pss_factory->create();
-  TESTASSERT(pss);
+  ASSERT_TRUE(pss);
 
   // Random distributions.
   std::uniform_int_distribution<unsigned> dist_cell_id(0, phys_cell_id::NOF_NID - 1);
@@ -90,10 +93,10 @@ int main()
     pss_args.ssb_first_subcarrier    = dist_ssb_first_subcarrier(rgen);
     pss_args.ssb_first_symbol        = dist_ssb_first_symbol(rgen);
     pss_args.amplitude               = 1.0F;
-    pss_args.ports.emplace_back(dist_port(rgen));
+    pss_args.precoding_and_beamforming =
+        precoding_beamforming_configuration::make_wideband(precoding_beam_list{to_beam_id(dist_port(rgen))});
 
-    test_case(*pss, pss_args);
+    error_type<std::string> test_ok = test_case(*pss, pss_args);
+    ASSERT_TRUE(test_ok.has_value()) << test_ok.error();
   }
-
-  return 0;
 }

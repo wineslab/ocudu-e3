@@ -17,7 +17,7 @@ namespace ocucp {
 inline void fill_asn1_qos_flow_info_item(asn1::e1ap::qos_flow_qos_param_item_s& asn1_qos_flow_info_item,
                                          const e1ap_qos_flow_qos_param_item&    qos_flow_info_item)
 {
-  asn1_qos_flow_info_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_info_item.qos_flow_id);
+  asn1_qos_flow_info_item.qos_flow_id = to_underlying(qos_flow_info_item.qos_flow_id);
 
   // Fill QoS flow level Qos params.
   auto& qos_flow_level_params = qos_flow_info_item.qos_flow_level_qos_params;
@@ -34,7 +34,7 @@ inline void fill_asn1_qos_flow_info_item(asn1::e1ap::qos_flow_qos_param_item_s& 
     asn1_dynamic_5qi.packet_error_rate.per_exponent = dynamic_5qi.per.exponent;
     if (dynamic_5qi.five_qi.has_value()) {
       asn1_dynamic_5qi.five_qi_present = true;
-      asn1_dynamic_5qi.five_qi         = five_qi_to_uint(dynamic_5qi.five_qi.value());
+      asn1_dynamic_5qi.five_qi         = to_underlying(dynamic_5qi.five_qi.value());
     }
     if (dynamic_5qi.is_delay_critical.has_value()) {
       asn1_dynamic_5qi.delay_crit_present = true;
@@ -55,7 +55,7 @@ inline void fill_asn1_qos_flow_info_item(asn1::e1ap::qos_flow_qos_param_item_s& 
     asn1_qos_flow_info_item.qos_flow_level_qos_params.qos_characteristics.set_non_dyn_5qi();
     auto& asn1_non_dynamic_5qi = asn1_qos_flow_info_item.qos_flow_level_qos_params.qos_characteristics.non_dyn_5qi();
 
-    asn1_non_dynamic_5qi.five_qi = five_qi_to_uint(non_dynamic_5qi.five_qi);
+    asn1_non_dynamic_5qi.five_qi = to_underlying(non_dynamic_5qi.five_qi);
 
     if (non_dynamic_5qi.qos_prio_level.has_value()) {
       asn1_non_dynamic_5qi.qos_prio_level_present = true;
@@ -145,7 +145,7 @@ inline void fill_asn1_qos_flow_info_item(asn1::e1ap::qos_flow_qos_param_item_s& 
 inline void fill_asn1_drb_to_setup_item(asn1::e1ap::drb_to_setup_item_ng_ran_s& asn1_drb_to_setup_item,
                                         const e1ap_drb_to_setup_item_ng_ran&    drb_to_setup_item)
 {
-  asn1_drb_to_setup_item.drb_id = drb_id_to_uint(drb_to_setup_item.drb_id);
+  asn1_drb_to_setup_item.drb_id = to_underlying(drb_to_setup_item.drb_id);
 
   // Fill SDAP config.
   asn1_drb_to_setup_item.sdap_cfg = sdap_config_to_e1ap_asn1(drb_to_setup_item.sdap_cfg);
@@ -190,21 +190,8 @@ inline void fill_asn1_drb_to_setup_item(asn1::e1ap::drb_to_setup_item_ng_ran_s& 
   // Fill DRB data forwarding info request.
   if (drb_to_setup_item.drb_data_forwarding_info_request.has_value()) {
     asn1_drb_to_setup_item.drb_data_forwarding_info_request_present = true;
-    asn1::string_to_enum(asn1_drb_to_setup_item.drb_data_forwarding_info_request.data_forwarding_request,
-                         drb_to_setup_item.drb_data_forwarding_info_request.value().data_forwarding_request);
-    for (const auto& qos_flow_map_item :
-         drb_to_setup_item.drb_data_forwarding_info_request.value().qos_flows_forwarded_on_fwd_tunnels) {
-      asn1::e1ap::qos_flow_map_item_s asn1_qos_flow_map_item;
-      asn1_qos_flow_map_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_map_item.qos_flow_id);
-      if (qos_flow_map_item.qos_flow_map_ind.has_value()) {
-        asn1_qos_flow_map_item.qos_flow_map_ind_present = true;
-        asn1_qos_flow_map_item.qos_flow_map_ind =
-            static_cast<asn1::e1ap::qos_flow_map_ind_opts::options>((int)qos_flow_map_item.qos_flow_map_ind.value());
-      }
-
-      asn1_drb_to_setup_item.drb_data_forwarding_info_request.qos_flows_forwarded_on_fwd_tunnels.push_back(
-          asn1_qos_flow_map_item);
-    }
+    e1ap_data_forwarding_info_request_to_asn1(asn1_drb_to_setup_item.drb_data_forwarding_info_request,
+                                              drb_to_setup_item.drb_data_forwarding_info_request.value());
   }
 
   // Fill DRB inactivity timer.
@@ -285,7 +272,7 @@ inline void fill_asn1_bearer_context_setup_request(asn1::e1ap::bearer_context_se
     asn1::e1ap::pdu_session_res_to_setup_item_s asn1_pdu_session_res_item;
 
     // Fill PDU session ID.
-    asn1_pdu_session_res_item.pdu_session_id = pdu_session_id_to_uint(pdu_session_res_item.pdu_session_id);
+    asn1_pdu_session_res_item.pdu_session_id = to_underlying(pdu_session_res_item.pdu_session_id);
 
     // Fill PDU session type.
     asn1_pdu_session_res_item.pdu_session_type = pdu_session_type_to_asn1(pdu_session_res_item.pdu_session_type);
@@ -316,23 +303,8 @@ inline void fill_asn1_bearer_context_setup_request(asn1::e1ap::bearer_context_se
     // Fill PDU session data forwarding info request.
     if (pdu_session_res_item.pdu_session_data_forwarding_info_request.has_value()) {
       asn1_pdu_session_res_item.pdu_session_data_forwarding_info_request_present = true;
-
-      asn1::string_to_enum(
-          asn1_pdu_session_res_item.pdu_session_data_forwarding_info_request.data_forwarding_request,
-          pdu_session_res_item.pdu_session_data_forwarding_info_request.value().data_forwarding_request);
-      for (const auto& qos_flow_map_item :
-           pdu_session_res_item.pdu_session_data_forwarding_info_request.value().qos_flows_forwarded_on_fwd_tunnels) {
-        asn1::e1ap::qos_flow_map_item_s asn1_qos_flow_map_item;
-        asn1_qos_flow_map_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_map_item.qos_flow_id);
-        if (qos_flow_map_item.qos_flow_map_ind.has_value()) {
-          asn1_qos_flow_map_item.qos_flow_map_ind_present = true;
-          asn1_qos_flow_map_item.qos_flow_map_ind =
-              static_cast<asn1::e1ap::qos_flow_map_ind_opts::options>((int)qos_flow_map_item.qos_flow_map_ind.value());
-        }
-
-        asn1_pdu_session_res_item.pdu_session_data_forwarding_info_request.qos_flows_forwarded_on_fwd_tunnels.push_back(
-            asn1_qos_flow_map_item);
-      }
+      e1ap_data_forwarding_info_request_to_asn1(asn1_pdu_session_res_item.pdu_session_data_forwarding_info_request,
+                                                pdu_session_res_item.pdu_session_data_forwarding_info_request.value());
     }
 
     // Fill PDU session inactivity timer.
@@ -382,7 +354,7 @@ inline void fill_asn1_bearer_context_setup_request(asn1::e1ap::bearer_context_se
   // Fill RAN UE ID.
   if (request.ran_ue_id.has_value()) {
     asn1_request->ran_ue_id_present = true;
-    asn1_request->ran_ue_id.from_number(ran_ue_id_to_uint(request.ran_ue_id.value()));
+    asn1_request->ran_ue_id.from_number(to_underlying(request.ran_ue_id.value()));
   }
 
   // Fill GNB DU ID.
@@ -449,14 +421,8 @@ fill_e1ap_bearer_context_setup_response(e1ap_bearer_context_setup_response&     
 
         // Fill DRB data forwarding info response.
         if (asn1_drb_setup_item.drb_data_forwarding_info_resp_present) {
-          if (asn1_drb_setup_item.drb_data_forwarding_info_resp.ul_data_forwarding_present) {
-            drb_setup_item.drb_data_forwarding_info_resp.value().ul_data_forwarding =
-                asn1_to_up_transport_layer_info(asn1_drb_setup_item.drb_data_forwarding_info_resp.ul_data_forwarding);
-          }
-          if (asn1_drb_setup_item.drb_data_forwarding_info_resp.dl_data_forwarding_present) {
-            drb_setup_item.drb_data_forwarding_info_resp.value().dl_data_forwarding =
-                asn1_to_up_transport_layer_info(asn1_drb_setup_item.drb_data_forwarding_info_resp.dl_data_forwarding);
-          }
+          drb_setup_item.drb_data_forwarding_info_resp =
+              e1ap_asn1_to_data_forwarding_info(asn1_drb_setup_item.drb_data_forwarding_info_resp);
         }
 
         res_setup_item.drb_setup_list_ng_ran.emplace(drb_setup_item.drb_id, drb_setup_item);
@@ -479,21 +445,13 @@ fill_e1ap_bearer_context_setup_response(e1ap_bearer_context_setup_response&     
 
       // Fill PDU session data forwarding info response.
       if (asn1_res_setup_item.pdu_session_data_forwarding_info_resp_present) {
-        if (asn1_res_setup_item.pdu_session_data_forwarding_info_resp.ul_data_forwarding_present) {
-          res_setup_item.pdu_session_data_forwarding_info_resp.value().ul_data_forwarding =
-              asn1_to_up_transport_layer_info(
-                  asn1_res_setup_item.pdu_session_data_forwarding_info_resp.ul_data_forwarding);
-        }
-        if (asn1_res_setup_item.pdu_session_data_forwarding_info_resp.dl_data_forwarding_present) {
-          res_setup_item.pdu_session_data_forwarding_info_resp.value().dl_data_forwarding =
-              asn1_to_up_transport_layer_info(
-                  asn1_res_setup_item.pdu_session_data_forwarding_info_resp.dl_data_forwarding);
-        }
+        res_setup_item.pdu_session_data_forwarding_info_resp =
+            e1ap_asn1_to_data_forwarding_info(asn1_res_setup_item.pdu_session_data_forwarding_info_resp);
       }
 
       // Fill NG DL UP unchanged.
       if (asn1_res_setup_item.ng_dl_up_unchanged_present) {
-        res_setup_item.ng_dl_up_unchanged.value() =
+        res_setup_item.ng_dl_up_unchanged =
             e1ap_asn1_ng_dl_up_unchanged_to_bool(asn1_res_setup_item.ng_dl_up_unchanged);
       }
 
@@ -560,13 +518,19 @@ inline void fill_asn1_bearer_context_modification_request(asn1::e1ap::bearer_con
       for (const auto& res_to_mod_item :
            request.ng_ran_bearer_context_mod_request.value().pdu_session_res_to_modify_list) {
         asn1::e1ap::pdu_session_res_to_modify_item_s asn1_res_to_mod_item;
-        asn1_res_to_mod_item.pdu_session_id = pdu_session_id_to_uint(res_to_mod_item.pdu_session_id);
+        asn1_res_to_mod_item.pdu_session_id = to_underlying(res_to_mod_item.pdu_session_id);
 
         // Fill NG UL UP transport layer information (updated UPF endpoint, e.g. after Xn path switch).
         if (res_to_mod_item.ng_ul_up_tnl_info.has_value()) {
           asn1_res_to_mod_item.ng_ul_up_tnl_info_present = true;
           up_transport_layer_info_to_asn1(asn1_res_to_mod_item.ng_ul_up_tnl_info,
                                           res_to_mod_item.ng_ul_up_tnl_info.value());
+        }
+
+        if (res_to_mod_item.pdu_session_data_forwarding_info.has_value()) {
+          asn1_res_to_mod_item.pdu_session_data_forwarding_info_present = true;
+          e1ap_data_forwarding_info_to_asn1(asn1_res_to_mod_item.pdu_session_data_forwarding_info,
+                                            res_to_mod_item.pdu_session_data_forwarding_info.value());
         }
 
         for (const auto& drb_to_setup_item : res_to_mod_item.drb_to_setup_list_ng_ran) {
@@ -578,7 +542,7 @@ inline void fill_asn1_bearer_context_modification_request(asn1::e1ap::bearer_con
         for (const e1ap_drb_to_modify_item_ng_ran& drb_to_mod_item : res_to_mod_item.drb_to_modify_list_ng_ran) {
           asn1::e1ap::drb_to_modify_item_ng_ran_s asn1_drb_to_mod_item;
 
-          asn1_drb_to_mod_item.drb_id = drb_id_to_uint(drb_to_mod_item.drb_id);
+          asn1_drb_to_mod_item.drb_id = to_underlying(drb_to_mod_item.drb_id);
 
           for (const auto& dl_up_param : drb_to_mod_item.dl_up_params) {
             asn1::e1ap::up_params_item_s asn1_dl_up_param;
@@ -613,7 +577,7 @@ inline void fill_asn1_bearer_context_modification_request(asn1::e1ap::bearer_con
 
         for (const auto& drb_to_rem_item : res_to_mod_item.drb_to_rem_list_ng_ran) {
           asn1::e1ap::drb_to_rem_item_ng_ran_s asn1_drb_to_rem_item;
-          asn1_drb_to_rem_item.drb_id = drb_id_to_uint(drb_to_rem_item);
+          asn1_drb_to_rem_item.drb_id = to_underlying(drb_to_rem_item);
           asn1_res_to_mod_item.drb_to_rem_list_ng_ran.push_back(asn1_drb_to_rem_item);
         }
 
@@ -627,7 +591,7 @@ inline void fill_asn1_bearer_context_modification_request(asn1::e1ap::bearer_con
       for (const auto& res_to_setup_mod_item :
            request.ng_ran_bearer_context_mod_request.value().pdu_session_res_to_setup_mod_list) {
         asn1::e1ap::pdu_session_res_to_setup_mod_item_s asn1_res_to_setup_mod_item;
-        asn1_res_to_setup_mod_item.pdu_session_id = pdu_session_id_to_uint(res_to_setup_mod_item.pdu_session_id);
+        asn1_res_to_setup_mod_item.pdu_session_id = to_underlying(res_to_setup_mod_item.pdu_session_id);
 
         // Fill PDU session type.
         asn1_res_to_setup_mod_item.pdu_session_type = pdu_session_type_to_asn1(res_to_setup_mod_item.pdu_session_type);
@@ -644,7 +608,7 @@ inline void fill_asn1_bearer_context_modification_request(asn1::e1ap::bearer_con
 
         for (const auto& drb_to_setup_mod_item : res_to_setup_mod_item.drb_to_setup_list_ng_ran) {
           asn1::e1ap::drb_to_setup_mod_item_ng_ran_s asn1_drb_to_setup_mod_item;
-          asn1_drb_to_setup_mod_item.drb_id = drb_id_to_uint(drb_to_setup_mod_item.drb_id);
+          asn1_drb_to_setup_mod_item.drb_id = to_underlying(drb_to_setup_mod_item.drb_id);
 
           // Fill SDAP config.
           asn1_drb_to_setup_mod_item.sdap_cfg = sdap_config_to_e1ap_asn1(drb_to_setup_mod_item.sdap_cfg);
@@ -709,7 +673,7 @@ inline void fill_asn1_bearer_context_modification_request(asn1::e1ap::bearer_con
       asn1_bearer_context_mod.pdu_session_res_to_rem_list_present = true;
       for (const auto& psi_to_rem : request.ng_ran_bearer_context_mod_request.value().pdu_session_res_to_rem_list) {
         asn1::e1ap::pdu_session_res_to_rem_item_s asn1_res_to_rem_item;
-        asn1_res_to_rem_item.pdu_session_id = pdu_session_id_to_uint(psi_to_rem);
+        asn1_res_to_rem_item.pdu_session_id = to_underlying(psi_to_rem);
         asn1_bearer_context_mod.pdu_session_res_to_rem_list.push_back(asn1_res_to_rem_item);
       }
     }
@@ -789,16 +753,8 @@ inline void fill_e1ap_bearer_context_modification_response(
 
             // Fill DRB data forwarding info response.
             if (asn1_drb_setup_item.drb_data_forwarding_info_resp_present) {
-              if (asn1_drb_setup_item.drb_data_forwarding_info_resp.ul_data_forwarding_present) {
-                drb_setup_item.drb_data_forwarding_info_resp.value().ul_data_forwarding =
-                    asn1_to_up_transport_layer_info(
-                        asn1_drb_setup_item.drb_data_forwarding_info_resp.ul_data_forwarding);
-              }
-              if (asn1_drb_setup_item.drb_data_forwarding_info_resp.dl_data_forwarding_present) {
-                drb_setup_item.drb_data_forwarding_info_resp.value().dl_data_forwarding =
-                    asn1_to_up_transport_layer_info(
-                        asn1_drb_setup_item.drb_data_forwarding_info_resp.dl_data_forwarding);
-              }
+              drb_setup_item.drb_data_forwarding_info_resp =
+                  e1ap_asn1_to_data_forwarding_info(asn1_drb_setup_item.drb_data_forwarding_info_resp);
             }
 
             res_mod_item.drb_setup_list_ng_ran.emplace(drb_setup_item.drb_id, drb_setup_item);
@@ -815,21 +771,14 @@ inline void fill_e1ap_bearer_context_modification_response(
 
           // Fill security result.
           if (asn1_res_mod_item.security_result_present) {
+            res_mod_item.security_result = security_result_t{};
             asn1_to_security_result(res_mod_item.security_result.value(), asn1_res_mod_item.security_result);
           }
 
           // Fill PDU session data forwarding info response.
           if (asn1_res_mod_item.pdu_session_data_forwarding_info_resp_present) {
-            if (asn1_res_mod_item.pdu_session_data_forwarding_info_resp.ul_data_forwarding_present) {
-              res_mod_item.pdu_session_data_forwarding_info_resp.value().ul_data_forwarding =
-                  asn1_to_up_transport_layer_info(
-                      asn1_res_mod_item.pdu_session_data_forwarding_info_resp.ul_data_forwarding);
-            }
-            if (asn1_res_mod_item.pdu_session_data_forwarding_info_resp.dl_data_forwarding_present) {
-              res_mod_item.pdu_session_data_forwarding_info_resp.value().dl_data_forwarding =
-                  asn1_to_up_transport_layer_info(
-                      asn1_res_mod_item.pdu_session_data_forwarding_info_resp.dl_data_forwarding);
-            }
+            res_mod_item.pdu_session_data_forwarding_info_resp =
+                e1ap_asn1_to_data_forwarding_info(asn1_res_mod_item.pdu_session_data_forwarding_info_resp);
           }
 
           res.pdu_session_resource_setup_list.emplace(res_mod_item.pdu_session_id, res_mod_item);
@@ -894,16 +843,8 @@ inline void fill_e1ap_bearer_context_modification_response(
 
             // Fill DRB data forwarding info response.
             if (asn1_drb_setup_item.drb_data_forwarding_info_resp_present) {
-              if (asn1_drb_setup_item.drb_data_forwarding_info_resp.ul_data_forwarding_present) {
-                drb_setup_item.drb_data_forwarding_info_resp.value().ul_data_forwarding =
-                    asn1_to_up_transport_layer_info(
-                        asn1_drb_setup_item.drb_data_forwarding_info_resp.ul_data_forwarding);
-              }
-              if (asn1_drb_setup_item.drb_data_forwarding_info_resp.dl_data_forwarding_present) {
-                drb_setup_item.drb_data_forwarding_info_resp.value().dl_data_forwarding =
-                    asn1_to_up_transport_layer_info(
-                        asn1_drb_setup_item.drb_data_forwarding_info_resp.dl_data_forwarding);
-              }
+              drb_setup_item.drb_data_forwarding_info_resp =
+                  e1ap_asn1_to_data_forwarding_info(asn1_drb_setup_item.drb_data_forwarding_info_resp);
             }
 
             res_mod_item.drb_setup_list_ng_ran.emplace(drb_setup_item.drb_id, drb_setup_item);
@@ -980,21 +921,14 @@ inline void fill_e1ap_bearer_context_modification_response(
 
           // Fill security result.
           if (asn1_res_mod_item.security_result_present) {
+            res_mod_item.security_result = security_result_t{};
             asn1_to_security_result(res_mod_item.security_result.value(), asn1_res_mod_item.security_result);
           }
 
           // Fill PDU session data forwarding info response.
           if (asn1_res_mod_item.pdu_session_data_forwarding_info_resp_present) {
-            if (asn1_res_mod_item.pdu_session_data_forwarding_info_resp.ul_data_forwarding_present) {
-              res_mod_item.pdu_session_data_forwarding_info_resp.value().ul_data_forwarding =
-                  asn1_to_up_transport_layer_info(
-                      asn1_res_mod_item.pdu_session_data_forwarding_info_resp.ul_data_forwarding);
-            }
-            if (asn1_res_mod_item.pdu_session_data_forwarding_info_resp.dl_data_forwarding_present) {
-              res_mod_item.pdu_session_data_forwarding_info_resp.value().dl_data_forwarding =
-                  asn1_to_up_transport_layer_info(
-                      asn1_res_mod_item.pdu_session_data_forwarding_info_resp.dl_data_forwarding);
-            }
+            res_mod_item.pdu_session_data_forwarding_info_resp =
+                e1ap_asn1_to_data_forwarding_info(asn1_res_mod_item.pdu_session_data_forwarding_info_resp);
           }
 
           res.pdu_session_resource_modified_list.emplace(res_mod_item.pdu_session_id, res_mod_item);

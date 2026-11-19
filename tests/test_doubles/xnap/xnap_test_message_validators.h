@@ -33,6 +33,12 @@ bool is_valid_sn_status_transfer(const ocucp::xnap_message& msg);
 
 bool is_valid_ue_context_release(const ocucp::xnap_message& msg);
 
+bool is_valid_retrieve_ue_context_request(const ocucp::xnap_message& msg);
+
+bool is_valid_retrieve_ue_context_response(const ocucp::xnap_message& msg);
+
+bool is_valid_retrieve_ue_context_failure(const ocucp::xnap_message& msg);
+
 byte_buffer get_rrc_container(const ocucp::xnap_message& msg);
 
 } // namespace test_helpers

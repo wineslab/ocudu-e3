@@ -10,6 +10,7 @@
 #include "ocudu/ran/nr_cgi.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/positioning/positioning_ids.h"
+#include "ocudu/ran/positioning/trp_information_exchange.h"
 #include "ocudu/ran/scs_specific_carrier.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/ran/srs/srs_configuration.h"
@@ -22,6 +23,10 @@ struct du_trp_info {
   std::optional<pci_t>               pci;
   std::optional<nr_cell_global_id_t> cgi;
   std::optional<arfcn_t>             arfcn;
+  /// DL-PRS configuration of the TRP, as per TS 38.473, Section 9.3.1.177.
+  std::optional<prs_cfg_t> prs_cfg;
+  /// Geographical coordinates of the TRP antenna, as per TS 38.473, Section 9.3.1.184.
+  std::optional<geographical_coordinates_t> geo_coords;
 };
 
 struct du_trp_info_response {
@@ -75,7 +80,14 @@ struct pos_meas_result_ul_rsrp {
   uint8_t ul_rsrp;
 };
 
-using pos_meas_result_item = std::variant<pos_meas_result_ul_rtoa, pos_meas_result_ul_rsrp>;
+struct pos_meas_result_ul_aoa {
+  /// Azimuth Angle of Arrival, in units of 0.1 degrees. Values {0,...,3599}, as per TS 38.473, Section 9.3.1.157.
+  uint16_t azimuth_aoa;
+  /// Zenith Angle of Arrival, in units of 0.1 degrees. Values {0,...,1799}, as per TS 38.473, Section 9.3.1.157.
+  std::optional<uint16_t> zenith_aoa;
+};
+
+using pos_meas_result_item = std::variant<pos_meas_result_ul_rtoa, pos_meas_result_ul_rsrp, pos_meas_result_ul_aoa>;
 
 struct pos_meas_result {
   trp_id_t trp_id;

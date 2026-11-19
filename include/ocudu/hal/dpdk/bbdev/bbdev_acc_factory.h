@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/hal/dpdk/bbdev/bbdev_acc.h"
+#include <memory>
 
 namespace ocudu {
 namespace dpdk {

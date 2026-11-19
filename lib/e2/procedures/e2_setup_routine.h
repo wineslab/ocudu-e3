@@ -7,7 +7,7 @@
 #include "ocudu/asn1/e2ap/e2ap.h"
 #include "ocudu/e2/e2.h"
 #include "ocudu/e2/e2_node_component_config_provider.h"
-#include "ocudu/e2/e2ap_configuration.h"
+#include "ocudu/e2/e2ap_config.h"
 #include "ocudu/e2/e2sm/e2sm_manager.h"
 #include "ocudu/support/async/async_task.h"
 #include "ocudu/support/timers.h"
@@ -18,7 +18,7 @@ namespace ocudu {
 class e2_setup_routine
 {
 public:
-  e2_setup_routine(const e2ap_configuration&          cfg,
+  e2_setup_routine(const e2ap_config&                 cfg,
                    e2_node_component_config_provider& node_cfg_provider,
                    e2sm_manager&                      e2sm_mngr,
                    e2_connection_manager&             e2_conn_mng,
@@ -33,7 +33,7 @@ private:
   async_task<e2_setup_response_message> start_e2_setup_request();
   void                                  handle_e2_setup_response(const e2_setup_response_message& msg);
 
-  const e2ap_configuration&          cfg;
+  const e2ap_config&                 cfg;
   e2_node_component_config_provider& node_cfg_provider;
   e2sm_manager&                      e2sm_mngr;
   e2_connection_manager&             e2_conn_mng;

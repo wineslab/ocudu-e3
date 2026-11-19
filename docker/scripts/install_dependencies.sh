@@ -23,16 +23,30 @@ install_dependencies_debian_ubuntu() {
     local -x DEBIAN_FRONTEND=noninteractive
     local -a pkgs=()
     local ARCH=""
-
     local -a build_pkgs=(
         cmake make gcc g++ pkg-config
         libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev
     )
+    # Customer binaries link only the single-precision FFTW, mbedcrypto, SCTP and
+    # yaml-cpp shared libraries. Development packages, the mbedTLS TLS/X.509
+    # libraries and GoogleTest are build-only and are not shipped at runtime.
     local -a run_pkgs=(
-        libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev libcap2-bin
+        libfftw3-single3 libsctp1 libyaml-cpp0.8 libcap2-bin
     )
+
+    # Runtime images are only built from Ubuntu 24.04 and newer, where mbedcrypto
+    # is the one runtime library whose soname changed after 24.04.
+    case "${VERSION_ID:-}" in
+        24.04)
+            run_pkgs+=(libmbedcrypto7t64)
+            ;;
+        *)
+            run_pkgs+=(libmbedcrypto16)
+            ;;
+    esac
     local -a extra_pkgs=(
         libzmq3-dev libuhd-dev uhd-host libboost-program-options-dev libdpdk-dev libelf-dev libdwarf-dev libdw-dev capnproto libcapnp-dev
+        libeigen3-dev
     )
 
     case "$mode" in
@@ -92,7 +106,6 @@ install_dependencies_debian_ubuntu() {
         fi
     fi
 
-    _ubuntu_apt_cleanup
 }
 
 install_dependencies_fedora() {
@@ -106,8 +119,8 @@ install_dependencies_fedora() {
         fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap
     )
     local -a extra_pkgs=(
-        boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel elfutils-devel elfutils-libelf-devel
-        libdwarf-devel libusb1-devel numactl-devel zeromq-devel
+        boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel uhd-devel elfutils-devel elfutils-libelf-devel
+        libdwarf-devel libusb1-devel numactl-devel zeromq-devel openssl openssl-devel eigen3-devel
     )
 
     case "$mode" in
@@ -130,7 +143,81 @@ install_dependencies_fedora() {
             ;;
     esac
 
-    install_fedora_pkgs "${pkgs[@]}"
+    install_rpm_pkgs "${pkgs[@]}"
+}
+
+install_dependencies_centos() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    local -a build_pkgs=(
+        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+    )
+    local -a run_pkgs=(
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls
+    )
+    local -a extra_pkgs=(
+        boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel elfutils-devel elfutils-libelf-devel
+        libdwarf-devel libusb1-devel numactl-devel zeromq-devel eigen3-devel
+    )
+
+    case "$mode" in
+        all)
+            pkgs+=( "${build_pkgs[@]}" "${extra_pkgs[@]}" )
+            ;;
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        extra)
+            pkgs+=( "${extra_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    install_rpm_pkgs "${pkgs[@]}"
+}
+
+install_dependencies_ubi10() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    local -a build_pkgs=(
+        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+    )
+    local -a run_pkgs=(
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls
+    )
+    local -a extra_pkgs=(
+        boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel elfutils-devel elfutils-libelf-devel
+        libdwarf-devel libusb1-devel numactl-devel zeromq-devel eigen3-devel
+    )
+
+    case "$mode" in
+        all)
+            pkgs+=( "${build_pkgs[@]}" "${extra_pkgs[@]}" )
+            ;;
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        extra)
+            pkgs+=( "${extra_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    install_rpm_pkgs "${pkgs[@]}"
 }
 
 install_dependencies_arch() {
@@ -138,13 +225,13 @@ install_dependencies_arch() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake fftw mbedtls yaml-cpp lksctp-tools gtest pkgconf
+        cmake fftw mbedtls3 yaml-cpp lksctp-tools gtest pkgconf
     )
     local -a run_pkgs=(
-        fftw mbedtls yaml-cpp lksctp-tools gtest libcap
+        fftw mbedtls3 yaml-cpp lksctp-tools libcap
     )
     local -a extra_pkgs=(
-        zeromq libuhd boost dpdk libelf libdwarf elfutils capnproto
+        zeromq libuhd boost dpdk libelf libdwarf elfutils capnproto eigen
     )
 
     case "$mode" in
@@ -188,7 +275,7 @@ install_dependencies_rhel() {
         yaml-cpp-devel mbedtls-devel
     )
     local -a extra_pkgs=(
-        cppzmq-devel libusbx-devel boost-devel numactl-devel capnproto capnproto-devel
+        cppzmq-devel libusbx-devel boost-devel numactl-devel capnproto capnproto-devel eigen3-devel
     )
 
     case "$mode" in
@@ -239,10 +326,17 @@ main() {
             install_dependencies_arch "$mode"
             ;;
         rhel)
-            install_dependencies_rhel "$mode"
+            if is_ubi10; then
+                install_dependencies_ubi10 "$mode"
+            else
+                install_dependencies_rhel "$mode"
+            fi
             ;;
         fedora)
             install_dependencies_fedora "$mode"
+            ;;
+        centos)
+            install_dependencies_centos "$mode"
             ;;
         *)
             echo "OS $ID not supported"

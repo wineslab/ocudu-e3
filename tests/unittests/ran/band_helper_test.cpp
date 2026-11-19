@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/bs_channel_bandwidth.h"
@@ -30,6 +32,8 @@ TEST(test_get_band_from_arfcn, mix_bands)
   ASSERT_EQ(nr_band::n51, get_band_from_dl_arfcn(285500U));
   ASSERT_EQ(nr_band::n70, get_band_from_dl_arfcn(400000U));
   ASSERT_EQ(nr_band::n77, get_band_from_dl_arfcn(630500U));
+  ASSERT_EQ(nr_band::n247, get_band_from_dl_arfcn(1130000U));
+  ASSERT_EQ(nr_band::n250, get_band_from_dl_arfcn(304000U));
 }
 
 TEST(test_arfcn_freq_conversion, arfcn_to_freq)
@@ -75,6 +79,16 @@ TEST(test_arfcn_freq_conversion, arfcn_to_freq)
 
   // n78
   ASSERT_DOUBLE_EQ(3513.6e6, nr_arfcn_to_freq(634240));
+
+  // n247, n248
+  ASSERT_DOUBLE_EQ(10800.0e6, nr_arfcn_to_freq(1120000));
+  ASSERT_DOUBLE_EQ(10950.0e6, nr_arfcn_to_freq(1130000));
+  // n250, n251
+  ASSERT_DOUBLE_EQ(1520.0e6, nr_arfcn_to_freq(304000));
+  ASSERT_DOUBLE_EQ(1538.5e6, nr_arfcn_to_freq(307700));
+  // n252, n253
+  ASSERT_DOUBLE_EQ(2190.0e6, nr_arfcn_to_freq(438000));
+  ASSERT_DOUBLE_EQ(1523.0e6, nr_arfcn_to_freq(304600));
 }
 
 TEST(test_arfcn_freq_conversion, freq_to_arfcn)
@@ -106,7 +120,7 @@ TEST(get_ul_arfcn_from_dl_arfcn, mixed_frequencies)
   ASSERT_EQ(142600, get_ul_arfcn_from_dl_arfcn(153600, nr_band::n28));
   ASSERT_EQ(144608, get_ul_arfcn_from_dl_arfcn(155608, nr_band::n28));
 
-  // For n66, n70, n92, n94, the UL spectrum is smaller than the DL spectrum. When we convert the DL ARFCN
+  // For n66, n70, n92, n94, n247, n248 the UL spectrum is smaller than the DL spectrum. When we convert the DL ARFCN
   // to the corresponding UL ARFCN, if the UL ARFCN exceeds the band upper-bound, we return 0.
   ASSERT_EQ(356000, get_ul_arfcn_from_dl_arfcn(436000, nr_band::n66));
   ASSERT_EQ(0, get_ul_arfcn_from_dl_arfcn(440000, nr_band::n66));
@@ -116,6 +130,10 @@ TEST(get_ul_arfcn_from_dl_arfcn, mixed_frequencies)
   ASSERT_EQ(0, get_ul_arfcn_from_dl_arfcn(303400, nr_band::n92));
   ASSERT_EQ(183000, get_ul_arfcn_from_dl_arfcn(293400, nr_band::n94));
   ASSERT_EQ(0, get_ul_arfcn_from_dl_arfcn(303400, nr_band::n94));
+  ASSERT_EQ(1333333, get_ul_arfcn_from_dl_arfcn(1130000, nr_band::n247));
+  ASSERT_EQ(0, get_ul_arfcn_from_dl_arfcn(1130001, nr_band::n247));
+  ASSERT_EQ(1366666, get_ul_arfcn_from_dl_arfcn(1146666, nr_band::n248));
+  ASSERT_EQ(0, get_ul_arfcn_from_dl_arfcn(1146667, nr_band::n248));
 }
 
 TEST(test_arfcn_freq_conversion, arfcn_to_freq_corner_cases)
@@ -126,12 +144,65 @@ TEST(test_arfcn_freq_conversion, arfcn_to_freq_corner_cases)
   ASSERT_DOUBLE_EQ(99.99996e9, nr_arfcn_to_freq(max_valid_nr_arfcn));
 }
 
+TEST(test_ntn_bands, rel17_satellite_bands_are_ntn_bands)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-DEP-3");
+
+  // TS 38.101-5: n255 (L-band) and n256 (S-band) are the Rel-17 satellite bands.
+  for (nr_band b : {nr_band::n255, nr_band::n256}) {
+    ASSERT_TRUE(is_ntn_band(b)) << "n" << static_cast<unsigned>(b) << " must be an NTN band";
+  }
+  for (nr_band b : {nr_band::n1, nr_band::n3, nr_band::n65, nr_band::n78}) {
+    ASSERT_FALSE(is_ntn_band(b)) << "n" << static_cast<unsigned>(b) << " must not be an NTN band";
+  }
+}
+
+TEST(test_ntn_bands, every_ntn_band_is_a_licensed_paired_fr1_band)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-DEP-3");
+
+  unsigned nof_ntn_bands = 0;
+  for (nr_band b : all_nr_bands_fr1) {
+    if (not is_ntn_band(b)) {
+      continue;
+    }
+    ++nof_ntn_bands;
+    const unsigned n = static_cast<unsigned>(b);
+    ASSERT_TRUE(is_band_known(b)) << "n" << n;
+    ASSERT_EQ(duplex_mode::FDD, get_duplex_mode(b)) << "n" << n;
+    ASSERT_TRUE(is_paired_spectrum(b)) << "n" << n;
+    ASSERT_EQ(frequency_range::FR1, get_freq_range(b)) << "n" << n;
+    ASSERT_FALSE(is_unlicensed_band(b)) << "n" << n;
+    ASSERT_FALSE(is_band_for_shared_spectrum(b)) << "n" << n;
+    ASSERT_NE(ssb_pattern_case::invalid, get_ssb_pattern(b, subcarrier_spacing::kHz15)) << "n" << n;
+    ASSERT_NE(min_channel_bandwidth::invalid, get_min_channel_bw(b, subcarrier_spacing::kHz15)) << "n" << n;
+  }
+  ASSERT_GE(nof_ntn_bands, 2U);
+}
+
+TEST(test_ntn_bands, n256_carrier_of_the_ntn_e2e_tests_is_valid_and_paired)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-DEP-3");
+
+  // Carrier used by the NTN e2e tests: DL 2185 MHz and UL 1995 MHz in n256.
+  const arfcn_t dl_arfcn = freq_to_nr_arfcn(2185e6);
+  const arfcn_t ul_arfcn = freq_to_nr_arfcn(1995e6);
+
+  ASSERT_TRUE(is_dl_arfcn_valid_given_band(nr_band::n256, dl_arfcn, subcarrier_spacing::kHz15).has_value());
+  ASSERT_TRUE(is_ul_arfcn_valid_given_band(nr_band::n256, ul_arfcn).has_value());
+  ASSERT_EQ(ul_arfcn, get_ul_arfcn_from_dl_arfcn(dl_arfcn, nr_band::n256));
+
+  // The DL of n256 overlaps the terrestrial n65, so the NTN band cannot be derived from the ARFCN and is always given.
+  ASSERT_NE(nr_band::n256, get_band_from_dl_arfcn(dl_arfcn));
+}
+
 TEST(test_band_duplexing, all_bands)
 {
   for (nr_band b : all_nr_bands_fr1) {
     if (b < nr_band::n29 or b == nr_band::n30 or b == nr_band::n65 or b == nr_band::n66 or
         (b >= ocudu::nr_band::n70 and b <= ocudu::nr_band::n74) or b == nr_band::n85 or
-        (b >= ocudu::nr_band::n91 and b <= ocudu::nr_band::n94) or b == ocudu::nr_band::n100) {
+        (b >= ocudu::nr_band::n91 and b <= ocudu::nr_band::n94) or b == ocudu::nr_band::n100 or
+        (b >= ocudu::nr_band::n247 and b <= ocudu::nr_band::n256)) {
       ASSERT_EQ(duplex_mode::FDD, get_duplex_mode(b));
     } else if ((b >= ocudu::nr_band::n34 and b <= ocudu::nr_band::n53) or
                (b >= ocudu::nr_band::n77 and b <= ocudu::nr_band::n79) or b == ocudu::nr_band::n90 or
@@ -191,7 +262,7 @@ TEST(test_is_paired_spectrum, unpaired)
 
 TEST(test_ssb_pattern, ssb_pattern_case_A)
 {
-  const std::array<nr_band, 13> case_c_bands{nr_band::n18,
+  const std::array<nr_band, 16> case_c_bands{nr_band::n18,
                                              nr_band::n38,
                                              nr_band::n40,
                                              nr_band::n46,
@@ -203,7 +274,10 @@ TEST(test_ssb_pattern, ssb_pattern_case_A)
                                              nr_band::n90,
                                              nr_band::n96,
                                              nr_band::n102,
-                                             nr_band::n104};
+                                             nr_band::n104,
+                                             nr_band::n247,
+                                             nr_band::n248,
+                                             nr_band::n254};
 
   for (const auto band : all_nr_bands_fr1) {
     // Skip SSB case-C-only bands and SUL bands.
@@ -218,7 +292,7 @@ TEST(test_ssb_pattern, ssb_pattern_case_A)
 
 TEST(test_ssb_pattern, ssb_pattern_case_B)
 {
-  const std::array<nr_band, 3> case_b_bands{nr_band::n5, nr_band::n24, nr_band::n66};
+  const std::array<nr_band, 5> case_b_bands{nr_band::n5, nr_band::n24, nr_band::n66, nr_band::n251, nr_band::n255};
 
   for (auto band : case_b_bands) {
     ASSERT_EQ(ssb_pattern_case::B, get_ssb_pattern(band, subcarrier_spacing::kHz30));
@@ -227,7 +301,7 @@ TEST(test_ssb_pattern, ssb_pattern_case_B)
 
 TEST(test_ssb_pattern, ssb_pattern_case_C)
 {
-  const std::array<nr_band, 16> case_c_bands{nr_band::n34,
+  const std::array<nr_band, 19> case_c_bands{nr_band::n34,
                                              nr_band::n38,
                                              nr_band::n39,
                                              nr_band::n40,
@@ -242,7 +316,10 @@ TEST(test_ssb_pattern, ssb_pattern_case_C)
                                              nr_band::n96,
                                              nr_band::n101,
                                              nr_band::n102,
-                                             nr_band::n104};
+                                             nr_band::n104,
+                                             nr_band::n247,
+                                             nr_band::n248,
+                                             nr_band::n254};
   for (auto band : case_c_bands) {
     ASSERT_EQ(ssb_pattern_case::C, get_ssb_pattern(band, subcarrier_spacing::kHz30));
   }
@@ -423,6 +500,8 @@ TEST(test_get_f_req_from_f_req_point_a, scs_kHz60)
 
 TEST(test_get_n_rbs_from_bw, scs_15kHz)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-1");
+
   ASSERT_EQ(25, get_n_rbs_from_bw(bs_channel_bandwidth::MHz5, subcarrier_spacing::kHz15, frequency_range::FR1));
   ASSERT_EQ(52, get_n_rbs_from_bw(bs_channel_bandwidth::MHz10, subcarrier_spacing::kHz15, frequency_range::FR1));
   ASSERT_EQ(79, get_n_rbs_from_bw(bs_channel_bandwidth::MHz15, subcarrier_spacing::kHz15, frequency_range::FR1));
@@ -438,6 +517,8 @@ TEST(test_get_n_rbs_from_bw, scs_15kHz)
 
 TEST(test_get_n_rbs_from_bw, scs_30kHz)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-1");
+
   ASSERT_EQ(11, get_n_rbs_from_bw(bs_channel_bandwidth::MHz5, subcarrier_spacing::kHz30, frequency_range::FR1));
   ASSERT_EQ(24, get_n_rbs_from_bw(bs_channel_bandwidth::MHz10, subcarrier_spacing::kHz30, frequency_range::FR1));
   ASSERT_EQ(38, get_n_rbs_from_bw(bs_channel_bandwidth::MHz15, subcarrier_spacing::kHz30, frequency_range::FR1));
@@ -457,6 +538,8 @@ TEST(test_get_n_rbs_from_bw, scs_30kHz)
 
 TEST(test_get_n_rbs_from_bw, scs_60kHz)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-1");
+
   ASSERT_EQ(0, get_n_rbs_from_bw(bs_channel_bandwidth::MHz5, subcarrier_spacing::kHz60, frequency_range::FR1));
   ASSERT_EQ(11, get_n_rbs_from_bw(bs_channel_bandwidth::MHz10, subcarrier_spacing::kHz60, frequency_range::FR1));
   ASSERT_EQ(18, get_n_rbs_from_bw(bs_channel_bandwidth::MHz15, subcarrier_spacing::kHz60, frequency_range::FR1));
@@ -476,6 +559,8 @@ TEST(test_get_n_rbs_from_bw, scs_60kHz)
 
 TEST(test_get_n_rbs_from_bw, scs_120kHz_fr2)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-1");
+
   ASSERT_EQ(66, get_n_rbs_from_bw(bs_channel_bandwidth::MHz50, subcarrier_spacing::kHz60, frequency_range::FR2));
   ASSERT_EQ(132, get_n_rbs_from_bw(bs_channel_bandwidth::MHz100, subcarrier_spacing::kHz60, frequency_range::FR2));
   ASSERT_EQ(264, get_n_rbs_from_bw(bs_channel_bandwidth::MHz200, subcarrier_spacing::kHz60, frequency_range::FR2));
@@ -483,6 +568,8 @@ TEST(test_get_n_rbs_from_bw, scs_120kHz_fr2)
 
 TEST(test_get_n_rbs_from_bw, scs_120kHz)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-1");
+
   ASSERT_EQ(32, get_n_rbs_from_bw(bs_channel_bandwidth::MHz50, subcarrier_spacing::kHz120, frequency_range::FR2));
   ASSERT_EQ(66, get_n_rbs_from_bw(bs_channel_bandwidth::MHz100, subcarrier_spacing::kHz120, frequency_range::FR2));
   ASSERT_EQ(132, get_n_rbs_from_bw(bs_channel_bandwidth::MHz200, subcarrier_spacing::kHz120, frequency_range::FR2));
@@ -491,6 +578,8 @@ TEST(test_get_n_rbs_from_bw, scs_120kHz)
 
 TEST(test_get_n_rbs_from_bw, invalid_cases)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-1");
+
   ASSERT_EQ(0, get_n_rbs_from_bw(bs_channel_bandwidth::MHz200, subcarrier_spacing::kHz60, frequency_range::FR1));
   ASSERT_EQ(0, get_n_rbs_from_bw(bs_channel_bandwidth::MHz400, subcarrier_spacing::kHz60, frequency_range::FR2));
   ASSERT_EQ(0, get_n_rbs_from_bw(bs_channel_bandwidth::MHz400, subcarrier_spacing::kHz15, frequency_range::FR2));
@@ -536,6 +625,47 @@ TEST(test_get_min_channel_bw, invalid_cases)
   ASSERT_EQ(min_channel_bandwidth::MHz20, get_min_channel_bw(nr_band::n102, subcarrier_spacing::kHz30));
   ASSERT_EQ(min_channel_bandwidth::MHz20, get_min_channel_bw(nr_band::n102, subcarrier_spacing::kHz60));
   ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n102, subcarrier_spacing::kHz120));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n247, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n247, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n247, subcarrier_spacing::kHz60));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n248, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n248, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n248, subcarrier_spacing::kHz60));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz5, get_min_channel_bw(nr_band::n250, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n250, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n250, subcarrier_spacing::kHz60));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n250, subcarrier_spacing::kHz120));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz5, get_min_channel_bw(nr_band::n251, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n251, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n251, subcarrier_spacing::kHz60));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n251, subcarrier_spacing::kHz120));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz5, get_min_channel_bw(nr_band::n252, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n252, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n252, subcarrier_spacing::kHz60));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n252, subcarrier_spacing::kHz120));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz5, get_min_channel_bw(nr_band::n253, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n253, subcarrier_spacing::kHz30));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz5, get_min_channel_bw(nr_band::n254, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n254, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n254, subcarrier_spacing::kHz60));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n254, subcarrier_spacing::kHz120));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz5, get_min_channel_bw(nr_band::n255, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n255, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n255, subcarrier_spacing::kHz60));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n255, subcarrier_spacing::kHz120));
+
+  ASSERT_EQ(min_channel_bandwidth::MHz5, get_min_channel_bw(nr_band::n256, subcarrier_spacing::kHz15));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n256, subcarrier_spacing::kHz30));
+  ASSERT_EQ(min_channel_bandwidth::MHz10, get_min_channel_bw(nr_band::n256, subcarrier_spacing::kHz60));
+  ASSERT_EQ(min_channel_bandwidth::invalid, get_min_channel_bw(nr_band::n256, subcarrier_spacing::kHz120));
 
   ASSERT_EQ(min_channel_bandwidth::MHz50, get_min_channel_bw(nr_band::n257, subcarrier_spacing::kHz60));
   ASSERT_EQ(min_channel_bandwidth::MHz50, get_min_channel_bw(nr_band::n258, subcarrier_spacing::kHz60));
@@ -917,6 +1047,52 @@ TEST(test_dl_arfcn_validator, test_tdd_bands_with_scs_dependent_raster)
                    .has_value());
 }
 
+TEST(test_dl_arfcn_validator, test_fdd_bands_with_scs_dependent_raster)
+{
+  // Get a random raster point from the band raster. If outside_raster is true, the function returns a point outside the
+  // raster.
+  auto get_rnd_raster_point = [](span<const uint32_t> raster, bool outside_raster = false) -> uint32_t {
+    const uint32_t raster_step = raster[1];
+    if (outside_raster) {
+      return test_rng::bernoulli(0.5) ? raster.front() - raster_step : raster.back() + raster_step;
+    }
+    const unsigned nof_raster_points = (raster.back() - raster.front()) / raster_step + 1;
+    return test_rng::uniform_int<unsigned>(0, nof_raster_points - 1) * raster_step + raster.front();
+  };
+
+  // n247 and n248 use a non-standard 15/30 kHz channel raster (like n41/n48/n77/n78/n79/n104) instead of the
+  // default 100 kHz raster.
+  constexpr std::array<uint32_t, 3> n247_raster_scs_15 = {1113334, 1, 1250000};
+  constexpr std::array<uint32_t, 3> n247_raster_scs_30 = {1113334, 2, 1250000};
+  constexpr std::array<uint32_t, 3> n248_raster_scs_15 = {1113334, 1, 1250000};
+  constexpr std::array<uint32_t, 3> n248_raster_scs_30 = {1113334, 2, 1250000};
+
+  ASSERT_TRUE(
+      is_dl_arfcn_valid_given_band(nr_band::n247, get_rnd_raster_point(n247_raster_scs_15), subcarrier_spacing::kHz15)
+          .has_value());
+  ASSERT_FALSE(is_dl_arfcn_valid_given_band(
+                   nr_band::n247, get_rnd_raster_point(n247_raster_scs_15, true), subcarrier_spacing::kHz15)
+                   .has_value());
+  ASSERT_TRUE(
+      is_dl_arfcn_valid_given_band(nr_band::n247, get_rnd_raster_point(n247_raster_scs_30), subcarrier_spacing::kHz30)
+          .has_value());
+  ASSERT_FALSE(is_dl_arfcn_valid_given_band(
+                   nr_band::n247, get_rnd_raster_point(n247_raster_scs_30, true), subcarrier_spacing::kHz30)
+                   .has_value());
+  ASSERT_TRUE(
+      is_dl_arfcn_valid_given_band(nr_band::n248, get_rnd_raster_point(n248_raster_scs_15), subcarrier_spacing::kHz15)
+          .has_value());
+  ASSERT_FALSE(is_dl_arfcn_valid_given_band(
+                   nr_band::n248, get_rnd_raster_point(n248_raster_scs_15, true), subcarrier_spacing::kHz15)
+                   .has_value());
+  ASSERT_TRUE(
+      is_dl_arfcn_valid_given_band(nr_band::n248, get_rnd_raster_point(n248_raster_scs_30), subcarrier_spacing::kHz30)
+          .has_value());
+  ASSERT_FALSE(is_dl_arfcn_valid_given_band(
+                   nr_band::n248, get_rnd_raster_point(n248_raster_scs_30, true), subcarrier_spacing::kHz30)
+                   .has_value());
+}
+
 TEST(test_ul_arfcn_validator, test_different_bands)
 {
   // Get a random raster point from the band raster. If outside_raster is true, the function returns a point outside the
@@ -951,6 +1127,47 @@ TEST(test_ul_arfcn_validator, test_different_bands)
   ASSERT_TRUE(is_ul_arfcn_valid_given_band(nr_band::n28, 144608, bs_channel_bandwidth::MHz40).has_value());
   // Let's provide a n14 frequency to n28.
   ASSERT_FALSE(is_ul_arfcn_valid_given_band(nr_band::n28, 157600).has_value());
+}
+
+TEST(test_ul_arfcn_validator, test_fdd_bands_with_scs_dependent_raster)
+{
+  // Get a random raster point from the band raster. If outside_raster is true, the function returns a point outside the
+  // raster.
+  auto get_rnd_raster_point = [](span<const uint32_t> raster, bool outside_raster = false) -> uint32_t {
+    const uint32_t raster_step = raster[1];
+    if (outside_raster) {
+      return test_rng::bernoulli(0.5) ? raster.front() - raster_step : raster.back() + raster_step;
+    }
+    const unsigned nof_raster_points = (raster.back() - raster.front()) / raster_step + 1;
+    return test_rng::uniform_int<unsigned>(0, nof_raster_points - 1) * raster_step + raster.front();
+  };
+
+  // n247, n248 use a non-standard 15/30 kHz UL raster.
+  constexpr std::array<uint32_t, 3> n247_raster_scs_15 = {1316667, 1, 1333333};
+  constexpr std::array<uint32_t, 3> n247_raster_scs_30 = {1316668, 2, 1333332};
+  constexpr std::array<uint32_t, 3> n248_raster_scs_15 = {1333334, 1, 1366666};
+  constexpr std::array<uint32_t, 3> n248_raster_scs_30 = {1333334, 2, 1366666};
+
+  ASSERT_TRUE(is_ul_arfcn_valid_given_band(nr_band::n247,
+                                           get_rnd_raster_point(n247_raster_scs_15),
+                                           bs_channel_bandwidth::MHz10,
+                                           subcarrier_spacing::kHz15)
+                  .has_value());
+  ASSERT_TRUE(is_ul_arfcn_valid_given_band(nr_band::n247,
+                                           get_rnd_raster_point(n247_raster_scs_30),
+                                           bs_channel_bandwidth::MHz10,
+                                           subcarrier_spacing::kHz30)
+                  .has_value());
+  ASSERT_TRUE(is_ul_arfcn_valid_given_band(nr_band::n248,
+                                           get_rnd_raster_point(n248_raster_scs_15),
+                                           bs_channel_bandwidth::MHz10,
+                                           subcarrier_spacing::kHz15)
+                  .has_value());
+  ASSERT_TRUE(is_ul_arfcn_valid_given_band(nr_band::n248,
+                                           get_rnd_raster_point(n248_raster_scs_30),
+                                           bs_channel_bandwidth::MHz10,
+                                           subcarrier_spacing::kHz30)
+                  .has_value());
 }
 
 class custom_band_test : public ::testing::Test

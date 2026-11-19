@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ocudu/support/io/sockets.h"
+#include "ocudu/support/io/unique_fd.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <arpa/inet.h>
 #include <fcntl.h>

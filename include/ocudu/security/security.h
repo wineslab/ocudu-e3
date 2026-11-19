@@ -42,6 +42,11 @@ constexpr unsigned to_number(ciphering_algorithm ciph_algo)
   return static_cast<unsigned>(ciph_algo);
 }
 
+constexpr unsigned format_as(ciphering_algorithm ciph_algo)
+{
+  return to_number(ciph_algo);
+}
+
 constexpr ciphering_algorithm ciphering_algorithm_from_number(unsigned ciph_algo)
 {
   ocudu_assert(ciph_algo < 4, "Error converting ciphering algorithm");
@@ -58,6 +63,11 @@ enum class integrity_algorithm {
 constexpr unsigned to_number(integrity_algorithm int_algo)
 {
   return static_cast<unsigned>(int_algo);
+}
+
+constexpr unsigned format_as(integrity_algorithm int_algo)
+{
+  return to_number(int_algo);
 }
 
 constexpr integrity_algorithm integrity_algorithm_from_number(unsigned int_algo)
@@ -102,6 +112,12 @@ constexpr uint8_t to_number(security_direction direction)
   return static_cast<uint8_t>(direction);
 }
 
+inline const char* format_as(security_direction dir)
+{
+  static constexpr const char* options[] = {"UL", "DL"};
+  return options[static_cast<unsigned>(dir)];
+}
+
 /// integrity/ciphering enabled.
 enum class integrity_enabled {
   /// Integrity check is disabled.
@@ -112,7 +128,20 @@ enum class integrity_enabled {
   /// This mode is only applicable for UL SRB between security mode command and security mode complete.
   smc_transition = 2
 };
+
+inline const char* format_as(integrity_enabled integrity_flag)
+{
+  static constexpr const char* options[] = {"off", "on", "smc_transition"};
+  return options[static_cast<unsigned>(integrity_flag)];
+}
+
 enum class ciphering_enabled { off = 0, on = 1 };
+
+inline const char* format_as(ciphering_enabled ciphering_flag)
+{
+  static constexpr const char* options[] = {"off", "on"};
+  return options[static_cast<unsigned>(ciphering_flag)];
+}
 
 /// Security state.
 /// Not enabled: No security applied.
@@ -142,6 +171,12 @@ using supported_algorithms             = std::array<bool, nof_supported_algos>;
 
 /// Security domain, whether applies to RRC or UP
 enum class sec_domain { rrc = 0, up = 1 };
+
+inline const char* format_as(sec_domain domain)
+{
+  static constexpr const char* options[] = {"RRC", "UP"};
+  return options[static_cast<unsigned>(domain)];
+}
 
 struct sec_128_as_config {
   sec_domain domain;
@@ -199,14 +234,14 @@ struct sec_as_keys {
 using sec_short_mac_i = std::array<uint8_t, 2>;
 
 struct security_context {
-  ocudulog::basic_logger&        logger = ocudulog::fetch_basic_logger("SEC");
-  security::sec_key              k;
-  uint8_t                        ncc = 0;
-  security::supported_algorithms supported_int_algos;
-  security::supported_algorithms supported_enc_algos;
-  sec_selected_algos             sel_algos;
-  sec_as_keys                    as_keys;
-  security_state                 state = security_state::not_enabled;
+  ocudulog::basic_logger&        logger              = ocudulog::fetch_basic_logger("SEC");
+  security::sec_key              k                   = {};
+  uint8_t                        ncc                 = 0;
+  security::supported_algorithms supported_int_algos = {};
+  security::supported_algorithms supported_enc_algos = {};
+  sec_selected_algos             sel_algos           = {};
+  sec_as_keys                    as_keys             = {};
+  security_state                 state               = security_state::not_enabled;
 
   security_context() = default;
 
@@ -312,84 +347,6 @@ sec_128_as_config truncate_config(const sec_as_config& cfg_in);
 namespace fmt {
 
 template <>
-struct formatter<ocudu::security::integrity_algorithm> {
-  template <typename ParseContext>
-  constexpr auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::security::integrity_algorithm algo, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", fmt::underlying(algo));
-  }
-};
-
-template <>
-struct formatter<ocudu::security::ciphering_algorithm> {
-  template <typename ParseContext>
-  constexpr auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::security::ciphering_algorithm algo, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", fmt::underlying(algo));
-  }
-};
-
-template <>
-struct formatter<ocudu::security::security_direction> {
-  template <typename ParseContext>
-  constexpr auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::security::security_direction dir, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"UL", "DL"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(dir)]);
-  }
-};
-
-template <>
-struct formatter<ocudu::security::integrity_enabled> {
-  template <typename ParseContext>
-  constexpr auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::security::integrity_enabled integrity_flag, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"off", "on", "smc_transition"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(integrity_flag)]);
-  }
-};
-
-template <>
-struct formatter<ocudu::security::ciphering_enabled> {
-  template <typename ParseContext>
-  constexpr auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::security::ciphering_enabled ciphering_flag, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"off", "on"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(ciphering_flag)]);
-  }
-};
-
-template <>
 struct formatter<ocudu::security::supported_algorithms> {
   template <typename ParseContext>
   constexpr auto parse(ParseContext& ctx)
@@ -415,12 +372,7 @@ struct formatter<ocudu::security::preferred_integrity_algorithms> {
   template <typename FormatContext>
   auto format(const ocudu::security::preferred_integrity_algorithms& algos, FormatContext& ctx) const
   {
-    return format_to(ctx.out(),
-                     "NIA{}, NIA{}, NIA{}, NIA{}",
-                     fmt::underlying(algos[0]),
-                     fmt::underlying(algos[1]),
-                     fmt::underlying(algos[2]),
-                     fmt::underlying(algos[3]));
+    return format_to(ctx.out(), "NIA{}, NIA{}, NIA{}, NIA{}", algos[0], algos[1], algos[2], algos[3]);
   }
 };
 
@@ -435,28 +387,7 @@ struct formatter<ocudu::security::preferred_ciphering_algorithms> {
   template <typename FormatContext>
   auto format(const ocudu::security::preferred_ciphering_algorithms& algos, FormatContext& ctx) const
   {
-    return format_to(ctx.out(),
-                     "NEA{}, NEA{}, NEA{}, NEA{}",
-                     fmt::underlying(algos[0]),
-                     fmt::underlying(algos[1]),
-                     fmt::underlying(algos[2]),
-                     fmt::underlying(algos[3]));
-  }
-};
-
-template <>
-struct formatter<ocudu::security::sec_domain> {
-  template <typename ParseContext>
-  constexpr auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::security::sec_domain domain, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"RRC", "UP"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(domain)]);
+    return format_to(ctx.out(), "NEA{}, NEA{}, NEA{}, NEA{}", algos[0], algos[1], algos[2], algos[3]);
   }
 };
 

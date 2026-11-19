@@ -4,15 +4,11 @@
 #pragma once
 
 #include "ocudu/adt/detail/type_traits.h"
-#include "ocudu/adt/static_vector.h"
-#include "ocudu/ocudulog/log_channel.h"
-#include "fmt/format.h"
-#include "fmt/ranges.h"
+#include "ocudu/support/ocudu_assert.h"
 #include <algorithm>
 #include <array>
 #include <iterator>
 #include <type_traits>
-#include <vector>
 
 namespace ocudu {
 
@@ -219,136 +215,3 @@ template <typename T>
 using const_span = span<const T>;
 
 } // namespace ocudu
-
-namespace fmt {
-
-template <typename T>
-struct is_range<ocudu::span<T>, char> : std::false_type {};
-
-/// \brief Custom formatter for \c span<T>.
-///
-/// By default, the elements within the span are separated by a space character. A comma delimiter is available and can
-/// be selected by formatting with <tt>{:,}</tt>. The delimiter can be disabled by formatting with <tt>{:#}</tt>.
-template <typename T>
-struct formatter<ocudu::span<T>> {
-  // Stores parsed format string.
-  memory_buffer format_buffer;
-
-  // Stores parsed delimiter string.
-  memory_buffer delimiter_buffer;
-
-  formatter()
-  {
-    static constexpr std::string_view DEFAULT_FORMAT    = "{}";
-    static constexpr std::string_view DEFAULT_DELIMITER = " ";
-    format_buffer.append(DEFAULT_FORMAT.begin(), DEFAULT_FORMAT.end());
-    delimiter_buffer.append(DEFAULT_DELIMITER.begin(), DEFAULT_DELIMITER.end());
-  }
-
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    static constexpr std::string_view PREAMBLE_FORMAT = "{:";
-    static constexpr std::string_view COMMA_DELIMITER = ", ";
-
-    // Skip if context is empty and use default format.
-    if (ctx.begin() == ctx.end()) {
-      return ctx.end();
-    }
-
-    // Store the format string.
-    format_buffer.clear();
-    format_buffer.append(PREAMBLE_FORMAT.begin(), PREAMBLE_FORMAT.end());
-    for (auto& it : ctx) {
-      // Detect if comma is in the context.
-      if (it == ',') {
-        delimiter_buffer.clear();
-        delimiter_buffer.append(COMMA_DELIMITER.begin(), COMMA_DELIMITER.end());
-        continue;
-      }
-
-      // Detect if the hash sign is in the context. This indicates no delimiter between entries.
-      if (it == '#') {
-        delimiter_buffer.clear();
-        continue;
-      }
-
-      format_buffer.push_back(it);
-
-      // Found the end of the context.
-      if (it == '}') {
-        return &it;
-      }
-    }
-
-    // No end of context was found.
-    return ctx.end();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::span<T> buf, FormatContext& ctx) const
-  {
-    string_view format_str    = string_view(format_buffer.data(), format_buffer.size());
-    string_view delimiter_str = string_view(delimiter_buffer.data(), delimiter_buffer.size());
-    return format_to(ctx.out(), format_str, fmt::join(buf.begin(), buf.end(), delimiter_str));
-  }
-};
-
-template <typename T>
-struct is_range<std::vector<T>, char> : std::false_type {};
-
-/// Custom formatter used by the \c copy_loggable_type defined below.
-template <typename T>
-struct formatter<std::vector<T>> : public formatter<ocudu::span<T>> {
-  using formatter<ocudu::span<T>>::delimiter_buffer;
-  using formatter<ocudu::span<T>>::format_buffer;
-
-  template <typename FormatContext>
-  auto format(const std::vector<T>& buf, FormatContext& ctx) const
-  {
-    string_view format_str    = string_view(format_buffer.data(), format_buffer.size());
-    string_view delimiter_str = string_view(delimiter_buffer.data(), delimiter_buffer.size());
-    return format_to(ctx.out(), format_str, fmt::join(buf.begin(), buf.end(), delimiter_str));
-  }
-};
-
-template <typename T, size_t N>
-struct is_range<ocudu::static_vector<T, N>, char> : std::false_type {};
-
-/// Custom formatter used by the \c copy_loggable_type defined below.
-template <typename T, size_t N>
-struct formatter<ocudu::static_vector<T, N>> : public formatter<ocudu::span<T>> {
-  using formatter<ocudu::span<T>>::delimiter_buffer;
-  using formatter<ocudu::span<T>>::format_buffer;
-
-  template <typename FormatContext>
-  auto format(const ocudu::static_vector<T, N>& buf, FormatContext& ctx) const
-  {
-    string_view format_str    = string_view(format_buffer.data(), format_buffer.size());
-    string_view delimiter_str = string_view(delimiter_buffer.data(), delimiter_buffer.size());
-    return format_to(ctx.out(), format_str, fmt::join(buf.begin(), buf.end(), delimiter_str));
-  }
-};
-
-} // namespace fmt
-
-namespace ocudulog {
-
-/// Type trait specialization to instruct the logger to use a user defined copy implementation as it is unsafe to
-/// directly copy the contents of a span.
-template <typename T>
-struct copy_loggable_type<ocudu::span<T>> {
-  static constexpr bool is_copyable = false;
-
-  static void copy(fmt::dynamic_format_arg_store<fmt::format_context>* store, ocudu::span<T> s)
-  {
-    static constexpr unsigned MAX_NOF_ELEMENTS = 128;
-    if (s.size() < MAX_NOF_ELEMENTS) {
-      store->push_back(ocudu::static_vector<typename std::remove_cv_t<T>, MAX_NOF_ELEMENTS>(s.begin(), s.end()));
-    } else {
-      store->push_back(std::vector<typename std::remove_cv_t<T>>(s.begin(), s.end()));
-    }
-  }
-};
-
-} // namespace ocudulog

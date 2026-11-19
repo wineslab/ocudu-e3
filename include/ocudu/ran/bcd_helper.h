@@ -6,6 +6,7 @@
 
 #include "ocudu/adt/span.h"
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace ocudu {

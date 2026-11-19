@@ -6,7 +6,7 @@
 
 #include "srs_allocator.h"
 #include "ocudu/adt/bounded_bitset.h"
-#include "ocudu/adt/circular_array.h"
+#include "ocudu/adt/circular_vector.h"
 #include "ocudu/ocudulog/logger.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/srs/srs_configuration.h"
@@ -54,10 +54,12 @@ private:
   // another aperiodic SRS. If not set, the SRS allocator works as no-op.
   const std::optional<unsigned> srs_prohibit_time;
 
-  // We consider MAX_NOF_DU_UES as max size, as we assume there can be at most 1 SRS cell per UE.
+  // The bitset is indexed by SRS cell resource ID, whose range is the number of SRS resources generated for the cell.
+  // Note: It cannot be bounded by the number of UEs of a cell, as the generated resources are tied to a slot offset and
+  // a symbol interval, and dropping the excess ones would prevent the allocator from spreading the SRS.
   using slot_srs_allocation = bounded_bitset<MAX_NOF_DU_UES>;
   // Ring of SRS resource allocations indexed by slot.
-  circular_array<slot_srs_allocation, RES_MANAGER_RING_BUFFER_SIZE> srs_allocation_ring;
+  circular_vector<slot_srs_allocation> srs_allocation_ring;
 
   // Keeps track of the last slot_point used by the resource manager.
   slot_point last_sl_ind;

@@ -16,6 +16,7 @@
 #include "ocudu/ran/subcarrier_spacing.h"
 #include "ocudu/ran/tac.h"
 #include "ocudu/support/async/async_task.h"
+#include <chrono>
 #include <optional>
 
 namespace ocudu {
@@ -112,6 +113,7 @@ struct gnbdu_config_update_response {
 struct gnbcu_config_update_request {
   std::vector<f1ap_cell_to_activate> cells_to_activate;
   std::vector<nr_cell_global_id_t>   cells_to_deactivate;
+  std::vector<f1ap_cell_to_bar>      cells_to_bar;
 };
 
 /// Result of gNB-CU initiated Config Update as per TS 38.473, Section 8.2.5.

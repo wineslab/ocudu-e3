@@ -14,12 +14,13 @@ rlc_rx_um_entity::rlc_rx_um_entity(gnb_du_id_t                       gnb_du_id,
                                    rlc_bearer_metrics_collector&     metrics_coll_,
                                    rlc_pcap&                         pcap_,
                                    task_executor&                    ue_executor,
-                                   timer_manager&                    timers) :
+                                   timer_manager&                    timers,
+                                   rlc_drb_um_rx_window_seg_pool&    window_seg_pool) :
   rlc_rx_entity(gnb_du_id, ue_index, rb_id, upper_dn_, metrics_coll_, pcap_, ue_executor, timers),
   cfg(config),
   mod(cardinality(to_number(cfg.sn_field_length))),
   um_window_size(window_size(to_number(cfg.sn_field_length))),
-  rx_window(logger, window_size(to_number(cfg.sn_field_length))),
+  rx_window(logger, window_size(to_number(cfg.sn_field_length)), window_seg_pool),
   reassembly_timer(ue_timer_factory.create_timer()),
   pcap_context(ue_index, rb_id, config)
 {
@@ -30,8 +31,7 @@ rlc_rx_um_entity::rlc_rx_um_entity(gnb_du_id_t                       gnb_du_id,
 
   // configure reassembly_timer
   if (cfg.t_reassembly > 0) {
-    reassembly_timer.set(std::chrono::milliseconds(cfg.t_reassembly),
-                         [this](timer_id_t tid) { on_expired_reassembly_timer(); });
+    reassembly_timer.set(std::chrono::milliseconds(cfg.t_reassembly), [this]() { on_expired_reassembly_timer(); });
   }
   logger.log_info("RLC UM configured. {}", cfg);
 }
@@ -88,7 +88,13 @@ void rlc_rx_um_entity::handle_pdu(byte_buffer_slice buf)
   }
 
   // We received an SDU segment
-  handle_segment_data_sdu(header, std::move(payload));
+  bool stored = handle_segment_data_sdu(header, std::move(payload));
+
+  // Return if nothing was added to the reception buffer
+  if (not stored) {
+    logger.log_debug("No new data added to RX window. sn={}", header.sn);
+    return;
+  }
 
   // Log state
   log_state(ocudulog::basic_levels::debug);
@@ -272,11 +278,20 @@ bool rlc_rx_um_entity::handle_segment_data_sdu(const rlc_um_pdu_header& header, 
   logger.log_debug("RX SDU segment. payload_len={} {}", payload.length(), header);
 
   // Add new SN to RX window if no segments have been received yet
-  rlc_rx_um_sdu_info& rx_sdu = rx_window.has_sn(header.sn) ? rx_window[header.sn] : ([&]() -> rlc_rx_um_sdu_info& {
-    rlc_rx_um_sdu_info& sdu = rx_window.add_sn(header.sn);
-    sdu.time_of_arrival     = std::chrono::steady_clock::now();
-    return sdu;
-  })();
+  bool new_sdu_added = false;
+  if (!rx_window.has_sn(header.sn)) {
+    new_sdu_added = rx_window.add_sn(header.sn);
+    if (!new_sdu_added) {
+      logger.log_warning("Dropped SDU segment, adding to RX window failed. sn={}", header.sn);
+      metrics.metrics_add_lost_pdus(1);
+      return false;
+    }
+  }
+  rlc_rx_um_sdu_info& rx_sdu = rx_window[header.sn];
+  if (new_sdu_added) {
+    rx_sdu.time_of_arrival = std::chrono::steady_clock::now();
+  }
+
   // Create SDU segment, to be stored later
   rlc_rx_um_sdu_segment segment = {};
   segment.si                    = header.si;

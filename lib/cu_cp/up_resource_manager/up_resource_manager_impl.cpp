@@ -31,10 +31,11 @@ bool up_resource_manager::validate_request(const ngap_pdu_session_resource_relea
 }
 
 up_config_update up_resource_manager::calculate_update(
-    const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_items)
+    const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_items,
+    const up_old_drb_association&                                                old_drb_association)
 {
   ocudu_assert(is_valid(setup_items, context, cfg, logger), "Invalid PDU Session Resource Setup items.");
-  return ocudu::ocucp::calculate_update(setup_items, context, cfg, logger);
+  return ocudu::ocucp::calculate_update(setup_items, context, cfg, logger, old_drb_association);
 }
 
 up_config_update up_resource_manager::calculate_update(const ngap_pdu_session_resource_modify_request& pdu)
@@ -143,6 +144,11 @@ const up_pdu_session_context& up_resource_manager::get_pdu_session_context(pdu_s
 bool up_resource_manager::has_pdu_session(pdu_session_id_t pdu_session_id) const
 {
   return context.pdu_sessions.find(pdu_session_id) != context.pdu_sessions.end();
+}
+
+bool up_resource_manager::has_drb(drb_id_t drb_id) const
+{
+  return context.drb_map.find(drb_id) != context.drb_map.end();
 }
 
 const up_drb_context& up_resource_manager::get_drb_context(drb_id_t drb_id) const

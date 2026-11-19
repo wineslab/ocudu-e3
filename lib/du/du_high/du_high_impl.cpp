@@ -31,13 +31,14 @@ public:
   {
     mac_ev_notifier.connect(du_mng_.get_mac_event_handler(), du_mng_.get_metrics_aggregator());
     f1_to_du_notifier.connect(du_mng_.get_f1ap_event_handler());
+    f1_to_du_notifier.connect_time_mapper(mac_inst.get_subframe_time_mapper());
     f1ap_paging_notifier.connect(mac_inst.get_cell_paging_info_handler());
   }
 
   /// Notifier MAC -> DU manager.
   du_manager_mac_event_indicator mac_ev_notifier;
 
-  /// Notifier F1AP -> DU manager
+  /// Notifier F1AP -> DU manager.
   f1ap_du_configurator_adapter f1_to_du_notifier;
 
   /// Notifier F1AP -> MAC for paging PDUs.
@@ -64,6 +65,7 @@ du_high_impl::du_high_impl(const du_high_configuration& config_, const du_high_d
                      dependencies.exec_mapper->du_control_executor(),
                      dependencies.exec_mapper->ue_mapper(),
                      adapters->f1ap_paging_notifier,
+                     adapters->f1_to_du_notifier,
                      timers);
 
   mac = create_mac(mac_config{adapters->mac_ev_notifier,
@@ -93,9 +95,21 @@ du_high_impl::du_high_impl(const du_high_configuration& config_, const du_high_d
        dependencies.exec_mapper->du_control_executor(),
        dependencies.exec_mapper->ue_mapper(),
        dependencies.exec_mapper->cell_mapper()},
-      {*f1ap, *f1ap, f1ap->get_metrics_collector(), dependencies.f1_setup_notifier},
+      {*f1ap, *f1ap, f1ap->get_metrics_collector(), dependencies.f1_setup_notifier, cfg.f1ap.retry_tnl_connection},
       {*dependencies.f1u_teid_allocator, *dependencies.f1u_gw},
-      {mac->get_ue_control_info_handler(), *f1ap, *f1ap, *dependencies.rlc_p, dependencies.rlc_metrics_notif},
+      {mac->get_ue_control_info_handler(),
+       *f1ap,
+       *f1ap,
+       *dependencies.rlc_p,
+       dependencies.rlc_metrics_notif,
+       cfg.rlc.drb_rx_window_seg_size,
+       cfg.rlc.drb_rx_window_seg_pool_size,
+       cfg.rlc.drb_tx_window_seg_size,
+       cfg.rlc.drb_tx_window_seg_pool_size,
+       cfg.rlc.srb_rx_window_seg_size,
+       cfg.rlc.srb_rx_window_seg_pool_size,
+       cfg.rlc.srb_tx_window_seg_size,
+       cfg.rlc.srb_tx_window_seg_pool_size},
       {*mac, cfg.ran.sched_cfg},
       {cfg.metrics.period,
        dependencies.du_notifier,
@@ -103,7 +117,8 @@ du_high_impl::du_high_impl(const du_high_configuration& config_, const du_high_d
        cfg.metrics.enable_mac,
        cfg.metrics.enable_sched,
        cfg.metrics.enable_du_proc},
-      cfg.test_cfg});
+      cfg.test_cfg,
+      {cfg.ntn, dependencies.ntn_doppler_handler}});
 
   // Connect Layer<->DU manager adapters.
   adapters->connect(*du_mng, *mac);
@@ -175,4 +190,9 @@ du_configurator& du_high_impl::get_du_configurator()
 mac_subframe_time_mapper& du_high_impl::get_subframe_time_mapper()
 {
   return mac->get_subframe_time_mapper();
+}
+
+ocudu_ntn::ntn_configuration_manager* du_high_impl::get_ntn_configuration_manager()
+{
+  return du_mng->get_ntn_configuration_manager();
 }

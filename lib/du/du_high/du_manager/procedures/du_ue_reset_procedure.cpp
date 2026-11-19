@@ -6,6 +6,7 @@
 #include "../du_ue/du_ue_manager.h"
 #include "await_all_ues.h"
 #include "ue_deletion_procedure.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace odu;

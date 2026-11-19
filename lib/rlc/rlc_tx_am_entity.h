@@ -10,10 +10,11 @@
 #include "rlc_retx_queue.h"
 #include "rlc_sdu_queue_lockfree.h"
 #include "rlc_tx_entity.h"
+#include "ocudu/rlc/rlc_window_seg_pools.h"
 #include "ocudu/support/executors/task_executor.h"
-#include "ocudu/support/sdu_window.h"
+#include "ocudu/support/segmented_sdu_window.h"
 #include "ocudu/support/timers.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 
 namespace ocudu {
 
@@ -107,7 +108,7 @@ private:
   const uint32_t am_window_size;
 
   /// TX window
-  sdu_window<rlc_tx_am_sdu_info, rlc_bearer_logger> tx_window;
+  segmented_sdu_window<rlc_tx_am_sdu_info, rlc_bearer_logger> tx_window;
 
   /// Recycler for discarded PDUs (from tx_window) that shall be deleted by a different executor off the critical path
   rlc_pdu_recycler pdu_recycler;
@@ -115,6 +116,9 @@ private:
   // Header sizes are computed upon construction based on SN length
   const uint32_t head_min_size;
   const uint32_t head_max_size;
+
+  /// PDCP SN mask for efficient SDU discard across SN wraparound.
+  const uint32_t pdcp_sn_mask;
 
   /// \brief t-PollRetransmit
   /// This timer is used by the transmitting side of an AM RLC entity in order to retransmit a poll (see sub
@@ -159,7 +163,8 @@ public:
                    rlc_pcap&                            pcap_,
                    task_executor&                       pcell_executor_,
                    task_executor&                       ue_executor_,
-                   timer_manager&                       timers);
+                   timer_manager&                       timers,
+                   rlc_drb_am_tx_window_seg_pool&       window_seg_pool);
 
   void stop() final
   {
@@ -183,7 +188,7 @@ public:
 
   // Interfaces for higher layers
   void handle_sdu(byte_buffer sdu_buf, bool is_retx) override;
-  void discard_sdu(uint32_t pdcp_sn) override;
+  void discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) override;
 
   // Interfaces for lower layers
   size_t pull_pdu(span<uint8_t> rlc_pdu_buf) noexcept override;

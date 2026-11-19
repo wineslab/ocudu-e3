@@ -7,7 +7,7 @@
 #include "ocudu/cu_cp/cu_configurator.h"
 #include "ocudu/cu_cp/cu_cp_configuration.h"
 #include "ocudu/e2/e2_cu.h"
-#include "ocudu/e2/e2ap_configuration.h"
+#include "ocudu/e2/e2ap_config.h"
 #include "ocudu/e2/gateways/e2_connection_client.h"
 
 namespace ocudu::ocucp {
@@ -17,7 +17,7 @@ struct o_cu_cp_config {
   /// CU-CP configuration.
   cu_cp_configuration cu_cp_config;
   /// E2AP configuration.
-  e2ap_configuration e2ap_config;
+  e2ap_config e2ap_cfg;
 };
 
 /// O-RAN CU-CP dependencies.

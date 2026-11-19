@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "tests/ocudu_test_requirements.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/to_array.h"
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
 #include "ocudu/ran/csi_report/csi_report_data.h"
 #include "ocudu/ran/csi_report/csi_report_formatters.h"
 #include "ocudu/ran/csi_report/csi_report_on_pucch_helpers.h"
 #include "ocudu/ran/csi_report/csi_report_on_pusch_helpers.h"
-#include "ocudu/ran/precoding/precoding_codebook_helpers.h"
-#include <fmt/ostream.h>
+#include "ocudu/ran/precoding/precoding_codebook_type1_helpers.h"
+#include "ocudu/support/math/math_utils.h"
+#include "fmt/ostream.h"
 #include <gtest/gtest.h>
 #include <random>
 
@@ -40,8 +43,9 @@ bool operator==(const precoding_matrix_indicator& left, const precoding_matrix_i
   if (std::holds_alternative<pmi_typeI_single_panel>(left) && std::holds_alternative<pmi_typeI_single_panel>(right)) {
     pmi_typeI_single_panel left2  = std::get<pmi_typeI_single_panel>(left);
     pmi_typeI_single_panel right2 = std::get<pmi_typeI_single_panel>(right);
-    return (left2.i_1_1 == right2.i_1_1) && (left2.i_1_2 == right2.i_1_2) && (left2.i_1_3 == right2.i_1_3) &&
-           (left2.i_2 == right2.i_2);
+    return (left2.panel_config.n1_n2 == right2.panel_config.n1_n2) &&
+           (left2.panel_config.mode == right2.panel_config.mode) && (left2.i_1_1 == right2.i_1_1) &&
+           (left2.i_1_2 == right2.i_1_2) && (left2.i_1_3 == right2.i_1_3) && (left2.i_2 == right2.i_2);
   }
 
   return false;
@@ -80,6 +84,11 @@ protected:
   void SetUp() override
   {
     const csi_report_configuration& configuration = GetParam();
+
+    // The RSRP reports carry no codebook, every other configuration uses a Type I codebook.
+    if (!std::holds_alternative<std::monostate>(configuration.pmi_codebook)) {
+      OCUDU_TEST_REQUIREMENTS("MVP-FUNC-MIMO-16-1", "MVP-FUNC-MIMO-16-3");
+    }
 
     // Pack CRI if enabled.
     if (configuration.quantities < csi_report_quantities::other) {
@@ -311,6 +320,10 @@ private:
     unsigned current_size             = get_pucch_payload_size(config, ri.value());
     unsigned max_size                 = 0;
     for (unsigned i_rank = 1; i_rank <= nof_csi_rs_antenna_ports; ++i_rank) {
+      // Skip ranks forbidden by the RI restriction, matching the logic in get_csi_report_pucch_size.
+      if (!config.ri_restriction.test(i_rank - 1)) {
+        continue;
+      }
       max_size = std::max(max_size, get_pucch_payload_size(config, i_rank));
     }
 
@@ -344,7 +357,7 @@ private:
           get_pmi_sizes_typeI_single_panel(get_single_panel_info(pmi_codebook.n1_n2), ri);
 
       // Set PMI values.
-      pmi_typeI_single_panel type;
+      pmi_typeI_single_panel type{pmi_codebook, 0, std::nullopt, std::nullopt, 0};
       type.i_1_1 = rgen() & mask_lsb_ones<unsigned>(param_sizes.i_1_1);
       if (param_sizes.i_1_2) {
         type.i_1_2.emplace(rgen() & mask_lsb_ones<unsigned>(param_sizes.i_1_2));

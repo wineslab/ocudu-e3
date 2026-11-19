@@ -3,8 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "amf_connection_removal_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/support/async/coroutine.h"
+#include "ocudu/support/ocudu_assert.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -35,7 +37,9 @@ void amf_connection_removal_routine::operator()(coro_context<async_task<void>>& 
     CORO_AWAIT(ngap->handle_amf_disconnection_request());
 
     // Update AMF connection handler state.
-    amfs_connected[amf_index] = false;
+    auto amf_connected = amfs_connected.find(amf_index);
+    ocudu_assert(amf_connected != amfs_connected.end(), "AMF index {} not found", amf_index);
+    amf_connected->second.store(false, std::memory_order_relaxed);
   }
 
   CORO_RETURN();

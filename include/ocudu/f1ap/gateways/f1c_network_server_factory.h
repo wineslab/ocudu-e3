@@ -6,6 +6,7 @@
 
 #include "ocudu/f1ap/gateways/f1c_connection_server.h"
 #include "ocudu/gateways/sctp_network_gateway.h"
+#include <memory>
 
 namespace ocudu {
 

@@ -9,9 +9,30 @@
 #include "ocudu/asn1/rrc_nr/ul_ccch_msg_ies.h"
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg.h"
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg_ies.h"
+#include "ocudu/lpp/reference_location.h"
+#include "ocudu/rrc/rrc_ue.h"
+#include <type_traits>
 
 using namespace ocudu;
 using namespace ocucp;
+
+namespace {
+
+/// \brief Returns the name of the carried message, which a message class extension holds outside c1.
+///
+/// Reading c1 of a message class extension only logs an ASN.1 error and then reads the wrong member of the union, so
+/// the alternative has to be checked before the name is taken.
+template <class T>
+const char* get_rrc_message_name(const T& msg)
+{
+  using msg_type_t = std::decay_t<decltype(msg.msg)>;
+  if (msg.msg.type().value != msg_type_t::types_opts::c1) {
+    return msg.msg.type().to_string();
+  }
+  return msg.msg.c1().type().to_string();
+}
+
+} // namespace
 
 template <class T>
 void ocudu::ocucp::log_rrc_message(rrc_ue_logger&    logger,
@@ -30,12 +51,12 @@ void ocudu::ocucp::log_rrc_message(rrc_ue_logger&    logger,
                      (dir == Rx) ? "Rx" : "Tx",
                      srb_id,
                      msg_type,
-                     msg.msg.c1().type().to_string(),
+                     get_rrc_message_name(msg),
                      pdu.length());
-    logger.log_debug("Containerized {}: {}", msg.msg.c1().type().to_string(), js.to_string());
+    logger.log_debug("Containerized {}: {}", get_rrc_message_name(msg), js.to_string());
   } else if (logger.get_basic_logger().info.enabled()) {
     std::vector<uint8_t> bytes{pdu.begin(), pdu.end()};
-    logger.log_info(pdu.begin(), pdu.end(), "{} {}", msg_type, msg.msg.c1().type().to_string());
+    logger.log_info(pdu.begin(), pdu.end(), "{} {}", msg_type, get_rrc_message_name(msg));
   }
 }
 
@@ -142,4 +163,34 @@ ocudu::ocucp::get_capabilities(asn1::rrc_nr::ue_cap_rat_container_list_l& capabi
   }
 
   return rrc_ue_capabilities_t{};
+}
+
+void ocudu::ocucp::store_coarse_ue_location(std::optional<coarse_ue_location>& coarse_location,
+                                            const asn1::dyn_octstring&         coarse_location_info,
+                                            rrc_ue_context_update_notifier&    cu_cp_notifier,
+                                            rrc_ue_logger&                     logger)
+{
+  // coarseLocationInfo has no presence flag of its own, so an empty octet string means "not available".
+  if (coarse_location_info.size() == 0) {
+    logger.log_debug("No coarse UE location reported. Cause: the UE does not have one available");
+    return;
+  }
+
+  std::optional<reference_location> position = lpp::unpack_reference_location(coarse_location_info);
+  if (not position.has_value()) {
+    logger.log_warning("Failed to decode the reported coarse UE location");
+    return;
+  }
+
+  // Only a position that moved can derive a new TAC.
+  const bool moved = not coarse_location.has_value() or coarse_location->position.latitude != position->latitude or
+                     coarse_location->position.longitude != position->longitude;
+
+  coarse_location = coarse_ue_location{position.value(), std::chrono::steady_clock::now()};
+  logger.log_debug("Stored coarse UE location lat={:.4f} lon={:.4f}", position->latitude, position->longitude);
+
+  if (moved) {
+    // A new position may mean a new derived TAC, so report it now rather than wait for the next message carrying one.
+    cu_cp_notifier.on_ue_location_update();
+  }
 }

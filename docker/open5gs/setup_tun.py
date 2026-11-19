@@ -5,7 +5,7 @@
 
 import click
 import ipaddress
-import iptc
+import subprocess
 from pyroute2 import IPRoute
 from pyroute2.netlink import NetlinkError
 
@@ -18,23 +18,20 @@ def handle_ip_string(ctx, param, value):
         raise click.BadParameter(f'{value} is not a valid IP range.')
 
 
-def iptables_add_masquerade(if_name, ip_range):
-    chain = iptc.Chain(iptc.Table(iptc.Table.NAT), "POSTROUTING")
-    rule = iptc.Rule()
-    rule.src = ip_range
-    rule.out_interface = if_name
-    target = iptc.Target(rule, "MASQUERADE")
-    rule.target = target
-    chain.insert_rule(rule)
+def nft_add_masquerade(if_name, ip_range):
+    subprocess.run(["nft", "add", "table", "ip", "nat"], check=True)
+    subprocess.run(["nft", "add", "chain", "ip", "nat", "POSTROUTING",
+                     "{", "type", "nat", "hook", "postrouting", "priority", "100", ";", "}"], check=True)
+    subprocess.run(["nft", "add", "rule", "ip", "nat", "POSTROUTING",
+                     "ip", "saddr", ip_range, "oifname", if_name, "masquerade"], check=True)
 
 
-def iptables_allow_all(if_name):
-    chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "INPUT")
-    rule = iptc.Rule()
-    rule.in_interface = if_name
-    target = iptc.Target(rule, "ACCEPT")
-    rule.target = target
-    chain.insert_rule(rule)
+def nft_allow_all(if_name):
+    subprocess.run(["nft", "add", "table", "inet", "filter"], check=True)
+    subprocess.run(["nft", "add", "chain", "inet", "filter", "INPUT",
+                     "{", "type", "filter", "hook", "input", "priority", "0", ";", "}"], check=True)
+    subprocess.run(["nft", "add", "rule", "inet", "filter", "INPUT",
+                     "iifname", if_name, "accept"], check=True)
 
 
 @click.command()
@@ -70,12 +67,9 @@ def main(if_name, ip_range):
         except NetlinkError:
             pass
 
-        # setup iptables
-        iptables_add_masquerade(if_name, ip_range.with_prefixlen)
-        iptables_allow_all(if_name)
-        # 'iptables -t nat -A POSTROUTING -s ' + ip_range.with_prefixlen + ' ! -o ' + if_name + ' -j MASQUERADE'
-
-        # 'iptables -A INPUT -i ' + if_name + ' -j ACCEPT'
+        # setup nftables
+        nft_add_masquerade(if_name, ip_range.with_prefixlen)
+        nft_allow_all(if_name)
 
 
 if __name__ == "__main__":

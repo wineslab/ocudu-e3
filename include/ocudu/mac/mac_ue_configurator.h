@@ -7,6 +7,7 @@
 #include "ocudu/mac/bsr_config.h"
 #include "ocudu/mac/mac_cell_group_config.h"
 #include "ocudu/mac/mac_sdu_handler.h"
+#include "ocudu/mac/msg3_mac_ce.h"
 #include "ocudu/mac/phr_config.h"
 #include "ocudu/ran/harq_id.h"
 #include "ocudu/ran/logical_channel/lcid.h"
@@ -84,9 +85,14 @@ struct mac_ue_create_response {
 
 /// Input parameters used to reconfigure a UE in the scheduler.
 struct mac_ue_reconfiguration_request {
-  du_ue_index_t                             ue_index;
-  du_cell_index_t                           pcell_index;
-  rnti_t                                    crnti;
+  du_ue_index_t   ue_index;
+  du_cell_index_t pcell_index;
+  rnti_t          crnti;
+  /// When true, requests the MAC controller to generate a CS-RNTI for this UE.
+  bool cs_rnti_requested = false;
+  /// When set, carries the generated CS-RNTI for this UE that needs to be passed to the scheduler.
+  /// If not set, the scheduler won't associate any CS-RNTI with this UE.
+  std::optional<rnti_t>                     assigned_cs_rnti;
   std::vector<mac_logical_channel_config>   bearers_to_addmod;
   std::vector<lcid_t>                       bearers_to_rem;
   std::optional<mac_cell_group_config>      mac_cell_group_cfg;
@@ -99,6 +105,9 @@ struct mac_ue_reconfiguration_request {
 struct mac_ue_reconfiguration_response {
   du_ue_index_t ue_index;
   bool          result;
+  /// When set, indicates the CS-RNTI that has been allocated to this UE.
+  /// If not set, no CS-RNTi has been allocated.
+  std::optional<rnti_t> cs_rnti_allocated;
 };
 
 /// Input parameters used to delete a UE in the scheduler.
@@ -136,8 +145,17 @@ public:
   /// \brief Deletes an existing UE context in the MAC.
   virtual async_task<mac_ue_delete_response> handle_ue_delete_request(const mac_ue_delete_request& cfg) = 0;
 
-  /// \brief Forward UL-CCCH message to upper layers.
-  virtual bool handle_ul_ccch_msg(du_ue_index_t ue_index, byte_buffer pdu) = 0;
+  /// \brief Forwards the UL-CCCH message to upper layers and the MAC CEs of the same Msg3 to the scheduler.
+  ///
+  /// Both are decoded before the UE is created, but cannot be acted upon until the UE context exists.
+  ///
+  /// \return false if the Msg3 content could not be handed over to the MAC UL. Losing the MAC CEs alone is not
+  /// reported, as it is not fatal to UE creation.
+  virtual bool handle_ul_ccch_msg(du_ue_index_t    ue_index,
+                                  du_cell_index_t  cell_index,
+                                  slot_point       slot_rx,
+                                  byte_buffer      ul_ccch_msg,
+                                  msg3_mac_ce_list mac_ces) = 0;
 
   /// Handle the confirmation that the UE received the last UE dedicated RRC configuration.
   virtual void handle_ue_config_applied(du_ue_index_t ue_index) = 0;

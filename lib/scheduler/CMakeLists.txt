@@ -2,14 +2,17 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-
 add_subdirectory(config)
+add_subdirectory(rrm)
 add_subdirectory(support)
 add_subdirectory(logging)
 add_subdirectory(cell)
 add_subdirectory(common_scheduling)
 add_subdirectory(ue_context)
 add_subdirectory(ue_scheduling)
+if (ENABLE_SCHEDTRACE)
+    add_subdirectory(trace)
+endif (ENABLE_SCHEDTRACE)
 
 set(SOURCES
         pdcch_scheduling/pdcch_resource_allocator_impl.cpp
@@ -20,7 +23,6 @@ set(SOURCES
         pucch_scheduling/pucch_allocator_impl.cpp
         pucch_scheduling/pucch_allocator_helpers.cpp
         pucch_scheduling/pucch_collision_manager.cpp
-        pucch_scheduling/pucch_resource_manager.cpp
         uci_scheduling/uci_scheduler_impl.cpp
         uci_scheduling/uci_allocator_impl.cpp
         uci_scheduling/uci_indication_selector.cpp
@@ -28,12 +30,13 @@ set(SOURCES
         slicing/ran_slice_instance.cpp
         slicing/slice_ue_repository.cpp
         srs/srs_scheduler_impl.cpp
+        cell_event_manager.cpp
         cell_scheduler.cpp
         scheduler_factory.cpp
         scheduler_impl.cpp
         support/csi_rs_helper.cpp
-        support/pusch/pusch_td_resource_indices.cpp
-        srs/srs_allocator_impl.cpp)
+        srs/srs_allocator_impl.cpp
+        configured_grant/configured_grant_scheduler_impl.cpp)
 
 add_library(ocudu_sched STATIC ${SOURCES}
         $<TARGET_OBJECTS:sched_config_manager>

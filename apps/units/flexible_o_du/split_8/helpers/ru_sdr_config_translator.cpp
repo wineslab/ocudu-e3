@@ -5,7 +5,10 @@
 #include "ru_sdr_config_translator.h"
 #include "apps/services/worker_manager/worker_manager_config.h"
 #include "ru_sdr_config.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ran/antenna_topology.h"
 #include "ocudu/ran/band_helper.h"
+#include <sstream>
 
 using namespace ocudu;
 
@@ -18,6 +21,7 @@ static lower_phy_configuration generate_lower_phy_config(const flexible_o_du_ru_
   // Static configuration that the gnb supports.
   static constexpr cyclic_prefix cp = cyclic_prefix::NORMAL;
 
+  // Calculate channel bandwidth in subcarriers.
   const unsigned bandwidth_sc =
       NOF_SUBCARRIERS_PER_RB * band_helper::get_n_rbs_from_bw(config.bw, config.scs, config.freq_range);
 
@@ -29,12 +33,13 @@ static lower_phy_configuration generate_lower_phy_config(const flexible_o_du_ru_
   out_cfg.bandwidth_rb               = band_helper::get_n_rbs_from_bw(config.bw, config.scs, config.freq_range);
   out_cfg.dl_freq_hz                 = band_helper::nr_arfcn_to_freq(config.dl_arfcn);
   out_cfg.ul_freq_hz                 = band_helper::nr_arfcn_to_freq(config.ul_arfcn);
-  out_cfg.nof_tx_ports               = config.nof_tx_antennas;
+  out_cfg.tx_ant_topology            = config.tx_ant_topology;
   out_cfg.nof_rx_ports               = config.nof_rx_antennas;
   out_cfg.dft_window_offset          = 0.5F;
   out_cfg.max_processing_delay_slots = max_processing_delay_slot;
   out_cfg.srate                      = sampling_rate::from_MHz(ru_cfg.srate_MHz);
-  out_cfg.ta_offset                  = band_helper::get_ta_offset(config.freq_range);
+  out_cfg.ta_offset =
+      band_helper::get_ta_offset(band_helper::get_band_from_dl_arfcn(config.dl_arfcn), false /* 5G SA mode */);
 
   if (ru_cfg.time_alignment_calibration.has_value()) {
     // Selects the user specific value.
@@ -246,18 +251,23 @@ ru_sdr_configuration ocudu::generate_ru_sdr_config(const ru_sdr_unit_config&    
 
 void ocudu::fill_sdr_worker_manager_config(worker_manager_config& config, const ru_sdr_unit_config& ru_cfg)
 {
-  auto& sdr_cfg = config.ru_sdr_cfg.emplace();
+  unsigned nof_cells = ru_cfg.expert_execution_cfg.cell_affinities.size();
 
-  sdr_cfg.nof_cells = ru_cfg.expert_execution_cfg.cell_affinities.size();
-  sdr_cfg.profile   = (ru_cfg.device_driver != "zmq")
-                          ? static_cast<worker_manager_config::ru_sdr_config::lower_phy_thread_profile>(
-                              ru_cfg.expert_execution_cfg.threads.execution_profile)
-                          : worker_manager_config::ru_sdr_config::lower_phy_thread_profile::sequential;
+  // The ZMQ driver requires sequential lower PHY execution to gurantee the order of the slot processing.
+  worker_manager_config::ru_sdr_config::lower_phy_thread_profile thread_profile =
+      (ru_cfg.device_driver != "zmq") ? static_cast<worker_manager_config::ru_sdr_config::lower_phy_thread_profile>(
+                                            ru_cfg.expert_execution_cfg.threads.execution_profile)
+                                      : worker_manager_config::ru_sdr_config::lower_phy_thread_profile::sequential;
+
+  config.ru_sdr_cfg.emplace(
+      worker_manager_config::ru_sdr_config{.profile                 = thread_profile,
+                                           .nof_cells               = nof_cells,
+                                           .executor_tracing_enable = ru_cfg.tracer.executor_tracing_enable});
 
   ocudu_assert(config.config_affinities.size() == ru_cfg.expert_execution_cfg.cell_affinities.size(),
                "Invalid number of cell affinities");
 
-  for (unsigned i = 0; i != sdr_cfg.nof_cells; ++i) {
+  for (unsigned i = 0; i != nof_cells; ++i) {
     config.config_affinities[i].push_back(ru_cfg.expert_execution_cfg.cell_affinities[i].ru_cpu_cfg);
   }
 }

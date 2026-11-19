@@ -4,6 +4,7 @@
 
 #include "gnb_cu_configuration_update_procedure.h"
 #include "../../asn1_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/f1ap/f1ap_message.h"
 #include "ocudu/f1ap/f1ap_message_notifier.h"
@@ -49,6 +50,17 @@ gnbcu_config_update_request gnb_cu_configuration_update_procedure::request_du_up
       auto  cgi       = cgi_from_asn1(asn1_cell.nr_cgi);
       if (cgi.has_value()) {
         du_req.cells_to_deactivate.push_back(cgi.value());
+      }
+    }
+  }
+
+  if (request->cells_to_be_barred_list_present) {
+    for (const auto& item : request->cells_to_be_barred_list) {
+      auto& asn1_cell = item->cells_to_be_barred_item();
+      auto  cgi       = cgi_from_asn1(asn1_cell.nr_cgi);
+      if (cgi.has_value()) {
+        du_req.cells_to_bar.push_back(
+            {cgi.value(), asn1_cell.cell_barred.value == asn1::f1ap::cell_barred_opts::barred});
       }
     }
   }

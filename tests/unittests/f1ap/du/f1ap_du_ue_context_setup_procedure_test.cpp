@@ -5,6 +5,7 @@
 #include "f1ap_du_test_helpers.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/rrc_nr/rrc_nr.h"
@@ -249,7 +250,7 @@ TEST_F(
   ASSERT_EQ(resp->gnb_cu_ue_f1ap_id, msg.pdu.init_msg().value.ue_context_setup_request()->gnb_cu_ue_f1ap_id);
   ASSERT_TRUE(resp->c_rnti_present)
       << "UE CONTEXT SETUP RESPONSE should contain C-RNTI IE if it created a UE in the process";
-  ASSERT_EQ(resp->c_rnti, to_value(this->f1ap_du_cfg_handler.next_ue_context_creation_response.crnti));
+  ASSERT_EQ(resp->c_rnti, to_underlying(this->f1ap_du_cfg_handler.next_ue_context_creation_response.crnti));
   ASSERT_TRUE(resp->drbs_setup_list_present);
   ASSERT_EQ(resp->drbs_setup_list.size(), 1);
   auto& drb_setup = resp->drbs_setup_list[0].value().drbs_setup_item();

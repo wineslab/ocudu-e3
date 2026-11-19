@@ -29,6 +29,9 @@ static const std::unordered_map<five_qi_t, qos_chars> five_qi_to_qos_mapping = {
      qos_chars{flow_type::gbr, qos_prio_level_t{20}, 100, packet_error_rate_t::make(1e-2), 2000, std::nullopt}},
     {uint_to_five_qi(67),
      qos_chars{flow_type::gbr, qos_prio_level_t{15}, 100, packet_error_rate_t::make(1e-3), 2000, std::nullopt}},
+    // NOTE: 5QI 75 is not supported in 5GS per TS 23.501 table 5.7.4-1, NOTE 14 (used only for V2X messages over
+    // MBMS bearers in EPS; value reserved). Kept for interoperability with cores that still signal it; do NOT add
+    // bearer configurations for this 5QI.
     {uint_to_five_qi(75),
      qos_chars{flow_type::gbr, qos_prio_level_t{25}, 50, packet_error_rate_t::make(1e-2), 2000, std::nullopt}},
     {uint_to_five_qi(71),
@@ -90,4 +93,10 @@ const qos_chars* ocudu::get_5qi_to_qos_characteristics_mapping(five_qi_t five_qi
 {
   const auto qos_char = five_qi_to_qos_mapping.find(five_qi);
   return qos_char != five_qi_to_qos_mapping.end() ? &qos_char->second : nullptr;
+}
+
+bool ocudu::is_gbr_five_qi(five_qi_t five_qi)
+{
+  const qos_chars* qos_char = get_5qi_to_qos_characteristics_mapping(five_qi);
+  return qos_char != nullptr and qos_char->res_type != flow_type::non_gbr;
 }

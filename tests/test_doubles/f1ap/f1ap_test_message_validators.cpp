@@ -5,10 +5,13 @@
 #include "f1ap_test_message_validators.h"
 #include "../lib/f1ap/asn1_helpers.h"
 #include "../tests/test_doubles/rrc/rrc_test_message_validators.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/f1ap/du/f1ap_du_connection_manager.h"
 #include "ocudu/f1ap/f1ap_message.h"
+#include "ocudu/f1ap/f1ap_ue_id_types.h"
+#include "ocudu/ran/rnti.h"
 
 using namespace ocudu;
 using namespace asn1::f1ap;
@@ -340,8 +343,7 @@ bool ocudu::test_helpers::is_valid_ue_context_release_request(const f1ap_message
 bool ocudu::test_helpers::is_valid_ue_context_release_request(const f1ap_message& msg, gnb_du_ue_f1ap_id_t du_ue_id)
 {
   TRUE_OR_RETURN(is_valid_ue_context_release_request(msg));
-  TRUE_OR_RETURN(msg.pdu.init_msg().value.ue_context_release_request()->gnb_du_ue_f1ap_id ==
-                 gnb_du_ue_f1ap_id_to_uint(du_ue_id));
+  TRUE_OR_RETURN(msg.pdu.init_msg().value.ue_context_release_request()->gnb_du_ue_f1ap_id == to_underlying(du_ue_id));
   return true;
 }
 
@@ -490,5 +492,30 @@ bool test_helpers::is_valid_gnb_cu_configuration_update(const f1ap_message& msg)
   TRUE_OR_RETURN(msg.pdu.type().value == asn1::f1ap::f1ap_pdu_c::types_opts::init_msg);
   TRUE_OR_RETURN(msg.pdu.init_msg().value.type().value ==
                  asn1::f1ap::f1ap_elem_procs_o::init_msg_c::types_opts::gnb_cu_cfg_upd);
+  return true;
+}
+
+bool test_helpers::is_valid_gnb_cu_configuration_update_acknowledge(const f1ap_message& msg)
+{
+  TRUE_OR_RETURN(msg.pdu.type().value == asn1::f1ap::f1ap_pdu_c::types_opts::successful_outcome);
+  TRUE_OR_RETURN(msg.pdu.successful_outcome().proc_code == ASN1_F1AP_ID_GNB_CU_CFG_UPD);
+  TRUE_OR_RETURN(is_packable(msg));
+  return true;
+}
+
+bool test_helpers::is_valid_e_cid_measurement_initiation_request(const f1ap_message& msg)
+{
+  TRUE_OR_RETURN(msg.pdu.type().value == f1ap_pdu_c::types_opts::init_msg);
+  TRUE_OR_RETURN(msg.pdu.init_msg().value.type().value ==
+                 f1ap_elem_procs_o::init_msg_c::types_opts::e_c_id_meas_initiation_request);
+
+  const auto& req = msg.pdu.init_msg().value.e_c_id_meas_initiation_request();
+  // The E-CID Measurement Quantities IE carries at least one item, as per TS 38.473, Section 9.2.12.20.
+  TRUE_OR_RETURN(req->e_c_id_meas_quantities.size() > 0);
+  // The E-CID Measurement Periodicity IE is present if and only if periodic reporting was requested.
+  TRUE_OR_RETURN(req->e_c_id_report_characteristics.value == e_c_id_report_characteristics_opts::periodic or
+                 not req->e_c_id_meas_periodicity_present);
+
+  TRUE_OR_RETURN(is_packable(msg));
   return true;
 }

@@ -3,27 +3,28 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pdcch.h"
-#include "ocudu/fapi_adaptor/precoding_matrix_repository.h"
-#include "ocudu/ocuduvec/bit.h"
+#include "precoding.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/fapi_adaptor/precoding_codebook_repository.h"
 
 using namespace ocudu;
 using namespace fapi_adaptor;
 
 /// Fills the DL DCI parameters of the PDCCH processor PDU.
-static void fill_dci(pdcch_processor::pdu_t&            proc_pdu,
-                     const fapi::dl_pdcch_pdu&          fapi_pdu,
-                     const precoding_matrix_repository& pm_repo)
+static void fill_dci(pdcch_processor::pdu_t&              proc_pdu,
+                     const fapi::dl_pdcch_pdu&            fapi_pdu,
+                     const precoding_codebook_repository& pm_repo)
 {
   const auto& fapi_dci = fapi_pdu.dl_dci;
 
   pdcch_processor::dci_description& dci = proc_pdu.dci;
 
-  dci.rnti              = to_value(fapi_dci.rnti);
-  dci.n_id_pdcch_data   = fapi_dci.nid_pdcch_data;
-  dci.n_id_pdcch_dmrs   = fapi_dci.nid_pdcch_dmrs;
-  dci.n_rnti            = fapi_dci.nrnti_pdcch_data;
-  dci.cce_index         = fapi_dci.cce_index;
-  dci.aggregation_level = to_nof_cces(fapi_dci.dci_aggregation_level);
+  dci.rnti                  = fapi_dci.rnti;
+  dci.n_id_pdcch_data       = fapi_dci.nid_pdcch_data;
+  dci.n_id_pdcch_dmrs       = fapi_dci.nid_pdcch_dmrs;
+  dci.n_rnti                = fapi_dci.nrnti_pdcch_data;
+  dci.cce_index             = fapi_dci.cce_index;
+  dci.dci_aggregation_level = fapi_dci.dci_aggregation_level;
 
   if (const auto* profile_nr = std::get_if<fapi::dl_dci_pdu::power_profile_nr>(&fapi_dci.power_config)) {
     dci.dmrs_power_offset_dB = profile_nr->power_control_offset_ss_db;
@@ -39,8 +40,13 @@ static void fill_dci(pdcch_processor::pdu_t&            proc_pdu,
   dci.payload.resize(fapi_dci.payload.size());
   fapi_dci.payload.to_unpacked_bits(span<uint8_t>{dci.payload.data(), dci.payload.size()});
 
-  dci.precoding = precoding_configuration::make_wideband(
-      pm_repo.get_precoding_matrix(fapi_dci.precoding_and_beamforming.prg.pm_index));
+  const fapi::tx_precoding_and_beamforming_pdu::prgs_info& prg = fapi_dci.precoding_and_beamforming.prg;
+  if (prg.beams.empty()) {
+    dci.precoding_and_beamforming = precoding_beamforming_configuration::make_wideband(
+        get_precoding_config(fapi_dci.precoding_and_beamforming, pm_repo));
+  } else {
+    dci.precoding_and_beamforming = precoding_beamforming_configuration::make_wideband(prg.beams);
+  }
 
   // Fill PDCCH context for logging.
   proc_pdu.context = fapi_pdu.dl_dci.context;
@@ -83,10 +89,10 @@ static void fill_coreset(pdcch_processor::coreset_description& coreset, const fa
   }
 }
 
-void ocudu::fapi_adaptor::convert_pdcch_fapi_to_phy(pdcch_processor::pdu_t&            proc_pdu,
-                                                    const fapi::dl_pdcch_pdu&          fapi_pdu,
-                                                    slot_point                         slot,
-                                                    const precoding_matrix_repository& pm_repo)
+void ocudu::fapi_adaptor::convert_pdcch_fapi_to_phy(pdcch_processor::pdu_t&              proc_pdu,
+                                                    const fapi::dl_pdcch_pdu&            fapi_pdu,
+                                                    slot_point                           slot,
+                                                    const precoding_codebook_repository& pm_repo)
 {
   proc_pdu.slot = slot;
   proc_pdu.cp   = fapi_pdu.cp;

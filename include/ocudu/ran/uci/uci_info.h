@@ -6,7 +6,6 @@
 
 #include "ocudu/adt/interval.h"
 #include "ocudu/ran/uci/uci_constants.h"
-#include "ocudu/support/math/math_utils.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <array>
 
@@ -73,9 +72,8 @@ inline unsigned calculate_uci_min_encoded_bits(unsigned nof_payload_bits)
   [[maybe_unused]] static constexpr interval<unsigned, true> nof_payload_bits_range(
       1, uci_constants::MAX_NOF_PAYLOAD_BITS);
   ocudu_assert(nof_payload_bits_range.contains(nof_payload_bits),
-               "Number of payload bits (i.e., {}) is out of the range {}.",
-               nof_payload_bits,
-               nof_payload_bits_range);
+               "Number of payload bits (i.e., {}) is out of range.",
+               nof_payload_bits);
 
   // For small blocks.
   if (nof_payload_bits < 12) {

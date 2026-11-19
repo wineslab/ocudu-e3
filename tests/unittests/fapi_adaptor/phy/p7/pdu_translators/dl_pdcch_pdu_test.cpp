@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "../message_builder_helpers.h"
 #include "pdcch.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi/p7/builders/dl_pdcch_pdu_builder.h"
-#include "ocudu/fapi_adaptor/precoding_matrix_table_generator.h"
-#include "ocudu/ocuduvec/bit.h"
-#include "ocudu/support/math/math_utils.h"
+#include "ocudu/fapi_adaptor/precoding_codebook_generator.h"
 #include <gtest/gtest.h>
 #include <random>
 
@@ -20,19 +20,19 @@ TEST(fapi_to_phy_pdcch_conversion_test, valid_pdu_conversion_success)
   // Random generators.
   std::uniform_int_distribution<unsigned> sfn_dist(0, 1023);
   std::uniform_int_distribution<unsigned> slot_dist(0, 159);
-  std::uniform_int_distribution<unsigned> bwp_size_dist(1, 275);
-  std::uniform_int_distribution<unsigned> bwp_start_dist(0, 274);
+  std::uniform_int_distribution<unsigned> bwp_size_dist(1, MAX_NOF_PRBS);
+  std::uniform_int_distribution<unsigned> bwp_start_dist(0, MAX_NOF_PRBS - 1);
   std::uniform_int_distribution<unsigned> start_symbol_index_dist(0, 13);
   std::uniform_int_distribution<unsigned> duration_symbol_dist(0, 3);
-  std::uniform_int_distribution<unsigned> shift_index_dist(0, 275);
+  std::uniform_int_distribution<unsigned> shift_index_dist(0, MAX_NOF_PRBS);
   std::uniform_int_distribution<unsigned> n_rnti_dist(0, 65535);
   std::uniform_int_distribution<unsigned> cce_dist(0, 135);
   std::uniform_int_distribution<unsigned> aggregation_dist(0, 4);
   std::uniform_int_distribution<unsigned> nid_dmrs_dist(0, 65535);
   std::uniform_int_distribution<unsigned> nid_data_dist(0, 65535);
 
-  auto                               pm_tools = generate_precoding_matrix_tables(1, 0);
-  const precoding_matrix_repository& pm_repo  = *std::get<std::unique_ptr<precoding_matrix_repository>>(pm_tools);
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_one_port{}, antenna_topology::one_port, 0);
+  const precoding_codebook_repository& pm_repo = *std::get<std::unique_ptr<precoding_codebook_repository>>(pm_tools);
 
   for (auto cp : {cyclic_prefix::NORMAL, cyclic_prefix::EXTENDED}) {
     for (auto interleaved : {0U, 1U}) {
@@ -93,7 +93,9 @@ TEST(fapi_to_phy_pdcch_conversion_test, valid_pdu_conversion_success)
                       .set_control_channel_parameters(cce, aggregation);
 
                   builder_dci.set_profile_nr_tx_power_info_parameters(power_nr);
-                  builder_dci.get_tx_precoding_and_beamforming_pdu_builder().set_prg_parameters(275).set_pmi(0);
+                  builder_dci.get_tx_precoding_and_beamforming_pdu_builder()
+                      .set_prg_parameters(MAX_NOF_PRBS)
+                      .set_pmi(0);
 
                   // Payload.
                   dci_payload payload = {1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1};
@@ -139,7 +141,7 @@ TEST(fapi_to_phy_pdcch_conversion_test, valid_pdu_conversion_success)
                   // Test DCI.
                   ASSERT_EQ(n_rnti, proc_pdu.dci.n_rnti);
                   ASSERT_EQ(cce, proc_pdu.dci.cce_index);
-                  ASSERT_EQ(to_nof_cces(aggregation), proc_pdu.dci.aggregation_level);
+                  ASSERT_EQ(aggregation, proc_pdu.dci.dci_aggregation_level);
                   ASSERT_EQ(nid_data, proc_pdu.dci.n_id_pdcch_data);
                   ASSERT_EQ(nid_dmrs, proc_pdu.dci.n_id_pdcch_dmrs);
 
@@ -164,4 +166,21 @@ TEST(fapi_to_phy_pdcch_conversion_test, valid_pdu_conversion_success)
       }
     }
   }
+}
+
+TEST(fapi_to_phy_pdcch_conversion_test, beamformed_dci_is_mapped_onto_its_beam)
+{
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_one_port{}, antenna_topology::one_port, 0);
+  const precoding_codebook_repository& pm_repo = *std::get<std::unique_ptr<precoding_codebook_repository>>(pm_tools);
+
+  const beam_identifier beam_id = to_beam_id(3);
+
+  fapi::dl_pdcch_pdu pdu                         = unittest::build_valid_dl_pdcch_pdu();
+  pdu.dl_dci.precoding_and_beamforming.prg.beams = precoding_beam_list({beam_id});
+
+  pdcch_processor::pdu_t proc_pdu;
+  convert_pdcch_fapi_to_phy(proc_pdu, pdu, slot_point(0, 0), pm_repo);
+
+  ASSERT_EQ(proc_pdu.dci.precoding_and_beamforming,
+            precoding_beamforming_configuration::make_wideband(precoding_beam_list({beam_id})));
 }

@@ -105,21 +105,7 @@ struct codebook_config {
       /// \brief See TS 38.331, \c n1-n2-codebookSubsetRestriction in \c CodebookConfig.
       /// \remark Bitset size is based on \c n1_n2_codebook_subset_restriction_type_t with maximum bit string length.
       using n1_n2_codebook_subset_restriction_value_t = bounded_bitset<139>;
-      enum class n1_n2_codebook_subset_restriction_type_t {
-        two_one,
-        two_two,
-        four_one,
-        three_two,
-        six_one,
-        four_two,
-        eight_one,
-        four_three,
-        six_two,
-        twelve_one,
-        four_four,
-        eight_two,
-        sixteen_one
-      };
+      using n1_n2_codebook_subset_restriction_type_t  = pmi_codebook_single_panel_config;
 
       n1_n2_codebook_subset_restriction_type_t  n1_n2_codebook_subset_restriction_type;
       n1_n2_codebook_subset_restriction_value_t n1_n2_codebook_subset_restriction_value;
@@ -155,8 +141,8 @@ struct codebook_config {
     };
 
     std::variant<typeii, typeii_port_selection> sub_type;
-    /// The size of the PSK alphabet, QPSK or 8-PSK. Values {4, 8}.
-    unsigned phase_alphabet_size;
+    /// The size of the PSK alphabet, QPSK or 8-PSK.
+    pmi_codebook_typeII_phase_size phase_alphabet_size;
     /// If subband amplitude reporting is activated (true).
     bool subband_amplitude;
     /// Number of beams, L, used for linear combination. Values {2, 3, 4}.

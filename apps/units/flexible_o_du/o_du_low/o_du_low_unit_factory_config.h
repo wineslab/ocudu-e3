@@ -28,8 +28,11 @@ struct o_du_low_unit_config {
     unsigned                               pusch_max_nof_layers;
     unsigned                               nof_rx_antennas;
     unsigned                               nof_tx_antennas;
+    antenna_topology                       tx_ant_topology = antenna_topology::one_port;
     /// NTN cell-specific K-offset. Empty for terrestrial cells.
     std::optional<std::chrono::milliseconds> ntn_cs_koffset;
+    /// NTN k_mac offset. Empty for terrestrial cells and for NTN cells with aligned DL/UL frame timing at the gNB.
+    std::optional<std::chrono::milliseconds> ntn_k_mac;
   };
 
   const du_low_unit_config&                      du_low_unit_cfg;

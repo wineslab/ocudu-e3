@@ -54,7 +54,10 @@ public:
     rlc_tx->handle_sdu(std::move(sdu), is_retx);
   }
 
-  void on_discard_sdu(uint32_t pdcp_sn) override { rlc_tx->discard_sdu(pdcp_sn); }
+  void on_discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) override
+  {
+    rlc_tx->discard_sdu(pdcp_sn_start, block_size);
+  }
 
 private:
   rlc_tx_upper_layer_data_interface* rlc_tx = nullptr;
@@ -193,20 +196,6 @@ private:
   /// thread still uses this to notify F1 of transmitted/delivered PDCP SNs.
   /// The lifetime of the F1 bearer exceeds the \c disconnect and is synchronized with the scheduler.
   std::atomic<f1u_tx_delivery_handler*> handler = nullptr;
-};
-
-class rlc_tx_control_notifier : public rlc_tx_upper_layer_control_notifier
-{
-public:
-  void on_protocol_failure() override
-  {
-    // TODO
-  }
-
-  void on_max_retx() override
-  {
-    // TODO
-  }
 };
 
 class rlc_tx_mac_buffer_state_updater : public rlc_tx_lower_layer_notifier

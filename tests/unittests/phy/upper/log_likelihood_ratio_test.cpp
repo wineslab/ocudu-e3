@@ -6,16 +6,12 @@
 /// \brief Unit test for the log-likelihood ratio type.
 ///
 /// Tests all the operators and functions defined for the type.
+#include "support/compare_sequences.h"
 #include "ocudu/phy/upper/log_likelihood_ratio.h"
 #include <gtest/gtest.h>
 #include <random>
 
 using namespace ocudu;
-
-bool operator==(span<const log_likelihood_ratio> lhs, span<const log_likelihood_ratio> rhs)
-{
-  return std::equal(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
-}
 
 TEST(LLR, Comparison)
 {
@@ -99,8 +95,11 @@ TEST(LLR, VectorOperations)
                  clamp_expected_data.begin(),
                  [low, high](log_likelihood_ratio value) { return std::clamp(value, low, high); });
   clamp(clamp_out_data, clamp_in_data, low, high);
-  ASSERT_EQ(span<const log_likelihood_ratio>(clamp_expected_data), span<const log_likelihood_ratio>(clamp_out_data))
-      << "Clamping not working.";
+  {
+    error_type<std::string> compare_result = compare_sequences(span<const log_likelihood_ratio>(clamp_out_data),
+                                                               span<const log_likelihood_ratio>(clamp_expected_data));
+    ASSERT_TRUE(compare_result.has_value()) << compare_result.error() << " Clamping not working.";
+  }
 
   std::array<log_likelihood_ratio, 1234> sum_x;
   std::array<log_likelihood_ratio, 1234> sum_y;
@@ -114,6 +113,9 @@ TEST(LLR, VectorOperations)
                  sum_expected.begin(),
                  [](log_likelihood_ratio x, log_likelihood_ratio y) { return x + y; });
   log_likelihood_ratio::sum(sum_out, sum_x, sum_y);
-  ASSERT_EQ(span<const log_likelihood_ratio>(sum_expected), span<const log_likelihood_ratio>(sum_out))
-      << "Vector sum not working.";
+  {
+    error_type<std::string> compare_result =
+        compare_sequences(span<const log_likelihood_ratio>(sum_out), span<const log_likelihood_ratio>(sum_expected));
+    ASSERT_TRUE(compare_result.has_value()) << compare_result.error() << " Vector sum not working.";
+  }
 }

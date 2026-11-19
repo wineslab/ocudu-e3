@@ -70,7 +70,7 @@ void ocudu::assert_tdd_pattern_consistency(const cell_configuration& cell_cfg,
   }
 
   ofdm_symbol_range ul_symbols = get_active_tdd_ul_symbols(
-      *cell_cfg.params.tdd_cfg, sl_tx.to_uint(), cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.cp);
+      *cell_cfg.params.tdd_cfg, sl_tx.count(), cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.cp);
   ASSERT_EQ(ul_symbols.length(), result.ul.nof_ul_symbols);
 
   if (ul_symbols.empty()) {
@@ -276,7 +276,7 @@ void ocudu::test_pdsch_sib_consistency(const cell_configuration& cell_cfg, span<
       ASSERT_TRUE(sib.si_msg_index.has_value());
     }
     ASSERT_EQ(sib.pdsch_cfg.codewords.size(), 1);
-    ASSERT_EQ(sib.pdsch_cfg.codewords[0].mcs_table, pdsch_mcs_table::qam64);
+    ASSERT_EQ(sib.pdsch_cfg.mcs_table, pdsch_mcs_table::qam64);
     vrb_interval vrbs = sib.pdsch_cfg.rbs.type1();
     ASSERT_LE(vrbs.stop(), effective_init_bwp_cfg.crbs.length())
         << fmt::format("PRB grant falls outside CORESET#0 RB boundaries");
@@ -295,13 +295,14 @@ void ocudu::test_pdsch_rar_consistency(const cell_configuration& cell_cfg, span<
 
   for (const rar_information& rar : rars) {
     rnti_t ra_rnti = rar.pdsch_cfg.rnti;
-    ASSERT_FALSE(rar.grants.empty()) << fmt::format("RAR with RA-rnti={} has no corresponding MSG3 grants", ra_rnti);
+    ASSERT_TRUE(not rar.grants.empty() or rar.backoff_indicator.has_value())
+        << fmt::format("RAR with RA-rnti={} has no corresponding MSG3 grants and no Backoff Indicator", ra_rnti);
     ASSERT_EQ(rar.pdsch_cfg.dci_fmt, dci_dl_format::f1_0);
     ASSERT_TRUE(rar.pdsch_cfg.rbs.is_type1()) << "Invalid allocation type for RAR";
     ASSERT_EQ(rar.pdsch_cfg.coreset_cfg->get_id(), ss_cfg.get_coreset_id());
     ASSERT_EQ(rar.pdsch_cfg.ss_set_type, search_space_set_type::type1);
     ASSERT_EQ(rar.pdsch_cfg.codewords.size(), 1);
-    ASSERT_EQ(rar.pdsch_cfg.codewords[0].mcs_table, pdsch_mcs_table::qam64);
+    ASSERT_EQ(rar.pdsch_cfg.mcs_table, pdsch_mcs_table::qam64);
 
     const prb_interval rar_vrbs = {
         rar.pdsch_cfg.rbs.type1().start() + rar.pdsch_cfg.coreset_cfg->get_coreset_start_crb(),
@@ -350,92 +351,17 @@ void ocudu::test_pucch_consistency(const cell_configuration& cell_cfg, span<cons
 {
   ASSERT_LE(pucchs.size(), cell_cfg.expert_cfg.ue.max_pucchs_per_slot);
 
-  constexpr unsigned max_f0_or_f1_multiplexing = pucch_constants::f1::NOF_ICS * pucch_constants::f1::NOF_TD_OCC;
+  // Check for collisions between PUCCHs.
+  for (const auto* it1 = pucchs.begin(); it1 != pucchs.end(); ++it1) {
+    for (const auto* it2 = std::next(it1); it2 != pucchs.end(); ++it2) {
+      if (it1->crnti == it2->crnti) {
+        // PUCCHs for the same UE can collide, as the UE will only transmit one of them.
+        continue;
+      }
 
-  // Note: The grid at index max_f0_or_f1_multiplexing is used to track the union of all F0/F1 grids.
-  // [Implementation defined] This assumes that either Format 0 or Format 1 is used, but not both.
-  static_vector<cell_slot_resource_grid, max_f0_or_f1_multiplexing + 1> f0_or_f1_grids(
-      max_f0_or_f1_multiplexing + 1,
-      cell_slot_resource_grid(cell_cfg.params.ul_cfg_common.freq_info_ul.scs_carrier_list));
-
-  // Note: The grid at index max_f4_multiplexing is used to track the union of all F4 grids.
-  constexpr unsigned                                              max_f4_multiplexing = 4;
-  static_vector<cell_slot_resource_grid, max_f4_multiplexing + 1> f4_grids(
-      max_f4_multiplexing + 1, cell_slot_resource_grid(cell_cfg.params.ul_cfg_common.freq_info_ul.scs_carrier_list));
-
-  // For formats that are not multiplexed.
-  cell_slot_resource_grid general_grid(cell_cfg.params.ul_cfg_common.freq_info_ul.scs_carrier_list);
-
-  for (const pucch_info& pucch : pucchs) {
-    const unsigned mux_idx      = pucch_mux_idx(*pucch.res);
-    const auto     pucch_grants = get_pucch_grant_info(pucch);
-    switch (pucch.format()) {
-      case pucch_format::FORMAT_0: {
-        // Multiplexed by initial cyclic shift only.
-        // Check the general grid, the union of the F4 grids and the F0 specific grid.
-        // Write to both the F0 union grid and the F0 specific grid.
-        ASSERT_FALSE(general_grid.collides(pucch_grants.first));
-        ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(pucch_grants.first));
-        ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(pucch_grants.first));
-        f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(pucch_grants.first);
-        f0_or_f1_grids[mux_idx].fill(pucch_grants.first);
-        if (pucch.res->second_hop_prb.has_value()) {
-          ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
-          ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(*pucch_grants.second));
-          ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(*pucch_grants.second));
-          f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(*pucch_grants.second);
-          f0_or_f1_grids[mux_idx].fill(*pucch_grants.second);
-        }
-      } break;
-      case pucch_format::FORMAT_1: {
-        // Multiplexed by initial cyclic shift and time domain OCC.
-        // Check the general grid, the union of the F4 grids and the F1 specific grid.
-        // Write to both the F1 union grid and the F1 specific grid.
-        ASSERT_FALSE(general_grid.collides(pucch_grants.first));
-        ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(pucch_grants.first));
-        ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(pucch_grants.first));
-        f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(pucch_grants.first);
-        f0_or_f1_grids[mux_idx].fill(pucch_grants.first);
-        if (pucch.res->second_hop_prb.has_value()) {
-          ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
-          ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(*pucch_grants.second));
-          ASSERT_FALSE(f0_or_f1_grids[mux_idx].collides(*pucch_grants.second));
-          f0_or_f1_grids[max_f0_or_f1_multiplexing].fill(*pucch_grants.second);
-          f0_or_f1_grids[mux_idx].fill(*pucch_grants.second);
-        }
-      } break;
-      case pucch_format::FORMAT_4: {
-        // Multiplexed by orthogonal sequence index.
-        // Check the general grid, the union of the F0/F1 grids and the F4 specific grid.
-        // Write to both the F4 union grid and the F4 specific grid.
-        ASSERT_FALSE(general_grid.collides(pucch_grants.first));
-        ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(pucch_grants.first));
-        ASSERT_FALSE(f4_grids[mux_idx].collides(pucch_grants.first));
-        f4_grids[max_f4_multiplexing].fill(pucch_grants.first);
-        f4_grids[mux_idx].fill(pucch_grants.first);
-        if (pucch.res->second_hop_prb.has_value()) {
-          ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
-          ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(*pucch_grants.second));
-          ASSERT_FALSE(f4_grids[mux_idx].collides(*pucch_grants.second));
-          f4_grids[max_f4_multiplexing].fill(*pucch_grants.second);
-          f4_grids[mux_idx].fill(*pucch_grants.second);
-        }
-      } break;
-      default: {
-        // Non multiplexed formats.
-        // Check the general grid, and the unions of the multiplexed grids.
-        // Only write to the general grid.
-        ASSERT_FALSE(general_grid.collides(pucch_grants.first));
-        ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(pucch_grants.first));
-        ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(pucch_grants.first));
-        general_grid.fill(pucch_grants.first);
-        if (pucch.res->second_hop_prb.has_value()) {
-          ASSERT_FALSE(general_grid.collides(*pucch_grants.second));
-          ASSERT_FALSE(f0_or_f1_grids[max_f0_or_f1_multiplexing].collides(*pucch_grants.second));
-          ASSERT_FALSE(f4_grids[max_f4_multiplexing].collides(*pucch_grants.second));
-          general_grid.fill(*pucch_grants.second);
-        }
-      } break;
+      if (pucch_resources_collide(*it1->res, *it2->res)) {
+        ASSERT_TRUE(false);
+      }
     }
   }
 }
@@ -558,18 +484,18 @@ static void assert_rar_grant_msg3_pusch_consistency(const cell_configuration&   
       tc_rntis.emplace(rar_grant.temp_crnti);
 
       // 2-step RACH SuccessRAR: UE's MsgA PUSCH was decoded; no Msg3 is required.
-      if (const auto* two_step = std::get_if<rar_ul_grant::two_step_info>(&rar_grant.type)) {
-        if (two_step->is_success) {
-          continue;
-        }
+      if (std::holds_alternative<rar_ul_grant::two_step_success_info>(rar_grant.type)) {
+        continue;
       }
 
       // 4-step RAR and 2-step FallbackRAR: a Msg3 PUSCH must be scheduled.
       ASSERT_LT(rar_grant.time_resource_assignment, pusch_td_list.size());
-      uint8_t k2 = ra_helper::get_msg3_delay(cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.scs,
-                                             pusch_td_list[rar_grant.time_resource_assignment].k2);
+      // In NTN, the Msg3 is further delayed by the cell-specific K_offset (TS 38.213, Section 8.3).
+      unsigned msg3_delay = ra_helper::get_msg3_delay(cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.scs,
+                                                      pusch_td_list[rar_grant.time_resource_assignment].k2) +
+                            cell_cfg.ntn_cs_koffset;
 
-      span<const ul_sched_info> ul_grants = res_grid[k2].result.ul.puschs;
+      span<const ul_sched_info> ul_grants = res_grid[msg3_delay].result.ul.puschs;
       const auto* it = std::find_if(ul_grants.begin(), ul_grants.end(), [&rar_grant](const auto& ulgrant) {
         return ulgrant.pusch_cfg.rnti == rar_grant.temp_crnti;
       });
@@ -587,9 +513,20 @@ void ocudu::test_dl_resource_grid_collisions(const cell_configuration& cell_cfg,
   std::vector<test_grant_info> dl_grants = get_dl_grants(cell_cfg, result);
   for (const test_grant_info& test_grant : dl_grants) {
     ASSERT_FALSE(test_grant.grant.crbs.empty()) << "Resource is empty";
+    // The DL-PRS resources of a resource set are multiplexed in the comb, so they share the RBs of the set and cannot
+    // be checked against each other. They are checked against the rest of the DL grants below.
+    if (test_grant.type == test_grant_info::PRS) {
+      continue;
+    }
     ASSERT_FALSE(grid.collides(test_grant.grant))
         << fmt::format("Resource collision for grant with rnti={}", test_grant.rnti);
     grid.fill(test_grant.grant);
+  }
+
+  for (const test_grant_info& test_grant : dl_grants) {
+    if (test_grant.type == test_grant_info::PRS) {
+      ASSERT_FALSE(grid.collides(test_grant.grant)) << "Resource collision for a DL-PRS resource";
+    }
   }
 }
 
@@ -652,7 +589,7 @@ void ocudu::test_ul_resource_grid_collisions(const cell_configuration& cell_cfg,
   }
 
   for (const test_grant_info& test_grant : ul_grants) {
-    if (test_grant.type == test_grant_info::PUCCH) {
+    if (test_grant.type == test_grant_info::PUCCH or test_grant.type == test_grant_info::SRS) {
       continue;
     }
     if (test_grant.type == test_grant_info::MSGA_PUSCH) {
@@ -673,6 +610,16 @@ void ocudu::test_ul_resource_grid_collisions(const cell_configuration& cell_cfg,
       rntis.emplace(test_grant.rnti);
     }
   }
+
+  // SRSs of different UEs are multiplexed in the code domain (comb offset, cyclic shift and sequence ID) over the same
+  // symbols and RBs, so they are only checked against the non-SRS grants, which are the ones already in the grid.
+  for (const test_grant_info& test_grant : ul_grants) {
+    if (test_grant.type != test_grant_info::SRS) {
+      continue;
+    }
+    ASSERT_FALSE(grid.collides(test_grant.grant))
+        << fmt::format("Resource collision for grant with rnti={}", test_grant.rnti);
+  }
 }
 
 void ocudu::test_ul_consistency(const cell_configuration& cell_cfg, slot_point sl_tx, const ul_sched_result& result)
@@ -680,21 +627,21 @@ void ocudu::test_ul_consistency(const cell_configuration& cell_cfg, slot_point s
   // Check that UL grant limits are respected.
   ASSERT_LE(result.pucchs.size() + result.puschs.size(), cell_cfg.expert_cfg.ue.max_ul_grants_per_slot);
 
-  ASSERT_NO_FATAL_FAILURE(test_prach_opportunity_validity(cell_cfg, sl_tx, result.prachs));
-  ASSERT_NO_FATAL_FAILURE(test_pusch_ue_consistency(cell_cfg, result.puschs));
-  ASSERT_NO_FATAL_FAILURE(test_pucch_consistency(cell_cfg, result.pucchs));
-  ASSERT_NO_FATAL_FAILURE(test_ul_resource_grid_collisions(cell_cfg, result));
+  test_prach_opportunity_validity(cell_cfg, sl_tx, result.prachs);
+  test_pusch_ue_consistency(cell_cfg, result.puschs);
+  test_pucch_consistency(cell_cfg, result.pucchs.unsorted());
+  test_ul_resource_grid_collisions(cell_cfg, result);
 }
 
 void ocudu::test_dl_consistency(const cell_configuration& cell_cfg, slot_point sl_tx, const dl_sched_result& result)
 {
-  ASSERT_NO_FATAL_FAILURE(test_pdsch_sib_consistency(cell_cfg, result.bc.sibs));
-  ASSERT_NO_FATAL_FAILURE(test_pdsch_rar_consistency(cell_cfg, result.rar_grants));
-  ASSERT_NO_FATAL_FAILURE(test_pdsch_ue_consistency(cell_cfg, result.ue_grants));
-  ASSERT_NO_FATAL_FAILURE(test_pdsch_cross_consistency(cell_cfg, sl_tx, result));
-  ASSERT_NO_FATAL_FAILURE(test_pdcch_common_consistency(cell_cfg, sl_tx, result.dl_pdcchs));
-  ASSERT_NO_FATAL_FAILURE(test_ul_pdcch_consistency(cell_cfg, sl_tx, result.ul_pdcchs));
-  ASSERT_NO_FATAL_FAILURE(test_dl_resource_grid_collisions(cell_cfg, result));
+  test_pdsch_sib_consistency(cell_cfg, result.bc.sibs);
+  test_pdsch_rar_consistency(cell_cfg, result.rar_grants);
+  test_pdsch_ue_consistency(cell_cfg, result.ue_grants);
+  test_pdsch_cross_consistency(cell_cfg, sl_tx, result);
+  test_pdcch_common_consistency(cell_cfg, sl_tx, result.dl_pdcchs);
+  test_ul_pdcch_consistency(cell_cfg, sl_tx, result.ul_pdcchs);
+  test_dl_resource_grid_collisions(cell_cfg, result);
 }
 
 void ocudu::test_scheduler_result_consistency(const cell_configuration& cell_cfg,
@@ -702,9 +649,9 @@ void ocudu::test_scheduler_result_consistency(const cell_configuration& cell_cfg
                                               const sched_result&       result)
 {
   ASSERT_TRUE(result.success);
-  ASSERT_NO_FATAL_FAILURE(assert_tdd_pattern_consistency(cell_cfg, sl_tx, result));
-  ASSERT_NO_FATAL_FAILURE(test_dl_consistency(cell_cfg, sl_tx, result.dl));
-  ASSERT_NO_FATAL_FAILURE(test_ul_consistency(cell_cfg, sl_tx, result.ul));
+  assert_tdd_pattern_consistency(cell_cfg, sl_tx, result);
+  test_dl_consistency(cell_cfg, sl_tx, result.dl);
+  test_ul_consistency(cell_cfg, sl_tx, result.ul);
 }
 
 /// \brief Verifies that the cell resource grid PRBs and symbols was filled with the allocated PDSCHs.
@@ -726,26 +673,10 @@ void ocudu::assert_dl_resource_grid_filled(const cell_configuration&      cell_c
 void ocudu::test_scheduler_result_consistency(const cell_configuration&      cell_cfg,
                                               const cell_resource_allocator& cell_res_grid)
 {
-  ASSERT_NO_FATAL_FAILURE(test_scheduler_result_consistency(cell_cfg, cell_res_grid[0].slot, cell_res_grid[0].result));
+  test_scheduler_result_consistency(cell_cfg, cell_res_grid[0].slot, cell_res_grid[0].result);
   assert_pdcch_pdsch_common_consistency(cell_cfg, cell_res_grid);
   assert_dl_resource_grid_filled(cell_cfg, cell_res_grid);
   assert_rar_grant_msg3_pusch_consistency(cell_cfg, cell_res_grid);
-}
-
-/// Helper to determine slot index associated with a RACH indication.
-static unsigned get_ra_slot_index(const cell_configuration& cell_cfg, slot_point rach_slot_rx)
-{
-  // As per Section 5.1.3, TS 38.321, and from Section 5.3.2, TS 38.211, slot_idx uses as the numerology of
-  // reference 15kHz for long PRACH Formats (i.e, slot_idx = subframe index); whereas, for short PRACH formats, it
-  // uses the same numerology as the SCS common (i.e, slot_idx = actual slot index within the frame).
-  return is_long_preamble(
-             prach_configuration_get(
-                 band_helper::get_freq_range(cell_cfg.band()),
-                 band_helper::get_duplex_mode(cell_cfg.band()),
-                 cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common->rach_cfg_generic.prach_config_index)
-                 .format)
-             ? rach_slot_rx.subframe_index()
-             : rach_slot_rx.slot_index();
 }
 
 static slot_interval get_rar_window(const cell_configuration& cell_cfg, slot_point rach_slot_rx)
@@ -862,12 +793,14 @@ void test_helper::ra_scheduler_tracker::on_new_rach_ind(const rach_indication_me
   const rach_config_common& rach_cfg = *cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common;
   for (const auto& occ : ind.occasions) {
     const slot_interval rar_window = get_rar_window(cell_cfg, ind.slot_rx);
-    const unsigned      slot_idx   = get_ra_slot_index(cell_cfg, ind.slot_rx);
+    const unsigned      slot_idx   = occ.slot_index;
     for (const auto& preamb : occ.preambles) {
       if (is_msga_preamble(preamb.preamble_id)) {
         const rach_config_common_two_step& two_step_cfg = *rach_cfg.two_step_rach_cfg;
         msga_preamble_context              ctxt;
         ctxt.msgb_rnti        = ra_helper::get_msgb_rnti(slot_idx, occ.start_symbol, occ.frequency_index);
+        ctxt.ra_rnti          = ra_helper::get_ra_rnti(slot_idx, occ.start_symbol, occ.frequency_index);
+        ctxt.preamble_id      = preamb.preamble_id;
         ctxt.tc_rnti          = preamb.tc_rnti;
         ctxt.pusch_slot       = ind.slot_rx + two_step_cfg.pusch.td_offset;
         ctxt.msgb_window_stop = ind.slot_rx + prach_duration_slots + two_step_cfg.msgB_response_window_slots;
@@ -946,7 +879,9 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
     const auto pusch_td_list =
         get_pusch_time_domain_resource_table(*cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common);
     for (const auto& ul_grant : rar.grants) {
-      if (const auto* two_step = std::get_if<rar_ul_grant::two_step_info>(&ul_grant.type)) {
+      const bool is_two_step_success  = std::holds_alternative<rar_ul_grant::two_step_success_info>(ul_grant.type);
+      const bool is_two_step_fallback = std::holds_alternative<rar_ul_grant::two_step_fallback_info>(ul_grant.type);
+      if (is_two_step_success or is_two_step_fallback) {
         // 2-step RACH MsgB grant (SuccessRAR or FallbackRAR).
         auto msga_it =
             std::find_if(pending_msga_preambles.begin(),
@@ -958,7 +893,7 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
         ASSERT_LE(sl_tx, msga_it->msgb_window_stop) << "MsgB scheduled outside of MsgB window";
         msga_it->msgb_sched = true;
 
-        if (two_step->is_success) {
+        if (is_two_step_success) {
           ++success_rar_counter;
         } else {
           // FallbackRAR: set up Msg3 tracking in pending_preambles so the rest of the Msg3 logic applies.
@@ -966,9 +901,11 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
           preamble_context& p = pending_preambles.emplace_back();
           p.preamble.tc_rnti  = ul_grant.temp_crnti;
           p.rar_slot          = sl_tx;
-          p.first_msg3_slot   = sl_tx + ra_helper::get_msg3_delay(cell_cfg.scs_common(),
-                                                                pusch_td_list[ul_grant.time_resource_assignment].k2);
-          p.first_grant       = ul_grant;
+          p.first_msg3_slot =
+              sl_tx +
+              ra_helper::get_msg3_delay(cell_cfg.scs_common(), pusch_td_list[ul_grant.time_resource_assignment].k2) +
+              cell_cfg.ntn_cs_koffset;
+          p.first_grant = ul_grant;
         }
       } else {
         // 4-step RAR UL grant: find matching RACH preamble.
@@ -985,7 +922,8 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
         ASSERT_TRUE(is_rar_ul_grant_consistent_with_rach_preamble(cell_cfg, ul_grant, ctxt.preamble));
         ctxt.first_msg3_slot =
             ctxt.rar_slot +
-            ra_helper::get_msg3_delay(cell_cfg.scs_common(), pusch_td_list[ul_grant.time_resource_assignment].k2);
+            ra_helper::get_msg3_delay(cell_cfg.scs_common(), pusch_td_list[ul_grant.time_resource_assignment].k2) +
+            cell_cfg.ntn_cs_koffset;
         ctxt.first_grant = ul_grant;
       }
     }
@@ -1009,7 +947,7 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
     const auto& dci    = ul_pdcch.dci.as_tc_rnti_f0_0();
     const auto& td_res = pusch_td_list[dci.time_resource];
 
-    const slot_point pusch_slot      = sl_tx + td_res.k2;
+    const slot_point pusch_slot      = sl_tx + td_res.k2 + cell_cfg.ntn_cs_koffset;
     auto             pending_msg3_it = std::find_if(pending_msg3_retxs.begin(),
                                         pending_msg3_retxs.end(),
                                         [&ul_pdcch, pusch_slot](const msg3_retx_context& pending_msg3) {
@@ -1030,10 +968,14 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
     }
 
     if (not pusch.context.msg3_delay.has_value() and pusch.context.nof_retxs == 0) {
-      // MsgA PUSCH (2-step RACH): find in pending_msga_preambles.
-      auto it = std::find_if(pending_msga_preambles.begin(),
-                             pending_msga_preambles.end(),
-                             [&pusch](const msga_preamble_context& p) { return p.tc_rnti == pusch.pusch_cfg.rnti; });
+      // MsgA PUSCH (2-step RACH): find in pending_msga_preambles. As per TS 38.211, 6.3.1.1, MsgA PUSCH is scheduled
+      // and decoded using the RA-RNTI, not the preamble's TC-RNTI. Multiple preambles in the same PRACH occasion
+      // share the same RA-RNTI, so the RAPID is also needed to disambiguate.
+      ASSERT_TRUE(pusch.context.rapid.has_value()) << "MsgA PUSCH context is missing its RAPID";
+      auto it = std::find_if(
+          pending_msga_preambles.begin(), pending_msga_preambles.end(), [&pusch](const msga_preamble_context& p) {
+            return p.ra_rnti == pusch.pusch_cfg.rnti and p.preamble_id == *pusch.context.rapid;
+          });
       ASSERT_NE(it, pending_msga_preambles.end()) << "MsgA PUSCH has no associated MsgA preamble";
       ASSERT_EQ(it->pusch_slot, sl_tx) << "MsgA PUSCH scheduled in slot not matching the TD offset";
       it->pusch_sched = true;
@@ -1104,17 +1046,7 @@ void test_helper::ra_scheduler_tracker::on_new_result(slot_point sl_tx, const sc
 bool test_helper::ra_scheduler_tracker::is_msga_preamble(uint8_t preamble_id) const
 {
   const rach_config_common& rach_cfg = *cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common;
-  if (not rach_cfg.two_step_rach_cfg.has_value()) {
-    return false;
-  }
-  const auto     ssb_per_ro_idx    = static_cast<unsigned>(rach_cfg.nof_ssb_per_ro);
-  const auto     one_idx           = static_cast<unsigned>(ssb_per_rach_occasions::one);
-  const unsigned nof_ssbs_per_ro   = ssb_per_ro_idx >= one_idx ? (1U << (ssb_per_ro_idx - one_idx)) : 1U;
-  const unsigned preambles_per_ssb = rach_cfg.total_nof_ra_preambles / nof_ssbs_per_ro;
-  const unsigned local_id          = preamble_id % preambles_per_ssb;
-  return local_id >= rach_cfg.nof_cb_preambles_per_ssb and
-         local_id < static_cast<unsigned>(rach_cfg.nof_cb_preambles_per_ssb) +
-                        rach_cfg.two_step_rach_cfg->cb_preambles_per_ssb_per_shared_ro;
+  return ra_helper::is_msga_cb_preamble(rach_cfg, preamble_id);
 }
 
 bool test_helper::ra_scheduler_tracker::is_expired(const preamble_context& ctxt, slot_point sl_tx) const
@@ -1165,8 +1097,16 @@ void test_helper::harq_tracker::on_new_result(slot_point /*sl_tx*/, const sched_
     const pdsch_codeword&    cw     = pdsch.codewords[0];
     const harq_key           key    = {pdsch.rnti, pdsch.harq_id};
     const auto               ndi_it = dl_ndi_map.find(key);
-    ASSERT_TRUE(ndi_it != dl_ndi_map.end()) << fmt::format(
-        "DL UE grant has no matching PDCCH for rnti={} h_id={}", pdsch.rnti, fmt::underlying(pdsch.harq_id));
+    if (ndi_it == dl_ndi_map.end()) {
+      // PDCCH-less PDSCH: only allowed for Rel-16 PDSCH repetition occasions, which re-transmit the TB of a PDSCH
+      // scheduled in a preceding slot.
+      ASSERT_FALSE(cw.new_data) << fmt::format(
+          "DL UE grant has no matching PDCCH for rnti={} h_id={}", pdsch.rnti, pdsch.harq_id);
+      const auto rep_it = dl_harqs.find(key);
+      ASSERT_NE(rep_it, dl_harqs.end()) << "PDSCH repetition occasion but no previous PDSCH for the same HARQ";
+      ASSERT_EQ(rep_it->second.tbs, cw.tb_size_bytes) << "TBS mismatch for PDSCH repetition occasion";
+      continue;
+    }
     const bool ndi = ndi_it->second;
     const auto it  = dl_harqs.find(key);
     if (cw.new_data) {

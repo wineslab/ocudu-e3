@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_ul_bearer_manager.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu.h"
 
 using namespace ocudu;

@@ -5,7 +5,6 @@
 
 #include "ocudu/support/ocudu_assert.h"
 #include <cstddef>
-#include <memory>
 #include <vector>
 
 namespace ocudu {

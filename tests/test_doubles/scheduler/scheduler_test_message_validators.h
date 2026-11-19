@@ -11,12 +11,12 @@
 #pragma once
 
 #include "ocudu/adt/span.h"
-#include "ocudu/ran/pdcch/coreset.h"
 
 namespace ocudu {
 
 struct dl_msg_alloc;
 struct ul_sched_info;
+struct coreset_configuration;
 
 namespace test_helper {
 

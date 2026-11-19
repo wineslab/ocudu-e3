@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include "ocudu/support/enum_utils.h"
 #include "fmt/format.h"
+#include <cstdint>
 
 namespace ocudu {
 
@@ -13,33 +15,34 @@ namespace ocudu {
 /// For PUCCH Format 2-3-4, all possible values are valid.
 enum class sr_nof_bits : unsigned { no_sr = 0, one, two, three, four };
 
-/// Converts \ref sr_nof_bits into unsigned.
-inline unsigned sr_nof_bits_to_uint(sr_nof_bits sr_bits)
-{
-  return static_cast<unsigned>(sr_bits);
-}
-
 /// Implements the + operator for \ref sr_nof_bits.
 inline sr_nof_bits operator+(sr_nof_bits x, sr_nof_bits y)
 {
-  const unsigned sum = sr_nof_bits_to_uint(x) + sr_nof_bits_to_uint(y);
-  return sum > sr_nof_bits_to_uint(sr_nof_bits::four) ? sr_nof_bits::four : static_cast<sr_nof_bits>(sum);
+  const unsigned sum = to_underlying(x) + to_underlying(y);
+  return sum > to_underlying(sr_nof_bits::four) ? sr_nof_bits::four : static_cast<sr_nof_bits>(sum);
 }
 
 /// Contains the number of UCI bits (HARQ-ACK, SR and CSI) of a PUCCH grant.
 struct pucch_uci_bits {
   /// Number of HARQ-ACK info bits that should have been reported in the removed PUCCH grant.
-  unsigned harq_ack_nof_bits{0};
+  uint16_t harq_ack_nof_bits{0};
   /// Number of SR info bits that should have been reported in the removed PUCCH grant.
   sr_nof_bits sr_bits{sr_nof_bits::no_sr};
   /// Number of CSI Part 1 info bits that should have been reported in the removed PUCCH grant.
-  unsigned csi_part1_nof_bits{0};
+  uint16_t csi_part1_nof_bits{0};
   // TODO: add extra bits for CSI Part 2.
 
   [[nodiscard]] unsigned get_total_bits() const
   {
-    return harq_ack_nof_bits + sr_nof_bits_to_uint(sr_bits) + csi_part1_nof_bits;
+    return harq_ack_nof_bits + to_underlying(sr_bits) + csi_part1_nof_bits;
   }
+
+  bool operator==(const pucch_uci_bits& other) const
+  {
+    return harq_ack_nof_bits == other.harq_ack_nof_bits and sr_bits == other.sr_bits and
+           csi_part1_nof_bits == other.csi_part1_nof_bits;
+  }
+  bool operator!=(const pucch_uci_bits& other) const { return not(*this == other); }
 };
 
 } // namespace ocudu

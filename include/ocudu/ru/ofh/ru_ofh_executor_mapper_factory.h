@@ -14,8 +14,8 @@ class task_executor;
 
 /// Configuration of the Open Fronthaul RU executor mapper.
 struct ru_ofh_executor_mapper_config {
-  /// Number of sectors.
-  unsigned nof_sectors;
+  /// The list of RU TX ports configured for each sector.
+  std::vector<std::vector<unsigned>> dl_eaxc_per_sector;
   /// Executor dedicated to IQ sample compression and OFH message serialization.
   task_executor* downlink_executor;
   /// Executor dedicated to IQ sample decompression and OFH message deserialization.

@@ -145,6 +145,82 @@ TEST_F(up_resource_manager_test, when_pdu_session_setup_with_two_qos_flows_both_
   ASSERT_EQ(update.pdu_sessions_to_setup_list.at(uint_to_pdu_session_id(1)).drb_to_add.size(), 2);
 }
 
+// During inter-gNB handover, DRB IDs are allocated independently by the source and target RAN nodes (TS 38.300
+// Section 9.2.3.2.3). Without a preference hint, a fresh target always allocates DRB1, DRB2, ... in QoS flow order,
+// which need not match the source's own numbering for the same flows. Verify that when the source's DRB-to-QoS-flow
+// mapping is known (e.g. decoded from the Handover Preparation Information), the target reuses it instead of
+// falling back to plain sequential allocation - this is what keeps a later SN/RAN Status Transfer (keyed only by
+// DRB ID) correlated with the correct bearer instead of silently colliding with an unrelated one.
+TEST_F(up_resource_manager_test, when_source_used_different_drb_ids_target_preserves_them)
+{
+  ngap_pdu_session_resource_setup_request msg = generate_pdu_session_resource_setup(cu_cp_ue_index_t::min, 1, 2);
+  ASSERT_TRUE(manager.validate_request(msg.pdu_session_res_setup_items));
+
+  // The source used DRB2 for QoS flow 1 and DRB1 for QoS flow 2 - the reverse of what plain sequential allocation
+  // would pick.
+  up_old_drb_association old_drb_association = {
+      {uint_to_pdu_session_id(1),
+       {{uint_to_qos_flow_id(1), uint_to_drb_id(2)}, {uint_to_qos_flow_id(2), uint_to_drb_id(1)}}}};
+
+  up_config_update update = manager.calculate_update(msg.pdu_session_res_setup_items, old_drb_association);
+
+  ASSERT_EQ(update.pdu_sessions_to_setup_list.size(), 1);
+  const auto& drb_to_add = update.pdu_sessions_to_setup_list.at(uint_to_pdu_session_id(1)).drb_to_add;
+  ASSERT_EQ(drb_to_add.size(), 2);
+
+  ASSERT_TRUE(drb_to_add.find(uint_to_drb_id(2)) != drb_to_add.end());
+  EXPECT_TRUE(drb_to_add.at(uint_to_drb_id(2)).qos_flows.find(uint_to_qos_flow_id(1)) !=
+              drb_to_add.at(uint_to_drb_id(2)).qos_flows.end());
+  EXPECT_TRUE(drb_to_add.at(uint_to_drb_id(2)).source_drb_id_confirmed);
+
+  ASSERT_TRUE(drb_to_add.find(uint_to_drb_id(1)) != drb_to_add.end());
+  EXPECT_TRUE(drb_to_add.at(uint_to_drb_id(1)).qos_flows.find(uint_to_qos_flow_id(2)) !=
+              drb_to_add.at(uint_to_drb_id(1)).qos_flows.end());
+  EXPECT_TRUE(drb_to_add.at(uint_to_drb_id(1)).source_drb_id_confirmed);
+}
+
+// Without a preference hint at all, allocation still succeeds as before, but the resulting DRB ID must not be
+// treated as confirmed - the target has no basis to assume it matches the source's numbering.
+TEST_F(up_resource_manager_test, when_no_preference_is_given_the_allocated_drb_id_is_not_confirmed)
+{
+  ngap_pdu_session_resource_setup_request msg = generate_pdu_session_resource_setup();
+  ASSERT_TRUE(manager.validate_request(msg.pdu_session_res_setup_items));
+
+  up_config_update update = manager.calculate_update(msg.pdu_session_res_setup_items);
+
+  ASSERT_EQ(update.pdu_sessions_to_setup_list.size(), 1);
+  const auto& drb_to_add = update.pdu_sessions_to_setup_list.at(uint_to_pdu_session_id(1)).drb_to_add;
+  ASSERT_EQ(drb_to_add.size(), 1);
+  EXPECT_FALSE(drb_to_add.at(uint_to_drb_id(1)).source_drb_id_confirmed);
+}
+
+// If the source's preferred DRB ID is already taken at the target (e.g. by another PDU session), allocation must
+// still succeed by falling back to the next free ID rather than failing or duplicating the DRB ID.
+TEST_F(up_resource_manager_test, when_preferred_drb_id_is_already_taken_allocation_falls_back)
+{
+  // First PDU session takes DRB1 the normal way.
+  setup_initial_pdu_session();
+
+  // A second PDU session's sole QoS flow prefers DRB1 too (e.g. a stale/duplicated hint) - it must not collide with
+  // the DRB already in use.
+  ngap_pdu_session_resource_setup_request msg =
+      generate_pdu_session_resource_setup(cu_cp_ue_index_t::min, uint_to_pdu_session_id(2), uint_to_qos_flow_id(1));
+  ASSERT_TRUE(manager.validate_request(msg.pdu_session_res_setup_items));
+
+  up_old_drb_association old_drb_association = {
+      {uint_to_pdu_session_id(2), {{uint_to_qos_flow_id(1), uint_to_drb_id(1)}}}};
+
+  up_config_update update = manager.calculate_update(msg.pdu_session_res_setup_items, old_drb_association);
+
+  ASSERT_EQ(update.pdu_sessions_to_setup_list.size(), 1);
+  const auto& drb_to_add = update.pdu_sessions_to_setup_list.at(uint_to_pdu_session_id(2)).drb_to_add;
+  ASSERT_EQ(drb_to_add.size(), 1);
+  ASSERT_TRUE(drb_to_add.find(uint_to_drb_id(2)) != drb_to_add.end());
+  EXPECT_TRUE(drb_to_add.find(uint_to_drb_id(1)) == drb_to_add.end());
+  // The fallback-allocated ID must not be treated as confirmed, since it isn't the one the source asked for.
+  EXPECT_FALSE(drb_to_add.at(uint_to_drb_id(2)).source_drb_id_confirmed);
+}
+
 TEST_F(up_resource_manager_test, when_pdu_session_gets_modified_new_drb_is_set_up)
 {
   // Preamble.

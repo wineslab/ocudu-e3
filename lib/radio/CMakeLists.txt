@@ -4,7 +4,9 @@
 
 add_library(ocudu_radio STATIC
         plugin_radio_factory.cpp
-        radio_factory.cpp)
+        radio_factory.cpp
+        metrics_decorator/radio_metrics_decorator_factory.cpp
+        metrics_decorator/radio_metrics_decorator_impl.cpp)
 
 set(OCUDU_RADIO_DEFINITIONS "")
 set(OCUDU_RADIO_LIBRARIES "")
@@ -31,6 +33,13 @@ if (Sidekiq_FOUND AND ENABLE_SIDEKIQ)
     list(APPEND OCUDU_RADIO_DEFINITIONS -DENABLE_SIDEKIQ)
     list(APPEND OCUDU_RADIO_LIBRARIES ocudu_radio_sidekiq)
 endif (Sidekiq_FOUND AND ENABLE_SIDEKIQ)
+
+if (ENABLE_DIFI)
+    add_subdirectory(difi)
+    list(APPEND OCUDU_RADIO_DEFINITIONS -DENABLE_DIFI)
+    list(APPEND OCUDU_RADIO_LIBRARIES ocudu_radio_difi)
+endif (ENABLE_DIFI)
+
 
 add_definitions(${OCUDU_RADIO_DEFINITIONS})
 target_link_libraries(ocudu_radio ${OCUDU_RADIO_LIBRARIES} ocudulog dl)

@@ -51,6 +51,25 @@ TEST(phy_time_unit_test, store_positive_ta)
   ASSERT_EQ(phy_time.to_Ta(scs), time);
 }
 
+TEST(phy_time_unit_test, signed_ta_round_trips_negative_values)
+{
+  const subcarrier_spacing scs = subcarrier_spacing::kHz15;
+
+  // A negative timing advance must not wrap around when converted back to units of Ta.
+  for (int time : {-3, -2, -1, 0, 1, 2, 3}) {
+    ASSERT_EQ(phy_time_unit::from_timing_advance(time, scs).to_Ta_signed(scs), time);
+  }
+}
+
+TEST(phy_time_unit_test, signed_ta_rounds_away_from_zero)
+{
+  const subcarrier_spacing scs = subcarrier_spacing::kHz15;
+
+  // One unit of Ta is 16 * kappa units of Tc at 15kHz SCS, so half a unit rounds to a full one.
+  ASSERT_EQ(phy_time_unit::from_units_of_Tc(8 * 64).to_Ta_signed(scs), 1);
+  ASSERT_EQ(phy_time_unit::from_units_of_Tc(-8 * 64).to_Ta_signed(scs), -1);
+}
+
 TEST(phy_time_unit_test, store_positive_seconds)
 {
   float         time     = 0.00001f;

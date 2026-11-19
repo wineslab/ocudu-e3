@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "csi_rs.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/bit.h"
 #include "ocudu/ran/csi_rs/csi_rs_config_helpers.h"
 #include "ocudu/ran/csi_rs/frequency_allocation_type.h"
@@ -44,8 +45,8 @@ void ocudu::fapi_adaptor::convert_csi_rs_fapi_to_phy(nzp_csi_rs_generator::confi
     proc_pdu.amplitude = convert_dB_to_amplitude(profile_sss->pwr_offset_db);
   }
 
-  unsigned nof_ports = csi_rs::get_nof_csi_rs_ports(fapi_pdu.row);
-  proc_pdu.precoding = precoding_configuration::make_wideband(make_identity(nof_ports));
+  unsigned nof_ports                 = csi_rs::get_nof_csi_rs_ports(fapi_pdu.row);
+  proc_pdu.precoding_and_beamforming = precoding_beamforming_configuration::make_wideband(make_identity(nof_ports));
 }
 
 void ocudu::fapi_adaptor::get_csi_rs_pattern_from_fapi_pdu(csi_rs_pattern&            pattern,

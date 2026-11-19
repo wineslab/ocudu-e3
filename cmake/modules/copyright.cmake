@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
-
 # This function reads the COPYRIGHT file, parse the external info and call sbom
 function(parse_copyright_file FILE)
   if(NOT EXISTS "${FILE}")
@@ -25,7 +24,9 @@ function(parse_copyright_file FILE)
       string(REPLACE " " ";" _file_list "${_files_str}")
       get_module_name_from_files("${_file_list}" _module_name)
 
-      if("${_module_name}" STREQUAL "*" OR ${_module_name} STREQUAL "docs")
+      # Documentation assets ship no package, so a docs/ subfolder must not
+      # become an SBOM entry named after itself.
+      if("${_module_name}" STREQUAL "*" OR _files_str MATCHES "^docs/")
         continue()
       endif()
 

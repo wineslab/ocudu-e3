@@ -103,11 +103,13 @@ public:
   void handle_ue_config_applied(du_ue_index_t ue_index) override {}
   void handle_ue_deactivation_request(du_ue_index_t ue_index) override {}
   void handle_si_update_request(const si_scheduling_update_request& req) override {}
+  void handle_pws_si_update_request(const pws_si_scheduling_update_request& req) override {}
   void handle_ul_bsr_indication(const ul_bsr_indication_message& bsr) override {}
   void handle_crc_indication(const ul_crc_indication& crc) override {}
   void handle_uci_indication(const uci_indication& uci) override {}
   void handle_srs_indication(const srs_indication& srs) override {}
   void handle_ul_phr_indication(const ul_phr_indication_message& phr_ind) override {}
+  void handle_ul_ta_report_indication(const ul_ta_report_indication_message& ta_report_ind) override {}
   void handle_dl_mac_ce_indication(const dl_mac_ce_indication& mac_ce) override {}
   void handle_crnti_ce_received(du_ue_index_t ue_index) override {}
   void handle_paging_information(const sched_paging_information& pi) override {}
@@ -120,6 +122,7 @@ public:
   void handle_positioning_measurement_request(const positioning_measurement_request& req) override {}
   void handle_positioning_measurement_stop(const positioning_measurement_stop_request& req) override {}
   void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& req) override {}
+  void handle_ntn_ul_ta_update(const sched_cell_ntn_ul_ta_update& req) override {}
 };
 
 class dummy_mac_sfn_time_mapper : public mac_subframe_time_mapper
@@ -142,11 +145,29 @@ public:
   void handle_slot_indication(const mac_cell_timing_context& context) override {}
 };
 
+class dummy_mac_cell_rach_handler : public mac_cell_rach_handler
+{
+public:
+  std::optional<ue_con_res_id_t> con_res_id;
+
+  void handle_rach_indication(const mac_rach_indication& rach_ind) override {}
+
+  std::optional<rnti_t>
+  handle_msga_ccch_sdu(rnti_t ra_rnti, uint8_t rapid, slot_point sl_rx, const ue_con_res_id_t& con_res_id_) override
+  {
+    con_res_id = con_res_id_;
+    return ra_rnti;
+  }
+
+  std::optional<ue_con_res_id_t> resolve_msga_con_res_id(rnti_t tc_rnti) override { return con_res_id; }
+};
+
 class dummy_mac_scheduler_adapter : public mac_scheduler_cell_info_handler
 {
 public:
-  bool         active            = false;
-  sched_result next_sched_result = {};
+  bool                        active            = false;
+  sched_result                next_sched_result = {};
+  dummy_mac_cell_rach_handler rach_handler;
 
   void handle_dl_buffer_state_update(const mac_dl_buffer_state_indication_message& dl_bs) override {}
 
@@ -166,7 +187,27 @@ public:
 
   void handle_si_change_indication(const si_scheduling_update_request& request) override {}
 
+  unsigned                                        nof_pws_broadcast_indications = 0;
+  std::optional<pws_si_scheduling_update_request> last_pws_si_change;
+
+  void handle_pws_si_change_indication(const pws_si_scheduling_update_request& request) override
+  {
+    last_pws_si_change = request;
+    // A warning stamped with the version of the epoch carrying it is starting one more broadcast.
+    const bool new_broadcast =
+        std::any_of(request.broadcasting.begin(), request.broadcasting.end(), [&request](const auto& warning) {
+          return warning.version == request.version;
+        });
+    if (new_broadcast) {
+      ++nof_pws_broadcast_indications;
+    }
+  }
+
   void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& req) override {}
+
+  void handle_ntn_ul_ta_update(const sched_cell_ntn_ul_ta_update& req) override {}
+
+  mac_cell_rach_handler& get_cell_rach_handler(du_cell_index_t cell_index) override { return rach_handler; }
 };
 
 class dummy_mac_cell_result_notifier : public mac_cell_result_notifier

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "downlink_processor_multi_executor_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/du_traces.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/phy/upper/channel_processors/pdcch/formatters.h"

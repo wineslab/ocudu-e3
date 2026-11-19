@@ -3,9 +3,11 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "amf_connection_setup_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ngap/ngap_setup.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/support/async/coroutine.h"
+#include "ocudu/support/ocudu_assert.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -80,5 +82,8 @@ void amf_connection_setup_routine::operator()(coro_context<async_task<bool>>& ct
 void amf_connection_setup_routine::handle_connection_setup_result()
 {
   // Update AMF connection handler state.
-  amfs_connected.emplace(amf_index, success);
+  // Note: The map holds an entry for each AMF, so this never changes its structure.
+  auto amf_connected = amfs_connected.find(amf_index);
+  ocudu_assert(amf_connected != amfs_connected.end(), "AMF index {} not found", amf_index);
+  amf_connected->second.store(success, std::memory_order_relaxed);
 }

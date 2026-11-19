@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "resource_grid_pool_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/du_traces.h"
 #include "ocudu/phy/support/resource_grid.h"
 #include "ocudu/phy/support/resource_grid_context.h"

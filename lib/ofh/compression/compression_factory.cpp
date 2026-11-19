@@ -3,8 +3,8 @@
 
 #include "ocudu/ofh/compression/compression_factory.h"
 #include "iq_compression_bfp_impl.h"
-#include "iq_compression_death_impl.h"
 #include "iq_compression_none_impl.h"
+#include "iq_compression_unsupported_impl.h"
 #include "iq_compressor_selector.h"
 #include "iq_decompressor_selector.h"
 #include "ocudu/support/cpu_features.h"
@@ -74,15 +74,15 @@ std::unique_ptr<iq_compressor> ocudu::ofh::create_iq_compressor(compression_type
 #endif // __ARM_NEON
       return std::make_unique<iq_compression_bfp_impl>(logger, iq_scaling);
     case compression_type::block_scaling:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::mu_law:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::modulation:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::bfp_selective:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::mod_selective:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     default:
       report_fatal_error("Compression type '{}' is not implemented", to_string(type));
   }
@@ -135,15 +135,15 @@ ocudu::ofh::create_iq_decompressor(compression_type type, ocudulog::basic_logger
 #endif // __ARM_NEON
       return std::make_unique<iq_compression_bfp_impl>(logger);
     case compression_type::block_scaling:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::mu_law:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::modulation:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::bfp_selective:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     case compression_type::mod_selective:
-      return std::make_unique<iq_compression_death_impl>();
+      return std::make_unique<iq_compression_unsupported_impl>();
     default:
       report_fatal_error("Compression type '{}' is not implemented", to_string(type));
   }

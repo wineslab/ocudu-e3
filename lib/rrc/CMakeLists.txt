@@ -15,14 +15,16 @@ set(SOURCES
         ue/rrc_ue_message_handlers.cpp
         ue/rrc_ue_message_senders.cpp
         ue/rrc_ue_helpers.cpp
+        ue/rrc_ue_security_helpers.cpp
         ue/procedures/rrc_setup_procedure.cpp
         ue/procedures/rrc_reconfiguration_procedure.cpp
         ue/procedures/rrc_ue_capability_transfer_procedure.cpp
+        ue/procedures/rrc_ue_information_procedure.cpp
         ue/procedures/rrc_reestablishment_procedure.cpp
         ue/procedures/rrc_resume_procedure.cpp
 )
 
 add_library(ocudu_rrc STATIC ${SOURCES})
-target_link_libraries(ocudu_rrc ocudu_up_resource_manager ocudu_ue_security_manager ocudu_security ocudu_pdcp rrc_nr_asn1)
+target_link_libraries(ocudu_rrc ocudu_up_resource_manager ocudu_ue_security_manager ocudu_security ocudu_pdcp rrc_nr_asn1 ocudu_lpp_lib ocudu_ran)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})

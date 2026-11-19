@@ -69,7 +69,7 @@ module "settings" {
   only_allow_merge_if_all_discussions_are_resolved = false
   remove_source_branch_after_merge                 = true
   resolve_outdated_diff_discussions                = false
-  squash_option                                    = "default_off" # never, always, default_on, default_off
+  squash_option                                    = "never" # never, always, default_on, default_off
   allow_merge_on_skipped_pipeline                  = false
 
   # =============================================================================
@@ -117,7 +117,7 @@ module "settings" {
     keep_n            = 100
     older_than        = "7d"
     name_regex_delete = ".*"
-    name_regex_keep   = null
+    name_regex_keep   = ".*-stable$|^sha256-.*\\.(sig|att)$"
   }
 
   # =============================================================================
@@ -183,6 +183,20 @@ module "settings" {
       allowed_to_merge = [{ access_level = "no one" }]
       allowed_to_push  = [{ access_level = "maintainer" }]
     }
+    srs_rf = {
+      allow_force_push             = false
+      code_owner_approval_required = false
+
+      allowed_to_merge = [{ access_level = "no one" }]
+      allowed_to_push  = [{ access_level = "maintainer" }]
+    }
+    srs_interop = {
+      allow_force_push             = false
+      code_owner_approval_required = false
+
+      allowed_to_merge = [{ access_level = "no one" }]
+      allowed_to_push  = [{ access_level = "maintainer" }]
+    }
   }
 
   # =============================================================================
@@ -197,6 +211,14 @@ module "settings" {
   # =============================================================================
   # Pipeline Schedules Configuration
   # =============================================================================
+  # OCUDU_RUNNER_TAG overrides the CI default (saas-linux-medium, set in
+  # .gitlab/ci-shared/workflow.yml) so scheduled builds run on the upstream
+  # on-premise runner fleet instead of GitLab SaaS runners.
+  #
+  # Forks: this is upstream-specific. Remove the "variables" entries below, or
+  # replace the value with a tag your own runners use — otherwise the scheduled
+  # pipelines queue forever waiting for runners that do not exist. See section 2.3
+  # of .gitlab/README.md for the available runner options.
   schedules = {
     nightly = {
       description = "Nightly"
@@ -204,7 +226,7 @@ module "settings" {
       timezone    = "Europe/Madrid"
       ref         = "refs/heads/dev"
       active      = true
-      variables   = {}
+      variables   = { OCUDU_RUNNER_TAG = "on-prem-linux" }
     }
     weekly = {
       description = "Weekly"
@@ -212,7 +234,7 @@ module "settings" {
       timezone    = "Europe/Madrid"
       ref         = "refs/heads/dev"
       active      = true
-      variables   = {}
+      variables   = { OCUDU_RUNNER_TAG = "on-prem-linux" }
     }
     alternative_oss = {
       description = "Alternative OSs"
@@ -220,7 +242,7 @@ module "settings" {
       timezone    = "Europe/Madrid"
       ref         = "refs/heads/dev"
       active      = true
-      variables   = {}
+      variables   = { OCUDU_RUNNER_TAG = "on-prem-linux" }
     }
   }
 

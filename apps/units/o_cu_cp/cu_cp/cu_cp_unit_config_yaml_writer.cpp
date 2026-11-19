@@ -5,8 +5,10 @@
 #include "cu_cp_unit_config_yaml_writer.h"
 #include "apps/helpers/metrics/metrics_config_yaml_writer.h"
 #include "apps/helpers/network/sctp_config_yaml_writer.h"
+#include "apps/helpers/ntn/ntn_config_yaml_writer.h"
 #include "cu_cp_unit_config.h"
 #include "ocudu/adt/span.h"
+#include <iterator>
 
 using namespace ocudu;
 
@@ -43,6 +45,9 @@ static YAML::Node build_cu_cp_supported_tas_section(const cu_cp_unit_supported_t
   auto plmn_node = node["plmn_list"];
   for (const auto& plmn_item : config.plmn_list) {
     plmn_node.push_back(build_cu_cp_plmn_list_section(plmn_item));
+  }
+  if (config.satellite_rat.has_value()) {
+    node["satellite_rat"] = *config.satellite_rat;
   }
 
   return node;
@@ -132,9 +137,8 @@ static YAML::Node build_cu_cp_mobility_ncells_section(const cu_cp_unit_neighbor_
 
   node["nr_cell_id"] = config.nr_cell_id;
   for (auto report_id : config.report_cfg_ids) {
-    node["report_configs"] = report_id;
+    node["report_configs"].push_back(report_id);
   }
-
   node["report_configs"].SetStyle(YAML::EmitterStyle::Flow);
 
   return node;
@@ -177,8 +181,20 @@ static YAML::Node build_cu_cp_mobility_cells_section(const cu_cp_unit_cell_confi
     node["ssb_duration"] = config.ssb_duration.value();
   }
 
+  if (config.ntn_cfg.has_value()) {
+    YAML::Node ntn_node;
+    fill_ntn_satellite_in_yaml_schema(ntn_node, config.ntn_cfg->sat_ref);
+    if (config.ntn_cfg->reference_location.has_value()) {
+      ntn_node["reference_location"] = build_geodetic_yaml_node(*config.ntn_cfg->reference_location, false);
+    }
+    if (config.ntn_cfg->polarization.has_value()) {
+      ntn_node["polarization"] = build_ntn_polarization_yaml_node(*config.ntn_cfg->polarization);
+    }
+    node["ntn"] = ntn_node;
+  }
+
   for (const auto& ncell : config.ncells) {
-    node["ncells"] = build_cu_cp_mobility_ncells_section(ncell);
+    node["ncells"].push_back(build_cu_cp_mobility_ncells_section(ncell));
   }
 
   return node;
@@ -209,9 +225,15 @@ static YAML::Node build_cu_cp_mobility_report_section(const cu_cp_unit_report_co
 
   node["report_cfg_id"] = config.report_cfg_id;
   node["report_type"]   = config.report_type;
-  // Cond-trigger report configs do not have report interval semantics.
+  // A cond-trigger report config has no report interval semantics, and carries no coarse location request.
   if (config.report_type != "cond_trigger") {
-    node["report_interval_ms"] = config.report_interval_ms;
+    node["report_interval_ms"]      = config.report_interval_ms;
+    node["coarse_location_request"] = config.coarse_location_request;
+  }
+
+  // Emit only when handover from periodic measurements is enabled (non-default).
+  if (config.report_type == "periodical" && config.periodic_ho_rsrp_offset != -1) {
+    node["periodic_ho_rsrp_offset_db"] = config.periodic_ho_rsrp_offset;
   }
 
   if (!config.event_triggered_report_type) {
@@ -225,39 +247,40 @@ static YAML::Node build_cu_cp_mobility_report_section(const cu_cp_unit_report_co
     }
   };
 
-  const std::string& ev               = config.event_triggered_report_type.value();
-  node["event_triggered_report_type"] = ev;
+  const ocucp::rrc_event_id::event_id_t ev = config.event_triggered_report_type.value();
+  node["event_triggered_report_type"]      = to_string(ev);
 
   // Parameters common to all event types.
   add_opt("meas_trigger_quantity", config.meas_trigger_quantity);
   add_opt("hysteresis_db", config.hysteresis_db);
   add_opt("time_to_trigger_ms", config.time_to_trigger_ms);
-  add_opt("t312_ms", config.t312_ms);
+  add_opt("t312", config.t312_ms);
 
   // A1, A2, A4, A5 - absolute threshold on one measurement quantity.
-  if (ev == "a1" or ev == "a2" or ev == "a4" or ev == "a5") {
+  if (ev == ocucp::rrc_event_id::event_id_t::a1 or ev == ocucp::rrc_event_id::event_id_t::a2 or
+      ev == ocucp::rrc_event_id::event_id_t::a4 or ev == ocucp::rrc_event_id::event_id_t::a5) {
     add_opt("meas_trigger_quantity_threshold_db", config.meas_trigger_quantity_threshold_db);
   }
 
-  // A5 only - second absolute threshold (serving < T1 AND neighbour > T2).
-  if (ev == "a5") {
+  // A5 only - second absolute threshold (serving < T1 AND neighbor > T2).
+  if (ev == ocucp::rrc_event_id::event_id_t::a5) {
     add_opt("meas_trigger_quantity_threshold_2_db", config.meas_trigger_quantity_threshold_2_db);
   }
 
-  // A3, A6 - neighbour offset relative to serving cell.
-  if (ev == "a3" or ev == "a6") {
+  // A3, A6 - neighbor offset relative to serving cell.
+  if (ev == ocucp::rrc_event_id::event_id_t::a3 or ev == ocucp::rrc_event_id::event_id_t::a6) {
     add_opt("meas_trigger_quantity_offset_db", config.meas_trigger_quantity_offset_db);
   }
 
   // D1/D2 - distance-based conditional events.
-  if (ev == "d1" or ev == "d2") {
+  if (ev == ocucp::rrc_event_id::event_id_t::d1 or ev == ocucp::rrc_event_id::event_id_t::d2) {
     add_opt("distance_thresh_from_ref1_km", config.distance_thresh_from_ref1_km);
     add_opt("distance_thresh_from_ref2_km", config.distance_thresh_from_ref2_km);
     add_opt("hysteresis_location_km", config.hysteresis_location_km);
   }
 
   // D1 - reference locations (serving and target cell).
-  if (ev == "d1") {
+  if (ev == ocucp::rrc_event_id::event_id_t::d1) {
     if (config.ref_location1.has_value()) {
       node["ref_location1"]["latitude"]  = config.ref_location1->latitude;
       node["ref_location1"]["longitude"] = config.ref_location1->longitude;
@@ -269,13 +292,36 @@ static YAML::Node build_cu_cp_mobility_report_section(const cu_cp_unit_report_co
   }
 
   // T1 - time-based conditional event.
-  if (ev == "t1") {
+  if (ev == ocucp::rrc_event_id::event_id_t::t1) {
     if (config.t1_thres.has_value()) {
       node["t1_thres"] = timepoint_to_iso8601(config.t1_thres.value());
     }
     if (config.duration.has_value()) {
       node["duration_s"] = config.duration->count();
     }
+  }
+
+  return node;
+}
+
+static YAML::Node build_cu_cp_ntn_location_mapping_section(const cu_cp_unit_ntn_location_mapping_item& config)
+{
+  YAML::Node node;
+
+  node["nr_cell_id"] = config.nr_cell_id;
+  for (const auto& area : config.location_areas) {
+    YAML::Node area_node;
+    if (area.tac.has_value()) {
+      area_node["tac"] = area.tac.value();
+    }
+    if (area.mapped_nr_cell_id.has_value()) {
+      area_node["mapped_nr_cell_id"] = area.mapped_nr_cell_id.value();
+    }
+    area_node["lat_min"] = area.lat_min;
+    area_node["lat_max"] = area.lat_max;
+    area_node["lon_min"] = area.lon_min;
+    area_node["lon_max"] = area.lon_max;
+    node["location_areas"].push_back(area_node);
   }
 
   return node;
@@ -288,6 +334,7 @@ static YAML::Node build_cu_cp_mobility_section(const cu_cp_unit_mobility_config&
   node["trigger_handover_from_measurements"] = config.trigger_handover_from_measurements;
   node["trigger_cho_on_ue_setup"]            = config.trigger_cho_on_ue_setup;
   node["cho_timeout_ms"]                     = config.cho_timeout_ms;
+  node["ntn_update_period_ms"]               = config.ntn_update_period_ms;
   for (const auto& cell : config.cells) {
     node["cells"].push_back(build_cu_cp_mobility_cells_section(cell));
   }
@@ -305,6 +352,10 @@ static YAML::Node build_cu_cp_rrc_section(const cu_cp_unit_rrc_config& config)
   node["force_reestablishment_fallback"] = config.force_reestablishment_fallback;
   node["force_resume_fallback"]          = config.force_resume_fallback;
   node["rrc_procedure_guard_time_ms"]    = config.rrc_procedure_guard_time_ms;
+  /// Only set rrc_reject_wait_time_s when provided.
+  if (config.rrc_reject_wait_time_s.has_value()) {
+    node["rrc_reject_wait_time_s"] = config.rrc_reject_wait_time_s.value();
+  }
 
   return node;
 }
@@ -313,10 +364,10 @@ static YAML::Node build_cu_cp_security_section(const cu_cp_unit_security_config&
 {
   YAML::Node node;
 
-  node["integrity"]       = config.integrity_protection;
-  node["confidentiality"] = config.confidentiality_protection;
-  node["nea_pref_list"]   = config.nea_preference_list;
-  node["nia_pref_list"]   = config.nia_preference_list;
+  node["integrity"]       = to_string(config.integrity_protection);
+  node["confidentiality"] = to_string(config.confidentiality_protection);
+  node["nea_pref_list"]   = to_string(config.nea_preference_list);
+  node["nia_pref_list"]   = to_string(config.nia_preference_list);
 
   return node;
 }
@@ -330,8 +381,9 @@ static void fill_cu_cp_section(YAML::Node node, const cu_cp_unit_config& config)
   node["inactivity_timer"]            = config.inactivity_timer;
   node["enable_rrc_inactive"]         = config.enable_rrc_inactive;
   node["ran_paging_cycle"]            = static_cast<unsigned>(config.ran_paging_cycle);
+  node["full_i_rnti_profile"]         = config.full_i_rnti_profile;
+  node["short_i_rnti_profile"]        = config.short_i_rnti_profile;
   node["t380"]                        = config.t380;
-  node["nof_i_rnti_ue_bits"]          = static_cast<unsigned>(config.nof_i_rnti_ue_bits);
   node["request_pdu_session_timeout"] = config.request_pdu_session_timeout;
 
   node["amf"] = build_cu_cp_amf_section(config.amf_config);
@@ -342,11 +394,20 @@ static void fill_cu_cp_section(YAML::Node node, const cu_cp_unit_config& config)
     node["xnap"] = build_cu_cp_xnap_section(config.xnap_config);
   }
   node["mobility"] = build_cu_cp_mobility_section(config.mobility_config);
+  for (const auto& cell_mapping : config.ntn_location_mapping) {
+    node["ntn_location_mapping"].push_back(build_cu_cp_ntn_location_mapping_section(cell_mapping));
+  }
   node["rrc"]      = build_cu_cp_rrc_section(config.rrc_config);
   node["security"] = build_cu_cp_security_section(config.security_config);
-  // Merge into any existing f1ap/e1ap nodes the appconfig writer may have populated (bind_addrs, sctp...).
-  node["f1ap"]["procedure_timeout"] = config.f1ap_config.procedure_timeout;
+  // Merge into any existing F1AP/E1AP nodes the appconfig writer may have populated (bind_addrs, sctp...).
+  node["f1ap"]["procedure_timeout"]                    = config.f1ap_config.procedure_timeout;
+  node["f1ap"]["ref_time_reporting"]["enabled"]        = config.f1ap_config.ref_time_reporting_enabled;
+  node["f1ap"]["ref_time_reporting"]["event_type"]     = config.f1ap_config.ref_time_reporting_event_type;
+  node["f1ap"]["ref_time_reporting"]["periodicity_rf"] = config.f1ap_config.ref_time_reporting_periodicity_rf;
+
   node["e1ap"]["procedure_timeout"] = config.e1ap_config.procedure_timeout;
+
+  node["pws"]["max_warning_message_segment_size"] = config.pws_config.max_warning_message_segment_size;
 }
 
 static void fill_cu_cp_log_section(YAML::Node node, const cu_cp_unit_logger_config& config)
@@ -379,15 +440,15 @@ static void fill_cu_cp_pcap_section(YAML::Node node, const cu_cp_unit_pcap_confi
 
 static void fill_cu_cp_metrics_layers_section(YAML::Node node, const cu_cp_unit_metrics_layer_config& config)
 {
-  node["enable_ngap"] = config.enable_ngap;
-  node["enable_pdcp"] = config.enable_pdcp;
-  node["enable_rrc"]  = config.enable_rrc;
+  node["enable_ngap"] = config.enable_ngap_metrics;
+  node["enable_pdcp"] = config.enable_pdcp_metrics;
+  node["enable_rrc"]  = config.enable_rrc_metrics;
 }
 
 static void fill_cu_cp_metrics_section(YAML::Node node, const cu_cp_unit_metrics_config& config)
 {
-  auto perdiodicity_node                   = node["periodicity"];
-  perdiodicity_node["cu_cp_report_period"] = config.cu_cp_report_period;
+  auto periodicity_node                   = node["periodicity"];
+  periodicity_node["cu_cp_report_period"] = config.cu_cp_report_period;
 
   fill_cu_cp_metrics_layers_section(node["layers"], config.layers_cfg);
 }
@@ -429,12 +490,12 @@ static void fill_cu_cp_um_bidir_section(YAML::Node node, const cu_cp_unit_rlc_um
 
 static void fill_cu_cp_rlc_qos_section(YAML::Node node, const cu_cp_unit_rlc_config& config)
 {
-  node["mode"] = config.mode;
-  if (config.mode == "am") {
+  node["mode"] = format_as(config.mode);
+  if (config.mode == rlc_mode::am) {
     fill_cu_cp_am_section(node["am"], config.am);
   }
 
-  if (config.mode == "um-bidir") {
+  if (config.mode == rlc_mode::um_bidir) {
     fill_cu_cp_um_bidir_section(node["um-bidir"], config.um);
   }
 }
@@ -463,21 +524,21 @@ static void fill_cu_cp_pdcp_qos_section(YAML::Node node, const cu_cp_unit_pdcp_c
   }
   {
     YAML::Node tx_node                = node["tx"];
-    tx_node["sn"]                     = config.tx.sn_field_length;
-    tx_node["discard_timer"]          = config.tx.discard_timer;
+    tx_node["sn"]                     = pdcp_sn_size_to_uint(config.tx.sn_field_length);
+    tx_node["discard_timer"]          = to_underlying(config.tx.discard_timer);
     tx_node["status_report_required"] = config.tx.status_report_required;
   }
   {
     YAML::Node rx_node               = node["rx"];
-    rx_node["sn"]                    = config.rx.sn_field_length;
-    rx_node["t_reordering"]          = config.rx.t_reordering;
+    rx_node["sn"]                    = pdcp_sn_size_to_uint(config.rx.sn_field_length);
+    rx_node["t_reordering"]          = to_underlying(config.rx.t_reordering);
     rx_node["out_of_order_delivery"] = config.rx.out_of_order_delivery;
   }
 }
 
 static void fill_cu_cp_qos_entry(YAML::Node node, const cu_cp_unit_qos_config& config)
 {
-  node["five_qi"] = five_qi_to_uint(config.five_qi);
+  node["five_qi"] = to_underlying(config.five_qi);
   fill_cu_cp_rlc_qos_section(node["rlc"], config.rlc);
   fill_cu_cp_pdcp_qos_section(node["pdcp"], config.pdcp);
 }
@@ -485,12 +546,7 @@ static void fill_cu_cp_qos_entry(YAML::Node node, const cu_cp_unit_qos_config& c
 static YAML::Node get_last_entry(YAML::Node node)
 {
   ocudu_assert(node.size() > 0, "Node is empty");
-
-  auto it = node.begin();
-  for (unsigned i = 1; i != node.size(); ++i) {
-    ++it;
-  }
-  return *it;
+  return static_cast<YAML::Node>(*std::next(node.begin(), node.size() - 1));
 }
 
 static void fill_cu_cp_qos_section(YAML::Node node, span<const cu_cp_unit_qos_config> qos_cfg)
@@ -510,6 +566,18 @@ static void fill_cu_cp_qos_section(YAML::Node node, span<const cu_cp_unit_qos_co
   }
 }
 
+static void fill_cu_cp_cells_section(YAML::Node node, span<const cu_cp_unit_logical_cell_config> cells_cfg)
+{
+  auto cells_node = node["logical_cells"];
+  for (const auto& cell : cells_cfg) {
+    YAML::Node cell_node;
+    cell_node["sector_id"]   = cell.sector_id;
+    cell_node["admin_state"] = to_string(cell.admin_state);
+    cell_node["cell_barred"] = cell.cell_barred;
+    cells_node.push_back(cell_node);
+  }
+}
+
 void ocudu::fill_cu_cp_config_in_yaml_schema(YAML::Node& node, const cu_cp_unit_config& config)
 {
   node["gnb_id"]            = config.gnb_id.id;
@@ -523,4 +591,6 @@ void ocudu::fill_cu_cp_config_in_yaml_schema(YAML::Node& node, const cu_cp_unit_
   fill_cu_cp_pcap_section(node["pcap"], config.pcap_cfg);
   fill_cu_cp_metrics_section(node["metrics"], config.metrics);
   fill_cu_cp_qos_section(node, config.qos_cfg);
+  fill_ntn_satellites_in_yaml_schema(node, config.ntn_satellites);
+  fill_cu_cp_cells_section(node["cu_cp"], config.cells_cfg);
 }

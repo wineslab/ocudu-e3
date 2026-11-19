@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include "ocudu/ran/srs/srs_resource_configuration.h"
+#include <cmath>
 
 namespace ocudu {
+struct srs_resource_configuration;
 
 /// \brief Collects Sounding Reference Signal information.
 ///

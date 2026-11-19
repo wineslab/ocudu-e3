@@ -9,6 +9,7 @@
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/subcarrier_spacing.h"
+#include <type_traits>
 #include <variant>
 
 namespace ocudu {
@@ -74,10 +75,11 @@ struct formatter<ocudu::fapi::dl_csi_rs_pdu> {
               pdu.scramb_id);
 
     if (const auto* profile_nr = std::get_if<ocudu::fapi::dl_csi_rs_pdu::power_profile_nr>(&pdu.power_config)) {
-      format_to(ctx.out(),
-                " Power configuration profile NR: power_control_offset_db={} power_control_offset_ss{}",
-                profile_nr->pwr_control_offset_db,
-                underlying(profile_nr->pwr_control_offset_ss));
+      format_to(
+          ctx.out(),
+          " Power configuration profile NR: power_control_offset_db={} power_control_offset_ss{}",
+          profile_nr->pwr_control_offset_db,
+          static_cast<std::underlying_type_t<ocudu::fapi::power_control_offset_ss>>(profile_nr->pwr_control_offset_ss));
     } else if (const auto* profile_sss =
                    std::get_if<ocudu::fapi::dl_csi_rs_pdu::power_profile_sss>(&pdu.power_config)) {
       format_to(ctx.out(), " Power configuration profile SSS: power_offset_db={}", profile_sss->pwr_offset_db);

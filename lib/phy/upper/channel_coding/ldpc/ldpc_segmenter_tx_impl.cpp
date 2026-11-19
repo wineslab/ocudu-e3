@@ -14,18 +14,11 @@ using namespace ocudu::ldpc;
 
 /// Length of the CRC checksum added to the segments.
 static constexpr units::bits SEG_CRC_LENGTH{24};
-/// Maximum accepted transport block size.
-/// Note: This value has to be multiple of 8.
-static constexpr units::bits MAX_TBS{1277992};
-static_assert(MAX_TBS.is_byte_exact(), "Value is not a multiple of 8");
 
 static void check_inputs_tx(const segmenter_config& cfg)
 {
   using namespace units::literals;
   ocudu_assert(cfg.transport_block_size > 0_bytes, "Argument transport_block should not be empty.");
-  ocudu_assert(cfg.transport_block_size.to_bits() + 24_bits <= MAX_TBS,
-               "Transport block too long. The maximum size, including CRC, is {}.",
-               MAX_TBS.truncate_to_bytes());
 
   ocudu_assert((cfg.rv >= 0) && (cfg.rv <= 3), "Invalid redundancy version.");
 

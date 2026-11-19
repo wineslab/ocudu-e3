@@ -6,6 +6,7 @@
 
 #include "ocudu/phy/upper/channel_processors/prach/prach_generator.h"
 #include "ocudu/ran/prach/prach_constants.h"
+#include <vector>
 
 namespace ocudu {
 

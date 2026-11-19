@@ -5,6 +5,7 @@
 /// \file
 /// \brief Interpolator unit test.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/support_factories.h"
 #include <gtest/gtest.h>
 

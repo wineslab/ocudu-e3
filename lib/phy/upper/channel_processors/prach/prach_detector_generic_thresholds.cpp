@@ -7,6 +7,7 @@
 #include "ocudu/adt/to_array.h"
 #include "ocudu/ran/prach/prach_format_type.h"
 #include "ocudu/ran/prach/prach_subcarrier_spacing.h"
+#include <vector>
 
 using namespace ocudu;
 using namespace detail;

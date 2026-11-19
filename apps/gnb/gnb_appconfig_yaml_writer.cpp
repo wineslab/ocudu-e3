@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "gnb_appconfig_yaml_writer.h"
+#include "apps/helpers/hal/hal_appconfig_yaml_writer.h"
 #include "apps/helpers/logger/logger_appconfig_yaml_writer.h"
 #include "apps/helpers/tracing/tracer_appconfig_yaml_writer.h"
 #include "apps/services/app_execution_metrics/executor_metrics_config_yaml_writer.h"
@@ -18,8 +19,7 @@ static void fill_gnb_appconfig_hal_section(YAML::Node node, const std::optional<
   if (!config.has_value()) {
     return;
   }
-  YAML::Node hal_node  = node["hal"];
-  hal_node["eal_args"] = config.value().eal_args;
+  fill_hal_appconfig_section(node, *config);
 }
 
 static void fill_gnb_appconfig_expert_execution_section(YAML::Node node, const expert_execution_appconfig& config)
@@ -29,7 +29,7 @@ static void fill_gnb_appconfig_expert_execution_section(YAML::Node node, const e
 
     if (config.affinities.main_pool_cpu_cfg.mask.any()) {
       affinities_node["main_pool_cpus"] =
-          fmt::format("{:,}", span<const size_t>(config.affinities.main_pool_cpu_cfg.mask.get_cpu_ids()));
+          fmt::format("{:n}", span<const size_t>(config.affinities.main_pool_cpu_cfg.mask.get_cpu_ids()));
     }
     affinities_node["main_pool_pinning"] = to_string(config.affinities.main_pool_cpu_cfg.pinning_policy);
   }

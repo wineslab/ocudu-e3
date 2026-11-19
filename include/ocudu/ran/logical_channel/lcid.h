@@ -26,6 +26,11 @@ constexpr lcid_t uint_to_lcid(std::underlying_type_t<lcid_t> val)
   return static_cast<lcid_t>(val);
 }
 
+constexpr std::underlying_type_t<lcid_t> format_as(lcid_t lcid)
+{
+  return static_cast<std::underlying_type_t<lcid_t>>(lcid);
+}
+
 /// Maximum value of Logical Channel ID.
 /// \remark See TS 38.331, maxLC-ID.
 constexpr lcid_t MAX_LCID = LCID_MAX_DRB;

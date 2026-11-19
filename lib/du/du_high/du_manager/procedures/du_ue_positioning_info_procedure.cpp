@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_ue_positioning_info_procedure.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace odu;

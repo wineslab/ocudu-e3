@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/support_factories.h"
 #include "ocudu/phy/upper/channel_processors/pdsch/factories.h"
 #include "ocudu/phy/upper/channel_processors/pdsch/formatters.h"
@@ -19,7 +20,7 @@ namespace {
 // Valid PDSCH configuration used as a base for the test cases.
 const pdsch_processor::pdu_t base_pdu = {.context          = std::nullopt,
                                          .slot             = {0, 19},
-                                         .rnti             = 1,
+                                         .rnti             = to_rnti(1),
                                          .bwp_size_rb      = 52,
                                          .bwp_start_rb     = 0,
                                          .cp               = cyclic_prefix::NORMAL,
@@ -29,7 +30,7 @@ const pdsch_processor::pdu_t base_pdu = {.context          = std::nullopt,
                                          .dmrs_symbol_mask = {0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0},
                                          .dmrs             = dmrs_config_type::type1,
                                          .scrambling_id    = 0,
-                                         .n_scid           = 0,
+                                         .n_scid           = false,
                                          .nof_cdm_groups_without_data = 1,
                                          .freq_alloc                  = rb_allocation::make_type1(0, 52),
                                          .start_symbol_index          = 2,
@@ -39,7 +40,8 @@ const pdsch_processor::pdu_t base_pdu = {.context          = std::nullopt,
                                          .ptrs                        = std::nullopt,
                                          .ratio_pdsch_dmrs_to_sss_dB  = 0,
                                          .ratio_pdsch_data_to_sss_dB  = 0,
-                                         .precoding = precoding_configuration::make_wideband(make_single_port())};
+                                         .precoding_and_beamforming =
+                                             precoding_beamforming_configuration::make_wideband(make_single_port())};
 
 struct test_case_t {
   std::function<pdsch_processor::pdu_t()> get_pdu;
@@ -59,10 +61,11 @@ const std::vector<test_case_t> pdsch_processor_validator_test_data = {
        pdu.bwp_size_rb            = MAX_NOF_PRBS + 1;
        return pdu;
      },
-     R"(Invalid BWP configuration, i\.e\., \[0, 276\) for the given RB allocation, i\.e\., \[0, 52\)\.)"},
+     fmt::format(R"(Invalid BWP configuration, i\.e\., \[0, {}\) for the given RB allocation, i\.e\., \[0, 52\)\.)",
+                 MAX_NOF_PRBS + 1)},
     {[] {
        pdsch_processor::pdu_t pdu = base_pdu;
-       pdu.dmrs_symbol_mask       = {1};
+       pdu.dmrs_symbol_mask       = {true};
        return pdu;
      },
      R"(The DM-RS symbol mask size \(i\.e\., 1\) must be equal to the slot size \(i\.e\., 14\)\.)"},
@@ -121,12 +124,6 @@ const std::vector<test_case_t> pdsch_processor_validator_test_data = {
        return pdu;
      },
      R"(Invalid LBRM size \(0 bytes\)\.)"},
-    {[] {
-       pdsch_processor::pdu_t pdu = base_pdu;
-       pdu.codewords.clear();
-       return pdu;
-     },
-     R"(Only one codeword is currently supported\.)"},
     {[] {
        pdsch_processor::pdu_t pdu = base_pdu;
        pdu.bwp_start_rb           = 0;

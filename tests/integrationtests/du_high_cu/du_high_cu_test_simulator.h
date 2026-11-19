@@ -5,13 +5,12 @@
 #pragma once
 
 #include "lib/gtpu/gtpu_teid_pool_impl.h"
-#include "tests/test_doubles/du/test_du_high_worker_manager.h"
 #include "tests/test_doubles/f1ap/f1c_test_local_gateway.h"
 #include "tests/test_doubles/mac/dummy_mac_result_notifier.h"
 #include "tests/unittests/ngap/test_helpers.h"
-#include "ocudu/cu_cp/cu_cp.h"
 #include "ocudu/du/du_high/du_high.h"
 #include "ocudu/du/du_high/du_high_configuration.h"
+#include "ocudu/ran/rnti.h"
 #include "ocudu/ran/slot_point_extended.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include "ocudu/support/executors/task_worker.h"
@@ -19,6 +18,14 @@
 namespace ocudu {
 
 class io_broker;
+class mac_clock_controller;
+class task_executor;
+namespace ocucp {
+class cu_cp;
+} // namespace ocucp
+namespace test_helpers {
+class du_high_worker_manager;
+} // namespace test_helpers
 
 class du_high_cu_cp_worker_manager
 {

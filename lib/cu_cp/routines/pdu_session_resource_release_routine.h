@@ -44,6 +44,7 @@ private:
   e1ap_bearer_context_manager& e1ap_bearer_ctxt_mng; // to trigger bearer context setup at CU-UP
   f1ap_ue_context_manager&     f1ap_ue_ctxt_mng;     // to trigger UE context modification at DU
   rrc_ue_interface*            rrc_ue;               // to trigger RRC Reconfiguration at UE
+  std::optional<rrc_meas_cfg>  initial_meas_cfg;     // UE measurement config at procedure start
   cu_cp_rrc_ue_interface&      cu_cp_notifier;       // to trigger UE release at CU-CP
   ue_task_scheduler&           task_sched;           // to schedule UE release request
   up_resource_manager&         up_resource_mng;      // to get RRC DRB config

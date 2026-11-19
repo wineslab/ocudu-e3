@@ -4,6 +4,7 @@
 
 #include "intra_slice_scheduler.h"
 #include "../logging/cell_metrics_handler.h"
+#include "../ue_context/ue_cell_repository.h"
 #include "ocudu/ran/pdcch/search_space.h"
 #include "ocudu/support/math/mod_math_utils.h"
 
@@ -122,6 +123,7 @@ void intra_slice_scheduler::slice_ue_group_scheduler::fill_ue_candidate_group(
 
 intra_slice_scheduler::intra_slice_scheduler(const scheduler_ue_expert_config& expert_cfg_,
                                              ue_repository&                    ues_,
+                                             ue_cell_repository&               cell_ues,
                                              pdcch_resource_allocator&         pdcch_alloc,
                                              uci_allocator&                    uci_alloc_,
                                              srs_allocator&                    srs_alloc_,
@@ -131,7 +133,7 @@ intra_slice_scheduler::intra_slice_scheduler(const scheduler_ue_expert_config& e
   expert_cfg(expert_cfg_),
   cell_alloc(cell_alloc_),
   cell_metrics(cell_metrics_),
-  cell_harqs(ues_.cell(cell_alloc_.cell_index()).get_cell_harqs()),
+  cell_harqs(cell_ues.get_cell_harqs()),
   uci_alloc(uci_alloc_),
   srs_alloc(srs_alloc_),
   ues(ues_),
@@ -304,17 +306,25 @@ unsigned intra_slice_scheduler::schedule_dl_retx_candidates(dl_ran_slice_candida
     }
 
     // Perform DL grant allocation, including PDCCH, PDSCH and UCI.
+    // Use the slice's live remaining budget, not its static config max, which can be stale once other slices have
+    // already used some of the slot's PRBs.
     auto result = ue_alloc.allocate_dl_grant(
-        ue_retx_dl_grant_request{u, pdsch_slot, h, used_dl_vrbs, enable_pdsch_interleaving, slice.cfg().rbs.max()});
+        ue_retx_dl_grant_request{u, pdsch_slot, h, used_dl_vrbs, enable_pdsch_interleaving, slice.remaining_rbs()});
     if (not result.has_value() and result.error() == dl_alloc_failure_cause::skip_slot) {
       // Received signal to stop allocations in the slot.
       break;
     }
 
     if (result.has_value()) {
-      vrb_interval alloc_vrbs = result.value();
+      vrb_interval alloc_vrbs = result.value().vrbs;
       used_dl_vrbs.fill(alloc_vrbs.start(), alloc_vrbs.stop());
       slice.store_grant(alloc_vrbs.length());
+      // PDSCH repetition occasions land in future slots that are not covered by this slice candidate's own
+      // remaining_rbs() budget (scoped to pdsch_slot); register their RB usage against the slice's budget for those
+      // slots directly.
+      for (slot_point occasion_slot : result.value().repetition_slots) {
+        slice.store_grant(alloc_vrbs.length(), occasion_slot);
+      }
       if (++alloc_count >= max_ue_grants_to_alloc or slice.remaining_rbs() == 0) {
         // Maximum number of allocations reached.
         break;
@@ -355,17 +365,25 @@ unsigned intra_slice_scheduler::schedule_ul_retx_candidates(ul_ran_slice_candida
     // Allocate PDCCH and PUSCH.
     // NOTE: the symbols passed to the grant are the symbols that are available for PUSCH and for which the used VRBs
     // have been computed.
+    // Use the slice's live remaining budget, not its static config max, which can be stale once PUCCH or other
+    // slices have already used some of the slot's PRBs.
     auto result = ue_alloc.allocate_ul_grant(ue_retx_ul_grant_request{
-        u, pusch_slot, h, used_ul_vrbs, ofdm_symbol_range{0, min_srs_symbol}, slice.cfg().rbs.max()});
+        u, pusch_slot, h, used_ul_vrbs, ofdm_symbol_range{0, min_srs_symbol}, slice.remaining_rbs()});
     if (not result.has_value() and result.error() == alloc_status::skip_slot) {
       // Received signal to stop allocations in the slot.
       break;
     }
 
     if (result.has_value()) {
-      vrb_interval alloc_vrbs = result.value();
+      vrb_interval alloc_vrbs = result.value().vrbs;
       used_ul_vrbs.fill(alloc_vrbs.start(), alloc_vrbs.stop());
       slice.store_grant(alloc_vrbs.length());
+      // PUSCH repetition occasions land in future slots that are not covered by this slice candidate's own
+      // remaining_rbs() budget (scoped to pusch_slot); register their RB usage against the slice's budget for those
+      // slots directly.
+      for (slot_point occasion_slot : result.value().repetition_slots) {
+        slice.store_grant(alloc_vrbs.length(), occasion_slot);
+      }
       if (++alloc_count >= max_ue_grants_to_alloc or slice.remaining_rbs() == 0) {
         // Maximum number of allocations reached.
         break;
@@ -527,7 +545,7 @@ unsigned intra_slice_scheduler::schedule_dl_newtx_candidates(dl_ran_slice_candid
     vrb_interval alloc_vrbs = grant_builder.recommended_vrbs(used_dl_vrbs, max_grant_size);
     if (alloc_vrbs.empty()) {
       logger.warning("ue={} c-rnti={}: Failed to allocate RBs for PDSCH grant at slot={}",
-                     fmt::underlying(grant_builder.ue().ue_index()),
+                     grant_builder.ue().ue_index(),
                      grant_builder.ue().crnti(),
                      slice.get_slot_tx());
       // We let the grant be empty. It will be skipped in the post-processing scheduling step.
@@ -547,7 +565,7 @@ unsigned intra_slice_scheduler::schedule_dl_newtx_candidates(dl_ran_slice_candid
     }
 
     // Save CRBs, MCS and RI.
-    grant_builder.set_pdsch_params(alloc_vrbs, alloc_crbs, enable_pdsch_interleaving);
+    auto committed_repetition_slots = grant_builder.set_pdsch_params(alloc_vrbs, alloc_crbs, enable_pdsch_interleaving);
 
     // Fill used VRBs.
     const unsigned nof_rbs_alloc = alloc_vrbs.length();
@@ -555,6 +573,12 @@ unsigned intra_slice_scheduler::schedule_dl_newtx_candidates(dl_ran_slice_candid
 
     // Update slice state.
     slice.store_grant(nof_rbs_alloc);
+    // PDSCH repetition occasions land in future slots that are not covered by this slice candidate's own
+    // remaining_rbs() budget (scoped to pdsch_slot); register their RB usage against the slice's budget for those
+    // slots directly.
+    for (slot_point occasion_slot : committed_repetition_slots) {
+      slice.store_grant(nof_rbs_alloc, occasion_slot);
+    }
     rb_count += nof_rbs_alloc;
     rbs_missing = (max_grant_size - nof_rbs_alloc);
   }
@@ -645,7 +669,7 @@ unsigned intra_slice_scheduler::schedule_ul_newtx_candidates(ul_ran_slice_candid
     vrb_interval alloc_vrbs = grant_builder.recommended_vrbs(used_ul_vrbs, max_grant_size);
     if (alloc_vrbs.empty()) {
       logger.error("ue={} c-rnti={}: Failed to allocate RBs for PUSCH grant at slot={}",
-                   fmt::underlying(grant_builder.ue().ue_index()),
+                   grant_builder.ue().ue_index(),
                    grant_builder.ue().crnti(),
                    slice.get_slot_tx());
       // We let the grant be empty. It will be skipped in the post-processing scheduling step.
@@ -654,7 +678,7 @@ unsigned intra_slice_scheduler::schedule_ul_newtx_candidates(ul_ran_slice_candid
     }
 
     // Save CRBs, MCS and RI.
-    grant_builder.set_pusch_params(alloc_vrbs);
+    auto committed_repetition_slots = grant_builder.set_pusch_params(alloc_vrbs);
 
     // Fill used CRBs.
     unsigned nof_rbs_alloc = alloc_vrbs.length();
@@ -662,6 +686,10 @@ unsigned intra_slice_scheduler::schedule_ul_newtx_candidates(ul_ran_slice_candid
 
     // Update slice state.
     slice.store_grant(nof_rbs_alloc);
+    // Register the occasions' RB usage against the slice's budget for their own (future) slots, as above.
+    for (slot_point occasion_slot : committed_repetition_slots) {
+      slice.store_grant(nof_rbs_alloc, occasion_slot);
+    }
     rb_count += nof_rbs_alloc;
     rbs_missing = max_grant_size - nof_rbs_alloc;
   }
@@ -679,7 +707,9 @@ unsigned intra_slice_scheduler::schedule_ul_newtx_candidates(ul_ran_slice_candid
 
 bool intra_slice_scheduler::can_allocate_pdsch(const slice_ue& u, const ue_cell& ue_cc) const
 {
-  // Check if PDCCH/PDSCH is possible for this slot (e.g. not in UL slot or measGap)
+  // Check if PDCCH/PDSCH is possible for this slot (e.g. not in UL slot or measGap). This also rejects a UE that
+  // already has a PDSCH in this slot (e.g. a PDSCH repetition occasion carried over from a bundle scheduled in a
+  // preceding slot),
   ocudu_assert(not ue_cc.is_in_fallback_mode(), "Slice UE cannot be in fallback mode");
   return ue_cc.is_pdsch_enabled(pdcch_slot, pdsch_slot);
 }
@@ -713,7 +743,7 @@ std::optional<ue_newtx_candidate> intra_slice_scheduler::create_newtx_dl_candida
           "ue={} rnti={} PDSCH allocation skipped. Cause: All the HARQs are allocated and waiting for their "
           "respective HARQ-ACK. Check if any HARQ-ACK went missing in the lower layers or is arriving too late to "
           "the scheduler.",
-          fmt::underlying(ue_cc.ue_index),
+          ue_cc.ue_index,
           ue_cc.rnti());
       cell_metrics.handle_late_dl_harqs();
     }
@@ -743,7 +773,7 @@ std::optional<ue_newtx_candidate> intra_slice_scheduler::create_newtx_ul_candida
       logger.info("ue={} rnti={} PUSCH allocation skipped. Cause: All the UE HARQs are busy waiting for "
                   "their respective CRC result. Check if any CRC PDU went missing in the lower layers or is "
                   "arriving too late to the scheduler.",
-                  fmt::underlying(ue_cc.ue_index),
+                  ue_cc.ue_index,
                   ue_cc.rnti());
       cell_metrics.handle_late_ul_harqs();
     }
@@ -842,8 +872,11 @@ void intra_slice_scheduler::update_used_dl_vrbs(const dl_ran_slice_candidate& sl
 
   // [Implementation defined] We use the common PDSCH TD resources as a reference for the computation of RBs
   // unavailable for PDSCH. This assumes that these resources are not colliding with PDCCH.
-  const auto&              init_dl_bwp      = cell_alloc.cfg.params.dl_cfg_common.init_dl_bwp;
-  const ofdm_symbol_range& symbols_to_check = init_dl_bwp.pdsch_common.pdsch_td_alloc_list[0].symbols;
+  // Note: It is not a problem if the symbols go beyond the DL symbols in the special slot, because UL is reserved in
+  // a separate grid.
+  const auto&              init_dl_bwp = cell_alloc.cfg.params.dl_cfg_common.init_dl_bwp;
+  const ofdm_symbol_range& symbols_to_check =
+      cell_alloc.cfg.init_bwp.dl.td_mapper().common_pdsch_td_resources()[0].symbols;
 
   enable_pdsch_interleaving = ss_info.interleaved_mapping.has_value();
   if (enable_pdsch_interleaving) {

@@ -5,6 +5,7 @@
 #include "../../../lib/phy/upper/uplink_request_processor_impl.h"
 #include "../support/prach_buffer_test_doubles.h"
 #include "upper_phy_rx_symbol_request_notifier_test_doubles.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/phy/support/prach_buffer_context.h"
 #include "ocudu/phy/support/support_factories.h"

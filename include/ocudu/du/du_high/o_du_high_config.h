@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ocudu/du/du_high/du_high_configuration.h"
-#include "ocudu/e2/e2ap_configuration.h"
+#include "ocudu/e2/e2ap_config.h"
 
 namespace ocudu {
 
@@ -23,9 +23,11 @@ namespace odu {
 /// Base O-DU high configuration.
 struct o_du_high_config {
   /// Configuration of the DU-high that comprises the MAC, RLC and F1 layers.
-  odu::du_high_configuration du_hi;
+  du_high_configuration du_hi;
   /// E2AP configuration.
-  e2ap_configuration e2ap_config;
+  e2ap_config e2ap_cfg;
+  /// Flag that indicates if realtime mode is enabled or disabled.
+  bool is_rt_mode_enabled;
 };
 
 /// O-RAN DU high sector dependencies. Contains the dependencies of one sector.

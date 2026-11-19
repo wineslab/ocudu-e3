@@ -30,6 +30,7 @@ public:
 private:
   async_task<bool> start_cell(const nr_cell_global_id_t& cgi);
   async_task<void> stop_cell(const nr_cell_global_id_t& cgi);
+  async_task<void> bar_cell(const f1ap_cell_to_bar& cell);
 
   const gnbcu_config_update_request   request;
   du_cell_manager&                    cell_mng;

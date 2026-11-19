@@ -206,8 +206,7 @@ public:
   // Run all tasks that have been enqueued in the strand, and unlocks the strand.
   void run_enqueued_tasks()
   {
-    unique_task task;
-    uint32_t    queue_size = state.get_queue_size();
+    uint32_t queue_size = state.get_queue_size();
 
     unsigned max_pops = batch_max_size;
     while (queue_size > 0) {
@@ -217,7 +216,8 @@ public:
       // queue implementations have spurious failures.
       unsigned run_count = 0;
       unsigned max_count = std::min(queue_size, max_pops);
-      for (; run_count != max_count and queue.pop(task); ++run_count) {
+      // Creating a task inside the loop guarantees the release of any resources it captures once the task is done.
+      for (unique_task task; run_count != max_count and queue.pop(task); ++run_count) {
         task();
       }
       if (run_count != max_count) {

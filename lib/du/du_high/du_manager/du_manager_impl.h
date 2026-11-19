@@ -12,7 +12,10 @@
 #include "procedures/du_proc_context_view.h"
 #include "ran_resource_management/du_ran_resource_manager_impl.h"
 #include "ocudu/du/du_high/du_manager/du_manager.h"
+#include "ocudu/du/du_high/du_manager/du_manager_mem_resources.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
+#include "ocudu/ntn/ntn_configuration_manager.h"
+#include "ocudu/rlc/rlc_window_seg_pool_factory.h"
 
 namespace ocudu {
 namespace odu {
@@ -20,6 +23,7 @@ namespace odu {
 class du_manager_impl final : public du_manager,
                               public du_manager_mac_event_handler,
                               public du_manager_f1ap_event_handler,
+                              public du_manager_pws_handler,
                               public du_configurator
 {
 public:
@@ -35,6 +39,9 @@ public:
 
   // Task scheduling interface.
   du_manager_f1ap_event_handler& get_f1ap_event_handler() override { return *this; }
+  du_manager_pws_handler&        get_pws_handler() override { return *this; }
+  async_task<std::vector<du_cell_index_t>>
+       handle_write_replace_warning(const write_replace_warning_information& req) override;
   void schedule_async_task(async_task<void>&& task) override { main_ctrl_loop.schedule(std::move(task)); }
   void schedule_async_task(du_ue_index_t ue_index, async_task<void>&& task) override
   {
@@ -72,16 +79,21 @@ public:
   async_task<du_param_config_response> handle_operator_config(const du_param_config_request& req,
                                                               task_executor& continuation_exec) override;
 
-  void handle_ntn_param_update(const du_ntn_param_update_request& req) override;
+  void handle_ntn_param_update(du_ntn_param_update_request req) override;
 
   f1ap_du_positioning_handler& get_positioning_handler() override { return *positioning_handler; }
 
   du_manager_mac_metric_aggregator& get_metrics_aggregator() override { return metrics; }
 
+  ocudu_ntn::ntn_configuration_manager* get_ntn_configuration_manager() override { return ntn_config_manager.get(); }
+
 private:
   // DU manager configuration that will be visible to all running procedures
   du_manager_params       params;
   ocudulog::basic_logger& logger;
+
+  // Resources owned by the DU manager, available to its procedures and sub-structures.
+  du_manager_mem_resources mem_resources;
 
   // Handler for DU tasks.
   fifo_async_task_scheduler main_ctrl_loop;
@@ -94,6 +106,12 @@ private:
   du_ue_manager                                ue_mng;
   std::unique_ptr<f1ap_du_positioning_handler> positioning_handler;
   du_proc_context_view                         proc_ctxt;
+
+  /// \brief NTN manager, created only when the configuration carries NTN cells.
+  ///
+  /// Declared before the controller, which stops it as part of the DU stop and must therefore outlive it.
+  std::unique_ptr<ocudu_ntn::ntn_configuration_manager> ntn_config_manager;
+
   /// Handle to control the start and stop of the DU activity.
   du_manager_controller_impl controller;
 };

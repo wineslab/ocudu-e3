@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/phy/generic_functions/dft_processor_ci16.h"
+#include <memory>
 
 namespace ocudu {
 

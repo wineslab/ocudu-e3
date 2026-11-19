@@ -58,8 +58,13 @@ e1ap_message_notifier* e1ap_cu_up_connection_handler::connect_to_cu_cp()
 {
   rx_path_disconnected.reset();
 
+  // Tag the Rx path with the association attempt it belongs to. A rejected connection request tears its Rx path down
+  // before this function even returns, and the resulting disconnection is handled asynchronously. Without the tag, it
+  // could be mistaken for the loss of the association established by a later attempt.
+  const unsigned session = ++e1_session_epoch;
+
   e1ap_notifier = e1_client_handler.handle_cu_up_connection_request(
-      std::make_unique<e1ap_rx_pdu_adapter>(e1ap_pdu_handler, [this]() { handle_connection_loss(); }));
+      std::make_unique<e1ap_rx_pdu_adapter>(e1ap_pdu_handler, [this, session]() { handle_connection_loss(session); }));
   if (e1ap_notifier == nullptr) {
     return nullptr;
   }
@@ -70,14 +75,22 @@ e1ap_message_notifier* e1ap_cu_up_connection_handler::connect_to_cu_cp()
   return e1ap_notifier.get();
 }
 
-void e1ap_cu_up_connection_handler::handle_connection_loss()
+void e1ap_cu_up_connection_handler::handle_connection_loss(unsigned session)
 {
+  auto handle_loss_of_session = [this, session]() {
+    if (session != e1_session_epoch) {
+      // The Rx path of an earlier association attempt was torn down. The current association is unaffected.
+      return;
+    }
+    handle_connection_loss_impl();
+  };
+
   // Signal back (via CU-UP control executor) that the Rx channel has been shut down.
   // Note: The caller might be in a different thread than the E1AP, so we dispatch the continuation to the E1AP
   // executor.
   // Note: We use defer, because we want to handle all the already enqueued E1AP events before the association
   // shutdown. This way no pending task is left pointing to an inexistent E1AP context.
-  while (not cu_up_executor.defer([this]() { handle_connection_loss_impl(); })) {
+  while (not cu_up_executor.defer(handle_loss_of_session)) {
     // Note: This defer cannot fail. Keep trying.
     logger.warning("Failed to dispatch handling of E1 Rx path disconnection. Cause: Task queue is full. Retrying...");
     std::this_thread::sleep_for(std::chrono::microseconds{10});

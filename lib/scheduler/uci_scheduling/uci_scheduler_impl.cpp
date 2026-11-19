@@ -14,14 +14,14 @@ using namespace ocudu;
 
 uci_scheduler_impl::uci_scheduler_impl(const cell_configuration& cell_cfg_,
                                        uci_allocator&            uci_alloc_,
-                                       ue_repository&            ues_) :
-  cell_cfg(cell_cfg_), uci_alloc(uci_alloc_), ues(ues_), logger(ocudulog::fetch_basic_logger("SCHED"))
+                                       ue_cell_repository&       ue_cell_db_) :
+  cell_cfg(cell_cfg_), uci_alloc(uci_alloc_), ue_cell_db(ue_cell_db_), logger(ocudulog::fetch_basic_logger("SCHED"))
 {
   // Max size of the UCI resource slot wheel, dimensioned based on the UCI periods.
   periodic_uci_slot_wheel.resize(std::max(MAX_SR_PERIOD, MAX_CSI_REPORT_PERIOD));
 
   // Pre-reserve space for the UEs that will be added.
-  updated_ues.reserve(MAX_NOF_DU_UES);
+  updated_ues.reserve(cell_cfg.max_nof_ue_contexts);
 }
 
 void uci_scheduler_impl::run_slot(cell_resource_allocator& res_alloc)
@@ -69,7 +69,7 @@ void uci_scheduler_impl::rem_resource(rnti_t crnti, unsigned res_offset, unsigne
 {
   auto log_error = [&]() {
     logger.error("cell={} c-rnti={}: Unable to remove {} PUCCH resource for period={} offset={}",
-                 fmt::underlying(cell_cfg.cell_index),
+                 cell_cfg.cell_index,
                  crnti,
                  is_sr ? "SR" : "CSI",
                  res_period,
@@ -126,7 +126,7 @@ void uci_scheduler_impl::add_ue_to_grid(const ue_cell_configuration& ue_cfg, boo
   add_resource(ue_cfg.crnti, ue_ul_cfg->pucch.sr_offset, sr_period_slots, true);
 
   if (ue_ul_cfg->periodic_csi_report.has_value()) {
-    const unsigned csi_period_slots = csi_resource_periodicity_to_uint(cell_cfg.params.init_bwp.csi->csi_rs_period);
+    const unsigned csi_period_slots = to_underlying(cell_cfg.params.init_bwp.csi->csi_rs_period);
     add_resource(ue_cfg.crnti, ue_ul_cfg->periodic_csi_report->offset, csi_period_slots, false);
   }
 
@@ -167,34 +167,27 @@ void uci_scheduler_impl::rem_ue(const ue_cell_configuration& ue_cfg)
   rem_resource(ue_cfg.crnti, ue_ul_cfg->pucch.sr_offset, sr_period_slots, true);
 
   if (ue_ul_cfg->periodic_csi_report.has_value()) {
-    const unsigned csi_period_slots = csi_resource_periodicity_to_uint(cell_cfg.params.init_bwp.csi->csi_rs_period);
+    const unsigned csi_period_slots = to_underlying(cell_cfg.params.init_bwp.csi->csi_rs_period);
     rem_resource(ue_cfg.crnti, ue_ul_cfg->periodic_csi_report->offset, csi_period_slots, false);
   }
 }
 
-const ue_cell_configuration* uci_scheduler_impl::get_ue_cfg(rnti_t rnti) const
+const ue_cell* uci_scheduler_impl::get_ue_cell(rnti_t rnti) const
 {
-  auto* u = ues.find_by_rnti(rnti);
-  if (u != nullptr) {
-    auto* ue_cc = u->find_cell(cell_cfg.cell_index);
-    if (ue_cc != nullptr) {
-      return &ue_cc->cfg();
-    }
-  }
-  return nullptr;
+  return ue_cell_db.find_by_rnti(rnti);
 }
 
 void uci_scheduler_impl::schedule_slot_ucis(cell_slot_resource_allocator& slot_alloc)
 {
   // For the provided slot, check if there are any pending UCI resources to allocate, and allocate them.
-  auto& slot_ucis = periodic_uci_slot_wheel[slot_alloc.slot.to_uint() % periodic_uci_slot_wheel.size()];
+  auto& slot_ucis = periodic_uci_slot_wheel[slot_alloc.slot.count() % periodic_uci_slot_wheel.size()];
   for (auto* it = slot_ucis.begin(); it != slot_ucis.end();) {
-    const periodic_uci_info&     uci_info = *it;
-    const ue_cell_configuration* ue_cfg   = get_ue_cfg(uci_info.rnti);
+    const periodic_uci_info& uci_info = *it;
+    const ue_cell*           ue_cc    = get_ue_cell(uci_info.rnti);
 
-    if (ue_cfg == nullptr) {
+    if (ue_cc == nullptr) {
       logger.error("cell={} c-rnti={}: UE for which {} is being scheduled was not found (slot={})",
-                   fmt::underlying(cell_cfg.cell_index),
+                   cell_cfg.cell_index,
                    uci_info.rnti,
                    it->sr_counter > 0 ? "SR" : (it->csi_counter > 0 ? "CSI" : "invalid UCI"),
                    slot_alloc.slot);
@@ -202,16 +195,38 @@ void uci_scheduler_impl::schedule_slot_ucis(cell_slot_resource_allocator& slot_a
       continue;
     }
 
+    // The UE transmits no PUCCH in a slot that its own uplink timeline excludes, e.g. one covered by its measurement
+    // gap (TS 38.321, Section 5.4.4 for the SR, TS 38.133, Section 9.1.2 for the interruption itself). In an NTN cell
+    // the gap sits T_TA away from the downlink timing it is anchored to, so it can span tens of slots.
+    if (not ue_cc->is_ul_enabled(slot_alloc.slot)) {
+      logger.debug("cell={} c-rnti={}: Skipped UCI PUCCH for slot={}. Cause: slot is not UL enabled for this UE",
+                   cell_cfg.cell_index,
+                   uci_info.rnti,
+                   slot_alloc.slot);
+      ++it;
+      continue;
+    }
+
     // Schedule SR PUCCH first.
     // NOTE: Allocating the CSI after the SR helps the PUCCH allocation to compute the number of allocated UCI bits and
     // the corresponding number of PRBs for the PUCCH Format 2 over a PUCCH F2 grant is within PUCCH capacity.
     if (uci_info.sr_counter > 0) {
-      uci_alloc.alloc_sr_opportunity(slot_alloc, uci_info.rnti, *ue_cfg);
+      if (not uci_alloc.alloc_sr_opportunity(slot_alloc, ue_cc->cfg())) {
+        logger.warning("cell={} c-rnti={}: Failed to allocate SR PUCCH for slot={}",
+                       cell_cfg.cell_index,
+                       uci_info.rnti,
+                       slot_alloc.slot);
+      }
     }
 
     // Schedule CSI PUCCH.
     if (uci_info.csi_counter > 0) {
-      uci_alloc.alloc_csi_opportunity(slot_alloc, uci_info.rnti, *ue_cfg);
+      if (not uci_alloc.alloc_csi_opportunity(slot_alloc, ue_cc->cfg())) {
+        logger.warning("cell={} c-rnti={}: Failed to allocate CSI PUCCH for slot={}",
+                       cell_cfg.cell_index,
+                       uci_info.rnti,
+                       slot_alloc.slot);
+      }
     }
 
     ++it;
@@ -223,11 +238,9 @@ void uci_scheduler_impl::schedule_updated_ues_ucis(cell_resource_allocator& res_
   // For all UEs whose config has been recently updated, schedule their UCIs up until one slot before the farthest
   // slot in the resource grid.
   for (rnti_t rnti : updated_ues) {
-    const ue_cell_configuration* ue_cfg = get_ue_cfg(rnti);
-    if (ue_cfg == nullptr) {
-      logger.error("cell={} c-rnti={}: UE for which UCI is being scheduled was not found.",
-                   fmt::underlying(cell_cfg.cell_index),
-                   rnti);
+    const ue_cell* ue_cc = get_ue_cell(rnti);
+    if (ue_cc == nullptr) {
+      logger.error("cell={} c-rnti={}: UE for which UCI is being scheduled was not found.", cell_cfg.cell_index, rnti);
       continue;
     }
 
@@ -242,7 +255,7 @@ void uci_scheduler_impl::schedule_updated_ues_ucis(cell_resource_allocator& res_
           for (const periodic_uci_info& uci_info : slot_ucis) {
             if (uci_info.rnti == rnti) {
               logger.debug("cell={} c-rnti={}: Skipped UCI scheduling for slot={}. Cause: Max PUCCHs has been reached",
-                           fmt::underlying(cell_cfg.cell_index),
+                           cell_cfg.cell_index,
                            rnti,
                            res_alloc[n].slot);
             }
@@ -253,25 +266,30 @@ void uci_scheduler_impl::schedule_updated_ues_ucis(cell_resource_allocator& res_
 
       for (const periodic_uci_info& uci_info : slot_ucis) {
         if (uci_info.rnti == rnti) {
+          // Skip the slots that the UE uplink timeline excludes, see schedule_slot_ucis.
+          if (not ue_cc->is_ul_enabled(res_alloc[n].slot)) {
+            continue;
+          }
+
           // Schedule SR PUCCHs first.
           // NOTE: Allocating the CSI after the SR helps the PUCCH allocation to compute the number of allocated UCI
           // bits and the corresponding number of PRBs for the PUCCH Format 2 over a PUCCH F2 grant is within PUCCH
           // capacity.
 
           if (uci_info.sr_counter > 0) {
-            bool existing_grants = std::any_of(res_alloc[n].result.ul.pucchs.begin(),
-                                               res_alloc[n].result.ul.pucchs.end(),
-                                               [rnti](const pucch_info& grant) { return grant.crnti == rnti; });
+            span<const pucch_info> pucchs          = res_alloc[n].result.ul.pucchs.unsorted();
+            bool                   existing_grants = std::any_of(
+                pucchs.begin(), pucchs.end(), [rnti](const pucch_info& grant) { return grant.crnti == rnti; });
             if (not existing_grants) {
               // Only allocate SR if there are no existing PUCCH grants for this UE in this slot, as the PUCCH allocator
               // doesn't support multiplexing SR over other UCI.
-              uci_alloc.alloc_sr_opportunity(res_alloc[n], rnti, *ue_cfg);
+              uci_alloc.alloc_sr_opportunity(res_alloc[n], ue_cc->cfg());
             }
           }
 
           // Schedule CSI
           if (uci_info.csi_counter > 0) {
-            uci_alloc.alloc_csi_opportunity(res_alloc[n], rnti, *ue_cfg);
+            uci_alloc.alloc_csi_opportunity(res_alloc[n], ue_cc->cfg());
           }
         }
       }

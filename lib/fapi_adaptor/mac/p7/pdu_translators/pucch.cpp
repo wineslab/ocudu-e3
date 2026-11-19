@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pucch.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/scheduler/result/pucch_info.h"
 
 using namespace ocudu;
@@ -156,7 +157,9 @@ void ocudu::fapi_adaptor::convert_pucch_mac_to_fapi(fapi::ul_pucch_pdu_builder& 
       .set_time_allocation_parameters(mac_pdu.res->syms)
       .set_hopping_information_parameters(mac_pdu.res->second_hop_prb.has_value()
                                               ? std::optional<uint16_t>(*mac_pdu.res->second_hop_prb)
-                                              : std::nullopt);
+                                              : std::nullopt)
+      .set_multi_slot_tx_indicator(mac_pdu.repetition.has_value() ? mac_pdu.repetition->position
+                                                                  : pucch_repetition_tx_slot::no_multi_slot);
 
   fill_format_parameters(builder, mac_pdu);
 }

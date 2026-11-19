@@ -90,9 +90,9 @@ struct formatter<ocudu::f1ap_cause_t> {
       return format_to(ctx.out(), "transport-id{}", fmt::underlying(*cause));
     }
     if (const auto* cause = std::get_if<ocudu::cause_protocol_t>(&o)) {
-      return format_to(ctx.out(), "protocol-id{}", fmt::underlying(*cause));
+      return format_to(ctx.out(), "protocol-id{}", *cause);
     }
-    return format_to(ctx.out(), "misc-id{}", fmt::underlying(std::get<ocudu::cause_misc_t>(o)));
+    return format_to(ctx.out(), "misc-id{}", std::get<ocudu::cause_misc_t>(o));
   }
 };
 

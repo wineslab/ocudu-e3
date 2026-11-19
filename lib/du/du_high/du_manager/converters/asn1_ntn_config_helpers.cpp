@@ -3,7 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "asn1_ntn_config_helpers.h"
-#include "ocudu/asn1/lpp/lpp.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/lpp/reference_location.h"
+#include "ocudu/support/error_handling.h"
+#include <cmath>
 
 using namespace ocudu;
 using namespace asn1::rrc_nr;
@@ -89,7 +92,7 @@ ntn_cfg_r17_s ocudu::odu::make_asn1_rrc_cell_ntn_cfg(const ntn_config& ntn_cfg)
   // K-mac.
   if (ntn_cfg.k_mac.has_value()) {
     out_ntn_cfg.kmac_r17_present = true;
-    out_ntn_cfg.kmac_r17         = *ntn_cfg.k_mac;
+    out_ntn_cfg.kmac_r17         = ntn_cfg.k_mac->count();
   }
 
   // TA-Info. Exempt from SI change notification or valueTag modification in SIB1.
@@ -101,7 +104,9 @@ ntn_cfg_r17_s ocudu::odu::make_asn1_rrc_cell_ntn_cfg(const ntn_config& ntn_cfg)
     ta_info.ta_common_r17                       = static_cast<uint32_t>(ntn_cfg.ta_info->ta_common / 0.004072);
     ta_info.ta_common_drift_r17                 = static_cast<int32_t>(ntn_cfg.ta_info->ta_common_drift / 0.0002);
     ta_info.ta_common_drift_variant_r17 = static_cast<uint16_t>(ntn_cfg.ta_info->ta_common_drift_variant / 0.00002);
-    ta_info.ta_common_r17 += static_cast<int32_t>(ntn_cfg.ta_info->ta_common_offset / 0.004072);
+    if (ntn_cfg.ta_info->ta_common_offset) {
+      ta_info.ta_common_r17 += static_cast<int32_t>(*ntn_cfg.ta_info->ta_common_offset / 0.004072);
+    }
   }
 
   if (ntn_cfg.polarization.has_value()) {
@@ -146,10 +151,14 @@ ntn_cfg_r17_s ocudu::odu::make_asn1_rrc_cell_ntn_cfg(const ntn_config& ntn_cfg)
       orbital_r17_s& orbit      = out_ntn_cfg.ephemeris_info_r17.orbital_r17();
       orbit.semi_major_axis_r17 = static_cast<uint64_t>((orbital_elem.semi_major_axis - 6500000) / 0.004249);
       orbit.eccentricity_r17    = static_cast<uint32_t>(orbital_elem.eccentricity / 0.00000001431);
-      orbit.inclination_r17     = static_cast<int32_t>(orbital_elem.inclination / 0.00000002341);
-      orbit.longitude_r17       = static_cast<uint32_t>(orbital_elem.longitude / 0.00000002341);
-      orbit.periapsis_r17       = static_cast<uint32_t>(orbital_elem.periapsis / 0.00000002341);
-      orbit.mean_anomaly_r17    = static_cast<uint32_t>(orbital_elem.mean_anomaly / 0.00000002341);
+      // Per TS 38.331, inclination-r17 is signed: positive field maps to [0, pi/2], negative field maps to [pi/2, pi]
+      // via actual value = field value * step + pi.
+      const double incl =
+          (orbital_elem.inclination <= M_PI / 2) ? orbital_elem.inclination : orbital_elem.inclination - M_PI;
+      orbit.inclination_r17  = static_cast<int32_t>(incl / 0.00000002341);
+      orbit.longitude_r17    = static_cast<uint32_t>(orbital_elem.longitude / 0.00000002341);
+      orbit.periapsis_r17    = static_cast<uint32_t>(orbital_elem.periapsis / 0.00000002341);
+      orbit.mean_anomaly_r17 = static_cast<uint32_t>(orbital_elem.mean_anomaly / 0.00000002341);
     }
   }
 
@@ -163,18 +172,7 @@ ntn_cfg_r17_s ocudu::odu::make_asn1_rrc_cell_ntn_cfg(const ntn_config& ntn_cfg)
 
 static byte_buffer pack_asn1_ellipsoid_point(const geodetic_coordinates_t& location)
 {
-  using namespace asn1::lpp;
-  ellipsoid_point_s ref_loc;
-  ref_loc.latitude_sign     = (location.latitude >= 0) ? ellipsoid_point_s::latitude_sign_opts::north
-                                                       : ellipsoid_point_s::latitude_sign_opts::south;
-  ref_loc.degrees_latitude  = static_cast<uint32_t>(std::floor(std::abs(location.latitude) * 8388607 / 90));
-  ref_loc.degrees_longitude = static_cast<int32_t>(std::floor(location.longitude * 16777215 / 360));
-
-  byte_buffer         buf;
-  asn1::bit_ref       bref{buf};
-  asn1::OCUDUASN_CODE ret = ref_loc.pack(bref);
-  ocudu_assert(ret == asn1::OCUDUASN_SUCCESS, "Failed to pack reference location for SIB19");
-  return buf;
+  return lpp::pack_reference_location(reference_location{location.latitude, location.longitude});
 }
 
 /// \brief Encodes a neighbor NTN cell configuration to ASN.1 format.
@@ -256,17 +254,17 @@ sib19_r17_s ocudu::odu::make_asn1_rrc_cell_sib19(const sib19_info& sib19_params)
                  sib19_params.ncells.size(),
                  MAX_NOF_NTN_NEIGHBORS);
 
-    // Pack first 4 neighbors into base list
-    size_t base_count = std::min(sib19_params.ncells.size(), size_t(4));
+    // Pack first MAX_NOF_NTN_NEIGHBORS_BASE_LIST neighbors into base list
+    size_t base_count = std::min(sib19_params.ncells.size(), MAX_NOF_NTN_NEIGHBORS_BASE_LIST);
     for (size_t i = 0; i != base_count; ++i) {
       sib19.ntn_neigh_cell_cfg_list_r17.push_back(make_asn1_ntn_neighbor_cell(sib19_params.ncells[i]));
     }
 
-    // Pack remaining neighbors (5-8) into extension list (R17 extension).
-    if (sib19_params.ncells.size() > 4) {
+    // Pack remaining neighbors into extension list (R17 extension).
+    if (sib19_params.ncells.size() > MAX_NOF_NTN_NEIGHBORS_BASE_LIST) {
       sib19.ext = true;
       sib19.ntn_neigh_cell_cfg_list_ext_v1720.set_present();
-      for (size_t i = 4, e = sib19_params.ncells.size(); i != e; ++i) {
+      for (size_t i = MAX_NOF_NTN_NEIGHBORS_BASE_LIST, e = sib19_params.ncells.size(); i != e; ++i) {
         sib19.ntn_neigh_cell_cfg_list_ext_v1720->push_back(make_asn1_ntn_neighbor_cell(sib19_params.ncells[i]));
       }
     }

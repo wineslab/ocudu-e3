@@ -35,16 +35,15 @@ pdsch_process_dmrs(resource_grid_writer& grid, dmrs_pdsch_processor& dmrs, const
   }
 
   // Prepare DM-RS configuration.
-  dmrs_pdsch_processor::config_t dmrs_config;
-  dmrs_config.slot                 = pdu.slot;
-  dmrs_config.reference_point_k_rb = dmrs_reference_point_k_rb;
-  dmrs_config.type                 = pdu.dmrs;
-  dmrs_config.scrambling_id        = pdu.scrambling_id;
-  dmrs_config.n_scid               = pdu.n_scid;
-  dmrs_config.amplitude            = convert_dB_to_amplitude(-pdu.ratio_pdsch_dmrs_to_sss_dB);
-  dmrs_config.symbols_mask         = pdu.dmrs_symbol_mask;
-  dmrs_config.rb_mask              = rb_mask_bitset;
-  dmrs_config.precoding            = pdu.precoding;
+  dmrs_pdsch_processor::config_t dmrs_config = {.slot                 = pdu.slot,
+                                                .reference_point_k_rb = dmrs_reference_point_k_rb,
+                                                .type                 = pdu.dmrs,
+                                                .scrambling_id        = pdu.scrambling_id,
+                                                .n_scid               = pdu.n_scid,
+                                                .amplitude = convert_dB_to_amplitude(-pdu.ratio_pdsch_dmrs_to_sss_dB),
+                                                .symbols_mask              = pdu.dmrs_symbol_mask,
+                                                .rb_mask                   = rb_mask_bitset,
+                                                .precoding_and_beamforming = pdu.precoding_and_beamforming};
 
   // Put DM-RS.
   dmrs.map(grid, dmrs_config);
@@ -76,22 +75,22 @@ pdsch_process_ptrs(resource_grid_writer& grid, ptrs_pdsch_generator& ptrs_genera
   float amplitude = convert_dB_to_amplitude(ptrs.ratio_ptrs_to_pdsch_data_dB - pdu.ratio_pdsch_data_to_sss_dB);
 
   // Prepare PT-RS configuration.
-  ptrs_pdsch_generator::configuration ptrs_config;
-  ptrs_config.slot                 = pdu.slot;
-  ptrs_config.rnti                 = to_rnti(pdu.rnti);
-  ptrs_config.dmrs_type            = pdu.dmrs;
-  ptrs_config.reference_point_k_rb = ptrs_reference_point_k_rb;
-  ptrs_config.scrambling_id        = pdu.scrambling_id;
-  ptrs_config.n_scid               = pdu.n_scid;
-  ptrs_config.amplitude            = amplitude;
-  ptrs_config.dmrs_symbols_mask    = pdu.dmrs_symbol_mask;
-  ptrs_config.rb_mask              = rb_mask_bitset;
-  ptrs_config.time_allocation      = {pdu.start_symbol_index, pdu.start_symbol_index + pdu.nof_symbols};
-  ptrs_config.freq_density         = ptrs.freq_density;
-  ptrs_config.time_density         = ptrs.time_density;
-  ptrs_config.re_offset            = ptrs.re_offset;
-  ptrs_config.reserved             = pdu.reserved;
-  ptrs_config.precoding            = pdu.precoding;
+  ptrs_pdsch_generator::configuration ptrs_config = {
+      .slot                      = pdu.slot,
+      .rnti                      = pdu.rnti,
+      .dmrs_type                 = pdu.dmrs,
+      .reference_point_k_rb      = ptrs_reference_point_k_rb,
+      .scrambling_id             = pdu.scrambling_id,
+      .n_scid                    = pdu.n_scid,
+      .amplitude                 = amplitude,
+      .dmrs_symbols_mask         = pdu.dmrs_symbol_mask,
+      .rb_mask                   = rb_mask_bitset,
+      .time_allocation           = {pdu.start_symbol_index, pdu.start_symbol_index + pdu.nof_symbols},
+      .freq_density              = ptrs.freq_density,
+      .time_density              = ptrs.time_density,
+      .re_offset                 = ptrs.re_offset,
+      .reserved                  = pdu.reserved,
+      .precoding_and_beamforming = pdu.precoding_and_beamforming};
 
   // Put PT-RS.
   ptrs_generator.generate(grid, ptrs_config);
@@ -133,7 +132,7 @@ inline unsigned pdsch_compute_nof_data_re(const pdsch_processor::pdu_t& pdu)
 
     // Create PT-RS pattern configuration.
     ptrs_pattern_configuration ptrs_pattern_config = {
-        .rnti             = to_rnti(pdu.rnti),
+        .rnti             = pdu.rnti,
         .dmrs_type        = pdu.dmrs,
         .dmrs_symbol_mask = pdu.dmrs_symbol_mask,
         .rb_mask          = crb_mask,
@@ -166,6 +165,69 @@ inline unsigned pdsch_compute_nof_data_re(const pdsch_processor::pdu_t& pdu)
                nof_grid_re,
                nof_reserved_re);
   return nof_grid_re - nof_reserved_re - nof_grid_dmrs;
+}
+
+/// \brief Extracts the precoding and beamforming configuration of a codeword.
+///
+/// The codewords split the transmission layers as described in TS38.211 Table 7.3.1.3-1, and the beams that carry the
+/// transmission are split evenly among them, following the beam list order: the first codeword is carried by the first
+/// half of the beams and the second codeword is carried by the last half.
+///
+/// \param[in] precoding     Precoding and beamforming configuration of the transmission.
+/// \param[in] nof_codewords Number of codewords of the transmission.
+/// \param[in] i_cw          Codeword index.
+/// \return The precoding and beamforming configuration of the given codeword.
+/// \remark An assertion is triggered if the number of beams is not divisible by the number of codewords.
+inline precoding_beamforming_configuration
+pdsch_extract_codeword_precoding(const precoding_beamforming_configuration& precoding,
+                                 unsigned                                   nof_codewords,
+                                 unsigned                                   i_cw)
+{
+  unsigned nof_layers = precoding.get_nof_layers();
+  unsigned nof_beams  = precoding.get_nof_beams();
+
+  ocudu_assert(nof_beams % nof_codewords == 0,
+               "The number of beams (i.e., {}) must be divisible by the number of codewords (i.e., {}).",
+               nof_beams,
+               nof_codewords);
+
+  // Number of beams that carry each of the codewords.
+  unsigned nof_beams_cw = nof_beams / nof_codewords;
+
+  // Number of layers of the first codeword, as per TS38.211 Table 7.3.1.3-1.
+  unsigned nof_layers_cw0 = nof_layers / nof_codewords;
+
+  // Number of layers of the given codeword.
+  unsigned nof_layers_cw = (i_cw == 0) ? nof_layers_cw0 : (nof_layers - nof_layers_cw0);
+
+  // First layer and first beam of the given codeword.
+  unsigned first_layer = i_cw * nof_layers_cw0;
+  unsigned first_beam  = i_cw * nof_beams_cw;
+
+  precoding_beamforming_configuration result(
+      nof_layers_cw, nof_beams_cw, precoding.get_nof_prg(), precoding.get_prg_size());
+
+  // Iterate each PRG.
+  for (unsigned i_prg = 0, i_prg_end = precoding.get_nof_prg(); i_prg != i_prg_end; ++i_prg) {
+    const precoding_beamforming_composite& prg_composite = precoding.get_prg(i_prg);
+
+    // Extract the MIMO precoding coefficients of the codeword layers and beams.
+    precoding_weight_matrix mimo(nof_layers_cw, nof_beams_cw);
+    for (unsigned i_layer = 0; i_layer != nof_layers_cw; ++i_layer) {
+      for (unsigned i_beam = 0; i_beam != nof_beams_cw; ++i_beam) {
+        mimo.set_coefficient(
+            prg_composite.mimo.get_coefficient(first_layer + i_layer, first_beam + i_beam), i_layer, i_beam);
+      }
+    }
+
+    // Extract the beams that carry the codeword.
+    precoding_beam_list beams(prg_composite.beams.begin() + first_beam,
+                              prg_composite.beams.begin() + first_beam + nof_beams_cw);
+
+    result.set_prg({mimo, beams}, i_prg);
+  }
+
+  return result;
 }
 
 } // namespace ocudu

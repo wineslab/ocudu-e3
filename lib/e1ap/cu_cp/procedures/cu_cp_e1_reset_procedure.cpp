@@ -30,10 +30,17 @@ void cu_cp_e1_reset_procedure::operator()(coro_context<async_task<void>>& ctx)
 {
   CORO_BEGIN(ctx);
 
-  logger.debug("\"{}\" started...", name());
+  logger.info("\"{}\" started...", name());
 
   // Create transaction.
   transaction = ev_mng.transactions.create_transaction(e1ap_cfg.proc_timeout);
+
+  // The transaction may already be aborted at this point, e.g. if the E1AP is being stopped. Skip sending the
+  // request in that case, since nothing will ever observe its response.
+  if (transaction.aborted()) {
+    logger.warning("\"{}\" failed. Cause: Timeout reached for E1ResetAcknowledge reception", name());
+    CORO_EARLY_RETURN();
+  }
 
   // Forward message to CU-UP.
   if (not send_e1_reset()) {
@@ -87,11 +94,11 @@ bool cu_cp_e1_reset_procedure::send_e1_reset()
 
       if (ue_ctxt.ue_ids.cu_cp_ue_e1ap_id != gnb_cu_cp_ue_e1ap_id_t::invalid) {
         conn_item.gnb_cu_cp_ue_e1ap_id_present = true;
-        conn_item.gnb_cu_cp_ue_e1ap_id         = gnb_cu_cp_ue_e1ap_id_to_uint(ue_ctxt.ue_ids.cu_cp_ue_e1ap_id);
+        conn_item.gnb_cu_cp_ue_e1ap_id         = to_underlying(ue_ctxt.ue_ids.cu_cp_ue_e1ap_id);
       }
       if (ue_ctxt.ue_ids.cu_up_ue_e1ap_id != gnb_cu_up_ue_e1ap_id_t::invalid) {
         conn_item.gnb_cu_up_ue_e1ap_id_present = true;
-        conn_item.gnb_cu_up_ue_e1ap_id         = gnb_cu_up_ue_e1ap_id_to_uint(ue_ctxt.ue_ids.cu_up_ue_e1ap_id);
+        conn_item.gnb_cu_up_ue_e1ap_id         = to_underlying(ue_ctxt.ue_ids.cu_up_ue_e1ap_id);
       }
 
       reset_part_of_e1_interface.push_back(item_container);

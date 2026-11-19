@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/carrier_configuration.h"
+#include "ocudu/ran/configured_grant/cg_configuration.h"
 #include "ocudu/ran/pdcch/aggregation_level.h"
 #include "ocudu/ran/pdcch/coreset.h"
 #include "ocudu/scheduler/config/cell_config_builder_params.h"
@@ -20,6 +21,9 @@ struct cell_config_builder_params_extended : public cell_config_builder_params {
   /// \c SS_ref is defined is per TS 38.104, Section 5.4.3.1 and 5.4.3.2.
   std::optional<arfcn_t> ssb_arfcn;
   unsigned               cell_nof_crbs;
+  /// \brief Maximum number of DL layers. Derived from \c max_rank if configured, otherwise from the number of DL
+  /// antenna ports, and in all cases bounded by the single-codeword layer limit.
+  unsigned max_nof_layers;
 };
 
 /// Generates a default DL carrier configuration based on the input parameters.
@@ -47,5 +51,14 @@ make_default_common_search_space_config(const config_helpers::cell_config_builde
 
 /// Compute the maximum number of candidates that can be accommodated in a CORESET for a given aggregation level.
 uint8_t compute_max_nof_candidates(aggregation_level aggr_lvl, const coreset_configuration& cs_cfg);
+
+/// \brief Builds the cell-default Configured Grant configuration from the cell-level CG parameters.
+/// \remark This function must only be called if the cell has CG enabled (i.e. \c cell_cfg.init_bwp.cg_cfg is set).
+cg_configuration make_default_cell_cg_config(const ran_cell_config& cell_cfg);
+
+/// \brief Computes the number of PRBs required per UE by a Configured Grant, derived from the CG grant size or
+/// bitrate and the configured MCS.
+/// \remark This function must only be called if the cell has CG enabled (i.e. \c cell_cfg.init_bwp.cg_cfg is set).
+unsigned compute_nof_cg_prbs_per_ue(const ran_cell_config& cell_cfg, const cg_configuration& cg_cfg);
 
 } // namespace ocudu::config_helpers

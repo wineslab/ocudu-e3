@@ -4,14 +4,17 @@
 
 #pragma once
 
+#include "ocudu/ran/pdcp/pdcp_count_info.h"
 #include "ocudu/ran/pdcp/pdcp_discard_timer.h"
 #include "ocudu/ran/pdcp/pdcp_rlc_mode.h"
 #include "ocudu/ran/pdcp/pdcp_sn_size.h"
 #include "ocudu/ran/pdcp/pdcp_t_reordering.h"
 #include "ocudu/ran/rohc/rohc_config.h"
 #include "ocudu/support/timers.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
+#include "fmt/std.h"
 #include <cstdint>
+#include <optional>
 
 namespace ocudu {
 
@@ -46,7 +49,7 @@ constexpr uint32_t pdcp_data_header_size(pdcp_sn_size sn_size)
 }
 
 /// \brief Returns the PDCP trailer size.
-/// \param rb_type           whether this is a SRB or DRB.
+/// \param rb_type           whether this is an SRB or DRB.
 /// \param integrity_enabled whether integrity is enabled or not.
 /// \return size of the data trailer.
 constexpr uint32_t pdcp_data_trailer_size(pdcp_rb_type rb_type, bool integrity_enabled)
@@ -134,25 +137,32 @@ struct pdcp_rx_config : pdcp_config_common {
 /// Parameters and valid values for them are taken from the RRC-NR PDCP-Config Information Element.
 /// Ref: 3GPP TS 38.331 version 15.2.1.
 struct pdcp_config {
+  /// Holds the transmission configuration.
+  struct tx_config {
+    pdcp_sn_size                      sn_size;
+    pdcp_security_direction           direction;
+    std::optional<pdcp_discard_timer> discard_timer;
+    bool                              status_report_required;
+  };
+
+  /// Holds the reception configuration.
+  struct rx_config {
+    pdcp_sn_size            sn_size;
+    pdcp_security_direction direction;
+    bool                    out_of_order_delivery;
+    pdcp_t_reordering       t_reordering;
+  };
+
   pdcp_rb_type               rb_type;
   pdcp_rlc_mode              rlc_mode;
   std::optional<rohc_config> header_compression;
   bool                       integrity_protection_required;
   bool                       ciphering_required;
-  struct {
-    pdcp_sn_size                      sn_size;
-    pdcp_security_direction           direction;
-    std::optional<pdcp_discard_timer> discard_timer;
-    bool                              status_report_required;
-  } tx;
-  struct {
-    pdcp_sn_size            sn_size;
-    pdcp_security_direction direction;
-    bool                    out_of_order_delivery;
-    pdcp_t_reordering       t_reordering;
-  } rx;
-  pdcp_custom_config custom;
+  tx_config                  tx;
+  rx_config                  rx;
+  pdcp_custom_config         custom;
 
+  /// Gets the transmission configuration.
   pdcp_tx_config get_tx_config() const
   {
     pdcp_tx_config cfg;
@@ -166,6 +176,8 @@ struct pdcp_config {
     cfg.custom                 = custom.tx;
     return cfg;
   }
+
+  /// Gets the reception configuration.
   pdcp_rx_config get_rx_config() const
   {
     pdcp_rx_config cfg;
@@ -210,11 +222,6 @@ inline pdcp_config pdcp_make_default_srb_config()
 
   return config;
 }
-
-struct pdcp_count_info {
-  uint32_t sn  = 0;
-  uint32_t hfn = 0;
-};
 
 struct pdcp_sn_status_info {
   pdcp_count_info ul_count;

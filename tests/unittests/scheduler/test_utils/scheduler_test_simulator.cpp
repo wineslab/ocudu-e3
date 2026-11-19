@@ -53,6 +53,11 @@ scheduler_test_simulator::scheduler_test_simulator(const scheduler_test_sim_conf
   auto_uci       = cfg.auto_uci;
   auto_crc       = cfg.auto_crc;
   ntn_cs_koffset = cfg.ntn_cs_koffset;
+  if (cfg.start_slot.has_value()) {
+    next_slot = slot_point_extended{cfg.start_slot.value()};
+    logger.set_context(next_slot.sfn(), next_slot.slot_index());
+    test_logger.set_context(next_slot.sfn(), next_slot.slot_index());
+  }
 }
 
 scheduler_test_simulator::~scheduler_test_simulator()
@@ -110,7 +115,7 @@ void scheduler_test_simulator::push_dl_buffer_state(const dl_buffer_state_indica
 
 void scheduler_test_simulator::run_slot(std::optional<du_cell_index_t> cell_idx)
 {
-  ocudu_assert(not cell_idx.has_value() or contains(*cell_idx), "Invalid cellId={}", fmt::underlying(*cell_idx));
+  ocudu_assert(not cell_idx.has_value() or contains(*cell_idx), "Invalid cellId={}", *cell_idx);
   logger.set_context(next_slot.sfn(), next_slot.slot_index());
   test_logger.set_context(next_slot.sfn(), next_slot.slot_index());
 
@@ -140,6 +145,16 @@ void scheduler_test_simulator::run_slot(std::optional<du_cell_index_t> cell_idx)
   }
 
   ++next_slot;
+
+  // Resume async tasks awaiting the next slot and drop the ones that completed.
+  next_slot_signal.set();
+  for (auto it = pending_tasks.begin(); it != pending_tasks.end();) {
+    if (it->ready()) {
+      it = pending_tasks.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 bool scheduler_test_simulator::run_slot_until(const std::function<bool()>& cond_func, unsigned slot_timeout)
@@ -152,6 +167,74 @@ bool scheduler_test_simulator::run_slot_until(const std::function<bool()>& cond_
     }
   }
   return count < slot_timeout;
+}
+
+void scheduler_test_simulator::schedule_task(async_task<void> task)
+{
+  if (task.ready()) {
+    return;
+  }
+  pending_tasks.push_back(launch_async([t = std::move(task)](coro_context<eager_async_task<void>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    CORO_AWAIT(t);
+    CORO_RETURN();
+  }));
+}
+
+void scheduler_test_simulator::run_until_all_pending_tasks_completion()
+{
+  while (not pending_tasks.empty()) {
+    run_slot();
+  }
+}
+
+async_task<bool> scheduler_test_simulator::launch_run_until(unique_function<bool()> condition, unsigned max_slot_count)
+{
+  return launch_async([this, condition = std::move(condition), max_slot_count, count = 0U](
+                          coro_context<async_task<bool>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    for (count = 0; count != max_slot_count; ++count) {
+      if (condition()) {
+        CORO_EARLY_RETURN(true);
+      }
+      CORO_AWAIT(next_slot_signal);
+    }
+    CORO_RETURN(false);
+  });
+}
+
+async_task<void> scheduler_test_simulator::launch_add_ue_task(const sched_ue_creation_request_message& ue_request)
+{
+  const du_ue_index_t ue_index = ue_request.ue_index;
+  // Note: the completion condition is built here (evaluated context) and moved into the coroutine frame, as the CORO_*
+  // macros cannot take an expression containing a lambda literal.
+  return launch_async([this, ue_request, cond = unique_function<bool()>([this, ue_index]() {
+                                           return notif.ue_creation_completed(ue_index);
+                                         })](coro_context<async_task<void>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    add_ue(ue_request, false);
+    CORO_AWAIT(launch_run_until(std::move(cond)));
+    CORO_RETURN();
+  });
+}
+
+async_task<void> scheduler_test_simulator::launch_rem_ue_task(du_ue_index_t ue_index)
+{
+  return launch_async([this, ue_index, cond = unique_function<bool()>([this, ue_index]() {
+                                         return notif.ue_deletion_completed(ue_index);
+                                       })](coro_context<async_task<void>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    sched->handle_ue_removal_request(ue_index);
+    // Wait for the scheduler to confirm the UE was fully drained before considering it removed.
+    CORO_AWAIT(launch_run_until(std::move(cond)));
+    for (auto it = rnti_to_ue_index.begin(); it != rnti_to_ue_index.end(); ++it) {
+      if (it->second == ue_index) {
+        rnti_to_ue_index.erase(it);
+        break;
+      }
+    }
+    CORO_RETURN();
+  });
 }
 
 void scheduler_test_simulator::handle_auto_feedback(du_cell_index_t cell_idx)

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/cause/common.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 #include <variant>
 
 namespace ocudu {
@@ -105,303 +105,195 @@ enum class xnap_cause_misc_t : uint8_t {
 using xnap_cause_t =
     std::variant<xnap_cause_radio_network_t, xnap_cause_transport_t, cause_protocol_t, xnap_cause_misc_t>;
 
+constexpr const char* format_as(xnap_cause_radio_network_t cause)
+{
+  switch (cause) {
+    case xnap_cause_radio_network_t::cell_not_available:
+      return "cell_not_available";
+    case xnap_cause_radio_network_t::ho_desirable_for_radio_reasons:
+      return "ho_desirable_for_radio_reasons";
+    case xnap_cause_radio_network_t::ho_target_not_allowed:
+      return "ho_target_not_allowed";
+    case xnap_cause_radio_network_t::invalid_amf_set_id:
+      return "invalid_amf_set_id";
+    case xnap_cause_radio_network_t::no_radio_res_available_in_target_cell:
+      return "no_radio_res_available_in_target_cell";
+    case xnap_cause_radio_network_t::partial_ho:
+      return "partial_ho";
+    case xnap_cause_radio_network_t::reduce_load_in_serving_cell:
+      return "reduce_load_in_serving_cell";
+    case xnap_cause_radio_network_t::res_optim_ho:
+      return "res_optim_ho";
+    case xnap_cause_radio_network_t::time_crit_ho:
+      return "time_crit_ho";
+    case xnap_cause_radio_network_t::txn_relo_coverall_expiry:
+      return "txn_relo_coverall_expiry";
+    case xnap_cause_radio_network_t::txn_relo_cprep_expiry:
+      return "txn_relo_cprep_expiry";
+    case xnap_cause_radio_network_t::unknown_guami_id:
+      return "unknown_guami_id";
+    case xnap_cause_radio_network_t::unknown_local_ng_ran_node_ue_xn_ap_id:
+      return "unknown_local_ng_ran_node_ue_xn_ap_id";
+    case xnap_cause_radio_network_t::inconsistent_remote_ng_ran_node_ue_xn_ap_id:
+      return "inconsistent_remote_ng_ran_node_ue_xn_ap_id";
+    case xnap_cause_radio_network_t::encryption_and_or_integrity_protection_algorithms_not_supported:
+      return "encryption_and_or_integrity_protection_algorithms_not_supported";
+    case xnap_cause_radio_network_t::not_used_causes_value_neg1:
+      return "not_used_causes_value_neg1";
+    case xnap_cause_radio_network_t::multiple_pdu_session_id_instances:
+      return "multiple_pdu_session_id_instances";
+    case xnap_cause_radio_network_t::unknown_pdu_session_id:
+      return "unknown_pdu_session_id";
+    case xnap_cause_radio_network_t::unknown_qos_flow_id:
+      return "unknown_qos_flow_id";
+    case xnap_cause_radio_network_t::multiple_qos_flow_id_instances:
+      return "multiple_qos_flow_id_instances";
+    case xnap_cause_radio_network_t::switch_off_ongoing:
+      return "switch_off_ongoing";
+    case xnap_cause_radio_network_t::not_supported_5qi_value:
+      return "not_supported_5qi_value";
+    case xnap_cause_radio_network_t::txn_d_coverall_expiry:
+      return "txn_d_coverall_expiry";
+    case xnap_cause_radio_network_t::txn_d_cprep_expiry:
+      return "txn_d_cprep_expiry";
+    case xnap_cause_radio_network_t::action_desirable_for_radio_reasons:
+      return "action_desirable_for_radio_reasons";
+    case xnap_cause_radio_network_t::reduce_load:
+      return "reduce_load";
+    case xnap_cause_radio_network_t::res_optim:
+      return "res_optim";
+    case xnap_cause_radio_network_t::time_crit_action:
+      return "time_crit_action";
+    case xnap_cause_radio_network_t::target_not_allowed:
+      return "target_not_allowed";
+    case xnap_cause_radio_network_t::no_radio_res_available:
+      return "no_radio_res_available";
+    case xnap_cause_radio_network_t::invalid_qos_combination:
+      return "invalid_qos_combination";
+    case xnap_cause_radio_network_t::encryption_algorithms_not_supported:
+      return "encryption_algorithms_not_supported";
+    case xnap_cause_radio_network_t::proc_cancelled:
+      return "proc_cancelled";
+    case xnap_cause_radio_network_t::rrm_purpose:
+      return "rrm_purpose";
+    case xnap_cause_radio_network_t::improve_user_bit_rate:
+      return "improve_user_bit_rate";
+    case xnap_cause_radio_network_t::user_inactivity:
+      return "user_inactivity";
+    case xnap_cause_radio_network_t::radio_conn_with_ue_lost:
+      return "radio_conn_with_ue_lost";
+    case xnap_cause_radio_network_t::fail_in_the_radio_interface_proc:
+      return "fail_in_the_radio_interface_proc";
+    case xnap_cause_radio_network_t::bearer_option_not_supported:
+      return "bearer_option_not_supported";
+    case xnap_cause_radio_network_t::up_integrity_protection_not_possible:
+      return "up_integrity_protection_not_possible";
+    case xnap_cause_radio_network_t::up_confidentiality_protection_not_possible:
+      return "up_confidentiality_protection_not_possible";
+    case xnap_cause_radio_network_t::res_not_available_for_the_slice_s:
+      return "res_not_available_for_the_slice_s";
+    case xnap_cause_radio_network_t::ue_max_ip_data_rate_reason:
+      return "ue_max_ip_data_rate_reason";
+    case xnap_cause_radio_network_t::cp_integrity_protection_fail:
+      return "cp_integrity_protection_fail";
+    case xnap_cause_radio_network_t::up_integrity_protection_fail:
+      return "up_integrity_protection_fail";
+    case xnap_cause_radio_network_t::slice_not_supported_by_ng_ran:
+      return "slice_not_supported_by_ng_ran";
+    case xnap_cause_radio_network_t::mn_mob:
+      return "mn_mob";
+    case xnap_cause_radio_network_t::sn_mob:
+      return "sn_mob";
+    case xnap_cause_radio_network_t::count_reaches_max_value:
+      return "count_reaches_max_value";
+    case xnap_cause_radio_network_t::unknown_old_ng_ran_node_ue_xn_ap_id:
+      return "unknown_old_ng_ran_node_ue_xn_ap_id";
+    case xnap_cause_radio_network_t::pdcp_overload:
+      return "pdcp_overload";
+    case xnap_cause_radio_network_t::drb_id_not_available:
+      return "drb_id_not_available";
+    case xnap_cause_radio_network_t::unspecified:
+      return "unspecified";
+    case xnap_cause_radio_network_t::ue_context_id_not_known:
+      return "ue_context_id_not_known";
+    case xnap_cause_radio_network_t::non_relocation_of_context:
+      return "non_relocation_of_context";
+    case xnap_cause_radio_network_t::cho_cpc_res_tobechanged:
+      return "cho_cpc_res_tobechanged";
+    case xnap_cause_radio_network_t::rsn_not_available_for_the_up:
+      return "rsn_not_available_for_the_up";
+    case xnap_cause_radio_network_t::npn_access_denied:
+      return "npn_access_denied";
+    case xnap_cause_radio_network_t::report_characteristics_empty:
+      return "report_characteristics_empty";
+    case xnap_cause_radio_network_t::existing_meas_id:
+      return "existing_meas_id";
+    case xnap_cause_radio_network_t::meas_temporarily_not_available:
+      return "meas_temporarily_not_available";
+    case xnap_cause_radio_network_t::meas_not_supported_for_the_obj:
+      return "meas_not_supported_for_the_obj";
+    case xnap_cause_radio_network_t::ue_pwr_saving:
+      return "ue_pwr_saving";
+    case xnap_cause_radio_network_t::not_existing_ng_ran_node2_meas_id:
+      return "not_existing_ng_ran_node2_meas_id";
+    case xnap_cause_radio_network_t::insufficient_ue_cap:
+      return "insufficient_ue_cap";
+    case xnap_cause_radio_network_t::normal_release:
+      return "normal_release";
+    case xnap_cause_radio_network_t::value_out_of_allowed_range:
+      return "value_out_of_allowed_range";
+    case xnap_cause_radio_network_t::scg_activation_deactivation_fail:
+      return "scg_activation_deactivation_fail";
+    case xnap_cause_radio_network_t::scg_deactivation_fail_due_to_data_tx:
+      return "scg_deactivation_fail_due_to_data_tx";
+    case xnap_cause_radio_network_t::ssb_not_available:
+      return "ssb_not_available";
+    case xnap_cause_radio_network_t::ltm_triggered:
+      return "ltm_triggered";
+    case xnap_cause_radio_network_t::no_backhaul_res:
+      return "no_backhaul_res";
+    case xnap_cause_radio_network_t::miab_node_not_authorized:
+      return "miab_node_not_authorized";
+    case xnap_cause_radio_network_t::iab_not_authorized:
+      return "iab_not_authorized";
+    default:
+      return "unknown";
+  }
+}
+
+constexpr const char* format_as(xnap_cause_transport_t cause)
+{
+  switch (cause) {
+    case xnap_cause_transport_t::transport_res_unavailable:
+      return "transport_res_unavailable";
+    case xnap_cause_transport_t::unspecified:
+      return "unspecified";
+    default:
+      return "unknown";
+  }
+}
+
+constexpr const char* format_as(xnap_cause_misc_t cause)
+{
+  switch (cause) {
+    case xnap_cause_misc_t::ctrl_processing_overload:
+      return "ctrl_processing_overload";
+    case xnap_cause_misc_t::hardware_fail:
+      return "hardware_fail";
+    case xnap_cause_misc_t::o_and_m_intervention:
+      return "o_and_m_intervention";
+    case xnap_cause_misc_t::not_enough_user_plane_processing_res:
+      return "not_enough_user_plane_processing_res";
+    case xnap_cause_misc_t::unspecified:
+      return "unspecified";
+    default:
+      return "unknown";
+  }
+}
+
 } // namespace ocudu
 
 namespace fmt {
-
-template <>
-struct formatter<ocudu::xnap_cause_radio_network_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::xnap_cause_radio_network_t& cause, FormatContext& ctx) const
-  {
-    if (cause == ocudu::xnap_cause_radio_network_t::cell_not_available) {
-      return format_to(ctx.out(), "cell_not_available");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::ho_desirable_for_radio_reasons) {
-      return format_to(ctx.out(), "ho_desirable_for_radio_reasons");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::ho_target_not_allowed) {
-      return format_to(ctx.out(), "ho_target_not_allowed");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::invalid_amf_set_id) {
-      return format_to(ctx.out(), "invalid_amf_set_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::no_radio_res_available_in_target_cell) {
-      return format_to(ctx.out(), "no_radio_res_available_in_target_cell");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::partial_ho) {
-      return format_to(ctx.out(), "partial_ho");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::partial_ho) {
-      return format_to(ctx.out(), "partial_ho");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::reduce_load_in_serving_cell) {
-      return format_to(ctx.out(), "reduce_load_in_serving_cell");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::res_optim_ho) {
-      return format_to(ctx.out(), "res_optim_ho");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::time_crit_ho) {
-      return format_to(ctx.out(), "time_crit_ho");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::txn_relo_coverall_expiry) {
-      return format_to(ctx.out(), "txn_relo_coverall_expiry");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::txn_relo_cprep_expiry) {
-      return format_to(ctx.out(), "txn_relo_cprep_expiry");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::unknown_guami_id) {
-      return format_to(ctx.out(), "unknown_guami_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::unknown_local_ng_ran_node_ue_xn_ap_id) {
-      return format_to(ctx.out(), "unknown_local_ng_ran_node_ue_xn_ap_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::inconsistent_remote_ng_ran_node_ue_xn_ap_id) {
-      return format_to(ctx.out(), "inconsistent_remote_ng_ran_node_ue_xn_ap_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::encryption_and_or_integrity_protection_algorithms_not_supported) {
-      return format_to(ctx.out(), "encryption_and_or_integrity_protection_algorithms_not_supported");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::not_used_causes_value_neg1) {
-      return format_to(ctx.out(), "not_used_causes_value_neg1");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::multiple_pdu_session_id_instances) {
-      return format_to(ctx.out(), "multiple_pdu_session_id_instances");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::unknown_pdu_session_id) {
-      return format_to(ctx.out(), "unknown_pdu_session_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::unknown_qos_flow_id) {
-      return format_to(ctx.out(), "unknown_qos_flow_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::multiple_qos_flow_id_instances) {
-      return format_to(ctx.out(), "multiple_qos_flow_id_instances");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::switch_off_ongoing) {
-      return format_to(ctx.out(), "switch_off_ongoing");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::not_supported_5qi_value) {
-      return format_to(ctx.out(), "not_supported_5qi_value");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::txn_d_coverall_expiry) {
-      return format_to(ctx.out(), "txn_d_coverall_expiry");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::txn_d_cprep_expiry) {
-      return format_to(ctx.out(), "txn_d_cprep_expiry");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::action_desirable_for_radio_reasons) {
-      return format_to(ctx.out(), "action_desirable_for_radio_reasons");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::reduce_load) {
-      return format_to(ctx.out(), "reduce_load");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::res_optim) {
-      return format_to(ctx.out(), "res_optim");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::time_crit_action) {
-      return format_to(ctx.out(), "time_crit_action");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::target_not_allowed) {
-      return format_to(ctx.out(), "target_not_allowed");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::no_radio_res_available) {
-      return format_to(ctx.out(), "no_radio_res_available");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::invalid_qos_combination) {
-      return format_to(ctx.out(), "invalid_qos_combination");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::encryption_algorithms_not_supported) {
-      return format_to(ctx.out(), "encryption_algorithms_not_supported");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::proc_cancelled) {
-      return format_to(ctx.out(), "proc_cancelled");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::rrm_purpose) {
-      return format_to(ctx.out(), "rrm_purpose");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::improve_user_bit_rate) {
-      return format_to(ctx.out(), "improve_user_bit_rate");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::user_inactivity) {
-      return format_to(ctx.out(), "user_inactivity");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::radio_conn_with_ue_lost) {
-      return format_to(ctx.out(), "radio_conn_with_ue_lost");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::fail_in_the_radio_interface_proc) {
-      return format_to(ctx.out(), "fail_in_the_radio_interface_proc");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::bearer_option_not_supported) {
-      return format_to(ctx.out(), "bearer_option_not_supported");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::up_integrity_protection_not_possible) {
-      return format_to(ctx.out(), "up_integrity_protection_not_possible");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::up_confidentiality_protection_not_possible) {
-      return format_to(ctx.out(), "up_confidentiality_protection_not_possible");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::res_not_available_for_the_slice_s) {
-      return format_to(ctx.out(), "res_not_available_for_the_slice_s");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::ue_max_ip_data_rate_reason) {
-      return format_to(ctx.out(), "ue_max_ip_data_rate_reason");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::cp_integrity_protection_fail) {
-      return format_to(ctx.out(), "cp_integrity_protection_fail");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::up_integrity_protection_fail) {
-      return format_to(ctx.out(), "up_integrity_protection_fail");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::slice_not_supported_by_ng_ran) {
-      return format_to(ctx.out(), "slice_not_supported_by_ng_ran");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::mn_mob) {
-      return format_to(ctx.out(), "mn_mob");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::sn_mob) {
-      return format_to(ctx.out(), "sn_mob");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::count_reaches_max_value) {
-      return format_to(ctx.out(), "count_reaches_max_value");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::unknown_old_ng_ran_node_ue_xn_ap_id) {
-      return format_to(ctx.out(), "unknown_old_ng_ran_node_ue_xn_ap_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::pdcp_overload) {
-      return format_to(ctx.out(), "pdcp_overload");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::drb_id_not_available) {
-      return format_to(ctx.out(), "drb_id_not_available");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::unspecified) {
-      return format_to(ctx.out(), "unspecified");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::ue_context_id_not_known) {
-      return format_to(ctx.out(), "ue_context_id_not_known");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::non_relocation_of_context) {
-      return format_to(ctx.out(), "non_relocation_of_context");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::cho_cpc_res_tobechanged) {
-      return format_to(ctx.out(), "cho_cpc_res_tobechanged");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::rsn_not_available_for_the_up) {
-      return format_to(ctx.out(), "rsn_not_available_for_the_up");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::npn_access_denied) {
-      return format_to(ctx.out(), "npn_access_denied");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::report_characteristics_empty) {
-      return format_to(ctx.out(), "report_characteristics_empty");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::existing_meas_id) {
-      return format_to(ctx.out(), "existing_meas_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::meas_temporarily_not_available) {
-      return format_to(ctx.out(), "meas_temporarily_not_available");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::meas_not_supported_for_the_obj) {
-      return format_to(ctx.out(), "meas_not_supported_for_the_obj");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::ue_pwr_saving) {
-      return format_to(ctx.out(), "ue_pwr_saving");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::not_existing_ng_ran_node2_meas_id) {
-      return format_to(ctx.out(), "not_existing_ng_ran_node2_meas_id");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::insufficient_ue_cap) {
-      return format_to(ctx.out(), "insufficient_ue_cap");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::normal_release) {
-      return format_to(ctx.out(), "normal_release");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::value_out_of_allowed_range) {
-      return format_to(ctx.out(), "value_out_of_allowed_range");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::scg_activation_deactivation_fail) {
-      return format_to(ctx.out(), "scg_activation_deactivation_fail");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::scg_deactivation_fail_due_to_data_tx) {
-      return format_to(ctx.out(), "scg_deactivation_fail_due_to_data_tx");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::ssb_not_available) {
-      return format_to(ctx.out(), "ssb_not_available");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::ltm_triggered) {
-      return format_to(ctx.out(), "ltm_triggered");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::no_backhaul_res) {
-      return format_to(ctx.out(), "no_backhaul_res");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::miab_node_not_authorized) {
-      return format_to(ctx.out(), "miab_node_not_authorized");
-    }
-    if (cause == ocudu::xnap_cause_radio_network_t::iab_not_authorized) {
-      return format_to(ctx.out(), "iab_not_authorized");
-    }
-
-    return format_to(ctx.out(), "unknown");
-  }
-};
-
-template <>
-struct formatter<ocudu::xnap_cause_transport_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::xnap_cause_transport_t& cause, FormatContext& ctx) const
-  {
-    if (cause == ocudu::xnap_cause_transport_t::transport_res_unavailable) {
-      return format_to(ctx.out(), "transport_res_unavailable");
-    }
-    if (cause == ocudu::xnap_cause_transport_t::unspecified) {
-      return format_to(ctx.out(), "unspecified");
-    }
-
-    return format_to(ctx.out(), "unknown");
-  }
-};
-
-template <>
-struct formatter<ocudu::xnap_cause_misc_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::xnap_cause_misc_t& cause, FormatContext& ctx) const
-  {
-    if (cause == ocudu::xnap_cause_misc_t::ctrl_processing_overload) {
-      return format_to(ctx.out(), "ctrl_processing_overload");
-    }
-    if (cause == ocudu::xnap_cause_misc_t::hardware_fail) {
-      return format_to(ctx.out(), "hardware_fail");
-    }
-    if (cause == ocudu::xnap_cause_misc_t::o_and_m_intervention) {
-      return format_to(ctx.out(), "o_and_m_intervention");
-    }
-    if (cause == ocudu::xnap_cause_misc_t::not_enough_user_plane_processing_res) {
-      return format_to(ctx.out(), "not_enough_user_plane_processing_res");
-    }
-    if (cause == ocudu::xnap_cause_misc_t::unspecified) {
-      return format_to(ctx.out(), "unspecified");
-    }
-
-    return format_to(ctx.out(), "unknown");
-  }
-};
 
 template <>
 struct formatter<ocudu::xnap_cause_t> {

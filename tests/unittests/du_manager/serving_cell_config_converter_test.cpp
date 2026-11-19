@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "lib/du/du_high/du_manager/converters/asn1_ntn_config_helpers.h"
 #include "lib/du/du_high/du_manager/converters/asn1_rrc_config_helpers.h"
+#include "tests/ocudu_test_requirements.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/rrc_nr/cell_group_config.h"
+#include "ocudu/asn1/rrc_nr/rrc_nr.h"
+#include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/mac/config/mac_cell_group_config_factory.h"
 #include "ocudu/scheduler/config/csi_helper.h"
 #include "ocudu/scheduler/config/ran_cell_config_helper.h"
@@ -250,6 +255,104 @@ TEST(serving_cell_config_converter_test, test_ue_custom_pdsch_cfg_conversion)
     ASSERT_EQ(rrc_sp_cell_cfg_ded.init_dl_bwp.pdsch_cfg.setup().tci_states_to_add_mod_list.size(), 1);
     ASSERT_EQ(rrc_sp_cell_cfg_ded.init_dl_bwp.pdsch_cfg.setup().tci_states_to_release_list.size(), 1);
   }
+}
+
+TEST(serving_cell_config_converter_test, test_ue_pdsch_td_alloc_list_r16_conversion)
+{
+  auto                       src_cfg = make_initial_du_ue_resource_config();
+  odu::du_ue_resource_config dest_cfg{src_cfg};
+  auto& dest_pdsch_cfg = dest_cfg.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.init_dl_bwp.pdsch_cfg.value();
+  dest_pdsch_cfg.pdsch_td_alloc_list.push_back({.k0 = 0, .map_type = sch_mapping_type::typeA, .symbols = {2, 14}});
+  dest_pdsch_cfg.pdsch_td_alloc_list.push_back(
+      {.k0 = 0, .map_type = sch_mapping_type::typeA, .symbols = {2, 14}, .rep_number = 8});
+  dest_pdsch_cfg.slot_based_repetition_enabled = true;
+
+  asn1::rrc_nr::cell_group_cfg_s rrc_cell_grp_cfg;
+  odu::calculate_cell_group_config_diff(rrc_cell_grp_cfg, src_cfg, dest_cfg);
+
+  auto& rrc_pdsch_cfg = rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded.init_dl_bwp.pdsch_cfg.setup();
+  ASSERT_TRUE(rrc_pdsch_cfg.ext);
+  ASSERT_TRUE(rrc_pdsch_cfg.pdsch_time_domain_alloc_list_r16.is_present());
+  ASSERT_TRUE(rrc_pdsch_cfg.pdsch_time_domain_alloc_list_r16->is_setup());
+
+  // The slot-based repetition scheme must be configured along with the Rel-16 TDRA list.
+  ASSERT_TRUE(rrc_pdsch_cfg.repeat_scheme_cfg_r16.is_present());
+  ASSERT_TRUE(rrc_pdsch_cfg.repeat_scheme_cfg_r16->is_setup());
+  ASSERT_EQ(rrc_pdsch_cfg.repeat_scheme_cfg_r16->setup().type(),
+            asn1::rrc_nr::repeat_scheme_cfg_r16_c::types_opts::slot_based_r16);
+  ASSERT_TRUE(rrc_pdsch_cfg.repeat_scheme_cfg_r16->setup().slot_based_r16().is_setup());
+  const auto& rrc_list = rrc_pdsch_cfg.pdsch_time_domain_alloc_list_r16->setup();
+  ASSERT_EQ(rrc_list.size(), 2);
+  ASSERT_FALSE(rrc_list[0].repeat_num_r16_present);
+  ASSERT_TRUE(rrc_list[1].repeat_num_r16_present);
+  ASSERT_EQ(rrc_list[1].repeat_num_r16.to_number(), 8);
+  ASSERT_EQ(rrc_list[0].start_symbol_and_len_r16, rrc_list[1].start_symbol_and_len_r16);
+
+  // The generated cell group config must be packable.
+  byte_buffer   packed;
+  asn1::bit_ref bref{packed};
+  ASSERT_EQ(rrc_cell_grp_cfg.pack(bref), asn1::OCUDUASN_SUCCESS);
+}
+
+TEST(serving_cell_config_converter_test, test_ue_pdsch_td_alloc_list_r16_release_conversion)
+{
+  auto src_cfg = make_initial_du_ue_resource_config();
+  src_cfg.cell_group.cells.at(SERVING_PCELL_IDX)
+      .serv_cell_cfg.init_dl_bwp.pdsch_cfg->pdsch_td_alloc_list.push_back(
+          {.k0 = 0, .map_type = sch_mapping_type::typeA, .symbols = {2, 14}, .rep_number = 2});
+  odu::du_ue_resource_config dest_cfg{src_cfg};
+  dest_cfg.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.init_dl_bwp.pdsch_cfg->pdsch_td_alloc_list.clear();
+
+  asn1::rrc_nr::cell_group_cfg_s rrc_cell_grp_cfg;
+  odu::calculate_cell_group_config_diff(rrc_cell_grp_cfg, src_cfg, dest_cfg);
+
+  auto& rrc_pdsch_cfg = rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded.init_dl_bwp.pdsch_cfg.setup();
+  ASSERT_TRUE(rrc_pdsch_cfg.pdsch_time_domain_alloc_list_r16.is_present());
+  ASSERT_EQ(rrc_pdsch_cfg.pdsch_time_domain_alloc_list_r16->type(), asn1::setup_release_opts::release);
+}
+
+TEST(serving_cell_config_converter_test, test_ue_pusch_td_alloc_list_dci_0_1_r16_conversion)
+{
+  auto src_cfg = make_initial_du_ue_resource_config();
+  src_cfg.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.ul_config->init_ul_bwp.pusch_cfg =
+      make_initial_pusch_config();
+  odu::du_ue_resource_config dest_cfg{src_cfg};
+  auto&                      dest_pusch_cfg =
+      dest_cfg.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.ul_config->init_ul_bwp.pusch_cfg.value();
+  dest_pusch_cfg.pusch_td_alloc_list.clear();
+  dest_pusch_cfg.pusch_td_alloc_list.push_back({.k2 = 4, .map_type = sch_mapping_type::typeA, .symbols = {0, 14}});
+  dest_pusch_cfg.pusch_td_alloc_list.push_back(
+      {.k2 = 4, .map_type = sch_mapping_type::typeA, .symbols = {0, 14}, .nof_repetitions = 4});
+
+  asn1::rrc_nr::cell_group_cfg_s rrc_cell_grp_cfg;
+  odu::calculate_cell_group_config_diff(rrc_cell_grp_cfg, src_cfg, dest_cfg);
+
+  auto& rrc_pusch_cfg = rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded.ul_cfg.init_ul_bwp.pusch_cfg.setup();
+  ASSERT_TRUE(rrc_pusch_cfg.ext);
+  ASSERT_TRUE(rrc_pusch_cfg.pusch_time_domain_alloc_list_dci_0_1_r16.is_present());
+  ASSERT_TRUE(rrc_pusch_cfg.pusch_time_domain_alloc_list_dci_0_1_r16->is_setup());
+  // pusch-RepTypeIndicatorDCI-0-1-r16 is mandatory whenever pusch-TimeDomainAllocationListDCI-0-1-r16 is configured.
+  ASSERT_TRUE(rrc_pusch_cfg.pusch_rep_type_ind_dci_0_1_r16_present);
+  ASSERT_EQ(rrc_pusch_cfg.pusch_rep_type_ind_dci_0_1_r16.value,
+            asn1::rrc_nr::pusch_cfg_s::pusch_rep_type_ind_dci_0_1_r16_opts::pusch_rep_type_a);
+  // availableSlotCounting-r17 is Cond PUSCH-RepTypeAIndicated: mandatory here since Type A is always indicated.
+  ASSERT_TRUE(rrc_pusch_cfg.available_slot_count_r17_present);
+  const auto& rrc_list = rrc_pusch_cfg.pusch_time_domain_alloc_list_dci_0_1_r16->setup();
+  ASSERT_EQ(rrc_list.size(), 2);
+  ASSERT_TRUE(rrc_list[0].k2_r16_present);
+  ASSERT_EQ(rrc_list[0].k2_r16, 4);
+  ASSERT_EQ(rrc_list[0].pusch_alloc_list_r16.size(), 1);
+  // numberOfRepetitions-r16 is mandatory present in the DCI 0_1 list; a single transmission is encoded as n1.
+  ASSERT_TRUE(rrc_list[0].pusch_alloc_list_r16[0].nof_repeats_r16_present);
+  ASSERT_EQ(rrc_list[0].pusch_alloc_list_r16[0].nof_repeats_r16.to_number(), 1);
+  ASSERT_EQ(rrc_list[1].pusch_alloc_list_r16.size(), 1);
+  ASSERT_TRUE(rrc_list[1].pusch_alloc_list_r16[0].nof_repeats_r16_present);
+  ASSERT_EQ(rrc_list[1].pusch_alloc_list_r16[0].nof_repeats_r16.to_number(), 4);
+
+  // The generated cell group config must be packable.
+  byte_buffer   packed;
+  asn1::bit_ref bref{packed};
+  ASSERT_EQ(rrc_cell_grp_cfg.pack(bref), asn1::OCUDUASN_SUCCESS);
 }
 
 TEST(serving_cell_config_converter_test, test_default_initial_ue_uplink_cfg_conversion)
@@ -575,6 +678,27 @@ TEST(serving_cell_config_converter_test, test_initial_pusch_cfg_conversion)
     ASSERT_TRUE(rrc_sp_cell_cfg_ded.ul_cfg.init_ul_bwp.pusch_cfg.setup().pusch_time_domain_alloc_list_present);
     ASSERT_TRUE(rrc_sp_cell_cfg_ded.ul_cfg.init_ul_bwp.pusch_cfg.setup().pusch_time_domain_alloc_list.is_setup());
   }
+}
+
+// Verifies a non-default p0_nominal_without_grant is carried into the packed dedicated PUSCH power control.
+TEST(serving_cell_config_converter_test, test_pusch_p0_nominal_without_grant_override_conversion)
+{
+  auto dest_cfg                                             = make_initial_du_ue_resource_config();
+  auto pusch_cfg                                            = make_initial_pusch_config();
+  pusch_cfg.pusch_pwr_ctrl.value().p0_nominal_without_grant = -90;
+  dest_cfg.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.ul_config.value().init_ul_bwp.pusch_cfg = pusch_cfg;
+
+  asn1::rrc_nr::cell_group_cfg_s rrc_cell_grp_cfg;
+  odu::calculate_cell_group_config_diff(rrc_cell_grp_cfg, {}, dest_cfg);
+
+  ASSERT_TRUE(rrc_cell_grp_cfg.sp_cell_cfg_present);
+  ASSERT_TRUE(rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded_present);
+
+  auto& rrc_sp_cell_cfg_ded = rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded;
+
+  ASSERT_TRUE(rrc_sp_cell_cfg_ded.ul_cfg.init_ul_bwp.pusch_cfg.setup().pusch_pwr_ctrl_present);
+  ASSERT_TRUE(rrc_sp_cell_cfg_ded.ul_cfg.init_ul_bwp.pusch_cfg.setup().pusch_pwr_ctrl.p0_nominal_without_grant_present);
+  ASSERT_EQ(rrc_sp_cell_cfg_ded.ul_cfg.init_ul_bwp.pusch_cfg.setup().pusch_pwr_ctrl.p0_nominal_without_grant, -90);
 }
 
 TEST(serving_cell_config_converter_test, test_ue_custom_pusch_cfg_conversion)
@@ -1115,10 +1239,10 @@ TEST(serving_cell_config_converter_test, test_custom_csi_meas_cfg_conversion)
   // '03'H.
   sub_type.typeii_ri_restriction.from_uint64(0x03);
   codebook_config::type2 type2{};
-  type2.sub_type                                                                  = sub_type;
-  type2.phase_alphabet_size                                                       = 4;
-  type2.subband_amplitude                                                         = true;
-  type2.nof_beams                                                                 = 2;
+  type2.sub_type            = sub_type;
+  type2.phase_alphabet_size = pmi_codebook_typeII_phase_size::qpsk;
+  type2.subband_amplitude   = true;
+  type2.nof_beams           = 2;
   dest_csi_meas_cfg.csi_report_cfg_list.back().codebook_cfg.value().codebook_type = type2;
 
   dest_csi_meas_cfg.csi_report_cfg_list.back().is_group_based_beam_reporting_enabled = true;
@@ -1216,6 +1340,8 @@ TEST(serving_cell_config_converter_test, test_csi_meas_cfg_release_conversion)
 
 TEST(serving_cell_config_converter_test, test_rlm_cfg_conversion)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RLM-16-1");
+
   using namespace asn1::rrc_nr;
 
   // Some lambda to check recurrent configs.
@@ -1281,9 +1407,8 @@ TEST(serving_cell_config_converter_test, test_rlm_cfg_conversion)
   odu::du_ue_resource_config dest_cfg{src_cfg};
 
   // 1. Make a RLM config that uses SSB resources.
-  uint8_t                                      L_max   = 4U;
-  constexpr std::array<uint8_t, NOF_SSB_BEAMS> ssb_ids = {0};
-  rlm_helper::rlm_builder_params rlm_params(rlm_resource_type::ssb, L_max, ssb_bitmap_t(0b1000, L_max), ssb_ids);
+  uint8_t                        L_max = 4U;
+  rlm_helper::rlm_builder_params rlm_params(rlm_resource_type::ssb, L_max, ssb_bitmap_t(0b1000, L_max));
 
   dest_cfg.cell_group.cells.at(SERVING_PCELL_IDX)
       .serv_cell_cfg.init_dl_bwp.rlm_cfg.emplace(rlm_helper::make_radio_link_monitoring_config(
@@ -1321,8 +1446,8 @@ TEST(serving_cell_config_converter_test, test_rlm_cfg_conversion)
   validate_rlm_csi_rs_resources(rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded, rlm_res_indices, csi_rs_res_indices);
 
   // 3. Make a RLM config that uses both SSB and CSI-RS resources.
-  rlm_params = rlm_helper::rlm_builder_params(
-      rlm_resource_type::ssb_and_csi_rs, L_max, ssb_bitmap_t(0b10000000, L_max), ssb_ids);
+  rlm_params =
+      rlm_helper::rlm_builder_params(rlm_resource_type::ssb_and_csi_rs, L_max, ssb_bitmap_t(0b10000000, L_max));
 
   // Set the DEST (with SSB config) configuration as the new SRC.
   src_cfg = dest_cfg;
@@ -1343,4 +1468,56 @@ TEST(serving_cell_config_converter_test, test_rlm_cfg_conversion)
   std::array<uint8_t, 3U> csi_rs_res_new_indices = {1, 2, 3};
   validate_rlm_csi_rs_resources(
       rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded, rlm_res_new_indices, csi_rs_res_new_indices);
+}
+
+/// Returns the JSON representation of an ASN.1 object, to compare two objects in full.
+template <typename T>
+static std::string to_json_string(const T& obj)
+{
+  asn1::json_writer js;
+  obj.to_json(js);
+  return js.to_string();
+}
+
+TEST(serving_cell_config_converter_test, handover_to_an_ntn_cell_carries_the_ntn_config_of_the_target_cell)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-MOB-2");
+
+  odu::du_cell_config target_cell = config_helpers::make_default_du_cell_config();
+  target_cell.ran.ntn_params.emplace();
+  target_cell.ran.ntn_params->ntn_cfg.cell_specific_koffset = std::chrono::milliseconds{20};
+  target_cell.ran.ntn_params->ntn_cfg.k_mac                 = std::chrono::milliseconds{4};
+
+  asn1::rrc_nr::recfg_with_sync_s recfg_with_sync;
+  ASSERT_TRUE(odu::calculate_reconfig_with_sync_diff(recfg_with_sync,
+                                                     target_cell,
+                                                     make_initial_du_ue_resource_config(),
+                                                     asn1::rrc_nr::ho_prep_info_s{},
+                                                     to_rnti(0x4601)));
+
+  // TS 38.331, ServingCellConfigCommon: the UE learns the NTN-Config of the target cell from the handover command,
+  // since it cannot read SIB19 of the target cell before accessing it.
+  ASSERT_TRUE(recfg_with_sync.sp_cell_cfg_common_present);
+  ASSERT_TRUE(recfg_with_sync.sp_cell_cfg_common.ntn_cfg_r17.is_present());
+  ASSERT_EQ(to_json_string(*recfg_with_sync.sp_cell_cfg_common.ntn_cfg_r17),
+            to_json_string(odu::make_asn1_rrc_cell_ntn_cfg(target_cell.ran.ntn_params->ntn_cfg)));
+  ASSERT_TRUE(recfg_with_sync.sp_cell_cfg_common.ntn_cfg_r17->cell_specific_koffset_r17_present);
+  ASSERT_EQ(recfg_with_sync.sp_cell_cfg_common.ntn_cfg_r17->cell_specific_koffset_r17, 20);
+}
+
+TEST(serving_cell_config_converter_test, handover_to_a_terrestrial_cell_carries_no_ntn_config)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-MOB-2");
+
+  const odu::du_cell_config target_cell = config_helpers::make_default_du_cell_config();
+
+  asn1::rrc_nr::recfg_with_sync_s recfg_with_sync;
+  ASSERT_TRUE(odu::calculate_reconfig_with_sync_diff(recfg_with_sync,
+                                                     target_cell,
+                                                     make_initial_du_ue_resource_config(),
+                                                     asn1::rrc_nr::ho_prep_info_s{},
+                                                     to_rnti(0x4601)));
+
+  ASSERT_TRUE(recfg_with_sync.sp_cell_cfg_common_present);
+  ASSERT_FALSE(recfg_with_sync.sp_cell_cfg_common.ntn_cfg_r17.is_present());
 }

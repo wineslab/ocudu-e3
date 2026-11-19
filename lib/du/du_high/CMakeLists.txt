@@ -10,12 +10,8 @@ add_library(ocudu_du_high STATIC
         du_high_impl.cpp
         du_high_factory.cpp
         du_high_clock_controller_factory.cpp
-        du_high_executor_mapper.cpp
-        du_high_ntn_sib19_update_handler_impl.cpp
-        du_high_ntn_sib19_update_handler_factory.cpp
-        du_high_ntn_time_provider_impl.cpp
-        du_high_ntn_time_provider_factory.cpp)
-target_link_libraries(ocudu_du_high PUBLIC ocudu_du_high_adapters)
+        du_high_executor_mapper.cpp)
+target_link_libraries(ocudu_du_high PUBLIC ocudu_du_high_adapters ocudu_ntn_lib)
 
 add_library(ocudu_o_du_high STATIC
         o_du_high_factory.cpp

@@ -25,9 +25,11 @@ public:
   void handle_cell_deactivation_request(du_cell_index_t cell_index) override;
 
   void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& req) override;
+  void handle_ntn_ul_ta_update(const sched_cell_ntn_ul_ta_update& req) override;
 
   // Sys Info handling.
   void handle_si_update_request(const si_scheduling_update_request& req) override;
+  void handle_pws_si_update_request(const pws_si_scheduling_update_request& req) override;
 
   // scheduler_slot_handler interface methods.
   const sched_result& slot_indication(slot_point_extended sl_tx, du_cell_index_t cell_index) noexcept override;
@@ -50,6 +52,7 @@ public:
   void handle_dl_mac_ce_indication(const dl_mac_ce_indication& mac_ce) override;
   void handle_ul_bsr_indication(const ul_bsr_indication_message& bsr) override;
   void handle_ul_phr_indication(const ul_phr_indication_message& phr_ind) override;
+  void handle_ul_ta_report_indication(const ul_ta_report_indication_message& ta_report_ind) override;
   void handle_crnti_ce_received(du_ue_index_t ue_index) override;
 
   // PHY events.

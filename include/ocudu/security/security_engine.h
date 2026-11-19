@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ocudu/adt/byte_buffer.h"
-#include "fmt/format.h"
 #include <cstdint>
 
 namespace ocudu {
@@ -45,6 +44,11 @@ inline const char* to_string(security_status status)
   }
 }
 
+inline const char* format_as(security_status status)
+{
+  return to_string(status);
+}
+
 class security_engine_tx
 {
 public:
@@ -63,21 +67,3 @@ public:
 
 } // namespace security
 } // namespace ocudu
-
-namespace fmt {
-
-template <>
-struct formatter<ocudu::security::security_status> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::security::security_status status, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", to_string(status));
-  }
-};
-} // namespace fmt

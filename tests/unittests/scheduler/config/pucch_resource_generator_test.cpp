@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/support/pucch/pucch_collision.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/pucch/pucch_configuration.h"
 #include "ocudu/ran/pucch/pucch_constants.h"
 #include "ocudu/ran/pucch/pucch_mapping.h"
@@ -87,6 +88,25 @@ TEST_P(pucch_resource_generator_test, successful_generation_results_in_no_collis
     for (unsigned j = i + 1; j != nof_res_f0_f1 + nof_res_f2_f3_f4; ++j) {
       ASSERT_FALSE(pucch_resources_collide(res_list[i], res_list[j]));
     }
+  }
+}
+
+TEST_P(pucch_resource_generator_test, f1_resources_have_valid_occ_indices)
+{
+  const std::vector<pucch_resource> res_list =
+      config_helpers::generate_cell_pucch_res_list(params, bwp_cfg.crbs.length());
+  ASSERT_FALSE(res_list.empty());
+
+  for (const auto& res : res_list) {
+    if (res.format() != pucch_format::FORMAT_1) {
+      continue;
+    }
+    // As per Table 6.3.2.4.1-1, TS 38.211, the OCC index must be lower than the spreading factor of every hop.
+    const unsigned nof_syms = res.syms.length();
+    const unsigned nof_occs = res.second_hop_prb.has_value() ? nof_syms / 4 : nof_syms / 2;
+    const auto&    f1_cfg   = std::get<pucch_resource::f1_config>(res.format_params);
+    ASSERT_LT(f1_cfg.time_domain_occ, nof_occs)
+        << fmt::format("Invalid OCC index for cell_res_id={} with nof_syms={}", res.res_id.ded().cell_res_id, nof_syms);
   }
 }
 
@@ -217,6 +237,17 @@ static constexpr pucch_f1_params f1_high_density{
     .nof_cyc_shifts = pucch_nof_cyclic_shifts::twelve,
     .occ_supported  = true,
 };
+static constexpr pucch_f1_params f1_freq_hop{
+    .nof_syms               = pucch_constants::f1::MAX_NOF_SYMS,
+    .intraslot_freq_hopping = true,
+    .nof_cyc_shifts         = pucch_nof_cyclic_shifts::two,
+    .occ_supported          = true,
+};
+static constexpr pucch_f1_params f1_12_syms{
+    .nof_syms       = 12,
+    .nof_cyc_shifts = pucch_nof_cyclic_shifts::twelve,
+    .occ_supported  = true,
+};
 
 static constexpr pucch_f2_params f2_multiple_rbs{
     .max_nof_rbs = 3,
@@ -253,6 +284,10 @@ void PrintTo(const pucch_resource_builder_params& value, ::std::ostream* os)
       *os << "F1 (low density)";
     } else if (f1_params == f1_high_density) {
       *os << "F1 (high density)";
+    } else if (f1_params == f1_freq_hop) {
+      *os << "F1 (freq hop)";
+    } else if (f1_params == f1_12_syms) {
+      *os << "F1 (12 symbols)";
     } else {
       *os << "F1 (unknown)";
     }
@@ -355,4 +390,20 @@ INSTANTIATE_TEST_SUITE_P(,
                                  .nof_cell_csi_resources   = 8,
                                  .f0_or_f1_params          = f1_high_density,
                                  .f2_or_f3_or_f4_params    = f4_high_density,
+                             },
+                             pucch_resource_builder_params{
+                                 .nof_cell_res_set_configs = 2,
+                                 .nof_cell_sr_resources    = 20,
+                                 .nof_cell_csi_resources   = 2,
+                                 .f0_or_f1_params          = f1_freq_hop,
+                                 .f2_or_f3_or_f4_params    = f2_freq_hop,
+                             },
+                             // PUCCH limited to 12 symbols, e.g., when SRS takes the last symbols of the slot.
+                             pucch_resource_builder_params{
+                                 .nof_cell_res_set_configs = 2,
+                                 .nof_cell_sr_resources    = 72,
+                                 .nof_cell_csi_resources   = 2,
+                                 .f0_or_f1_params          = f1_12_syms,
+                                 .f2_or_f3_or_f4_params    = f2_multiple_rbs,
+                                 .max_nof_symbols          = 12,
                              }));

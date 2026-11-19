@@ -24,6 +24,7 @@
 #include "phy_metrics_time_alignment_estimator_decorator.h"
 #include "phy_metrics_transform_precoder_decorator.h"
 #include "phy_metrics_ulsch_demultiplex_decorator.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

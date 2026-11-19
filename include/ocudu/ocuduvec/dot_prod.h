@@ -74,5 +74,11 @@ float average_power(span<const cf_t> x);
 /// <tt>dot_prod(x, x) / x.size()</tt>.
 float average_power(span<const cbf16_t> x);
 
+/// \brief Estimates the average power of a complex int16 span - linear scale.
+///
+/// The result is normalized by \c scale, i.e. it matches the average power of the samples converted to complex float
+/// using the same scaling factor.
+float average_power(span<const ci16_t> x, float scale);
+
 } // namespace ocuduvec
 } // namespace ocudu

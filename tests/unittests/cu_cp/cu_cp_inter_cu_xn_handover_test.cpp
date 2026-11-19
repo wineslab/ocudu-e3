@@ -3,15 +3,16 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
 #include "tests/test_doubles/rrc/rrc_test_message_validators.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/test_doubles/xnap/xnap_test_message_validators.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
 #include "tests/unittests/xnap/xnap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/xnap/xnap_pdu_contents.h"
 #include "ocudu/e1ap/common/e1ap_types.h"
@@ -20,9 +21,9 @@
 #include "ocudu/ngap/ngap_message.h"
 #include "ocudu/ngap/ngap_types.h"
 #include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/up_transport_layer_info.h"
 #include "ocudu/xnap/xnap_types.h"
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 using namespace ocudu;
 using namespace ocucp;
@@ -42,9 +43,6 @@ public:
   {
     // Run NG setup to completion.
     run_ng_setup();
-
-    // Wait for the XN-C gateway to be attached to the CU-CP.
-    sleep(1);
 
     // Run XN setup to completion.
     run_xn_setup();
@@ -73,7 +71,10 @@ public:
     return ue_ctx != nullptr;
   }
 
-  [[nodiscard]] bool send_handover_request_and_await_bearer_context_setup_request(local_xnap_ue_id_t local_xnap_ue_id)
+  [[nodiscard]] bool
+  send_handover_request_and_await_bearer_context_setup_request(local_xnap_ue_id_t local_xnap_ue_id,
+                                                               bool include_drb_to_qos_flow_mapping = true,
+                                                               bool include_as_config_drb_mapping   = false)
   {
     report_fatal_error_if_not(not this->get_amf().try_pop_rx_pdu(ngap_pdu),
                               "there are still NGAP messages to pop from AMF");
@@ -82,10 +83,12 @@ public:
     report_fatal_error_if_not(not this->get_cu_up(cu_up_idx).try_pop_rx_pdu(e1ap_pdu),
                               "there are still E1AP messages to pop from CU-UP");
     report_fatal_error_if_not(not this->get_xnc_cu_cp(xnc_peer_idx).try_pop_rx_pdu(xnap_pdu),
-                              "there are still XNAP messages to pop from XN-C peer CU-CP");
+                              "there are still XNAP messages to pop from Xn-C peer CU-CP");
 
     // Inject Handover Request and wait for Bearer Context Setup Request.
-    get_xnc_cu_cp(xnc_peer_idx).push_tx_pdu(generate_handover_request(local_xnap_ue_id));
+    get_xnc_cu_cp(xnc_peer_idx)
+        .push_tx_pdu(generate_handover_request(
+            local_xnap_ue_id, include_drb_to_qos_flow_mapping, include_as_config_drb_mapping));
     report_fatal_error_if_not(this->wait_for_e1ap_tx_pdu(cu_up_idx, e1ap_pdu),
                               "Failed to receive Bearer Context Setup Request");
     report_fatal_error_if_not(test_helpers::is_valid_bearer_context_setup_request(e1ap_pdu),
@@ -157,10 +160,12 @@ public:
   }
 
   [[nodiscard]] bool
-  send_sn_status_transfer_and_await_bearer_context_modification_request(local_xnap_ue_id_t local_xnap_ue_id,
-                                                                        peer_xnap_ue_id_t  peer_xnap_ue_id)
+  send_sn_status_transfer_and_await_bearer_context_modification_request(local_xnap_ue_id_t           local_xnap_ue_id,
+                                                                        peer_xnap_ue_id_t            peer_xnap_ue_id,
+                                                                        const std::vector<drb_id_t>& extra_drb_ids = {})
   {
-    get_xnc_cu_cp(xnc_peer_idx).push_tx_pdu(generate_sn_status_transfer(local_xnap_ue_id, peer_xnap_ue_id));
+    get_xnc_cu_cp(xnc_peer_idx)
+        .push_tx_pdu(generate_sn_status_transfer(local_xnap_ue_id, peer_xnap_ue_id, extra_drb_ids));
     report_fatal_error_if_not(this->wait_for_e1ap_tx_pdu(cu_up_idx, e1ap_pdu),
                               "Failed to receive Bearer Context Modification Request");
     report_fatal_error_if_not(test_helpers::is_valid_bearer_context_modification_request(e1ap_pdu),
@@ -172,7 +177,7 @@ public:
   {
     // Inject UL RRC Message (containing RRC Reconfiguration Complete) and wait for Path Switch Request.
     get_du(du_idx).push_ul_pdu(test_helpers::generate_ul_rrc_message_transfer(
-        du_ue_id, cu_ue_id, srb_id_t::srb1, make_byte_buffer("80000800795ae600").value()));
+        du_ue_id, cu_ue_id, srb_id_t::srb1, make_byte_buffer("800008006cfadbf2").value()));
     return await_path_switch_request();
   }
 
@@ -180,7 +185,7 @@ public:
   {
     // Inject UL RRC Message containing RRC Reconfiguration Complete.
     get_du(du_idx).push_ul_pdu(test_helpers::generate_ul_rrc_message_transfer(
-        du_ue_id, cu_ue_id, srb_id_t::srb1, make_byte_buffer("80000800795ae600").value()));
+        du_ue_id, cu_ue_id, srb_id_t::srb1, make_byte_buffer("800008006cfadbf2").value()));
     return true;
   }
 
@@ -245,6 +250,13 @@ public:
         test_helpers::is_valid_rrc_handover_preparation_info(test_helpers::get_rrc_container(xnap_pdu)),
         "Invalid Handover Preparation Info");
 
+    // The peer has to learn which AMF serves the UE, so that it can address the same one over NG-C
+    // (TS 38.423 section 9.2.1.13).
+    const auto& asn1_ue_context_info = xnap_pdu.pdu.init_msg().value.ho_request()->ue_context_info_ho_request;
+    report_fatal_error_if_not(tla_from_asn1_bitstring(asn1_ue_context_info.cp_tnl_info_source.endpoint_ip_address()) ==
+                                  amf_addr,
+                              "The Handover Request does not carry the address of the AMF association");
+
     local_xnap_ue_id =
         uint_to_local_xnap_ue_id(xnap_pdu.pdu.init_msg().value.ho_request()->source_ng_ra_nnode_ue_xn_ap_id);
     peer_xnap_ue_id =
@@ -262,7 +274,7 @@ public:
 
   [[nodiscard]] bool timeout_handover_command_and_await_handover_cancel()
   {
-    // Fail Handover Preparation (XN-C peer CU-CP doesn't respond) and await Handover Cancel.
+    // Fail Handover Preparation (Xn-C peer CU-CP doesn't respond) and await Handover Cancel.
     if (tick_until(std::chrono::milliseconds(1000), [&]() { return false; })) {
       return false;
     }
@@ -321,7 +333,7 @@ public:
         generate_bearer_context_modification_response_with_pdcp_status(cu_cp_ue_e1ap_id, cu_up_ue_e1ap_id));
 
     report_fatal_error_if_not(this->wait_for_xnap_tx_pdu(xnc_peer_idx, xnap_pdu),
-                              "Failed to transmist XNAP SN Status transfer to XN-C peer CU-CP");
+                              "Failed to transmist XNAP SN Status transfer to Xn-C peer CU-CP");
     report_fatal_error_if_not(test_helpers::is_valid_sn_status_transfer(xnap_pdu), "Invalid XNAP SN Status Transfer");
 
     return true;
@@ -347,7 +359,7 @@ public:
     report_fatal_error_if_not(not this->get_cu_up(cu_up_idx).try_pop_rx_pdu(e1ap_pdu),
                               "there are still E1AP messages to pop from CU-UP");
     report_fatal_error_if_not(not this->get_xnc_cu_cp(xnc_peer_idx).try_pop_rx_pdu(xnap_pdu),
-                              "there are still XNAP messages to pop from XN-C peer CU-CP");
+                              "there are still XNAP messages to pop from Xn-C peer CU-CP");
 
     // Inject XNAP UE Context Release and wait for Bearer Context Release Command.
     get_xnc_cu_cp(xnc_peer_idx).push_tx_pdu(generate_ue_context_release(local_xnap_ue_id, peer_xnap_ue_id));
@@ -387,7 +399,7 @@ public:
   gnb_cu_ue_f1ap_id_t cu_ue_id;
   rnti_t              crnti     = to_rnti(0x4601);
   amf_ue_id_t         amf_ue_id = uint_to_amf_ue_id(
-      test_rng::uniform_int<uint64_t>(amf_ue_id_to_uint(amf_ue_id_t::min), amf_ue_id_to_uint(amf_ue_id_t::max)));
+      test_rng::uniform_int<uint64_t>(to_underlying(amf_ue_id_t::min), to_underlying(amf_ue_id_t::max)));
   gnb_cu_up_ue_e1ap_id_t cu_up_e1ap_id = gnb_cu_up_ue_e1ap_id_t::min;
   gnb_cu_cp_ue_e1ap_id_t cu_cp_e1ap_id;
 
@@ -511,6 +523,124 @@ TEST_F(cu_cp_inter_cu_xn_handover_test, when_handover_request_received_then_path
   ASSERT_TRUE(send_path_switch_request_ack_and_await_ue_context_modification_request());
 
   // Inject UE Context Modification Response to ACK the RRC reconfiguration complete indicator.
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// Per TS 38.423 Section 8.2.2.1, the DRBs Subject to Status Transfer List IE reflects the source's DRB
+// configuration and is not guaranteed to be a subset of the DRBs admitted at this target (e.g. if a DRB's
+// QoS flows were not admitted). The target must ignore such DRBs.
+TEST_F(cu_cp_inter_cu_xn_handover_test, when_sn_status_transfer_contains_drb_not_admitted_at_target_then_it_is_ignored)
+{
+  // Inject Handover Request and await Bearer Context Setup Request.
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(source_local_xnap_ue_id));
+
+  // Inject Bearer Context Setup Response and await UE Context Setup Request.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+
+  // Inject UE Context Setup Response and await Bearer Context Modification Request.
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+
+  // Inject Bearer Context Modification Response and await Handover Request Ack.
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+
+  // Inject XNAP SN Status Transfer that additionally reports DRB2, which was never admitted at this target
+  // (the UE was only set up with DRB1).
+  ASSERT_TRUE(send_sn_status_transfer_and_await_bearer_context_modification_request(
+      source_local_xnap_ue_id, source_peer_xnap_ue_id, {drb_id_t::drb2}));
+
+  // The Bearer Context Modification Request must only cover the admitted DRB1; DRB2 must be skipped.
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& pdu_sessions = bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request()
+                                 .pdu_session_res_to_modify_list;
+  ASSERT_EQ(pdu_sessions.size(), 1U);
+  const auto& drbs_to_modify = pdu_sessions[0].drb_to_modify_list_ng_ran;
+  ASSERT_EQ(drbs_to_modify.size(), 1U);
+  EXPECT_EQ(drbs_to_modify[0].drb_id, 1);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_path_switch_request());
+  ASSERT_TRUE(send_path_switch_request_ack_and_await_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// The source's DRB-to-QoS-flow mapping may instead be reported through AS-Config in the RRC
+// HandoverPreparationInformation (TS 38.331 Section 11.2.3), which is how this node signals it. The target must
+// derive the source's DRB numbering from there too, so a matching DRB ID is confirmed and can be trusted with the
+// source's PDCP state.
+TEST_F(cu_cp_inter_cu_xn_handover_test, when_drb_to_qos_flow_mapping_is_signalled_via_as_config_then_it_is_confirmed)
+{
+  // Inject Handover Request reporting the mapping only via AS-Config, not via the XnAP-native IE.
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(source_local_xnap_ue_id,
+                                                                           /*include_drb_to_qos_flow_mapping=*/false,
+                                                                           /*include_as_config_drb_mapping=*/true));
+
+  // Inject Bearer Context Setup Response and await UE Context Setup Request.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+
+  // Inject UE Context Setup Response and await Bearer Context Modification Request.
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+
+  // Inject Bearer Context Modification Response and await Handover Request Ack.
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+
+  // Inject XNAP SN Status Transfer reporting DRB1.
+  ASSERT_TRUE(send_sn_status_transfer_and_await_bearer_context_modification_request(source_local_xnap_ue_id,
+                                                                                    source_peer_xnap_ue_id));
+
+  // DRB1's numbering was confirmed from AS-Config, so the source's PDCP state must be applied to it.
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& pdu_sessions = bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request()
+                                 .pdu_session_res_to_modify_list;
+  ASSERT_EQ(pdu_sessions.size(), 1U);
+  const auto& drbs_to_modify = pdu_sessions[0].drb_to_modify_list_ng_ran;
+  ASSERT_EQ(drbs_to_modify.size(), 1U);
+  EXPECT_EQ(drbs_to_modify[0].drb_id, 1);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_path_switch_request());
+  ASSERT_TRUE(send_path_switch_request_ack_and_await_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// DRB IDs are allocated independently by each RAN node (TS 38.300 Section 9.2.3.2.3). A numeric ID match is
+// therefore only trustworthy when the source's DRB-to-QoS-flow mapping was actually signalled and confirmed during
+// admission (TS 38.423 Section 9.2.1.17); an unconfirmed match, even for a DRB that legitimately exists at the
+// target, must not be trusted with the source's PDCP state.
+TEST_F(cu_cp_inter_cu_xn_handover_test, when_sn_status_transfer_reports_an_unconfirmed_drb_id_then_it_is_ignored)
+{
+  // Inject Handover Request (without the source's DRB-to-QoS-flow mapping) and await Bearer Context Setup Request.
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(source_local_xnap_ue_id,
+                                                                           /*include_drb_to_qos_flow_mapping=*/false));
+
+  // Inject Bearer Context Setup Response and await UE Context Setup Request.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+
+  // Inject UE Context Setup Response and await Bearer Context Modification Request.
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+
+  // Inject Bearer Context Modification Response and await Handover Request Ack.
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+
+  // Inject XNAP SN Status Transfer reporting DRB1, which was admitted at this target (matching by pure numeric
+  // coincidence), but the source never confirmed that mapping during admission.
+  ASSERT_TRUE(send_sn_status_transfer_and_await_bearer_context_modification_request(source_local_xnap_ue_id,
+                                                                                    source_peer_xnap_ue_id));
+
+  // DRB1 must still be skipped: existing here is not enough, it must be confirmed. Nothing is left to modify.
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& pdu_sessions = bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request()
+                                 .pdu_session_res_to_modify_list;
+  ASSERT_EQ(pdu_sessions.size(), 0U);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_path_switch_request());
+  ASSERT_TRUE(send_path_switch_request_ack_and_await_ue_context_modification_request());
   ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
 }
 
@@ -662,7 +792,7 @@ TEST_F(cu_cp_inter_cu_xn_handover_test, when_zigzag_handover_is_performed_then_h
 
   // ... and now this CU-CP is the source.
 
-  // Pop messages from XN-C peer CU-CP before injecting the RRC Measurement Report.
+  // Pop messages from Xn-C peer CU-CP before injecting the RRC Measurement Report.
   this->get_xnc_cu_cp(xnc_peer_idx).try_pop_rx_pdu(xnap_pdu);
 
   // Inject RRC Measurement Report and await Handover Request.
@@ -671,7 +801,7 @@ TEST_F(cu_cp_inter_cu_xn_handover_test, when_zigzag_handover_is_performed_then_h
       du_ue_id,
       source_local_xnap_ue_id,
       target_peer_xnap_ue_id,
-      make_byte_buffer("000100420004015f741fe0808bf183fce4fc8052").value()));
+      make_byte_buffer("000100420004015f741fe0808bf183fcf868e7c5").value()));
 
   // Inject Handover Request Ack and await UE Context Modification Request (with RRC Reconfiguration).
   ASSERT_TRUE(send_handover_request_ack_and_await_ue_context_modification_request(target_local_xnap_ue_id,

@@ -4,18 +4,25 @@
 
 #pragma once
 
+#include "../cell_group_event_handler.h"
 #include "../pucch_scheduling/pucch_allocator.h"
+#include "../srs/srs_allocator.h"
 #include "../uci_scheduling/uci_allocator.h"
-#include "ocudu/scheduler/scheduler_configurator.h"
+#include "ocudu/scheduler/scheduler_dl_buffer_state_indication_handler.h"
+#include "ocudu/scheduler/scheduler_feedback_handler.h"
 #include "ocudu/scheduler/scheduler_positioning_handler.h"
+#include "ocudu/scheduler/scheduler_slot_handler.h"
 
 namespace ocudu {
 
 class pdcch_resource_allocator;
 struct cell_resource_allocator;
-class sched_ue_configuration_handler;
 class scheduler_event_logger;
 class cell_metrics_handler;
+class ra_ue_repository;
+class srs_scheduler;
+class uci_scheduler_impl;
+class ue_cell_repository;
 
 /// Request to create a new cell handler in the UE scheduler.
 struct ue_cell_scheduler_creation_request {
@@ -28,12 +35,20 @@ struct ue_cell_scheduler_creation_request {
   uci_allocator* uci_alloc;
   /// UCI allocator for the cell.
   srs_allocator* srs_alloc;
+  /// SRS scheduler for the cell.
+  srs_scheduler* srs_sched;
+  /// Scheduler of the periodic UCI of the cell.
+  uci_scheduler_impl* uci_sched;
   /// Resource grid for the cell.
   cell_resource_allocator* cell_res_alloc;
   /// Cell metrics handler for the cell.
   cell_metrics_handler* cell_metrics;
   /// Logger of events for the cell.
   scheduler_event_logger* ev_logger;
+  /// Shared repository of in-flight RA attempts, keyed by TC-RNTI.
+  ra_ue_repository* ra_ue_repo;
+  /// Repository of the UEs configured in the cell.
+  ue_cell_repository* ue_cell_db;
 };
 
 /// Handler of UE grant scheduling for a given cell.
@@ -42,26 +57,11 @@ class ue_cell_scheduler
 public:
   virtual ~ue_cell_scheduler() = default;
 
+  /// Retrieve the handler of the events that this cell dispatches to its cell group.
+  virtual cell_group_event_handler& get_event_handler() = 0;
+
   /// Schedule UE DL and UL grants for a given {slot, cell}.
   virtual void run_slot(slot_point sl_tx) = 0;
-
-  /// Handle error indication coming from the lower layers for a given {slot, cell}.
-  virtual void handle_error_indication(slot_point sl_tx, scheduler_slot_handler::error_outcome event) = 0;
-
-  /// Handle slice reconfiguration request for a given cell.
-  virtual void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& slice_reconf_req) = 0;
-
-  /// Retrieves handler of UE feedback for a given cell.
-  virtual scheduler_feedback_handler& get_feedback_handler() = 0;
-
-  /// Retrieves handler of UE positioning for a given cell.
-  virtual scheduler_cell_positioning_handler& get_positioning_handler() = 0;
-
-  /// Retrieves handler of DL buffer state updates for a given cell.
-  virtual scheduler_dl_buffer_state_indication_handler& get_dl_buffer_state_indication_handler() = 0;
-
-  /// Return UE configurator.
-  virtual sched_ue_configuration_handler& get_ue_configurator() = 0;
 
   /// Called when cell is activated.
   virtual void start() = 0;

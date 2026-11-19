@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/adt/bounded_bitset.h"
+#include "ocudu/fapi/fapi_power_unit.h"
 #include "ocudu/fapi/p7/messages/uci_pdu_definitions.h"
 #include "ocudu/ran/phy_time_unit.h"
 #include "ocudu/ran/rnti.h"
@@ -26,10 +27,10 @@ struct uci_pucch_pdu_format_2_3_4 {
   uint32_t                           handle = 0U;
   rnti_t                             rnti;
   format_type                        pucch_format;
-  int16_t                            ul_sinr_metric;
+  std::optional<float>               ul_sinr_metric_dB;
   std::optional<phy_time_unit>       timing_advance_offset;
-  uint16_t                           rssi;
-  uint16_t                           rsrp;
+  std::optional<fapi_power_unit>     rssi;
+  std::optional<fapi_power_unit>     rsrp;
   std::optional<sr_pdu_format_2_3_4> sr;
   std::optional<uci_harq_pdu>        harq;
   std::optional<uci_csi_part1>       csi_part1;

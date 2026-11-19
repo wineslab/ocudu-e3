@@ -16,12 +16,13 @@ rlc_rx_am_entity::rlc_rx_am_entity(gnb_du_id_t                       gnb_du_id,
                                    rlc_bearer_metrics_collector&     metrics_coll_,
                                    rlc_pcap&                         pcap_,
                                    task_executor&                    ue_executor_,
-                                   timer_manager&                    timers) :
+                                   timer_manager&                    timers,
+                                   rlc_drb_am_rx_window_seg_pool&    window_seg_pool) :
   rlc_rx_entity(gnb_du_id, ue_index, rb_id, upper_dn_, metrics_coll_, pcap_, ue_executor_, timers),
   cfg(config),
   mod(cardinality(to_number(cfg.sn_field_length))),
   am_window_size(window_size(to_number(cfg.sn_field_length))),
-  rx_window(logger, window_size(to_number(cfg.sn_field_length))),
+  rx_window(logger, window_size(to_number(cfg.sn_field_length)), window_seg_pool),
   status_buf({rlc_am_status_pdu(cfg.sn_field_length),
               rlc_am_status_pdu(cfg.sn_field_length),
               rlc_am_status_pdu(cfg.sn_field_length)}),
@@ -40,13 +41,12 @@ rlc_rx_am_entity::rlc_rx_am_entity(gnb_du_id_t                       gnb_du_id,
   // configure status_prohibit_timer
   if (cfg.t_status_prohibit > 0) {
     status_prohibit_timer.set(std::chrono::milliseconds{cfg.t_status_prohibit},
-                              [this](timer_id_t tid) { on_expired_status_prohibit_timer(); });
+                              [this]() { on_expired_status_prohibit_timer(); });
   }
 
   // configure reassembly_timer
   if (cfg.t_reassembly > 0) {
-    reassembly_timer.set(std::chrono::milliseconds{cfg.t_reassembly},
-                         [this](timer_id_t tid) { on_expired_reassembly_timer(); });
+    reassembly_timer.set(std::chrono::milliseconds{cfg.t_reassembly}, [this]() { on_expired_reassembly_timer(); });
   }
 
   // configure status report limits
@@ -107,18 +107,17 @@ void rlc_rx_am_entity::handle_control_pdu(byte_buffer_slice buf)
 
 void rlc_rx_am_entity::handle_data_pdu(byte_buffer_slice buf)
 {
-  bool status_changed   = false;
+  bool stored           = false;
   bool status_requested = false;
   auto on_function_exit = make_scope_exit([&]() {
-    logger.log_debug(
-        "Post-processing for AMD PDU: status_changed={} status_requested={}", status_changed, status_requested);
-    if (status_changed || status_requested) {
+    logger.log_debug("Post-processing for AMD PDU: stored={} status_requested={}", stored, status_requested);
+    if (stored || status_requested) {
       refresh_status_report();
     }
     if (status_requested) {
       do_status.store(true, std::memory_order_relaxed);
     }
-    if (status_changed || status_requested) {
+    if (stored || status_requested) {
       notify_status_report_changed();
     }
   });
@@ -170,9 +169,15 @@ void rlc_rx_am_entity::handle_data_pdu(byte_buffer_slice buf)
 
   // Write to rx window either full SDU or SDU segment
   if (header.si == rlc_si_field::full_sdu) {
-    status_changed = handle_full_data_sdu(header, std::move(payload));
+    stored = handle_full_data_sdu(header, std::move(payload));
   } else {
-    status_changed = handle_segment_data_sdu(header, std::move(payload));
+    stored = handle_segment_data_sdu(header, std::move(payload));
+  }
+
+  // Return if nothing was added to the reception buffer
+  if (not stored) {
+    logger.log_debug("No new data added to RX window. sn={}", header.sn);
+    return;
   }
 
   // Log state
@@ -278,7 +283,7 @@ void rlc_rx_am_entity::handle_data_pdu(byte_buffer_slice buf)
       stop_reassembly_timer = true;
     }
     if (rx_mod_base(st.rx_next_status_trigger) == rx_mod_base(st.rx_next + 1)) {
-      if (not rx_window[st.rx_next].has_gap) {
+      if (rx_window.has_sn(st.rx_next) && not rx_window[st.rx_next].has_gap) {
         stop_reassembly_timer = true;
       }
     }
@@ -328,11 +333,19 @@ bool rlc_rx_am_entity::handle_full_data_sdu(const rlc_am_pdu_header& header, byt
   logger.log_debug("RX SDU. payload_len={} {}", payload.length(), header);
 
   // Add new SN to RX window if no segments have been received yet
-  rlc_rx_am_sdu_info& rx_sdu = rx_window.has_sn(header.sn) ? rx_window[header.sn] : ([&]() -> rlc_rx_am_sdu_info& {
-    rlc_rx_am_sdu_info& sdu = rx_window.add_sn(header.sn);
-    sdu.time_of_arrival     = std::chrono::steady_clock::now();
-    return sdu;
-  })();
+  bool new_sdu_added = false;
+  if (!rx_window.has_sn(header.sn)) {
+    new_sdu_added = rx_window.add_sn(header.sn);
+    if (!new_sdu_added) {
+      logger.log_warning("Dropped SDU, adding to RX window failed. sn={}", header.sn);
+      metrics.metrics_add_lost_pdus(1);
+      return false;
+    }
+  }
+  rlc_rx_am_sdu_info& rx_sdu = rx_window[header.sn];
+  if (new_sdu_added) {
+    rx_sdu.time_of_arrival = std::chrono::steady_clock::now();
+  }
 
   // Store the full SDU and flag it as complete.
   rx_sdu.sdu_data       = std::move(payload);
@@ -352,11 +365,19 @@ bool rlc_rx_am_entity::handle_segment_data_sdu(const rlc_am_pdu_header& header, 
   logger.log_debug("RX SDU segment. payload_len={} {}", payload.length(), header);
 
   // Add new SN to RX window if no segments have been received yet
-  rlc_rx_am_sdu_info& rx_sdu = rx_window.has_sn(header.sn) ? rx_window[header.sn] : ([&]() -> rlc_rx_am_sdu_info& {
-    rlc_rx_am_sdu_info& sdu = rx_window.add_sn(header.sn);
-    sdu.time_of_arrival     = std::chrono::steady_clock::now();
-    return sdu;
-  })();
+  bool new_sdu_added = false;
+  if (!rx_window.has_sn(header.sn)) {
+    new_sdu_added = rx_window.add_sn(header.sn);
+    if (!new_sdu_added) {
+      logger.log_warning("Dropped SDU segment, adding to RX window failed. sn={}", header.sn);
+      metrics.metrics_add_lost_pdus(1);
+      return false;
+    }
+  }
+  rlc_rx_am_sdu_info& rx_sdu = rx_window[header.sn];
+  if (new_sdu_added) {
+    rx_sdu.time_of_arrival = std::chrono::steady_clock::now();
+  }
 
   // Create SDU segment, to be stored later
   rlc_rx_am_sdu_segment segment = {};

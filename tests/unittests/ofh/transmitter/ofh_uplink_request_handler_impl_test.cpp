@@ -6,6 +6,7 @@
 #include "../../phy/support/resource_grid_test_doubles.h"
 #include "../receiver/helpers.h"
 #include "ofh_data_flow_cplane_scheduling_commands_test_doubles.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ofh/ofh_error_notifier.h"
 #include "ocudu/ofh/ofh_uplane_rx_symbol_notifier.h"
 #include "ocudu/ofh/transmitter/ofh_transmitter_timing_parameters.h"

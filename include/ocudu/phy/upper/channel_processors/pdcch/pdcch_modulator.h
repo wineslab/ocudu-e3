@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/span.h"
-#include "ocudu/phy/support/precoding_configuration.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/resource_allocation/rb_bitmap.h"
 
 namespace ocudu {
@@ -33,8 +33,8 @@ public:
     unsigned n_rnti;
     /// Scaling factor to apply to the resource elements according to PDCCH power allocation in TS38.213.
     float scaling;
-    /// Precoding information for the PDCCH transmission.
-    precoding_configuration precoding;
+    /// Precoding and beamforming configuration.
+    precoding_beamforming_configuration precoding_and_beamforming;
   };
 
   /// Default destructor.

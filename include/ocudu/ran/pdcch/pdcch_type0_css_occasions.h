@@ -7,6 +7,7 @@
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ran/pdcch/search_space.h"
 #include "ocudu/ran/slot_point.h"
+#include "ocudu/ran/subcarrier_spacing.h"
 
 namespace ocudu {
 

@@ -5,7 +5,9 @@
 #pragma once
 
 #include "rx_buffer_codeblock_pool.h"
+#include "rx_buffer_state_fsm.h"
 #include "ocudu/adt/bit_buffer.h"
+#include "ocudu/adt/expected.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/phy/upper/log_likelihood_ratio.h"
@@ -13,47 +15,68 @@
 #include "ocudu/phy/upper/unique_rx_buffer.h"
 #include "ocudu/ran/sch/sch_constants.h"
 #include "ocudu/support/ocudu_assert.h"
-#include <atomic>
-#include <cstdint>
 
 namespace ocudu {
 
-enum class rx_buffer_status : uint8_t { successful = 0, already_in_use, insufficient_cb };
+/// Receive buffer reservation status codes.
+enum class rx_buffer_error : uint8_t {
+  /// Status code for successful reservation.
+  successful = 0,
+  /// The buffer is already reserved and in a state that cannot be reserved.
+  already_in_use,
+  /// The buffer was available but codeblocks could not be allocated.
+  insufficient_cb,
+  /// The buffer reservation is marked as a retransmission with a different number of codeblocks.
+  retransmission_cb_mismatch,
+  /// The number of repetitions for a buffer reservation exceeds the maximum.
+  exceed_repetitions
+};
+
+/// Gets the receiver buffer status code text string.
+constexpr const char* to_string(rx_buffer_error status)
+{
+  switch (status) {
+    case rx_buffer_error::successful:
+      return "successful";
+    case rx_buffer_error::already_in_use:
+      return "already in use";
+    case rx_buffer_error::insufficient_cb:
+      return "insufficient CBs in the pool";
+    case rx_buffer_error::retransmission_cb_mismatch:
+      return "retransmission number of CBs mismatch";
+    case rx_buffer_error::exceed_repetitions:
+      return "exceeds number of repetitions";
+    default:
+      return "unknown";
+  }
+}
 
 /// Implements a receiver buffer interface.
-class rx_buffer_impl : public unique_rx_buffer::callback
+class rx_buffer_impl : public unique_rx_buffer::buffer_management
 {
 private:
-  /// Internal buffer states.
-  enum class state : uint8_t {
-    /// \brief The buffer has not been configured with any codeblock.
-    ///
-    /// It is available for being reserved.
-    available,
-    /// \brief The buffer is reserved with a number of codeblocks.
-    ///
-    /// It allows:
-    /// -\c expire:  called when the buffer context has expired, it transitions to \c available.
-    /// -\c reserve: makes a new reservation.
-    reserved,
-    /// \brief The buffer is reserved and locked in a context. It does not accept new reservations or retransmissions,
-    /// and prevents the buffer from expiring.
-    ///
-    /// It allows:
-    /// - \c unlock:  a transmission did not match the CRC, it transitions to \c reserved; and
-    /// - \c release: a transmission matched the CRC and the buffer releases all its resources, it transitions to \c
-    ///               available.
-    locked
-  };
-
-  /// Current buffer state.
-  std::atomic<state> current_state = {state::available};
+  /// Buffer internal finite state machine.
+  rx_buffer_state_fsm state_machine;
   /// Reference to the codeblock pool.
   rx_buffer_codeblock_pool& codeblock_pool;
   /// Stores codeblocks CRCs.
   static_vector<bool, MAX_NOF_SEGMENTS> crc;
   /// Stores codeblock identifiers.
   static_vector<unsigned, MAX_NOF_SEGMENTS> codeblock_ids;
+  /// Repetition counter - it becomes the identifier for the next reservation.
+  unsigned repetition_counter = 0;
+
+  /// \brief Decodes enqueued callbacks for the next repetition.
+  ///
+  /// It unlocks the sequential repetition for each codeblock assigned to this buffer.
+  ///
+  /// \param[in] retransmission Retransmission identifier that has been unlocked.
+  void on_unlock_buffer(unsigned retransmission)
+  {
+    for (unsigned cb_id : codeblock_ids) {
+      codeblock_pool.on_unlock_repetition(cb_id, retransmission);
+    }
+  }
 
   /// Frees reserved codeblocks. The codeblocks are returned to the pool.
   void free()
@@ -65,6 +88,7 @@ private:
 
     // Indicate the buffer is available by clearing the codeblocks identifiers.
     codeblock_ids.clear();
+    crc.clear();
   }
 
 public:
@@ -83,16 +107,37 @@ public:
 
   /// \brief Reserves a number of codeblocks from the pool.
   ///
-  /// It optionally resets the CRCs.
+  /// It optionally resets the CRCs and dynamically reallocates codeblocks.
+  ///
+  /// \see rx_buffer_error for the different reasons the reservation fails.
   ///
   /// \param nof_codeblocks Number of codeblocks to reserve.
   /// \param reset_crc      Set to true for reset the codeblock CRCs.
-  /// \return The reservation status.
-  rx_buffer_status reserve(unsigned nof_codeblocks, bool reset_crc)
+  /// \return The repetition counter on success, or an error on failure.
+  expected<unsigned, rx_buffer_error> reserve(unsigned nof_codeblocks, bool reset_crc)
   {
-    // It cannot reserve resources if it is locked.
-    if (current_state.load() == state::locked) {
-      return rx_buffer_status::already_in_use;
+    if (!state_machine.on_reserve(reset_crc)) {
+      return make_unexpected(rx_buffer_error::already_in_use);
+    }
+
+    // Early return if it is a not a new transmission.
+    if (!reset_crc) {
+      // Ensure the number of codeblocks remains the same.
+      if (nof_codeblocks != codeblock_ids.size()) {
+        state_machine.on_unlock();
+        return make_unexpected(rx_buffer_error::retransmission_cb_mismatch);
+      }
+
+      // Increment repetition counter.
+      unsigned this_repetition = ++repetition_counter;
+
+      // Maker sure the repetition is within the range.
+      if (this_repetition >= rx_buffer_codeblock_pool::max_nof_repetitions) {
+        state_machine.on_unlock();
+        return make_unexpected(rx_buffer_error::exceed_repetitions);
+      }
+
+      return this_repetition;
     }
 
     // If the current number of codeblocks is larger than required, free the excess of codeblocks.
@@ -113,8 +158,8 @@ public:
       // Free the entire buffer if one codeblock cannot be reserved.
       if (!cb_id.has_value()) {
         free();
-        current_state = state::available;
-        return rx_buffer_status::insufficient_cb;
+        state_machine.on_insufficient_cb();
+        return make_unexpected(rx_buffer_error::insufficient_cb);
       }
 
       // Append the codeblock identifier to the list.
@@ -124,17 +169,18 @@ public:
     // Resize CRCs.
     crc.resize(nof_codeblocks);
 
-    // Reset CRCs if necessary.
-    if (reset_crc) {
-      reset_codeblocks_crc();
+    // Reset CRCs and repetition counters.
+    reset_codeblocks_crc();
+    repetition_counter = 0;
+    for (auto cb_id : codeblock_ids) {
+      codeblock_pool.reset_repetition(cb_id);
     }
-    current_state = state::reserved;
 
-    return rx_buffer_status::successful;
+    return repetition_counter;
   }
 
   // See interface for documentation.
-  unsigned get_nof_codeblocks() const override { return crc.size(); }
+  unsigned get_nof_codeblocks() const override { return codeblock_ids.size(); }
 
   // See interface for documentation.
   void reset_codeblocks_crc() override
@@ -186,36 +232,48 @@ public:
     return codeblock_pool.get_data_bits(cb_id).first(data_size);
   }
 
-  // See interface for documentation.
-  bool try_lock() override
+  // See the unique_rx_buffer::buffer_management interface for documentation.
+  void decode_cb_in_sequence(unsigned                    retransmission,
+                             unsigned                    codeblock_id,
+                             rx_buffer_decoder_callback& decoder_callback) override
   {
-    state expected_state = state::reserved;
-    return current_state.compare_exchange_strong(expected_state, state::locked);
+    codeblock_pool.decode_cb_in_sequence(codeblock_ids[codeblock_id], retransmission, codeblock_id, decoder_callback);
   }
 
-  // See interface for documentation.
-  void unlock() override
+  // See the unique_rx_buffer::buffer_management interface for documentation.
+  void unlock(unsigned retransmission) override
   {
-    state previous_state = current_state.exchange(state::reserved);
-    ocudu_assert(previous_state == state::locked, "Failed to unlock. Invalid state.");
+    // Decode next repetition before unlocking the FSM.
+    on_unlock_buffer(retransmission);
+
+    // Notify unlock to the FSM.
+    state_machine.on_unlock();
   }
 
-  // See interface for documentation.
-  void release() override
+  // See the unique_rx_buffer::buffer_management interface for documentation.
+  void release(unsigned retransmission) override
   {
-    // Release all reserved codeblocks.
-    free();
+    // Decode next repetition before releasing the FSM.
+    on_unlock_buffer(retransmission);
 
-    // The buffer can now be reused again.
-    state previous_state = current_state.exchange(state::available);
-    ocudu_assert(previous_state == state::locked, "Failed to release. Invalid state.");
+    // Notify the release event to the state machine.
+    bool released = state_machine.on_release();
+
+    // Free codeblocks if the buffer was released.
+    if (released) {
+      // Release all reserved codeblocks.
+      free();
+
+      // Notify the completion of the release.
+      state_machine.on_release_complete();
+    }
   }
 
   /// Returns true if the buffer is free.
-  bool is_free() const { return current_state == state::available; }
+  bool is_free() const { return state_machine.is_available(); }
 
   /// Returns true if the buffer is locked.
-  bool is_locked() const { return current_state == state::locked; }
+  bool is_locked() const { return state_machine.is_locked(); }
 
   /// \brief Expires the buffer.
   ///
@@ -225,18 +283,19 @@ public:
   /// \return \c true if the buffer is not locked.
   bool expire()
   {
-    state expected_state = state::reserved;
-    bool  from_reserved  = current_state.compare_exchange_strong(expected_state, state::available);
+    // Notify the expired event to the state machine.
+    bool expired = state_machine.on_expire();
 
-    // The buffer cannot be freed if it is locked.
-    if (!from_reserved) {
-      return false;
+    // The buffer cannot be released if it is locked.
+    if (expired) {
+      // Release all reserved codeblocks.
+      free();
+
+      // Notify the completion of the release.
+      state_machine.on_release_complete();
     }
 
-    // Release resources.
-    free();
-
-    return true;
+    return expired;
   }
 };
 

@@ -82,8 +82,8 @@ private:
                                                    network_order_binary_deserializer& deserializer,
                                                    const ru_compression_params&       compression_params);
 
-  /// Decodes the IQ data from the given deserializer.
-  void decode_iq_data(uplane_section_params&             results,
+  /// Decodes the IQ data from the given deserializer and returns true on success.
+  bool decode_iq_data(uplane_section_params&             results,
                       network_order_binary_deserializer& deserializer,
                       const ru_compression_params&       compression_params);
 

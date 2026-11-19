@@ -6,6 +6,7 @@
 #include "lib/du/du_high/du_manager/du_ue/du_ue_bearer_manager.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/du_manager/du_manager_test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include <gtest/gtest.h>
 #include <numeric>
@@ -18,9 +19,9 @@ namespace {
 class dummy_rlc_rlf_notifier : public rlc_tx_upper_layer_control_notifier
 {
 public:
-  void on_protocol_failure() override {}
+  void on_protocol_failure(rb_id_t rb_id) override {}
 
-  void on_max_retx() override {}
+  void on_max_retx(rb_id_t rb_id) override {}
 };
 
 } // namespace
@@ -69,6 +70,7 @@ protected:
                                         ul_tnls,
                                         teid_pool,
                                         du_mng->params,
+                                        du_mng->mem_resources,
                                         rlf_notifier});
   }
 };

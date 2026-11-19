@@ -89,7 +89,7 @@ protected:
     tester              = std::make_unique<f1u_cu_up_test_frame>();
     drb_id_t drb_id     = drb_id_t::drb1;
     ue_inactivity_timer = ue_timer_factory.create_timer();
-    ue_inactivity_timer.set(std::chrono::milliseconds(inactivity_time_ms), [this](timer_id_t) {
+    ue_inactivity_timer.set(std::chrono::milliseconds(inactivity_time_ms), [this]() {
       // Text
       ue_inactivity_triggered = true;
     });
@@ -222,6 +222,38 @@ TEST_F(f1u_cu_up_test, tx_discard)
   tester->tx_msg_list.pop_front();
 
   EXPECT_TRUE(tester->tx_msg_list.empty());
+}
+
+TEST_F(f1u_cu_up_test, tx_discard_block_size_limit)
+{
+  constexpr uint32_t pdu_size = 10;
+  constexpr uint32_t pdcp_sn  = 100;
+
+  // Discard nru_max_discard_block_size (255) consecutive SNs — fills one block to the maximum.
+  for (uint32_t i = 0; i < nru_max_discard_block_size; i++) {
+    f1u->discard_sdu(pdcp_sn + i);
+  }
+
+  // One more consecutive SN: must NOT expand the full block, but open a new one.
+  f1u->discard_sdu(pdcp_sn + nru_max_discard_block_size);
+
+  // Piggy-back the discard blocks on the next transmitted SDU.
+  byte_buffer tx_pdcp_pdu = create_sdu_byte_buffer(pdu_size, 0xcc);
+  f1u->handle_sdu(tx_pdcp_pdu.deep_copy().value(), /* is_retx = */ false);
+
+  ASSERT_FALSE(tester->tx_msg_list.empty());
+  ASSERT_TRUE(tester->tx_msg_list.front().dl_user_data.discard_blocks.has_value());
+
+  const auto& blocks = tester->tx_msg_list.front().dl_user_data.discard_blocks.value();
+  ASSERT_EQ(blocks.size(), 2);
+
+  // First block must be capped at the maximum size.
+  EXPECT_EQ(blocks[0].pdcp_sn_start, pdcp_sn);
+  EXPECT_EQ(blocks[0].block_size, nru_max_discard_block_size);
+
+  // Overflow SN must start a fresh block.
+  EXPECT_EQ(blocks[1].pdcp_sn_start, pdcp_sn + nru_max_discard_block_size);
+  EXPECT_EQ(blocks[1].block_size, 1);
 }
 
 TEST_F(f1u_cu_up_test, tx_pdcp_pdus)

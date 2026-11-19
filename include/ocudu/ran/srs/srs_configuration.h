@@ -11,6 +11,7 @@
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/srs/srs_properties.h"
 #include "ocudu/ran/ssb/ssb_configuration.h"
+#include <optional>
 #include <variant>
 
 namespace ocudu {

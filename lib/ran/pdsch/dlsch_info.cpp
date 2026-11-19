@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/pdsch/dlsch_info.h"
+#include "ocudu/ran/dmrs/dmrs.h"
 #include "ocudu/ran/resource_block.h"
 
 using namespace ocudu;

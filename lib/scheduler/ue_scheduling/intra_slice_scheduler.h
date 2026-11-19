@@ -20,6 +20,7 @@ class intra_slice_scheduler
 public:
   intra_slice_scheduler(const scheduler_ue_expert_config& expert_cfg_,
                         ue_repository&                    ues,
+                        ue_cell_repository&               cell_ues,
                         pdcch_resource_allocator&         pdcch_alloc,
                         uci_allocator&                    uci_alloc,
                         srs_allocator&                    srs_alloc_,

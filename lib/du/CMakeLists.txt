@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-
 add_subdirectory(du_high)
 add_subdirectory(du_low)
 
 set(SOURCES du_cell_config_validation.cpp du_update_config_helpers.cpp)
 add_library(ocudu_du_config_validators STATIC ${SOURCES})
-target_link_libraries(ocudu_du_config_validators sched_config)
+target_link_libraries(ocudu_du_config_validators sched_config rrc_nr_asn1)
 
 add_library(ocudu_o_du STATIC
         o_du_impl.cpp

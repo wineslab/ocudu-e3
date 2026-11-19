@@ -110,25 +110,7 @@ static inline xnap_context create_peer_xnap_context(const T& asn1_request_respon
   // Fill served cells list.
   if (asn1_request_response->list_of_served_cells_nr_present) {
     for (const auto& asn1_served_cell : asn1_request_response->list_of_served_cells_nr) {
-      cu_cp_served_cell_info served_cell;
-
-      // Fill served cell info.
-      served_cell.nr_cgi      = asn1_to_cgi(asn1_served_cell.served_cell_info_nr.cell_id);
-      served_cell.nr_pci      = asn1_served_cell.served_cell_info_nr.nr_pci;
-      served_cell.five_gs_tac = asn1_served_cell.served_cell_info_nr.tac.to_number();
-      for (const auto& asn1_plmn : asn1_served_cell.served_cell_info_nr.broadcast_plmn) {
-        // Note: The ASN.1 PLMN ID already validated in validate_xn_setup_request, so it is safe to assume it is valid
-        // here.
-        served_cell.served_plmns.push_back(plmn_identity::from_bytes(asn1_plmn.to_bytes()).value());
-      }
-      served_cell.nr_mode_info    = asn1_to_nr_mode_info(asn1_served_cell.served_cell_info_nr.nr_mode_info);
-      served_cell.meas_timing_cfg = asn1_served_cell.served_cell_info_nr.meas_timing_cfg.copy();
-
-      if (asn1_served_cell.served_cell_info_nr.ranac_present) {
-        served_cell.ranac = asn1_served_cell.served_cell_info_nr.ranac;
-      }
-
-      context.list_of_served_cells_nr.push_back(served_cell);
+      context.list_of_served_cells_nr.push_back(asn1_to_served_cell_info(asn1_served_cell.served_cell_info_nr));
     }
   }
 

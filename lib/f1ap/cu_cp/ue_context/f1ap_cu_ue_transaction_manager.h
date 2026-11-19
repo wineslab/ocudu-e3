@@ -4,15 +4,12 @@
 
 #pragma once
 
-#include "ocudu/adt/expected.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
-#include "ocudu/support/async/event_signal.h"
 #include "ocudu/support/async/protocol_transaction_manager.h"
 
-namespace ocudu {
-namespace ocucp {
+namespace ocudu::ocucp {
 
 class f1ap_ue_transaction_manager
 {
@@ -22,7 +19,8 @@ public:
     context_modification_outcome(timers),
     context_release_complete(timers),
     positioning_information_outcome(timers),
-    positioning_activation_outcome(timers)
+    positioning_activation_outcome(timers),
+    e_cid_measurement_outcome(timers)
   {
   }
 
@@ -30,9 +28,13 @@ public:
   {
     context_setup_outcome.stop();
     context_modification_outcome.stop();
-    context_release_complete.stop();
     positioning_information_outcome.stop();
     positioning_activation_outcome.stop();
+    e_cid_measurement_outcome.stop();
+    // Must run last. Stopping this transaction synchronously resumes, in-line, the UE Context Release Routine that
+    // is awaiting it, which runs to completion up to removing this very UE context (freeing "this"). No member of
+    // this object may be accessed after this call.
+    context_release_complete.stop();
   }
 
   /// F1AP UE Context Setup Response/Failure Event Source.
@@ -54,7 +56,11 @@ public:
   protocol_transaction_event_source<asn1::f1ap::positioning_activation_resp_s,
                                     asn1::f1ap::positioning_activation_fail_s>
       positioning_activation_outcome;
+
+  /// F1AP E-CID Measurement Initiation Event Source.
+  protocol_transaction_event_source<asn1::f1ap::e_c_id_meas_initiation_resp_s,
+                                    asn1::f1ap::e_c_id_meas_initiation_fail_s>
+      e_cid_measurement_outcome;
 };
 
-} // namespace ocucp
-} // namespace ocudu
+} // namespace ocudu::ocucp

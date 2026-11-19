@@ -198,76 +198,93 @@ fill_meas_results(const nrppa_meas_quantities_item&                             
     }
   }
 
-  // TODO: Add support for AoA and timing advance
-
   return meas_results_value;
 }
 
-inline expected<nrppa_e_cid_meas_result, std::string>
-fill_e_cid_measurement_result(cu_cp_ue_index_t                               ue_index,
-                              const cell_measurement_positioning_info&       meas_results,
-                              const std::vector<nrppa_meas_quantities_item>& meas_quantities,
-                              tac_t                                          serving_cell_tac)
+/// \brief Returns true when the given measurement quantity is sourced from the RRC measurement reports.
+inline bool is_rrc_sourced_meas_quantity(nrppa_meas_quantities_value quantity)
 {
-  nrppa_e_cid_meas_result meas_result;
+  return quantity == nrppa_meas_quantities_value::ss_rsrp or quantity == nrppa_meas_quantities_value::ss_rsrq or
+         quantity == nrppa_meas_quantities_value::csi_rsrp or quantity == nrppa_meas_quantities_value::csi_rsrq;
+}
 
-  meas_result.serving_cell_id  = meas_results.serving_cell_id;
-  meas_result.serving_cell_tac = serving_cell_tac;
+/// \brief Returns true when the given measurement quantity is measured by the gNB-DU.
+inline bool is_du_sourced_meas_quantity(nrppa_meas_quantities_value quantity)
+{
+  return quantity == nrppa_meas_quantities_value::angle_of_arrival_nr;
+}
 
-  // Fill requested measurement results.
+/// \brief Collects the measured results the RRC measurement reports provide.
+/// \param[in] meas_results The measurement results of the UE.
+/// \param[in] meas_quantities The measurement quantities the LMF requested.
+/// \returns The measured results for the requested quantities.
+inline std::vector<nrppa_measured_results_value>
+fill_rrc_measured_results(const cell_measurement_positioning_info&       meas_results,
+                          const std::vector<nrppa_meas_quantities_item>& meas_quantities)
+{
+  std::vector<nrppa_measured_results_value> measured_results;
+
   for (const auto& meas_quantity : meas_quantities) {
-    for (const auto& cell_meas_result_item : meas_results.cell_measurements) {
-      // If cell id is requested, no measurement results are sent.
-      if (meas_quantity.meas_quantities_value != nrppa_meas_quantities_value::cell_id) {
-        // For now only RSRP and RSRQ measurements are supported.
-        if (meas_quantity.meas_quantities_value != nrppa_meas_quantities_value::ss_rsrp &&
-            meas_quantity.meas_quantities_value != nrppa_meas_quantities_value::ss_rsrq &&
-            meas_quantity.meas_quantities_value != nrppa_meas_quantities_value::csi_rsrp &&
-            meas_quantity.meas_quantities_value != nrppa_meas_quantities_value::csi_rsrq) {
-          if (meas_quantity.meas_quantities_value == nrppa_meas_quantities_value::rsrp ||
-              meas_quantity.meas_quantities_value == nrppa_meas_quantities_value::rsrq) {
-            ocudulog::fetch_basic_logger("NRPPA").debug("Unsupported measurement quantity requested ({}). RSRP/RSRQ "
-                                                        "without SS/CSI resource type is not supported",
-                                                        meas_quantity.meas_quantities_value);
-          } else {
-            ocudulog::fetch_basic_logger("NRPPA").debug("Unsupported measurement quantity requested ({})",
-                                                        meas_quantity.meas_quantities_value);
-          }
+    // The Cell-ID quantity is answered by the Serving Cell ID IE alone, so it adds no measured result.
+    if (meas_quantity.meas_quantities_value == nrppa_meas_quantities_value::cell_id or
+        is_du_sourced_meas_quantity(meas_quantity.meas_quantities_value)) {
+      continue;
+    }
 
-          continue;
-        }
-
-        nrppa_measured_results_value meas_results_value =
-            fill_meas_results(meas_quantity, cell_meas_result_item.second);
-
-        // Don't append empty measurement results (e.g. when RSRP/RSRQ is requested but not available for the cell).
-        if (std::holds_alternative<std::vector<nrppa_result_ss_rsrp_item>>(meas_results_value) &&
-            std::get<std::vector<nrppa_result_ss_rsrp_item>>(meas_results_value).empty()) {
-          continue;
-        }
-        if (std::holds_alternative<std::vector<nrppa_result_ss_rsrq_item>>(meas_results_value) &&
-            std::get<std::vector<nrppa_result_ss_rsrq_item>>(meas_results_value).empty()) {
-          continue;
-        }
-        if (std::holds_alternative<std::vector<nrppa_result_csi_rsrp_item>>(meas_results_value) &&
-            std::get<std::vector<nrppa_result_csi_rsrp_item>>(meas_results_value).empty()) {
-          continue;
-        }
-        if (std::holds_alternative<std::vector<nrppa_result_csi_rsrq_item>>(meas_results_value) &&
-            std::get<std::vector<nrppa_result_csi_rsrq_item>>(meas_results_value).empty()) {
-          continue;
-        }
-
-        meas_result.measured_results.push_back(meas_results_value);
+    if (!is_rrc_sourced_meas_quantity(meas_quantity.meas_quantities_value)) {
+      if (meas_quantity.meas_quantities_value == nrppa_meas_quantities_value::rsrp ||
+          meas_quantity.meas_quantities_value == nrppa_meas_quantities_value::rsrq) {
+        ocudulog::fetch_basic_logger("NRPPA").info("Unsupported measurement quantity requested ({}). RSRP/RSRQ "
+                                                   "without SS/CSI resource type is not supported",
+                                                   meas_quantity.meas_quantities_value);
+      } else {
+        ocudulog::fetch_basic_logger("NRPPA").info("Unsupported measurement quantity requested ({})",
+                                                   meas_quantity.meas_quantities_value);
       }
+      continue;
+    }
+
+    for (const auto& cell_meas_result_item : meas_results.cell_measurements) {
+      nrppa_measured_results_value meas_results_value = fill_meas_results(meas_quantity, cell_meas_result_item.second);
+
+      // Don't append empty measurement results (e.g. when RSRP/RSRQ is requested but not available for the cell).
+      if (std::holds_alternative<std::vector<nrppa_result_ss_rsrp_item>>(meas_results_value) &&
+          std::get<std::vector<nrppa_result_ss_rsrp_item>>(meas_results_value).empty()) {
+        continue;
+      }
+      if (std::holds_alternative<std::vector<nrppa_result_ss_rsrq_item>>(meas_results_value) &&
+          std::get<std::vector<nrppa_result_ss_rsrq_item>>(meas_results_value).empty()) {
+        continue;
+      }
+      if (std::holds_alternative<std::vector<nrppa_result_csi_rsrp_item>>(meas_results_value) &&
+          std::get<std::vector<nrppa_result_csi_rsrp_item>>(meas_results_value).empty()) {
+        continue;
+      }
+      if (std::holds_alternative<std::vector<nrppa_result_csi_rsrq_item>>(meas_results_value) &&
+          std::get<std::vector<nrppa_result_csi_rsrq_item>>(meas_results_value).empty()) {
+        continue;
+      }
+
+      measured_results.push_back(meas_results_value);
     }
   }
 
-  if (meas_result.measured_results.empty()) {
-    return make_unexpected(fmt::format("No supported measurement quantity requested"));
+  return measured_results;
+}
+
+/// \brief Converts the measured results the gNB-DU reported over F1AP.
+/// \param[in] du_meas_result The E-CID measurement result of the gNB-DU.
+/// \returns The measured results in NRPPa common type.
+inline std::vector<nrppa_measured_results_value>
+fill_du_measured_results(const e_cid_measurement_result_t& du_meas_result)
+{
+  std::vector<nrppa_measured_results_value> measured_results;
+
+  for (const ul_angle_of_arrival_t& aoa : du_meas_result.measured_results) {
+    measured_results.push_back(nrppa_ul_aoa{aoa.azimuth_aoa, aoa.zenith_aoa, aoa.lcs_to_gcs_translation});
   }
 
-  return meas_result;
+  return measured_results;
 }
 
 /// \brief Fills the common type \c trp_information_request_t struct.
@@ -283,8 +300,11 @@ inline void fill_trp_information_request(trp_information_request_t&             
 
   // Fill TRP information type list TRP request.
   for (const auto& asn1_trp_info_type_item_container : asn1_request->trp_info_type_list_trp_req) {
-    request.trp_info_type_list_trp_req.push_back(
-        asn1_to_trp_info_type_item(asn1_trp_info_type_item_container->trp_info_type_item()));
+    std::optional<trp_information_type_item_t> trp_info_type_item =
+        asn1_to_trp_info_type_item(asn1_trp_info_type_item_container->trp_info_type_item());
+    if (trp_info_type_item.has_value()) {
+      request.trp_info_type_list_trp_req.push_back(trp_info_type_item.value());
+    }
   }
 }
 
@@ -440,7 +460,11 @@ inline void fill_measurement_request(measurement_request_t& request, const asn1:
 
   // Fill TRP meas quantities.
   for (const auto& asn1_trp_meas_quantities_item : asn1_request->trp_meas_quantities) {
-    request.trp_meas_quantities.push_back(asn1_to_trp_meas_quantities_list_item(asn1_trp_meas_quantities_item));
+    std::optional<trp_meas_quantities_list_item_t> trp_meas_quantities_list_item =
+        asn1_to_trp_meas_quantities_list_item(asn1_trp_meas_quantities_item);
+    if (trp_meas_quantities_list_item.has_value()) {
+      request.trp_meas_quantities.push_back(trp_meas_quantities_list_item.value());
+    }
   }
 
   // Fill SFN Initialization time.

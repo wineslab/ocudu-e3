@@ -6,6 +6,7 @@
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/adt/span.h"
 #include <cstdint>
+#include <memory>
 
 namespace ocudu {
 

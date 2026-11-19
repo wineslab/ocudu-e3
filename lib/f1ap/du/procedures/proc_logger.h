@@ -40,7 +40,7 @@ struct formatter<ocudu::odu::f1ap_log_prefix> {
   {
     bool needs_sep = prefix.ue_index != ocudu::INVALID_DU_UE_INDEX;
     if (prefix.ue_index != ocudu::INVALID_DU_UE_INDEX) {
-      format_to(ctx.out(), "ue={}", fmt::underlying(prefix.ue_index));
+      format_to(ctx.out(), "ue={}", prefix.ue_index);
     }
     return format_to(
         ctx.out(), "{}{}", needs_sep ? " " : "", static_cast<const ocudu::f1ap_common_log_prefix&>(prefix));

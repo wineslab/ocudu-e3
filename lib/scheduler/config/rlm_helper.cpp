@@ -3,7 +3,9 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/scheduler/config/rlm_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/ocudu_assert.h"
+#include <algorithm>
 
 using namespace ocudu;
 using namespace rlm_helper;
@@ -41,16 +43,28 @@ ocudu::rlm_helper::make_radio_link_monitoring_config(const rlm_builder_params&  
     return rlm_cfg;
   }
 
-  // [Implementation-defined] We build the RLM resource list with 1 resource only: assign the SSB id of the only SSB
-  // beam currently supported.
+  // [Implementation-defined] We build one RLM resource per transmitted SSB candidate. When CSI-RS resources are also
+  // used, half of the N_RLM budget is left for them.
   unsigned rlm_rs_idx = 0U;
   if (params.resource_type == rlm_resource_type::ssb or params.resource_type == rlm_resource_type::ssb_and_csi_rs) {
-    ocudu_assert(params.ssb_params.value().ssb_bitmap.test(0U), "Invalid SSB bitmap");
-    auto& rlm_rs  = rlm_cfg.rlm_resources.emplace_back();
-    rlm_rs.res_id = to_rlm_res_id(rlm_rs_idx++);
-    // [Implementation-defined] This is the only supported option at the moment.
-    rlm_rs.resource_purpose = radio_link_monitoring_config::radio_link_monitoring_rs::purpose::rlf;
-    rlm_rs.detection_resource.emplace<ssb_id_t>(params.ssb_params.value().ssb_beam_ids[0U]);
+    const ssb_bitmap_t& ssb_bitmap = params.ssb_params.value().ssb_bitmap;
+    ocudu_assert(ssb_bitmap.any(), "No SSB candidate is transmitted");
+
+    const unsigned max_nof_ssb_resources = (params.resource_type == rlm_resource_type::ssb)
+                                               ? max_nof_rlm_resources
+                                               : std::max(max_nof_rlm_resources / 2U, 1U);
+
+    for (unsigned ssb_idx = 0, l_max = ssb_bitmap.get_L_max(); ssb_idx != l_max and rlm_rs_idx != max_nof_ssb_resources;
+         ++ssb_idx) {
+      if (not ssb_bitmap.test(ssb_idx)) {
+        continue;
+      }
+      auto& rlm_rs  = rlm_cfg.rlm_resources.emplace_back();
+      rlm_rs.res_id = to_rlm_res_id(rlm_rs_idx++);
+      // [Implementation-defined] This is the only supported option at the moment.
+      rlm_rs.resource_purpose = radio_link_monitoring_config::radio_link_monitoring_rs::purpose::rlf;
+      rlm_rs.detection_resource.emplace<ssb_id_t>(static_cast<uint8_t>(ssb_idx));
+    }
   }
 
   // [Implementation-defined] We build the RLM resource list with the maximum allowed number of resources N_RLM, as per

@@ -9,6 +9,7 @@
 #include "dynamic_o_du_unit_config_validator.h"
 #include "dynamic_o_du_unit_config_yaml_writer.h"
 #include "dynamic_o_du_unit_logger_registrator.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

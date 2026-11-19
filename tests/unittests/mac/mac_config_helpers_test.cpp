@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/mac/config/mac_config_helpers.h"
+#include "fmt/format.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -13,6 +15,11 @@ struct mac_lc_config_test_params {
   gbr_bps              input;
   prioritized_bit_rate expected_output;
 };
+
+void PrintTo(const mac_lc_config_test_params& p, std::ostream* os)
+{
+  *os << fmt::format("input={}bps expected_pbr={}kBps", p.input, fmt::underlying(p.expected_output));
+}
 
 class mac_lc_config_test : public ::testing::TestWithParam<mac_lc_config_test_params>
 {};

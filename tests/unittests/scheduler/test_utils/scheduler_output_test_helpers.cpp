@@ -8,6 +8,7 @@
 #include "lib/scheduler/support/sched_result_helpers.h"
 #include "ocudu/ran/pdcch/cce_to_prb_mapping.h"
 #include "ocudu/ran/resource_allocation/vrb_to_prb.h"
+#include "ocudu/ran/srs/srs_bandwidth_configuration.h"
 
 using namespace ocudu;
 
@@ -170,6 +171,15 @@ std::vector<test_grant_info> ocudu::get_dl_grants(const cell_configuration& cell
     grants.back().grant = get_pdsch_grant_info(cell_cfg.params.dl_cfg_common.init_dl_bwp, pg);
   }
 
+  // Register DL-PRS resources. The resource grid is RB-granular, so the whole PRS bandwidth is reserved even though the
+  // resource only uses one subcarrier out of every comb size.
+  for (const prs_info& prs : dl_res.prs) {
+    grants.emplace_back();
+    grants.back().type  = test_grant_info::PRS;
+    grants.back().rnti  = rnti_t::INVALID_RNTI;
+    grants.back().grant = grant_info{prs.scs, prs.symbols, prs.crbs};
+  }
+
   return grants;
 }
 
@@ -216,10 +226,13 @@ std::vector<test_grant_info> ocudu::get_ul_grants(const cell_configuration& cell
   // Fill SRSs.
   for (const srs_info& srs : ul_res.srss) {
     grants.emplace_back();
-    grants.back().type = test_grant_info::SRS;
-    // [Implementation defined] We always configure SRS to occupy as many as CRBs as possible, which might result in
-    // occupying the whole band.
-    grants.back().grant = grant_info(srs.bwp_cfg->scs, srs.symbols, srs.bwp_cfg->crbs);
+    grants.back().type                                = test_grant_info::SRS;
+    grants.back().rnti                                = srs.crnti;
+    const std::optional<srs_configuration> srs_bw_cfg = srs_configuration_get(srs.config_index, srs.bw_index);
+    ocudu_assert(srs_bw_cfg.has_value(), "Invalid SRS c_srs={}/b_srs={} configuration", srs.config_index, srs.bw_index);
+    const crb_interval srs_crbs{srs.bwp_cfg->crbs.start() + srs.freq_shift,
+                                srs.bwp_cfg->crbs.start() + srs.freq_shift + srs_bw_cfg->m_srs};
+    grants.back().grant = grant_info(srs.bwp_cfg->scs, srs.symbols, srs_crbs);
   }
 
   return grants;

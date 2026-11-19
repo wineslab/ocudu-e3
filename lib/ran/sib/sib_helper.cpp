@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/sib/sib_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_coreset_config.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_occasions.h"
@@ -24,7 +25,8 @@ sib_helper::sib1_sched_occations sib_helper::get_occupied_slot_offsets(const ssb
   const pdcch_type0_css_coreset_description coreset0_params =
       pdcch_type0_css_coreset_get(band, ssb_cfg.scs, scs_common, coreset0_idx, ssb_cfg.k_ssb.value());
 
-  const unsigned ssb_period_ms = std::max<unsigned>(to_value(ssb_cfg.ssb_period), to_value(min_sib1_retx_period));
+  const unsigned ssb_period_ms =
+      std::max<unsigned>(to_underlying(ssb_cfg.ssb_period), to_underlying(min_sib1_retx_period));
 
   // For patterns 2 and 3 (FR2), CORESET0 lies within the same slot as the SS/PBCH block, so the Type0-CSS monitoring
   // slots are exactly the SSB slots. Return those directly; the window period is the SSB period.
@@ -41,8 +43,8 @@ sib_helper::sib1_sched_occations sib_helper::get_occupied_slot_offsets(const ssb
 
   sib1_sched_occations result;
   result.window_period_slots = window_period_slots;
-  for (unsigned ssb_idx = 0; ssb_idx < ssb_cfg.ssb_bitmap.size(); ++ssb_idx) {
-    if (!ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+  for (unsigned ssb_idx = 0; ssb_idx < ssb_cfg.ssb_beams.get_L_max(); ++ssb_idx) {
+    if (!ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
       continue;
     }
     // SIB1 is scheduled in slot n0+1 of the Type0-CSS window.

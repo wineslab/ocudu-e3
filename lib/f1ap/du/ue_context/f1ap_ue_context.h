@@ -48,15 +48,12 @@ struct formatter<ocudu::odu::f1ap_ue_context> {
   auto format(const ocudu::odu::f1ap_ue_context& ue, FormatContext& ctx) const
   {
     if (ue.gnb_cu_ue_f1ap_id == ocudu::gnb_cu_ue_f1ap_id_t::invalid) {
-      return format_to(ctx.out(),
-                       "ue={} c-rnti={} du_ue={}",
-                       fmt::underlying(ue.ue_index),
-                       ue.rnti,
-                       fmt::underlying(ue.gnb_du_ue_f1ap_id));
+      return format_to(
+          ctx.out(), "ue={} c-rnti={} du_ue={}", ue.ue_index, ue.rnti, fmt::underlying(ue.gnb_du_ue_f1ap_id));
     }
     return format_to(ctx.out(),
                      "ue={} c-rnti={} du_ue={} cu_ue={}",
-                     fmt::underlying(ue.ue_index),
+                     ue.ue_index,
                      ue.rnti,
                      fmt::underlying(ue.gnb_du_ue_f1ap_id),
                      fmt::underlying(ue.gnb_cu_ue_f1ap_id));

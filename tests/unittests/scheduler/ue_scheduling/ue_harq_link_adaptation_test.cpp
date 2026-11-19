@@ -7,7 +7,9 @@
 #include "lib/scheduler/config/du_cell_group_config_pool.h"
 #include "lib/scheduler/logging/cell_metrics_handler.h"
 #include "lib/scheduler/ue_context/ue.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
 #include "lib/scheduler/ue_context/ue_repository.h"
+#include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "ocudu/scheduler/config/logical_channel_config_factory.h"
 #include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
 #include <gtest/gtest.h>
@@ -33,7 +35,8 @@ protected:
     // Create cell.
     const sched_cell_configuration_request_message sched_cell_cfg_req = cfg_mng.get_default_cell_config_request();
     cell_cfg                                                          = cfg_mng.add_cell(sched_cell_cfg_req);
-    ues.add_cell(*cell_cfg, nullptr);
+    cell_ues.emplace(*cell_cfg, nullptr);
+    ues.register_cell(*cell_ues);
     next_slot = test_helper::generate_random_slot_point(cell_cfg->params.dl_cfg_common.init_dl_bwp.generic_params.scs);
 
     // Create UE.
@@ -46,8 +49,8 @@ protected:
     }
     ue_ded_cfg = cfg_mng.add_ue(ue_creation_req);
     report_error_if_not(ue_ded_cfg != nullptr, "Failed to create UE configuration");
-    ues.add_ue(
-        *ue_ded_cfg, ue_creation_req.starts_in_fallback, ue_creation_req.ul_ccch_slot_rx, ue_creation_req.cfra_enabled);
+    ues.add_ue(*ue_ded_cfg,
+               {sched_config_helper::to_ue_creation_mode(ue_creation_req), ue_creation_req.ul_ccch_slot_rx});
     ue_ptr = &ues[ue_creation_req.ue_index];
     ue_cc  = &ue_ptr->get_cell(SERVING_PCELL_IDX);
   }
@@ -65,16 +68,14 @@ protected:
     dl_harq_process_handle h_dl = ue_cc->harqs.alloc_dl_harq(next_slot, k1, 4, 0).value();
 
     // Create dummy PDSCH grant.
-    const pdsch_codeword    cw{sch_mcs_description{modulation_scheme::QAM256, 0.9},
-                            sch_mcs_index{5},
-                            pdsch_mcs_table::qam64,
-                            0,
-                            units::bytes{128}};
+    const pdsch_codeword cw{
+        sch_mcs_description{modulation_scheme::QAM256, 0.9}, sch_mcs_index{5}, 0, units::bytes{128}};
     const pdsch_information pdsch{ue_ptr->crnti,
                                   &ss.bwp->dl.cfg(),
                                   &ss.coreset->cfg(),
                                   vrb_alloc{vrb_interval{0, 5}},
-                                  ss.pdsch_time_domain_list[0].symbols,
+                                  ss.bwp->dl.td_mapper().pdsch_td_resources(ss.get_dl_dci_format())[0].symbols,
+                                  pdsch_mcs_table::qam64,
                                   {cw},
                                   {},
                                   ue_cc->cfg().cell_cfg_common.params.pci,
@@ -83,7 +84,7 @@ protected:
                                   search_space_set_type::ue_specific,
                                   dci_dl_format::f1_1,
                                   h_dl.id(),
-                                  std::nullopt};
+                                  make_default_precoding()};
     const dl_msg_alloc      ue_pdsch{
         pdsch,
              {{dl_msg_tb_info{{dl_msg_lc_info{lcid_dl_sch_t{lcid_t::LCID_SRB1}, cw.tb_size_bytes.value() - 4, {}}}}}},
@@ -102,9 +103,10 @@ protected:
 
   ocudulog::basic_logger& logger;
 
-  ue_repository ues;
-  ue*           ue_ptr = nullptr;
-  ue_cell*      ue_cc  = nullptr;
+  std::optional<ue_cell_repository> cell_ues;
+  ue_repository                     ues;
+  ue*                               ue_ptr = nullptr;
+  ue_cell*                          ue_cc  = nullptr;
 
   slot_point next_slot;
 };

@@ -7,8 +7,10 @@
 #include "f1ap_asn1_helpers.h"
 #include "f1ap_asn1_utils.h"
 #include "log_helpers.h"
+#include "procedures/du_config_update_procedure.h"
 #include "procedures/f1_removal_procedure.h"
 #include "procedures/f1_setup_procedure.h"
+#include "procedures/f1ap_e_cid_measurement_initiation_procedure.h"
 #include "procedures/f1ap_positioning_activation_procedure.h"
 #include "procedures/f1ap_positioning_information_exchange_procedure.h"
 #include "procedures/f1ap_positioning_measurement_procedure.h"
@@ -18,12 +20,16 @@
 #include "procedures/ue_context_modification_procedure.h"
 #include "procedures/ue_context_release_procedure.h"
 #include "procedures/ue_context_setup_procedure.h"
+#include "procedures/write_replace_warning_procedure.h"
 #include "ocudu/adt/expected.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
+#include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/f1ap/f1ap_message.h"
 #include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/ran/subcarrier_spacing.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -48,7 +54,7 @@ f1ap_cu_impl::~f1ap_cu_impl() {}
 
 async_task<void> f1ap_cu_impl::stop()
 {
-  return launch_async<f1ap_stop_procedure>(du_processor_notifier, ue_ctxt_list);
+  return launch_async<f1ap_stop_procedure>(du_processor_notifier, ue_ctxt_list, ev_mng);
 }
 
 const f1ap_du_context& f1ap_cu_impl::get_context() const
@@ -223,10 +229,37 @@ f1ap_cu_impl::handle_positioning_measurement_request(const measurement_request_t
   return launch_async<f1ap_positioning_measurement_procedure>(cfg, request, ev_mng, tx_pdu_notifier, logger);
 }
 
+async_task<expected<e_cid_measurement_response_t, e_cid_measurement_failure_t>>
+f1ap_cu_impl::handle_e_cid_measurement_request(const e_cid_measurement_request_t& request)
+{
+  if (!ue_ctxt_list.contains(request.ue_index)) {
+    logger.warning("ue={}: Dropping \"ECIDMeasurementInitiationRequest\". UE context does not exist", request.ue_index);
+
+    return launch_async(
+        [request](coro_context<async_task<expected<e_cid_measurement_response_t, e_cid_measurement_failure_t>>>&
+                      ctx) mutable {
+          CORO_BEGIN(ctx);
+          CORO_RETURN(make_unexpected(e_cid_measurement_failure_t{
+              request.lmf_ue_meas_id, request.ran_ue_meas_id, f1ap_cause_t{cause_misc_t::unspecified}}));
+        });
+  }
+
+  f1ap_ue_context& ue_ctxt = ue_ctxt_list[request.ue_index];
+  ue_ctxt.logger.log_info("Handling E-CID measurement initiation request");
+
+  return launch_async<f1ap_e_cid_measurement_initiation_procedure>(cfg, request, ue_ctxt, tx_pdu_notifier, logger);
+}
+
 async_task<f1ap_gnb_cu_configuration_update_response>
 f1ap_cu_impl::handle_gnb_cu_configuration_update(const f1ap_gnb_cu_configuration_update& request)
 {
   return launch_async<gnb_cu_configuration_update_procedure>(cfg, request, tx_pdu_notifier, ev_mng, logger);
+}
+
+async_task<f1ap_write_replace_warning_response>
+f1ap_cu_impl::handle_write_replace_warning_request(const f1ap_write_replace_warning_request& request)
+{
+  return launch_async<write_replace_warning_procedure>(cfg, request, tx_pdu_notifier, ev_mng, logger);
 }
 
 void f1ap_cu_impl::handle_initiating_message(const asn1::f1ap::init_msg_s& msg)
@@ -253,6 +286,9 @@ void f1ap_cu_impl::handle_initiating_message(const asn1::f1ap::init_msg_s& msg)
       break;
     case asn1::f1ap::f1ap_elem_procs_o::init_msg_c::types_opts::options::gnb_du_cfg_upd:
       handle_du_cfg_update(msg.value.gnb_du_cfg_upd());
+      break;
+    case asn1::f1ap::f1ap_elem_procs_o::init_msg_c::types_opts::options::ref_time_info_report:
+      handle_ref_time_info_report(msg.value.ref_time_info_report());
       break;
     default:
       logger.warning("Initiating message of type {} is not supported", msg.value.type().to_string());
@@ -287,23 +323,15 @@ void f1ap_cu_impl::handle_access_success(const asn1::f1ap::access_success_s& msg
 
 void f1ap_cu_impl::handle_du_cfg_update(const asn1::f1ap::gnb_du_cfg_upd_s& request)
 {
-  f1ap_message f1ap_msg;
-
-  // TODO: for now, always reply with a config update acknowledge.
-  f1ap_msg.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_GNB_DU_CFG_UPD);
-  auto& resp = f1ap_msg.pdu.successful_outcome().value.gnb_du_cfg_upd_ack();
-
-  resp->transaction_id = request->transaction_id;
-
-  // Send F1AP PDU to DU.
-  tx_pdu_notifier.on_new_message(f1ap_msg);
+  handle_du_config_update_procedure(request, du_ctxt, tx_pdu_notifier, du_processor_notifier, logger);
 }
 
 void f1ap_cu_impl::handle_f1_setup_request(const asn1::f1ap::f1_setup_request_s& request)
 {
-  current_transaction_id = request->transaction_id;
-
-  handle_f1_setup_procedure(request, du_ctxt, tx_pdu_notifier, du_processor_notifier, logger);
+  bool accepted = handle_f1_setup_procedure(request, du_ctxt, tx_pdu_notifier, du_processor_notifier, logger);
+  if (accepted && cfg.ref_time_report_ctrl) {
+    handle_ref_time_info_report_ctrl(*cfg.ref_time_report_ctrl);
+  }
 }
 
 void f1ap_cu_impl::handle_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_msg_transfer_s& msg)
@@ -522,6 +550,11 @@ void f1ap_cu_impl::handle_successful_outcome(const asn1::f1ap::successful_outcom
         ue_ctxt->ev_mng.positioning_information_outcome.set(outcome.value.positioning_info_resp());
       }
       break;
+    case asn1::f1ap::f1ap_elem_procs_o::successful_outcome_c::types_opts::e_c_id_meas_initiation_resp:
+      if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
+        ue_ctxt->ev_mng.e_cid_measurement_outcome.set(outcome.value.e_c_id_meas_initiation_resp());
+      }
+      break;
     case asn1::f1ap::f1ap_elem_procs_o::successful_outcome_c::types_opts::positioning_activation_resp:
       if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
         ue_ctxt->ev_mng.positioning_activation_outcome.set(outcome.value.positioning_activation_resp());
@@ -538,6 +571,16 @@ void f1ap_cu_impl::handle_successful_outcome(const asn1::f1ap::successful_outcom
       }
       break;
     case asn1::f1ap::f1ap_elem_procs_o::successful_outcome_c::types_opts::gnb_cu_cfg_upd_ack:
+      transaction_id = get_transaction_id(outcome);
+      if (not transaction_id.has_value()) {
+        logger.error("Successful outcome of type {} is not supported", outcome.value.type().to_string());
+        break;
+      }
+      if (not ev_mng.transactions.set_response(transaction_id.value(), outcome)) {
+        logger.warning("Unexpected transaction id={}", transaction_id.value());
+      }
+      break;
+    case asn1::f1ap::f1ap_elem_procs_o::successful_outcome_c::types_opts::write_replace_warning_resp:
       transaction_id = get_transaction_id(outcome);
       if (not transaction_id.has_value()) {
         logger.error("Successful outcome of type {} is not supported", outcome.value.type().to_string());
@@ -600,6 +643,11 @@ void f1ap_cu_impl::handle_unsuccessful_outcome(const asn1::f1ap::unsuccessful_ou
         ue_ctxt->ev_mng.positioning_information_outcome.set(outcome.value.positioning_info_fail());
       }
       break;
+    case asn1::f1ap::f1ap_elem_procs_o::unsuccessful_outcome_c::types_opts::e_c_id_meas_initiation_fail:
+      if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
+        ue_ctxt->ev_mng.e_cid_measurement_outcome.set(outcome.value.e_c_id_meas_initiation_fail());
+      }
+      break;
     case asn1::f1ap::f1ap_elem_procs_o::unsuccessful_outcome_c::types_opts::positioning_activation_fail:
       if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
         ue_ctxt->ev_mng.positioning_activation_outcome.set(outcome.value.positioning_activation_fail());
@@ -629,6 +677,50 @@ void f1ap_cu_impl::handle_unsuccessful_outcome(const asn1::f1ap::unsuccessful_ou
       logger.warning("Unsuccessful outcome of type {} is not supported", outcome.value.type().to_string());
       break;
   }
+}
+
+void f1ap_cu_impl::handle_ref_time_info_report(const asn1::f1ap::ref_time_info_report_s& msg)
+{
+  logger.debug("Received \"ReferenceTimeInformationReport\"");
+
+  f1ap_time_ref_info info;
+  info.ref_time_r16 = msg->time_ref_info.ref_time.copy();
+  info.ref_slot     = slot_point{subcarrier_spacing::kHz15, msg->time_ref_info.ref_sfn, 0};
+  if (msg->time_ref_info.uncertainty_present) {
+    info.uncertainty = msg->time_ref_info.uncertainty;
+  }
+  info.is_local_clock = msg->time_ref_info.time_info_type_present;
+
+  du_processor_notifier.on_ref_time_info_report(info);
+}
+
+void f1ap_cu_impl::handle_ref_time_info_report_ctrl(const f1ap_ref_time_report_ctrl_request& request)
+{
+  using event_type_opts = asn1::f1ap::event_type_opts;
+
+  f1ap_message msg{};
+  msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_REF_TIME_INFO_REPORT_CTRL);
+  auto& ctrl           = msg.pdu.init_msg().value.ref_time_info_report_ctrl();
+  ctrl->transaction_id = next_ref_time_transaction_id++;
+
+  auto& rrt = ctrl->report_request_type;
+  switch (request.event_type) {
+    case f1ap_ref_time_event_type::on_demand:
+      rrt.event_type.value = event_type_opts::on_demand;
+      break;
+    case f1ap_ref_time_event_type::periodic:
+      rrt.event_type.value                 = event_type_opts::periodic;
+      rrt.report_periodicity_value_present = request.report_periodicity_rf.has_value();
+      if (request.report_periodicity_rf.has_value()) {
+        rrt.report_periodicity_value = *request.report_periodicity_rf;
+      }
+      break;
+    case f1ap_ref_time_event_type::stop:
+      rrt.event_type.value = event_type_opts::stop;
+      break;
+  }
+
+  tx_pdu_notifier.on_new_message(msg);
 }
 
 void f1ap_cu_impl::log_pdu(bool is_rx, const f1ap_message& pdu)

@@ -7,6 +7,7 @@
 #include "ocudu/ran/pdsch/pdsch_constants.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include "ocudu/support/rtsan.h"
+#include "ocudu/support/test_utils.h"
 #include <gtest/gtest.h>
 #include <list>
 
@@ -66,8 +67,8 @@ public:
   }
 
   // rlc_tx_upper_layer_control_notifier interface
-  void on_protocol_failure() override { proto_err_count++; }
-  void on_max_retx() override { max_retx_count++; }
+  void on_protocol_failure(rb_id_t rb_id) override { proto_err_count++; }
+  void on_max_retx(rb_id_t rb_id) override { max_retx_count++; }
 
   // rlc_tx_buffer_state_update_notifier interface
   void on_buffer_state_update(const rlc_buffer_state& bs) override
@@ -85,6 +86,21 @@ public:
   void report_metrics(const rlc_metrics& metrics) override {}
 };
 
+ocudu::log_sink_spy& test_spy = []() -> ocudu::log_sink_spy& {
+  if (!ocudulog::install_custom_sink(
+          ocudu::log_sink_spy::name(),
+          std::unique_ptr<ocudu::log_sink_spy>(new ocudu::log_sink_spy(ocudulog::get_default_log_formatter())))) {
+    report_fatal_error("Unable to create logger spy");
+  }
+  auto* spy = static_cast<ocudu::log_sink_spy*>(ocudulog::find_sink(ocudu::log_sink_spy::name()));
+  if (spy == nullptr) {
+    report_fatal_error("Unable to create logger spy");
+  }
+
+  ocudulog::fetch_basic_logger("RLC", *spy, true);
+  return *spy;
+}();
+
 /// Fixture class for RLC AM Tx tests
 /// It requires TEST_P() and INSTANTIATE_TEST_SUITE_P() to create/spawn tests for each supported SN size
 class rlc_tx_am_test : public ::testing::Test, public ::testing::WithParamInterface<rlc_am_sn_size>
@@ -95,6 +111,9 @@ protected:
     // init test's logger
     ocudulog::init();
     logger.set_level(ocudulog::basic_levels::debug);
+
+    // reset log spy
+    test_spy.reset_counters();
 
     // init RLC logger
     ocudulog::fetch_basic_logger("RLC", false).set_level(ocudulog::basic_levels::debug);
@@ -131,7 +150,8 @@ protected:
                                              pcap,
                                              pcell_worker,
                                              ue_worker,
-                                             timers);
+                                             timers,
+                                             get_window_pool());
 
     // Bind AM Rx/Tx interconnect
     rlc->set_status_provider(tester.get());
@@ -348,6 +368,10 @@ protected:
     pcell_worker.run_pending_tasks();
   }
 
+  virtual rlc_drb_am_tx_window_seg_pool& get_window_pool() { return pool.get_pool_of_type<rlc_tx_am_sdu_info>(); }
+
+  rlc_drb_tx_window_seg_pool pool{rlc_drb_tx_window_seg_pool_size, rlc_drb_tx_window_seg_size};
+
   ocudulog::basic_logger&                       logger  = ocudulog::fetch_basic_logger("TEST", false);
   rlc_am_sn_size                                sn_size = GetParam();
   rlc_tx_am_config                              config;
@@ -358,6 +382,23 @@ protected:
   null_rlc_pcap                                 pcap;
   std::unique_ptr<rlc_tx_am_entity>             rlc;
   std::unique_ptr<rlc_bearer_metrics_collector> metrics_coll;
+};
+
+class rlc_tx_am_test_no_window_segments : public rlc_tx_am_test
+{
+protected:
+  rlc_drb_am_tx_window_seg_pool& get_window_pool() override { return dummy_pool; }
+
+private:
+  class rlc_tx_am_window_seg_pool_dummy : public rlc_drb_am_tx_window_seg_pool
+  {
+  public:
+    ocudu::span<std::optional<detail::kv_obj<uint32_t, rlc_tx_am_sdu_info>>> get_segment() override { return {}; }
+    void   return_segment(ocudu::span<std::optional<detail::kv_obj<uint32_t, rlc_tx_am_sdu_info>>>) override {}
+    size_t segment_size() const override { return rlc_drb_tx_window_seg_size; }
+  };
+
+  rlc_tx_am_window_seg_pool_dummy dummy_pool = {};
 };
 
 TEST_P(rlc_tx_am_test, create_new_entity)
@@ -512,9 +553,9 @@ TEST_P(rlc_tx_am_test, sdu_discard)
   n_bsr             = 0;
 
   // Discard valid SDUs
-  rlc->discard_sdu(0);
-  rlc->discard_sdu(4); // out-of-order discard
-  rlc->discard_sdu(3);
+  rlc->discard_sdu(0, 1);
+  rlc->discard_sdu(4, 1); // out-of-order discard
+  rlc->discard_sdu(3, 1);
 
   // Compute expected buffer state
   uint32_t header_size         = sn_size == rlc_am_sn_size::size12bits ? 2 : 3;
@@ -529,7 +570,7 @@ TEST_P(rlc_tx_am_test, sdu_discard)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 0);
 
   // Try discard of invalid SDU
-  rlc->discard_sdu(999);
+  rlc->discard_sdu(999, 1);
   pcell_worker.run_pending_tasks();
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, expect_buffer_state);
   EXPECT_EQ(tester->bsr.pending_bytes, expect_mac_bsr);
@@ -538,7 +579,7 @@ TEST_P(rlc_tx_am_test, sdu_discard)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 1);
 
   // Try discard of already discarded SDU
-  rlc->discard_sdu(0);
+  rlc->discard_sdu(0, 1);
   pcell_worker.run_pending_tasks();
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, expect_buffer_state);
   EXPECT_EQ(tester->bsr.pending_bytes, expect_mac_bsr);
@@ -564,7 +605,7 @@ TEST_P(rlc_tx_am_test, sdu_discard)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 2);
 
   // Try discard of already transmitted SDU
-  rlc->discard_sdu(1);
+  rlc->discard_sdu(1, 1);
   pcell_worker.run_pending_tasks();
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, expect_buffer_state);
   EXPECT_EQ(tester->bsr.pending_bytes, expect_mac_bsr);
@@ -588,7 +629,7 @@ TEST_P(rlc_tx_am_test, sdu_discard)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 3);
 
   // Discard remaining SDU
-  rlc->discard_sdu(5);
+  rlc->discard_sdu(5, 1);
   expect_buffer_state = 0;
   expect_mac_bsr      = 0;
   pcell_worker.run_pending_tasks();
@@ -625,9 +666,9 @@ TEST_P(rlc_tx_am_test, sdu_discard_with_pdcp_sn_wraparound)
   n_bsr             = 0;
 
   // Discard valid SDUs
-  rlc->discard_sdu((pdcp_sn_start + 0) % pdcp_sn_mod);
-  rlc->discard_sdu((pdcp_sn_start + 4) % pdcp_sn_mod); // post-wraparound discard
-  rlc->discard_sdu((pdcp_sn_start + 3) % pdcp_sn_mod); // out-of-order discard (pre-wraparound)
+  rlc->discard_sdu((pdcp_sn_start + 0) % pdcp_sn_mod, 1);
+  rlc->discard_sdu((pdcp_sn_start + 4) % pdcp_sn_mod, 1); // post-wraparound discard
+  rlc->discard_sdu((pdcp_sn_start + 3) % pdcp_sn_mod, 1); // out-of-order discard (pre-wraparound)
 
   // Compute expected buffer state
   uint32_t header_size         = sn_size == rlc_am_sn_size::size12bits ? 2 : 3;
@@ -642,7 +683,7 @@ TEST_P(rlc_tx_am_test, sdu_discard_with_pdcp_sn_wraparound)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 0);
 
   // Try discard of invalid SDU
-  rlc->discard_sdu((pdcp_sn_start + 999) % pdcp_sn_mod);
+  rlc->discard_sdu((pdcp_sn_start + 999) % pdcp_sn_mod, 1);
   pcell_worker.run_pending_tasks();
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, expect_buffer_state);
   EXPECT_EQ(tester->bsr.pending_bytes, expect_mac_bsr);
@@ -651,7 +692,7 @@ TEST_P(rlc_tx_am_test, sdu_discard_with_pdcp_sn_wraparound)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 1);
 
   // Try discard of already discarded SDU
-  rlc->discard_sdu((pdcp_sn_start + 0) % pdcp_sn_mod);
+  rlc->discard_sdu((pdcp_sn_start + 0) % pdcp_sn_mod, 1);
   pcell_worker.run_pending_tasks();
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, expect_buffer_state);
   EXPECT_EQ(tester->bsr.pending_bytes, expect_mac_bsr);
@@ -677,7 +718,7 @@ TEST_P(rlc_tx_am_test, sdu_discard_with_pdcp_sn_wraparound)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 2);
 
   // Try discard of already transmitted SDU
-  rlc->discard_sdu((pdcp_sn_start + 1) % pdcp_sn_mod);
+  rlc->discard_sdu((pdcp_sn_start + 1) % pdcp_sn_mod, 1);
   pcell_worker.run_pending_tasks();
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, expect_buffer_state);
   EXPECT_EQ(tester->bsr.pending_bytes, expect_mac_bsr);
@@ -701,7 +742,7 @@ TEST_P(rlc_tx_am_test, sdu_discard_with_pdcp_sn_wraparound)
   EXPECT_EQ(rlc->get_metrics().tx_high.num_discard_failures, 3);
 
   // Discard remaining SDU
-  rlc->discard_sdu((pdcp_sn_start + 5) % pdcp_sn_mod);
+  rlc->discard_sdu((pdcp_sn_start + 5) % pdcp_sn_mod, 1);
   expect_buffer_state = 0;
   expect_mac_bsr      = 0;
   pcell_worker.run_pending_tasks();
@@ -1500,6 +1541,33 @@ TEST_P(rlc_tx_am_test, invalid_nack_nack_sn_outside_rx_window)
   ASSERT_EQ(st1.tx_next_ack, 7); // TX_NEXT_ACK should have not changed
 }
 
+TEST_P(rlc_tx_am_test, invalid_nack_nack_sn_not_yet_added_to_tx_window)
+{
+  const uint32_t sdu_size = 4;
+  const uint32_t n_pdus   = 12;
+
+  std::vector<std::vector<uint8_t>> pdus = tx_full_pdus(n_pdus, sdu_size);
+
+  // ACK up until 5
+  rlc_am_status_pdu status_pdu0(sn_size);
+  status_pdu0.ack_sn = 5;
+  rlc->on_status_pdu(std::move(status_pdu0));
+
+  // Status PDU 1
+  rlc_am_status_pdu status_pdu1(sn_size);
+  status_pdu1.ack_sn = 12;
+  {
+    rlc_am_status_nack nack = {};
+    nack.nack_sn            = 12; // NACK an SN just above tx window that would be added next but still doesen't exist.
+    status_pdu1.push_nack(nack);
+  }
+
+  rlc->on_status_pdu(std::move(status_pdu1));          // NACK should be rejected.
+  ASSERT_EQ(rlc->get_buffer_state().pending_bytes, 0); // Should have ignored status report.
+  rlc_tx_am_state st1 = rlc->get_state();
+  ASSERT_EQ(st1.tx_next_ack, 5); // TX_NEXT_ACK should have not changed.
+}
+
 TEST_P(rlc_tx_am_test, invalid_nack_sn_larger_than_ack_sn)
 {
   const uint32_t sdu_size = 4;
@@ -2246,6 +2314,42 @@ TEST_P(rlc_tx_am_test, retx_count_trigger_max_retx_without_segmentation)
   EXPECT_EQ(tester->max_retx_count, 2);
 }
 
+TEST_P(rlc_tx_am_test_no_window_segments, tx_pdu)
+{
+  const uint32_t n_pdus   = 2;
+  uint32_t       sdu_size = 10;
+
+  uint32_t n_bsr    = tester->bsr_count;
+  auto     sdu_bufs = std::vector<byte_buffer>(n_pdus);
+  for (uint32_t i = 0; i < n_pdus; i++) {
+    sdu_bufs[i] = test_helpers::create_pdcp_pdu(config.pdcp_sn_len, /* is_srb = */ false, i, sdu_size, i);
+
+    // Write SDU into upper end.
+    rlc->handle_sdu(std::move(sdu_bufs[i]), false);
+  }
+  pcell_worker.run_pending_tasks();
+  EXPECT_EQ(tester->bsr_count, ++n_bsr);
+
+  uint32_t header_size         = sn_size == rlc_am_sn_size::size12bits ? 2 : 3;
+  uint32_t data_pdu_size       = header_size + sdu_size;
+  uint32_t expect_buffer_state = n_pdus * data_pdu_size;
+
+  // Read "n_pdus" PDUs from RLC.
+  for (uint32_t i = 0; i < n_pdus; i++) {
+    rlc_buffer_state bs = rlc->get_buffer_state();
+    EXPECT_EQ(bs.pending_bytes,
+              expect_buffer_state); // Actual buffer state does not change.
+    std::vector<uint8_t> pdu_buf;
+    pdu_buf.resize(data_pdu_size);
+    size_t pdu_len = rlc->pull_pdu(pdu_buf);
+    EXPECT_EQ(pdu_len, 0);
+  }
+
+  // Warnings shall be logged.
+  EXPECT_EQ(test_spy.get_warning_counter(), 2);
+  EXPECT_EQ(test_spy.get_error_counter(), 0);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Finally, instantiate all testcases for each supported SN size
 ///////////////////////////////////////////////////////////////////////////////
@@ -2259,6 +2363,11 @@ std::string test_param_info_to_string(const ::testing::TestParamInfo<rlc_am_sn_s
 
 INSTANTIATE_TEST_SUITE_P(rlc_tx_am_test_each_sn_size,
                          rlc_tx_am_test,
+                         ::testing::Values(rlc_am_sn_size::size12bits, rlc_am_sn_size::size18bits),
+                         test_param_info_to_string);
+
+INSTANTIATE_TEST_SUITE_P(rlc_tx_am_test_each_sn_size_no_window_segments,
+                         rlc_tx_am_test_no_window_segments,
                          ::testing::Values(rlc_am_sn_size::size12bits, rlc_am_sn_size::size18bits),
                          test_param_info_to_string);
 

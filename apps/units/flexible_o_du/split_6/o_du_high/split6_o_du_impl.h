@@ -21,7 +21,6 @@ class split6_o_du_impl : public odu::du, public du_operation_controller
 {
 public:
   split6_o_du_impl(unsigned                                        nof_cells_,
-                   std::chrono::microseconds                       slot_duration,
                    std::unique_ptr<fapi_adaptor::phy_fapi_adaptor> adaptor_,
                    std::unique_ptr<odu::o_du_high>                 odu_hi_);
 

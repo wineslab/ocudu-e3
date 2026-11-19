@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "support/compare_sequences.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/generic_functions/generic_functions_factories.h"
 #include "ocudu/ran/transform_precoding/transform_precoding_helpers.h"
 #include "ocudu/support/math/math_utils.h"
-#include "ocudu/support/ocudu_test.h"
 #include "fmt/ostream.h"
 #include <cmath>
 #include <gtest/gtest.h>
@@ -39,18 +40,6 @@ static std::set<unsigned> dft_required_sizes = []() {
 static float ASSERT_MAX_ERROR = 1e-3;
 
 namespace ocudu {
-
-static bool operator==(span<const cf_t> transform, span<const cf_t> dft_output)
-{
-  auto length = static_cast<float>(transform.size());
-  return std::equal(transform.begin(),
-                    transform.end(),
-                    dft_output.begin(),
-                    dft_output.end(),
-                    [length](cf_t transform_val, cf_t dft_output_val) {
-                      return (std::abs(transform_val - dft_output_val) / std::sqrt(length) <= ASSERT_MAX_ERROR);
-                    });
-}
 
 std::ostream& operator<<(std::ostream& os, dft_processor::direction direction)
 {
@@ -178,7 +167,14 @@ TEST_P(DFTprocessorFixture, DFTProcessorUnittest)
     run_expected_dft(expected_output, direction, input);
 
     // Make sure the output matches the expected within the tolerances.
-    ASSERT_EQ(span<const cf_t>(expected_output), span<const cf_t>(output));
+    error_type<std::string> compare_result = compare_sequences(
+        span<const cf_t>(output),
+        span<const cf_t>(expected_output),
+        [length = static_cast<float>(output.size())](const cf_t& output_val, const cf_t& expected_val) {
+          return std::abs(output_val - expected_val) / std::sqrt(length);
+        },
+        ASSERT_MAX_ERROR);
+    ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
   }
 }
 

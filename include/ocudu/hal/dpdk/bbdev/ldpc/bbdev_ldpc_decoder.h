@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "ocudu/adt/span.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/hal/phy/upper/channel_processors/pusch/hw_accelerator_pusch_dec.h"
 #include "ocudu/ocudulog/ocudulog.h"

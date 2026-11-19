@@ -12,6 +12,7 @@
 #include "ocudu/ran/pucch/pucch_context.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/slot_point.h"
+#include "ocudu/ran/uci/uci_part2_size_description.h"
 #include <string>
 
 namespace ocudu {
@@ -31,6 +32,15 @@ public:
     std::optional<pucch_context> context;
     /// Slot and numerology.
     slot_point slot;
+    /// \brief Slot delay with which the message is processed.
+    ///
+    /// Determines the number of slots that have passed since the UE transmitted to the gNB received. In other words,
+    /// the UE transmitted in slot \e n while the gNB is receiving in slot <em>n + slot_offset</em>.
+    ///
+    /// The effect of this offset is applied to the sequence generators that depend on the slot number.
+    ///
+    /// This parameter is derived from the higher layers K-MAC which is specific for NTN.
+    unsigned slot_offset;
     /// Cyclic prefix.
     cyclic_prefix cp;
     /// Number of contiguous PRBs allocated to the BWP {1, ..., 275}.
@@ -79,6 +89,8 @@ public:
     std::optional<pucch_context> context;
     /// Slot and numerology.
     slot_point slot;
+    /// Slot delay with which the message is processed. Derived from the NTN K-MAC.
+    unsigned slot_offset;
     /// Number of contiguous PRBs allocated to the BWP {1, ..., 275}.
     unsigned bwp_size_rb;
     /// BWP start RB index from Point A {0, ..., 274}.
@@ -118,6 +130,8 @@ public:
   struct format1_common_configuration {
     /// Slot and numerology.
     slot_point slot;
+    /// Slot delay with which the message is processed. Derived from the NTN K-MAC.
+    unsigned slot_offset;
     /// Number of contiguous PRBs allocated to the BWP {1, ..., 275}.
     unsigned bwp_size_rb;
     /// BWP start RB index from Point A {0, ..., 274}.
@@ -152,6 +166,7 @@ public:
     /// Construct the configuration from a complete Format 1 configuration parameters.
     explicit format1_common_configuration(const format1_configuration& config) :
       slot(config.slot),
+      slot_offset(config.slot_offset),
       bwp_size_rb(config.bwp_size_rb),
       bwp_start_rb(config.bwp_start_rb),
       cp(config.cp),
@@ -167,10 +182,10 @@ public:
     /// Determines whether the Format 1 common configuration is equal to another.
     bool operator==(const format1_common_configuration& other) const
     {
-      return (other.slot == slot) && (other.bwp_size_rb == bwp_size_rb) && (other.bwp_start_rb == bwp_start_rb) &&
-             (cp == other.cp) && (starting_prb == other.starting_prb) && (second_hop_prb == other.second_hop_prb) &&
-             (n_id == other.n_id) && (ports == other.ports) && (nof_symbols == other.nof_symbols) &&
-             (start_symbol_index == other.start_symbol_index);
+      return (other.slot == slot) && (other.slot_offset == slot_offset) && (other.bwp_size_rb == bwp_size_rb) &&
+             (other.bwp_start_rb == bwp_start_rb) && (cp == other.cp) && (starting_prb == other.starting_prb) &&
+             (second_hop_prb == other.second_hop_prb) && (n_id == other.n_id) && (ports == other.ports) &&
+             (nof_symbols == other.nof_symbols) && (start_symbol_index == other.start_symbol_index);
     }
   };
 
@@ -207,6 +222,8 @@ public:
     std::optional<pucch_context> context;
     /// Slot and numerology.
     slot_point slot;
+    /// Slot delay with which the message is processed. Derived from the NTN K-MAC.
+    unsigned slot_offset;
     /// Cyclic prefix configuration for the slot.
     cyclic_prefix cp;
     /// Port indices used for the PUCCH reception.
@@ -247,8 +264,10 @@ public:
     unsigned nof_sr;
     /// Number of expected CSI Part 1 bits {0, ..., 1706} (see also \ref PUCCH_payload_size "here").
     unsigned nof_csi_part1;
-    /// Number of expected CSI Part 2 bits {0, ..., 1706} (see also \ref PUCCH_payload_size "here").
-    unsigned nof_csi_part2;
+    /// CSI Part 1 to Part 2 size correspondence.
+    uci_part2_size_description csi_part2_size;
+    /// Maximum UCI code rate
+    float max_code_rate;
   };
 
   /// Collects specific PUCCH Format 3 parameters.
@@ -257,6 +276,8 @@ public:
     std::optional<pucch_context> context;
     /// Slot and numerology.
     slot_point slot;
+    /// Slot delay with which the message is processed. Derived from the NTN K-MAC.
+    unsigned slot_offset;
     /// Cyclic prefix configuration for the slot.
     cyclic_prefix cp;
     /// Port indices used for the PUCCH reception.
@@ -298,14 +319,16 @@ public:
     unsigned nof_sr;
     /// Number of expected CSI Part 1 bits {0, ..., 1706} (see also \ref PUCCH_payload_size "here").
     unsigned nof_csi_part1;
-    /// Number of expected CSI Part 2 bits {0, ..., 1706} (see also \ref PUCCH_payload_size "here").
-    unsigned nof_csi_part2;
+    /// CSI Part 1 to Part 2 size correspondence.
+    uci_part2_size_description csi_part2_size;
     /// Set to higher layer parameter \e additionalDMRS described in TS38.331 Section 6.3.2, Information Element \e
     /// PUCCH-FormatConfig.
     bool additional_dmrs;
     /// Set to higher layer parameter \e pi2BPSK described in TS38.331 Section 6.3.2, Information Element \e
     /// PUCCH-FormatConfig.
     bool pi2_bpsk;
+    /// Maximum UCI code rate
+    float max_code_rate;
   };
 
   /// Collects specific PUCCH Format 4 parameters.
@@ -314,6 +337,8 @@ public:
     std::optional<pucch_context> context;
     /// Slot and numerology.
     slot_point slot;
+    /// Slot delay with which the message is processed. Derived from the NTN K-MAC.
+    unsigned slot_offset;
     /// Cyclic prefix configuration for the slot.
     cyclic_prefix cp;
     /// Port indices used for the PUCCH reception.
@@ -354,8 +379,8 @@ public:
     unsigned nof_sr;
     /// Number of expected CSI Part 1 bits {0, ..., 1706} (see also \ref PUCCH_payload_size "here").
     unsigned nof_csi_part1;
-    /// Number of expected CSI Part 2 bits {0, ..., 1706} (see also \ref PUCCH_payload_size "here").
-    unsigned nof_csi_part2;
+    /// CSI Part 1 to Part 2 size correspondence.
+    uci_part2_size_description csi_part2_size;
     /// Set to higher layer parameter \e additionalDMRS described in TS38.331 Section 6.3.2, Information Element \e
     /// PUCCH-FormatConfig.
     bool additional_dmrs;
@@ -368,6 +393,8 @@ public:
     /// Set to higher layer parameter \e occ-Length described in TS38.331 Section 6.3.2, Information Element \e
     /// PUCCH-format4 {2, 4}.
     unsigned occ_length;
+    /// Maximum UCI code rate
+    float max_code_rate;
   };
 
   /// Default destructor.

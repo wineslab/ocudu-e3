@@ -6,17 +6,17 @@
 
 #include "ocudu/adt/complex.h"
 #include "ocudu/adt/tensor.h"
-#include "ocudu/phy/support/resource_grid_reader.h"
-#include "ocudu/phy/support/resource_grid_writer.h"
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/subcarrier_spacing.h"
-#include "ocudu/support/executors/task_executor.h"
 #include "ocudu/support/math/complex_normal_random.h"
 #include "ocudu/support/memory_pool/bounded_object_pool.h"
 #include <random>
 #include <string>
 
 namespace ocudu {
+class resource_grid_reader;
+class resource_grid_writer;
+class task_executor;
 
 /// \brief Implements a frequency domain channel emulator.
 ///

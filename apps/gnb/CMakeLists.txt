@@ -13,6 +13,7 @@ add_library(gnb_base STATIC ${SOURCES})
 target_include_directories(gnb_base PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(gnb_base PRIVATE
         ocudu_app_services
+        ocudu_config_app_helpers
         ocudu_f1u_connector
         ocudu_ngap
         ngap_asn1
@@ -70,5 +71,5 @@ foreach (NAME LIB IN ZIP_LISTS EXTENSIONS LIBRARIES)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/../${NAME}"   # Path to the binary.
             RUNTIME_OUTPUT_NAME "gnb"                                           # Binary name.
             EXCLUDE_FROM_ALL 1)                                                 # Do not build by default.
-    notify_binary_target(${NAME})
+    notify_binary_target(${NAME} FILENAME "${CMAKE_INSTALL_BINDIR}/${NAME}")
 endforeach ()

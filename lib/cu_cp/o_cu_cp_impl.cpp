@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "o_cu_cp_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ocucp;

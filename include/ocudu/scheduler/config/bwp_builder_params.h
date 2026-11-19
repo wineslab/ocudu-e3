@@ -10,6 +10,7 @@
 #include "ocudu/ran/radio_link_monitoring.h"
 #include "ocudu/ran/resource_allocation/vrb_to_prb.h"
 #include "ocudu/ran/sr_configuration.h"
+#include "ocudu/scheduler/config/cg_builder_params.h"
 #include "ocudu/scheduler/config/csi_helper.h"
 #include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include "ocudu/scheduler/config/serving_cell_config.h"
@@ -25,8 +26,8 @@ struct pdsch_builder_params {
   /// Maximum number of DL HARQ processes available to UEs.
   /// \remark See TS 38.331, \c nrofHARQ-ProcessesForPDSCH.
   uint8_t max_harq_procs = 16;
-  /// Optional maximum number of DL layers. If not set, DL antenna ports are used.
-  std::optional<unsigned> max_nof_layers;
+  /// Maximum number of DL layers.
+  unsigned max_nof_layers = 1;
   /// Preferred MCS table to use for PDSCH.
   pdsch_mcs_table mcs_table = pdsch_mcs_table::qam256;
   /// Position for additional DM-RS in DL, see Tables 7.4.1.1.2-3 and 7.4.1.1.2-4 in TS 38.211.
@@ -36,6 +37,9 @@ struct pdsch_builder_params {
   /// See TS 38.331, \c downlinkHARQ-FeedbackDisabled.
   /// A bit set to 1 indicates HARQ processes with disabled DL HARQ feedback; a bit set to 0 indicate feedback enabled.
   harq_dl_feedback_disabled_mask dl_harq_feedback_disabled = harq_dl_feedback_disabled_mask(MAX_NOF_HARQS);
+  /// \brief Maximum number of PDSCH repetitions offered in the dedicated Rel-16 TDRA list of supporting UEs.
+  /// Value 1 disables dynamic PDSCH repetitions. Values: {1, 2, 3, 4, 5, 6, 7, 8, 16}.
+  uint8_t max_nof_repetitions = 1;
 };
 
 /// PUCCH parameters for a given BWP of a given DU cell.
@@ -74,6 +78,8 @@ struct pusch_builder_params {
   std::optional<uci_on_pusch::beta_offsets_semi_static> uci_beta_offsets;
   /// P0-PUSCH-AlphaSet alpha for PUSCH power control.
   std::optional<alpha> p0_pusch_alpha;
+  /// \c p0-NominalWithoutGrant for PUSCH power control.
+  int p0_nominal_without_grant = -76;
   /// A bit set to one identifies a HARQ process in modeA and a bit set to zero identifies a HARQ process in modeB.
   /// \remark See TS 38.331, \c uplinkHARQ-mode.
   harq_ul_mode_mask ul_harq_mode = ~harq_ul_mode_mask(MAX_NOF_HARQS);
@@ -81,6 +87,9 @@ struct pusch_builder_params {
   std::optional<uint8_t> cbg_tx;
   /// \c xOverhead.
   x_overhead x_ov_head{x_overhead::not_set};
+  /// \brief Maximum number of PUSCH repetitions offered in the dedicated Rel-16 TDRA list of supporting UEs.
+  /// Value 1 disables dynamic PUSCH repetitions.
+  uint8_t max_nof_repetitions = 1;
 };
 
 /// Random Access parameters for this BWP.
@@ -116,6 +125,8 @@ struct bwp_builder_params {
   std::optional<du_csi_params> csi;
   /// Parameters for SRS-Config generation.
   srs_builder_params srs_cfg;
+  /// Parameters for Configured Grant (CG) PUSCH generation. When absent, no CG is configured.
+  std::optional<cg_builder_params> cg_cfg;
   /// Parameters for Random Access in this BWP.
   rach_builder_params rach;
   /// Parameters relative to the generation of the paging configs.

@@ -6,6 +6,7 @@
 
 #include "../mac_config_interfaces.h"
 #include "../mac_dl/mac_dl_metric_handler.h"
+#include "mac_cell_controller_impl.h"
 #include "mac_config.h"
 #include "mac_metrics_aggregator.h"
 #include "mac_scheduler_configurator.h"
@@ -20,6 +21,7 @@ struct mac_ue_context {
   du_ue_index_t   du_ue_index = MAX_NOF_DU_UES;
   rnti_t          rnti        = rnti_t::INVALID_RNTI;
   du_cell_index_t pcell_idx   = MAX_NOF_DU_CELLS;
+  rnti_t          cs_rnti     = rnti_t::INVALID_RNTI;
 };
 
 class rnti_manager;
@@ -39,10 +41,7 @@ public:
   /// Removes cell configuration from MAC. The cell is also removed from the scheduler.
   void remove_cell(du_cell_index_t cell_index) override;
 
-  mac_cell_controller& get_cell_controller(du_cell_index_t cell_index) override
-  {
-    return dl_unit.get_cell_controller(cell_index);
-  }
+  mac_cell_controller& get_cell_controller(du_cell_index_t cell_index) override;
 
   mac_subframe_time_mapper& get_subframe_time_mapper() override;
 
@@ -56,9 +55,13 @@ public:
   async_task<mac_ue_reconfiguration_response>
   handle_ue_reconfiguration_request(const mac_ue_reconfiguration_request& msg) override;
 
-  bool handle_ul_ccch_msg(du_ue_index_t ue_index, byte_buffer pdu) override
+  bool handle_ul_ccch_msg(du_ue_index_t    ue_index,
+                          du_cell_index_t  cell_index,
+                          slot_point       slot_rx,
+                          byte_buffer      ul_ccch_msg,
+                          msg3_mac_ce_list mac_ces) override
   {
-    return ul_unit.flush_ul_ccch_msg(ue_index, std::move(pdu));
+    return ul_unit.flush_ul_ccch_msg(ue_index, cell_index, slot_rx, std::move(ul_ccch_msg), std::move(mac_ces));
   }
 
   void handle_ue_config_applied(du_ue_index_t ue_index) override;
@@ -85,6 +88,9 @@ private:
 
   // Metrics aggregator.
   mac_metrics_aggregator metrics;
+
+  // Cell database
+  slotted_array<mac_cell_controller_impl, MAX_NOF_DU_CELLS> cells;
 
   // UE database
   du_ue_list<mac_ue_context> ue_db;

@@ -5,7 +5,6 @@
 
 #include "ocudu/adt/span.h"
 #include "ocudu/support/ocudu_assert.h"
-#include <array>
 #include <cstdint>
 
 namespace ocudu {

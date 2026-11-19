@@ -3,7 +3,6 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/rlc/rlc_tx_tm_entity.h"
-#include "tests/test_doubles/pdcp/pdcp_pdu_generator.h"
 #include "ocudu/adt/byte_buffer_chain.h"
 #include "ocudu/rlc/rlc_srb_config_factory.h"
 #include "ocudu/support/executors/manual_task_worker.h"
@@ -31,8 +30,8 @@ public:
   void on_delivered_retransmitted_sdu(uint32_t max_deliv_retx_pdcp_sn) override {}
 
   // rlc_tx_upper_layer_control_notifier interface
-  void on_protocol_failure() override {}
-  void on_max_retx() override {}
+  void on_protocol_failure(rb_id_t rb_id) override {}
+  void on_max_retx(rb_id_t rb_id) override {}
 
   // rlc_tx_buffer_state_update_notifier interface
   void on_buffer_state_update(const rlc_buffer_state& bs) override
@@ -68,10 +67,11 @@ protected:
         gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{1000}, tester.get(), ue_worker);
 
     // Create RLC TM TX entity
+    cfg = make_default_srb0_rlc_config().tm.tx;
     rlc = std::make_unique<rlc_tx_tm_entity>(gnb_du_id_t::min,
                                              du_ue_index_t::MIN_DU_UE_INDEX,
                                              srb_id_t::srb0,
-                                             make_default_srb0_rlc_config().tm.tx,
+                                             cfg,
                                              *tester,
                                              *tester,
                                              *tester,
@@ -88,12 +88,22 @@ protected:
     ocudulog::flush();
   }
 
+  static byte_buffer create_buffer(uint32_t size, uint8_t first_byte)
+  {
+    byte_buffer buf;
+    for (uint32_t k = 0; k < size; ++k) {
+      report_error_if_not(buf.append(first_byte + k), "Failed to allocate byte buffer");
+    }
+    return buf;
+  }
+
   ocudulog::basic_logger&                       logger = ocudulog::fetch_basic_logger("TEST", false);
   timer_manager                                 timers;
   manual_task_worker                            pcell_worker{128};
   manual_task_worker                            ue_worker{128};
   std::unique_ptr<rlc_tx_tm_test_frame>         tester;
   null_rlc_pcap                                 pcap;
+  rlc_tx_tm_config                              cfg;
   std::unique_ptr<rlc_tx_tm_entity>             rlc;
   std::unique_ptr<rlc_bearer_metrics_collector> metrics_coll;
 };
@@ -110,14 +120,13 @@ TEST_F(rlc_tx_tm_test, create_new_entity)
 
 TEST_F(rlc_tx_tm_test, test_tx)
 {
-  const uint32_t sdu_size = 4;
-  uint32_t       count    = 0;
+  const uint32_t sdu_size  = 4;
+  uint32_t       sdu_count = 0;
 
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, 0);
 
-  byte_buffer sdu_buf =
-      test_helpers::create_pdcp_pdu(pdcp_sn_size::size12bits, /* is_srb = */ true, count, sdu_size, count);
-  auto t_start = std::chrono::steady_clock::now();
+  byte_buffer sdu_buf = create_buffer(sdu_size, sdu_count);
+  auto        t_start = std::chrono::steady_clock::now();
   // write SDU into upper end
   rlc->handle_sdu(sdu_buf.deep_copy().value(), false); // keep local copy for later comparison
   auto t_end = std::chrono::steady_clock::now();
@@ -168,8 +177,8 @@ TEST_F(rlc_tx_tm_test, test_tx)
   EXPECT_EQ(tester->bsr_count, 1); // unchanged
 
   // write another SDU into upper end
-  count++;
-  sdu_buf = test_helpers::create_pdcp_pdu(pdcp_sn_size::size12bits, /* is_srb = */ true, count, sdu_size, count);
+  sdu_count++;
+  sdu_buf = create_buffer(sdu_size, sdu_count);
 
   t_start = std::chrono::steady_clock::now();
   rlc->handle_sdu(sdu_buf.deep_copy().value(), false); // keep local copy for later comparison
@@ -205,9 +214,8 @@ TEST_F(rlc_tx_tm_test, test_tx)
   EXPECT_EQ(tester->bsr_count, 2); // unchanged
 
   // write another SDU into upper end
-  count++;
-  byte_buffer sdu_buf2 =
-      test_helpers::create_pdcp_pdu(pdcp_sn_size::size12bits, /* is_srb = */ true, count, sdu_size, count);
+  sdu_count++;
+  byte_buffer sdu_buf2 = create_buffer(sdu_size, sdu_count);
 
   // write SDU into upper end
   rlc->handle_sdu(sdu_buf2.deep_copy().value(), false); // keep local copy for later comparison
@@ -262,13 +270,12 @@ TEST_F(rlc_tx_tm_test, test_tx)
 
 TEST_F(rlc_tx_tm_test, discard_sdu_increments_discard_failure_counter)
 {
-  const uint32_t sdu_size = 4;
-  uint32_t       count    = 0;
+  const uint32_t sdu_size  = 4;
+  uint32_t       sdu_count = 0;
 
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, 0);
 
-  byte_buffer sdu_buf =
-      test_helpers::create_pdcp_pdu(pdcp_sn_size::size12bits, /* is_srb = */ true, count, sdu_size, count);
+  byte_buffer sdu_buf = create_buffer(sdu_size, sdu_count);
 
   // write SDU into upper end
   rlc->handle_sdu(sdu_buf.deep_copy().value(), false); // keep local copy for later comparison
@@ -278,7 +285,7 @@ TEST_F(rlc_tx_tm_test, discard_sdu_increments_discard_failure_counter)
   EXPECT_EQ(tester->bsr_count, 1);
 
   // Try discard of valid SDU - but TM does not support any discard, discard failures are counted
-  rlc->discard_sdu(0);
+  rlc->discard_sdu(0, 1);
   pcell_worker.run_pending_tasks();
   EXPECT_EQ(tester->bsr.pending_bytes, sdu_size);
   EXPECT_EQ(tester->bsr_count, 1);
@@ -301,13 +308,12 @@ TEST_F(rlc_tx_tm_test, discard_sdu_increments_discard_failure_counter)
 
 TEST_F(rlc_tx_tm_test, test_tx_metrics)
 {
-  const uint32_t sdu_size = 4;
-  uint32_t       count    = 0;
+  const uint32_t sdu_size  = 4;
+  uint32_t       sdu_count = 0;
 
   EXPECT_EQ(rlc->get_buffer_state().pending_bytes, 0);
 
-  byte_buffer sdu_buf =
-      test_helpers::create_pdcp_pdu(pdcp_sn_size::size12bits, /* is_srb = */ true, count, sdu_size, count);
+  byte_buffer sdu_buf = create_buffer(sdu_size, sdu_count);
 
   // write SDU into upper end
   rlc->handle_sdu(sdu_buf.deep_copy().value(), false); // keep local copy for later comparison
@@ -326,6 +332,160 @@ TEST_F(rlc_tx_tm_test, test_tx_metrics)
   rlc_tx_metrics m = rlc->get_metrics();
   ASSERT_TRUE(std::holds_alternative<rlc_tm_tx_metrics_lower>(m.tx_low.mode_specific));
   ASSERT_EQ(std::get<rlc_tm_tx_metrics_lower>(m.tx_low.mode_specific).num_small_allocs, 1);
+}
+
+TEST_F(rlc_tx_tm_test, test_tx_is_retx_flag)
+{
+  // TM logs an error for is_retx=true but still queues and transmits the SDU.
+  const uint32_t sdu_size  = 4;
+  uint32_t       sdu_count = 0;
+
+  byte_buffer sdu_buf = create_buffer(sdu_size, sdu_count);
+
+  rlc->handle_sdu(sdu_buf.deep_copy().value(), /*is_retx=*/true);
+  pcell_worker.run_pending_tasks();
+  EXPECT_EQ(rlc->get_buffer_state().pending_bytes, sdu_size);
+
+  std::vector<uint8_t> tx_pdu(sdu_size);
+  unsigned             nwritten = rlc->pull_pdu(tx_pdu);
+  ue_worker.run_pending_tasks();
+  byte_buffer_chain pdu =
+      byte_buffer_chain::create(byte_buffer_slice::create(span<uint8_t>(tx_pdu.data(), nwritten)).value()).value();
+  EXPECT_EQ(pdu.length(), sdu_size);
+  EXPECT_EQ(pdu, sdu_buf);
+
+  rlc_tx_metrics m = rlc->get_metrics();
+  EXPECT_EQ(m.tx_high.num_sdus, 1);
+  EXPECT_EQ(m.tx_high.num_dropped_sdus, 0);
+}
+
+TEST_F(rlc_tx_tm_test, queue_full_by_sdu_count_drops_sdu)
+{
+  // The default SRB0 config has queue_size=8. The 9th SDU must be dropped.
+  const uint32_t sdu_size   = 4;
+  const uint32_t queue_size = cfg.queue_size;
+
+  for (uint32_t i = 0; i < queue_size; i++) {
+    byte_buffer sdu = create_buffer(sdu_size, i);
+    rlc->handle_sdu(std::move(sdu), false);
+    pcell_worker.run_pending_tasks();
+  }
+  EXPECT_EQ(rlc->get_buffer_state().pending_bytes, queue_size * sdu_size);
+
+  // 9th SDU must be dropped
+  byte_buffer overflow_sdu = create_buffer(sdu_size, queue_size);
+  rlc->handle_sdu(std::move(overflow_sdu), false);
+  pcell_worker.run_pending_tasks();
+
+  EXPECT_EQ(rlc->get_buffer_state().pending_bytes, queue_size * sdu_size);
+
+  rlc_tx_metrics m = rlc->get_metrics();
+  EXPECT_EQ(m.tx_high.num_sdus, queue_size);
+  EXPECT_EQ(m.tx_high.num_dropped_sdus, 1);
+}
+
+TEST_F(rlc_tx_tm_test, queue_full_by_bytes_drops_sdu)
+{
+  // The default SRB0 config has queue_size_bytes=16000. Use two large SDUs that
+  // together exceed the byte limit while staying within the count limit (8).
+  // A third SDU is used to fill the remaining space to check the full capacity is available.
+  const uint32_t first_sdu_size  = cfg.queue_size_bytes / 2;
+  const uint32_t second_sdu_size = cfg.queue_size_bytes - first_sdu_size + 1; // 8000 + 8001 = 16001 > 16000 (too much)
+  const uint32_t third_sdu_size  = cfg.queue_size_bytes - first_sdu_size;     // 8000 + 8000 = 16000 (exact match)
+
+  byte_buffer first_sdu = create_buffer(first_sdu_size, 0);
+  rlc->handle_sdu(std::move(first_sdu), false);
+  pcell_worker.run_pending_tasks();
+  EXPECT_EQ(rlc->get_buffer_state().pending_bytes, first_sdu_size);
+
+  byte_buffer second_sdu = create_buffer(second_sdu_size, 1);
+  rlc->handle_sdu(std::move(second_sdu), false);
+  pcell_worker.run_pending_tasks();
+
+  EXPECT_EQ(rlc->get_buffer_state().pending_bytes, first_sdu_size);
+
+  byte_buffer third_sdu = create_buffer(third_sdu_size, 1);
+  rlc->handle_sdu(std::move(third_sdu), false);
+  pcell_worker.run_pending_tasks();
+
+  EXPECT_EQ(rlc->get_buffer_state().pending_bytes, first_sdu_size + third_sdu_size);
+
+  rlc_tx_metrics m = rlc->get_metrics();
+  EXPECT_EQ(m.tx_high.num_sdus, 2);
+  EXPECT_EQ(m.tx_high.num_dropped_sdus, 1);
+}
+
+TEST_F(rlc_tx_tm_test, buffer_state_dedup_on_rapid_sdu_writes)
+{
+  // Writing two SDUs before draining the pcell worker must produce only one BSR
+  // notification, because the atomic pending_buffer_state flag deduplicates
+  // redundant update tasks.
+  const uint32_t sdu_size = 4;
+
+  byte_buffer sdu1 = create_buffer(sdu_size, 0);
+  byte_buffer sdu2 = create_buffer(sdu_size, 1);
+
+  rlc->handle_sdu(std::move(sdu1), false);
+  rlc->handle_sdu(std::move(sdu2), false);
+  // Both SDUs queued; only one deferred buffer-state task should be pending.
+  pcell_worker.run_pending_tasks();
+
+  EXPECT_EQ(tester->bsr_count, 1);
+  EXPECT_EQ(tester->bsr.pending_bytes, 2 * sdu_size);
+  EXPECT_EQ(rlc->get_buffer_state().pending_bytes, 2 * sdu_size);
+}
+
+TEST_F(rlc_tx_tm_test, tx_metrics_on_successful_tx)
+{
+  const uint32_t sdu_size = 4;
+  const uint32_t n_sdus   = 3;
+
+  for (uint32_t i = 0; i < n_sdus; i++) {
+    byte_buffer sdu = create_buffer(sdu_size, i);
+    rlc->handle_sdu(std::move(sdu), false);
+    pcell_worker.run_pending_tasks();
+
+    std::vector<uint8_t> tx_pdu(sdu_size);
+    rlc->pull_pdu(tx_pdu);
+    ue_worker.run_pending_tasks();
+    pcell_worker.run_pending_tasks();
+  }
+
+  rlc_tx_metrics m = rlc->get_metrics();
+  EXPECT_EQ(m.tx_high.num_sdus, n_sdus);
+  EXPECT_EQ(m.tx_high.num_sdu_bytes, n_sdus * sdu_size);
+  EXPECT_EQ(m.tx_high.num_dropped_sdus, 0);
+  EXPECT_EQ(m.tx_low.num_pdus_no_segmentation, n_sdus);
+  EXPECT_EQ(m.tx_low.num_pdu_bytes_no_segmentation, n_sdus * sdu_size);
+  ASSERT_TRUE(std::holds_alternative<rlc_tm_tx_metrics_lower>(m.tx_low.mode_specific));
+  EXPECT_EQ(std::get<rlc_tm_tx_metrics_lower>(m.tx_low.mode_specific).num_small_allocs, 0);
+}
+
+TEST_F(rlc_tx_tm_test, multiple_discard_failures_accumulate)
+{
+  const uint32_t sdu_size  = 4;
+  uint32_t       sdu_count = 0;
+
+  byte_buffer sdu_buf = create_buffer(sdu_size, sdu_count);
+  rlc->handle_sdu(sdu_buf.deep_copy().value(), false);
+  pcell_worker.run_pending_tasks();
+
+  rlc->discard_sdu(0, 1);
+  rlc->discard_sdu(1, 1);
+  rlc->discard_sdu(2, 1);
+
+  rlc_tx_metrics m = rlc->get_metrics();
+  EXPECT_EQ(m.tx_high.num_discard_failures, 3);
+  EXPECT_EQ(m.tx_high.num_discarded_sdus, 0);
+
+  // SDU remains in queue and can still be transmitted
+  std::vector<uint8_t> tx_pdu(sdu_size);
+  unsigned             nwritten = rlc->pull_pdu(tx_pdu);
+  ue_worker.run_pending_tasks();
+  byte_buffer_chain pdu =
+      byte_buffer_chain::create(byte_buffer_slice::create(span<uint8_t>(tx_pdu.data(), nwritten)).value()).value();
+  EXPECT_EQ(pdu.length(), sdu_size);
+  EXPECT_EQ(pdu, sdu_buf);
 }
 
 int main(int argc, char** argv)

@@ -82,7 +82,7 @@ public:
   {
     ocudu_assert(ue_index_to_ue_f1ap_id.find(ue_index) != ue_index_to_ue_f1ap_id.end(),
                  "ue={} gNB-CU-UE-F1AP-ID not found",
-                 fmt::underlying(ue_index));
+                 ue_index);
     ocudu_assert(ues.find(ue_index_to_ue_f1ap_id.at(ue_index)) != ues.end(),
                  "cu_ue={}: F1AP UE context not found",
                  fmt::underlying(ue_index_to_ue_f1ap_id.at(ue_index)));
@@ -123,10 +123,10 @@ public:
 
   f1ap_ue_context& add_ue(cu_cp_ue_index_t ue_index, gnb_cu_ue_f1ap_id_t cu_ue_id)
   {
-    ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", fmt::underlying(ue_index));
+    ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
     ocudu_assert(cu_ue_id != gnb_cu_ue_f1ap_id_t::invalid, "Invalid cu_ue={}", fmt::underlying(cu_ue_id));
 
-    logger.debug("ue={} cu_ue={}: Adding F1AP UE context", fmt::underlying(ue_index), fmt::underlying(cu_ue_id));
+    logger.debug("ue={} cu_ue={}: Adding F1AP UE context", ue_index, fmt::underlying(cu_ue_id));
     ues.emplace(
         std::piecewise_construct, std::forward_as_tuple(cu_ue_id), std::forward_as_tuple(ue_index, cu_ue_id, timers));
     ue_index_to_ue_f1ap_id.emplace(ue_index, cu_ue_id);
@@ -151,7 +151,7 @@ public:
     ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
 
     if (ue_index_to_ue_f1ap_id.find(ue_index) == ue_index_to_ue_f1ap_id.end()) {
-      logger.warning("ue={}: gNB-CU-UE-F1AP-ID not found", fmt::underlying(ue_index));
+      logger.warning("ue={}: gNB-CU-UE-F1AP-ID not found", ue_index);
       return;
     }
 
@@ -164,7 +164,7 @@ public:
       return;
     }
 
-    logger.debug("ue={} cu_ue={}: Removing F1AP UE context", fmt::underlying(ue_index), fmt::underlying(cu_ue_id));
+    logger.debug("ue={} cu_ue={}: Removing F1AP UE context", ue_index, fmt::underlying(cu_ue_id));
     ues.erase(cu_ue_id);
   }
 
@@ -173,7 +173,7 @@ public:
     ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
     ocudu_assert(ue_index_to_ue_f1ap_id.find(ue_index) != ue_index_to_ue_f1ap_id.end(),
                  "ue={}: gNB-CU-UE-F1AP-ID not found",
-                 fmt::underlying(ue_index));
+                 ue_index);
     ocudu_assert(ues.find(ue_index_to_ue_f1ap_id.at(ue_index)) != ues.end(),
                  "cu_ue={}: F1AP UE context not found",
                  fmt::underlying(ue_index_to_ue_f1ap_id.at(ue_index)));
@@ -270,7 +270,7 @@ private:
       next_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_t::min;
     } else {
       // increase cu ue f1ap id counter
-      next_cu_ue_f1ap_id = int_to_gnb_cu_ue_f1ap_id(gnb_cu_ue_f1ap_id_to_uint(next_cu_ue_f1ap_id) + 1);
+      next_cu_ue_f1ap_id = int_to_gnb_cu_ue_f1ap_id(to_underlying(next_cu_ue_f1ap_id) + 1);
     }
   }
 

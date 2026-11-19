@@ -9,6 +9,7 @@
 #include "ocudu/adt/expected.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ran/pucch/pucch_constants.h"
+#include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/scheduler/config/cell_bwp_res_config.h"
 #include "ocudu/scheduler/resource_grid_util.h"
@@ -140,7 +141,7 @@ pucch_collision_manager::pucch_collision_manager(const cell_configuration& cell_
   mux_matrix(make_mux_regions_matrix(cell_cfg.bwp_res[to_bwp_id(0)].ul().pucch)),
   mux_region_lookup(build_mux_region_lookup(mux_matrix)),
   // The ring must be at least 1 slot larger than the max. UL allocation delay, to take into account the current slot.
-  slots_ctx(get_allocator_ring_size_gt_min(get_max_slot_ul_alloc_delay(cell_cfg.ntn_cs_koffset) + 1),
+  slots_ctx(get_pow2_allocator_ring_size_gt_min(get_max_slot_ul_alloc_delay(cell_cfg.ntn_cs_koffset) + 1),
             {slot_context(cell_cfg)})
 {
 }
@@ -150,8 +151,7 @@ void pucch_collision_manager::slot_indication(slot_point sl_tx)
   ocudu_sanity_check(not last_sl_ind.valid() or sl_tx == last_sl_ind + 1, "Detected a skipped slot");
 
   // Clear previous slot context.
-  slots_ctx[(sl_tx - 1).count()].current_state.reset();
-  slots_ctx[(sl_tx - 1).count()].pucch_res_grid.clear();
+  slots_ctx[(sl_tx - 1).count()].clear();
   // Update last slot indication.
   last_sl_ind = sl_tx;
 }
@@ -160,61 +160,105 @@ void pucch_collision_manager::stop()
 {
   // Clear all slot contexts.
   for (auto& ctx : slots_ctx) {
-    ctx.current_state.reset();
-    ctx.pucch_res_grid.clear();
+    ctx.clear();
   }
   last_sl_ind = {};
 }
 
-pucch_collision_manager::alloc_result_t
-pucch_collision_manager::alloc(cell_slot_resource_grid& ul_res_grid, slot_point sl, const pucch_resource& res)
+error_type<pucch_alloc_failure> pucch_collision_manager::can_alloc(const cell_slot_resource_allocator& slot_alloc,
+                                                                   const pucch_resource&               res,
+                                                                   rnti_t                              rnti) const
 {
-  ocudu_sanity_check(sl < last_sl_ind + slots_ctx.size(),
+  ocudu_sanity_check(slot_alloc.slot < last_sl_ind + slots_ctx.size(),
                      "PUCCH resource ring-buffer accessed too far into the future");
 
-  auto&          ctx     = slots_ctx[sl.count()];
+  const auto&    ctx     = slots_ctx[slot_alloc.slot.count()];
   const auto&    bwp_cfg = cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params;
   const unsigned res_idx = get_res_idx(cell_cfg.bwp_res[to_bwp_id(0)].ul().pucch, res.res_id);
+
+  // Check that the slot is UL enabled in the resource symbols.
+  if (cell_cfg.is_tdd()) {
+    const unsigned nof_syms    = get_nsymb_per_slot(bwp_cfg.cp);
+    const unsigned nof_ul_syms = cell_cfg.get_nof_ul_symbol_per_slot(slot_alloc.slot);
+    ocudu_assert(nof_ul_syms > 0, "PUCCH resource allocation attempted in a non-UL slot");
+    const ofdm_symbol_range slot_ul_syms = ofdm_symbol_range{nof_syms - nof_ul_syms, nof_syms};
+    if (not slot_ul_syms.contains(res.syms)) {
+      return make_unexpected(pucch_alloc_failure::INCOMPATIBLE_SLOT);
+    }
+  }
+
+  // Check if the resource is already in use by another UE. Re-selecting a resource already held by the same UE is
+  // not a collision.
+  if (ctx.owners[res_idx] != rnti_t::INVALID_RNTI and ctx.owners[res_idx] != rnti) {
+    return make_unexpected(pucch_alloc_failure::RESOURCE_IN_USE);
+  }
+
+  // Check for PUCCH-to-PUCCH collisions using the collision matrix. A collision against a resource already held by
+  // the same UE is not a real collision.
+  bool real_collision = false;
+  (col_matrix[res_idx] & ctx.current_state).for_each(0, ctx.current_state.size(), [&](size_t idx) {
+    real_collision |= ctx.owners[idx] != rnti;
+  });
+  if (real_collision) {
+    return make_unexpected(pucch_alloc_failure::PUCCH_COLLISION);
+  }
 
   // Check for PUCCH-to-other UL grant collisions using the resource grids.
   const grant_info                first_hop = pucch_hop_grant(res, bwp_cfg, true);
   const std::optional<grant_info> second_hop =
       res.second_hop_prb.has_value() ? std::optional{pucch_hop_grant(res, bwp_cfg, false)} : std::nullopt;
-  if (ul_res_grid.collides(first_hop, &ctx.pucch_res_grid)) {
-    return make_unexpected(alloc_failure_reason::UL_GRANT_COLLISION);
+  if (slot_alloc.ul_res_grid.collides(first_hop, &ctx.pucch_res_grid)) {
+    return make_unexpected(pucch_alloc_failure::UL_GRANT_COLLISION);
   }
-  if (second_hop.has_value() and ul_res_grid.collides(*second_hop, &ctx.pucch_res_grid)) {
-    return make_unexpected(alloc_failure_reason::UL_GRANT_COLLISION);
-  }
-
-  // Check for PUCCH-to-PUCCH collisions using the collision matrix.
-  const auto& row = col_matrix[res_idx];
-  if ((row & ctx.current_state).any()) {
-    return make_unexpected(alloc_failure_reason::PUCCH_COLLISION);
+  if (second_hop.has_value() and slot_alloc.ul_res_grid.collides(*second_hop, &ctx.pucch_res_grid)) {
+    return make_unexpected(pucch_alloc_failure::UL_GRANT_COLLISION);
   }
 
-  // Allocate the resource.
-  ctx.current_state.set(res_idx);
-  ul_res_grid.fill(first_hop);
-  ctx.pucch_res_grid.fill(first_hop);
-  if (second_hop.has_value()) {
-    ul_res_grid.fill(*second_hop);
-    ctx.pucch_res_grid.fill(*second_hop);
-  }
+  // If all checks passed, the resource can be allocated.
   return default_success_t();
 }
 
-bool pucch_collision_manager::free(cell_slot_resource_grid& ul_res_grid, slot_point sl, const pucch_resource& res)
+error_type<pucch_alloc_failure>
+pucch_collision_manager::alloc(cell_slot_resource_allocator& slot_alloc, const pucch_resource& res, rnti_t rnti)
 {
-  ocudu_sanity_check(sl < last_sl_ind + slots_ctx.size(),
-                     "PUCCH resource ring-buffer accessed too far into the future");
+  if (auto alloc_res = can_alloc(slot_alloc, res, rnti); not alloc_res.has_value()) {
+    return make_unexpected(alloc_res.error());
+  }
 
-  auto&          ctx     = slots_ctx[sl.count()];
+  // Allocate the resource.
+  do_alloc(slot_alloc, res, rnti);
+  return default_success_t();
+}
+
+void pucch_collision_manager::do_alloc(cell_slot_resource_allocator& slot_alloc, const pucch_resource& res, rnti_t rnti)
+{
+  const auto&                     bwp_cfg   = cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params;
+  const unsigned                  res_idx   = get_res_idx(cell_cfg.bwp_res[to_bwp_id(0)].ul().pucch, res.res_id);
+  const grant_info                first_hop = pucch_hop_grant(res, bwp_cfg, true);
+  const std::optional<grant_info> second_hop =
+      res.second_hop_prb.has_value() ? std::optional{pucch_hop_grant(res, bwp_cfg, false)} : std::nullopt;
+  auto& ctx           = slots_ctx[slot_alloc.slot.count()];
+  ctx.owners[res_idx] = rnti;
+  ctx.current_state.set(res_idx);
+  slot_alloc.ul_res_grid.fill(first_hop);
+  ctx.pucch_res_grid.fill(first_hop);
+  if (second_hop.has_value()) {
+    slot_alloc.ul_res_grid.fill(*second_hop);
+    ctx.pucch_res_grid.fill(*second_hop);
+  }
+}
+
+bool pucch_collision_manager::free(cell_slot_resource_allocator& slot_alloc, const pucch_resource& res, rnti_t rnti)
+{
+  ocudu_sanity_check(slot_alloc.slot < last_sl_ind + slots_ctx.size(),
+                     "PUCCH resource ring-buffer accessed too far into the future");
+  auto&          ctx     = slots_ctx[slot_alloc.slot.count()];
   const unsigned res_idx = get_res_idx(cell_cfg.bwp_res[to_bwp_id(0)].ul().pucch, res.res_id);
-  if (not ctx.current_state.test(res_idx)) {
-    // Resource was not allocated.
+  if (ctx.owners[res_idx] != rnti or not ctx.current_state.test(res_idx)) {
+    // Resource was not allocated to this UE.
     return false;
   }
+  ctx.owners[res_idx] = rnti_t::INVALID_RNTI;
   ctx.current_state.reset(res_idx);
 
   // Check if any other resource in the same multiplexing region is still allocated.
@@ -229,11 +273,11 @@ bool pucch_collision_manager::free(cell_slot_resource_grid& ul_res_grid, slot_po
   // Clear grants in ul_res_grid and ctx.pucch_res_grid.
   const auto&      bwp_cfg   = cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params;
   const grant_info first_hop = pucch_hop_grant(res, bwp_cfg, true);
-  ul_res_grid.clear(first_hop);
+  slot_alloc.ul_res_grid.clear(first_hop);
   ctx.pucch_res_grid.clear(first_hop);
   if (res.second_hop_prb.has_value()) {
     const grant_info second_hop = pucch_hop_grant(res, bwp_cfg, false);
-    ul_res_grid.clear(second_hop);
+    slot_alloc.ul_res_grid.clear(second_hop);
     ctx.pucch_res_grid.clear(second_hop);
   }
   return true;
@@ -255,4 +299,18 @@ pucch_collision_manager::build_mux_region_lookup(const detail::mux_regions_matri
   }
 
   return lookup;
+}
+
+pucch_collision_manager::slot_context::slot_context(const cell_configuration& cell_cfg) :
+  current_state(cell_cfg.bwp_res[to_bwp_id(0)].ul().pucch.nof_total_res()),
+  owners(cell_cfg.bwp_res[to_bwp_id(0)].ul().pucch.nof_total_res(), rnti_t::INVALID_RNTI),
+  pucch_res_grid(cell_cfg.params.ul_cfg_common.freq_info_ul.scs_carrier_list)
+{
+}
+
+void pucch_collision_manager::slot_context::clear()
+{
+  current_state.reset();
+  std::fill(owners.begin(), owners.end(), rnti_t::INVALID_RNTI);
+  pucch_res_grid.clear();
 }

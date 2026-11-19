@@ -24,10 +24,10 @@ class UplinkProcessorFixture : public ::testing::Test
 {
 public:
   UplinkProcessorFixture() :
-    pucch_executor(1),
-    pusch_executor(1),
-    srs_executor(1),
-    prach_executor(1),
+    pucch_executor(max_nof_tasks_per_test_case),
+    pusch_executor(max_nof_tasks_per_test_case),
+    srs_executor(max_nof_tasks_per_test_case),
+    prach_executor(max_nof_tasks_per_test_case),
     grid_reader_spy(max_nof_layers, max_nof_symbols, max_nof_prb),
     grid_writer_spy(max_nof_layers, max_nof_symbols, max_nof_prb)
   {
@@ -37,8 +37,8 @@ public:
   {
     auto prach      = std::make_unique<prach_detector_spy>();
     auto pusch_proc = std::make_unique<pusch_processor_spy>();
-    auto pucch_proc = std::make_unique<pucch_processor_dummy>();
-    auto srs        = std::make_unique<srs_estimator_dummy>();
+    auto pucch_proc = std::make_unique<pucch_processor_spy>();
+    auto srs        = std::make_unique<srs_estimator_spy>();
     auto grid       = std::make_unique<resource_grid_spy>(grid_reader_spy, grid_writer_spy);
     auto tap        = std::make_unique<phy_tap_spy>();
 
@@ -53,6 +53,8 @@ public:
     pusch_spy = pusch_proc.get();
     grid_spy  = grid.get();
     tap_spy   = tap.get();
+    pucch_spy = pucch_proc.get();
+    srs_spy   = srs.get();
 
     uplink_processor_impl::task_executor_collection executors = {.pucch_executor = pucch_executor,
                                                                  .pusch_executor = pusch_executor,
@@ -75,23 +77,27 @@ public:
   }
 
 protected:
-  static constexpr unsigned   max_nof_prb     = 15;
-  static constexpr unsigned   max_nof_layers  = 1;
-  static constexpr unsigned   max_nof_symbols = 14;
-  static constexpr slot_point slot            = {0, 9};
+  static constexpr unsigned   max_nof_tasks_per_test_case = 5;
+  static constexpr unsigned   max_nof_prb                 = 15;
+  static constexpr unsigned   max_nof_layers              = 1;
+  static constexpr unsigned   max_nof_symbols             = 14;
+  static constexpr unsigned   pucch_f0_start_symb         = 0;
+  static constexpr unsigned   pucch_f0_nof_symb           = 1;
+  static constexpr unsigned   pusch_csi2_size             = 3;
+  static constexpr unsigned   slot_end_symbol_index       = MAX_NSYMB_PER_SLOT - 1;
+  static constexpr slot_point slot                        = {0, 9};
 
   const uplink_pdu_slot_repository::pusch_pdu pusch_pdu = {
-      .harq_id = 0,
       .tb_size = units::bytes(8),
-      .pdu     = {.context       = std::nullopt,
+      .pdu     = {.harq_id       = to_harq_id(0),
                   .slot          = slot,
-                  .rnti          = 8323,
+                  .rnti          = to_rnti(8323),
                   .bwp_size_rb   = 25,
                   .bwp_start_rb  = 0,
                   .cp            = cyclic_prefix::NORMAL,
                   .mcs_descr     = {modulation_scheme::PI_2_BPSK, 0.1},
                   .codeword      = {{0, ldpc_base_graph_type::BG2, true}},
-                  .uci           = {1, 0, uci_part2_size_description(1), 1, 20, 6.25, 6.25},
+                  .uci           = {1, 20, uci_part2_size_description(pusch_csi2_size), 1, 20, 6.25, 6.25},
                   .n_id          = 935,
                   .nof_tx_layers = 1,
                   .rx_ports      = {0, 1, 2, 3},
@@ -107,7 +113,28 @@ protected:
                   .tbs_lbrm           = units::bytes(ldpc::MAX_CODEBLOCK_SIZE / 8),
                   .dc_position        = std::nullopt}};
 
-  const uplink_pdu_slot_repository::pucch_pdu pucch_pdu = {
+  const uplink_pdu_slot_repository::srs_pdu srs_pdu = {
+      .context = {.slot                                             = slot,
+                  .rnti                                             = to_rnti(0x5000),
+                  .is_normalized_channel_iq_matrix_report_requested = false,
+                  .is_positioning_report_requested                  = false},
+      .config  = {.slot     = slot,
+                  .resource = {.nof_antenna_ports   = srs_resource_configuration::one_two_four_enum::one,
+                               .nof_symbols         = srs_nof_symbols::n1,
+                               .start_symbol        = 5,
+                               .configuration_index = 0,
+                               .sequence_id         = 0,
+                               .bandwidth_index     = 0,
+                               .comb_size           = tx_comb_size::n2,
+                               .comb_offset         = 0,
+                               .cyclic_shift        = 0,
+                               .freq_position       = 0,
+                               .freq_shift          = 0,
+                               .freq_hopping        = 0,
+                               .hopping             = srs_group_or_sequence_hopping::neither,
+                               .periodicity         = std::nullopt}}};
+
+  const uplink_pdu_slot_repository::pucch_pdu pucch_f0_pdu = {
       .context = {.slot          = slot,
                   .rnti          = to_rnti(0x4601),
                   .format        = pucch_format::FORMAT_0,
@@ -115,20 +142,145 @@ protected:
       .config  = pucch_processor::format0_configuration{.context              = std::nullopt,
                                                         .slot                 = slot,
                                                         .cp                   = cyclic_prefix::NORMAL,
-                                                        .bwp_size_rb          = 275,
+                                                        .bwp_size_rb          = MAX_NOF_PRBS,
                                                         .bwp_start_rb         = 0,
                                                         .starting_prb         = 0,
                                                         .second_hop_prb       = 270,
-                                                        .start_symbol_index   = 0,
-                                                        .nof_symbols          = 1,
+                                                        .start_symbol_index   = pucch_f0_start_symb,
+                                                        .nof_symbols          = pucch_f0_nof_symb,
                                                         .initial_cyclic_shift = 0,
                                                         .n_id                 = 0,
                                                         .nof_harq_ack         = 1,
                                                         .sr_opportunity       = true,
                                                         .ports                = {0}}};
 
+  // PUCCH Format 1 fixture member.
+  const uplink_pdu_slot_repository::pucch_pdu pucch_f1_pdu = {
+      .context = {.slot          = slot,
+                  .rnti          = to_rnti(0x4602),
+                  .format        = pucch_format::FORMAT_1,
+                  .context_f0_f1 = std::nullopt},
+      .config  = pucch_processor::format1_configuration{.context              = std::nullopt,
+                                                        .slot                 = slot,
+                                                        .bwp_size_rb          = MAX_NOF_PRBS,
+                                                        .bwp_start_rb         = 0,
+                                                        .cp                   = cyclic_prefix::NORMAL,
+                                                        .starting_prb         = 0,
+                                                        .second_hop_prb       = std::nullopt,
+                                                        .n_id                 = 0,
+                                                        .nof_harq_ack         = 2,
+                                                        .ports                = {0},
+                                                        .initial_cyclic_shift = 0,
+                                                        .nof_symbols          = 4,
+                                                        .start_symbol_index   = 2,
+                                                        .time_domain_occ      = 0}};
+
+  // PUCCH Format 1 fixture member that can be combined with the previous one.
+  const uplink_pdu_slot_repository::pucch_pdu pucch_f1_pdu2 = {
+      .context = {.slot          = slot,
+                  .rnti          = to_rnti(0x4602),
+                  .format        = pucch_format::FORMAT_1,
+                  .context_f0_f1 = std::nullopt},
+      .config  = pucch_processor::format1_configuration{.context              = std::nullopt,
+                                                        .slot                 = slot,
+                                                        .bwp_size_rb          = MAX_NOF_PRBS,
+                                                        .bwp_start_rb         = 0,
+                                                        .cp                   = cyclic_prefix::NORMAL,
+                                                        .starting_prb         = 0,
+                                                        .second_hop_prb       = std::nullopt,
+                                                        .n_id                 = 0,
+                                                        .nof_harq_ack         = 2,
+                                                        .ports                = {0},
+                                                        .initial_cyclic_shift = 2,
+                                                        .nof_symbols          = 4,
+                                                        .start_symbol_index   = 2,
+                                                        .time_domain_occ      = 0}};
+
+  // PUCCH Format 2 fixture member.
+  const uplink_pdu_slot_repository::pucch_pdu pucch_f2_pdu = {
+      .context = {.slot          = slot,
+                  .rnti          = to_rnti(0x4603),
+                  .format        = pucch_format::FORMAT_2,
+                  .context_f0_f1 = std::nullopt},
+      .config  = pucch_processor::format2_configuration{.context            = std::nullopt,
+                                                        .slot               = slot,
+                                                        .cp                 = cyclic_prefix::NORMAL,
+                                                        .ports              = {0},
+                                                        .bwp_size_rb        = MAX_NOF_PRBS,
+                                                        .bwp_start_rb       = 0,
+                                                        .prbs               = prb_interval::start_and_len(0, 2),
+                                                        .second_hop_prb     = std::nullopt,
+                                                        .start_symbol_index = 0,
+                                                        .nof_symbols        = 2,
+                                                        .rnti               = static_cast<uint16_t>(to_rnti(0x4603)),
+                                                        .n_id               = 0,
+                                                        .n_id_0             = 0,
+                                                        .nof_harq_ack       = 2,
+                                                        .nof_sr             = 0,
+                                                        .nof_csi_part1      = 0,
+                                                        .csi_part2_size     = uci_part2_size_description(1),
+                                                        .max_code_rate      = 0.5}};
+
+  // PUCCH Format 3 fixture member.
+  const uplink_pdu_slot_repository::pucch_pdu pucch_f3_pdu = {
+      .context = {.slot          = slot,
+                  .rnti          = to_rnti(0x4604),
+                  .format        = pucch_format::FORMAT_3,
+                  .context_f0_f1 = std::nullopt},
+      .config  = pucch_processor::format3_configuration{.context            = std::nullopt,
+                                                        .slot               = slot,
+                                                        .cp                 = cyclic_prefix::NORMAL,
+                                                        .ports              = {0},
+                                                        .bwp_size_rb        = MAX_NOF_PRBS,
+                                                        .bwp_start_rb       = 0,
+                                                        .prbs               = prb_interval::start_and_len(0, 2),
+                                                        .second_hop_prb     = std::nullopt,
+                                                        .start_symbol_index = 0,
+                                                        .nof_symbols        = 4,
+                                                        .rnti               = static_cast<uint16_t>(to_rnti(0x4604)),
+                                                        .n_id_hopping       = 0,
+                                                        .n_id_scrambling    = 0,
+                                                        .nof_harq_ack       = 2,
+                                                        .nof_sr             = 0,
+                                                        .nof_csi_part1      = 0,
+                                                        .csi_part2_size     = uci_part2_size_description(1),
+                                                        .additional_dmrs    = false,
+                                                        .pi2_bpsk           = false,
+                                                        .max_code_rate      = 0.5}};
+
+  // PUCCH Format 4 fixture member.
+  const uplink_pdu_slot_repository::pucch_pdu pucch_f4_pdu = {
+      .context = {.slot          = slot,
+                  .rnti          = to_rnti(0x4605),
+                  .format        = pucch_format::FORMAT_4,
+                  .context_f0_f1 = std::nullopt},
+      .config  = pucch_processor::format4_configuration{.context            = std::nullopt,
+                                                        .slot               = slot,
+                                                        .cp                 = cyclic_prefix::NORMAL,
+                                                        .ports              = {0},
+                                                        .bwp_size_rb        = MAX_NOF_PRBS,
+                                                        .bwp_start_rb       = 0,
+                                                        .starting_prb       = 0,
+                                                        .second_hop_prb     = std::nullopt,
+                                                        .start_symbol_index = 0,
+                                                        .nof_symbols        = 4,
+                                                        .rnti               = static_cast<uint16_t>(to_rnti(0x4605)),
+                                                        .n_id_hopping       = 0,
+                                                        .n_id_scrambling    = 0,
+                                                        .nof_harq_ack       = 2,
+                                                        .nof_sr             = 0,
+                                                        .nof_csi_part1      = 0,
+                                                        .csi_part2_size     = uci_part2_size_description(1),
+                                                        .additional_dmrs    = false,
+                                                        .pi2_bpsk           = false,
+                                                        .occ_index          = 0,
+                                                        .occ_length         = 2,
+                                                        .max_code_rate      = 0.5}};
+
   prach_detector_spy*                     prach_spy = nullptr;
   pusch_processor_spy*                    pusch_spy = nullptr;
+  pucch_processor_spy*                    pucch_spy = nullptr;
+  srs_estimator_spy*                      srs_spy   = nullptr;
   manual_task_worker_always_enqueue_tasks pucch_executor;
   manual_task_worker_always_enqueue_tasks pusch_executor;
   manual_task_worker_always_enqueue_tasks srs_executor;
@@ -143,7 +295,7 @@ protected:
   phy_tap_spy*             tap_spy;
 };
 
-TEST_F(UplinkProcessorFixture, prach_normal_workflow)
+TEST_F(UplinkProcessorFixture, concurrent_prach_stop_workflow)
 {
   ul_processor->get_pdu_slot_repository(slot);
 
@@ -234,10 +386,11 @@ TEST_F(UplinkProcessorFixture, pusch_normal_workflow)
   repository->add_pusch_pdu(pusch_pdu);
   shared_resource_grid grid = repository.release();
 
-  unsigned end_symbol_index = pusch_pdu.pdu.start_symbol_index + pusch_pdu.pdu.nof_symbols - 1;
+  unsigned pusch_end_symbol_index = pusch_pdu.pdu.start_symbol_index + pusch_pdu.pdu.nof_symbols - 1;
 
   // Notify reception of the previous reception symbol.
-  ul_processor->get_slot_processor(slot).handle_rx_symbol(end_symbol_index - 1, true);
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(pusch_end_symbol_index - 1, true);
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), pusch_end_symbol_index);
 
   // Check that nothing happened.
   ASSERT_FALSE(pusch_executor.has_pending_tasks());
@@ -246,9 +399,8 @@ TEST_F(UplinkProcessorFixture, pusch_normal_workflow)
   ASSERT_FALSE(results_notifier.has_pusch_uci_result_been_notified());
 
   // Notify reception of receive symbol.
-  ul_processor->get_slot_processor(slot).handle_rx_symbol(end_symbol_index, true);
-  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), max_nof_symbols);
-  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(pusch_end_symbol_index, true);
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), pusch_end_symbol_index + 1);
 
   // Check PUSCH processing has been enqueued and the processor was not called.
   ASSERT_TRUE(pusch_executor.has_pending_tasks());
@@ -263,6 +415,136 @@ TEST_F(UplinkProcessorFixture, pusch_normal_workflow)
   ASSERT_TRUE(pusch_spy->has_process_method_been_called());
   ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
   ASSERT_TRUE(results_notifier.has_pusch_uci_result_been_notified());
+
+  // Validate UCI message content (HARQ-ACK, CSI Part 1, CSI Part 2).
+  const auto& pusch_uci = results_notifier.get_last_pusch_uci_result();
+  ASSERT_TRUE(pusch_uci.has_value()) << "PUSCH UCI result must be present";
+
+  ASSERT_TRUE(pusch_uci->harq_ack.has_value()) << "HARQ-ACK field must be present";
+  ASSERT_EQ(pusch_uci->harq_ack->payload.size(), pusch_pdu.pdu.uci.nof_harq_ack)
+      << "HARQ-ACK payload bit count must match";
+
+  ASSERT_TRUE(pusch_uci->csi1.has_value()) << "CSI Part 1 field must be present";
+  ASSERT_EQ(pusch_uci->csi1->payload.size(), pusch_pdu.pdu.uci.nof_csi_part1)
+      << "CSI Part 1 payload bit count must match";
+
+  ASSERT_TRUE(pusch_uci->csi2.has_value()) << "CSI Part 2 field must be present";
+  ASSERT_EQ(pusch_uci->csi2->payload.size(), pusch_csi2_size) << "CSI Part 2 payload bit count must match";
+
+  // Validate PHY tap.
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), MAX_NSYMB_PER_SLOT);
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+}
+
+TEST_F(UplinkProcessorFixture, pucch_normal_workflow)
+{
+  // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  repository->add_pucch_pdu(pucch_f0_pdu);
+  repository->add_pucch_pdu(pucch_f1_pdu);
+  repository->add_pucch_pdu(pucch_f1_pdu2);
+  repository->add_pucch_pdu(pucch_f2_pdu);
+  repository->add_pucch_pdu(pucch_f3_pdu);
+  repository->add_pucch_pdu(pucch_f4_pdu);
+  shared_resource_grid grid = repository.release();
+
+  // The PUCCH Format 0 PDU ends at symbol 0 (start=0, length=1).
+  // handle_rx_symbol(0) triggers processing since the end symbol is reached.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(slot_end_symbol_index, true);
+
+  // Check PUCCH processing has been enqueued.
+  ASSERT_TRUE(pucch_executor.has_pending_tasks());
+  ASSERT_FALSE(results_notifier.has_pucch_result_been_notified());
+
+  // Execute tasks.
+  pucch_executor.run_pending_tasks();
+
+  // Check the processor has been called and the result notified.
+  ASSERT_TRUE(pucch_spy->has_format0_been_called());
+  ASSERT_TRUE(pucch_spy->has_format1_been_called());
+  ASSERT_TRUE(pucch_spy->has_format2_been_called());
+  ASSERT_TRUE(pucch_spy->has_format3_been_called());
+  ASSERT_TRUE(pucch_spy->has_format4_been_called());
+  ASSERT_TRUE(results_notifier.has_pucch_result_been_notified());
+}
+
+TEST_F(UplinkProcessorFixture, srs_normal_workflow)
+{
+  // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  repository->add_srs_pdu(srs_pdu);
+  shared_resource_grid grid = repository.release();
+
+  // Notify reception of the SRS OFDM symbol.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(slot_end_symbol_index, true);
+
+  // Check SRS processing has been enqueued and the processor was not called.
+  ASSERT_TRUE(srs_executor.has_pending_tasks());
+  ASSERT_FALSE(srs_spy->has_estimate_method_been_called());
+  ASSERT_FALSE(results_notifier.has_srs_result_been_notified());
+
+  // Execute tasks.
+  srs_executor.run_pending_tasks();
+
+  // Check the estimator has been called and the result notified.
+  ASSERT_TRUE(srs_spy->has_estimate_method_been_called());
+  ASSERT_TRUE(results_notifier.has_srs_result_been_notified());
+}
+
+TEST_F(UplinkProcessorFixture, phy_tap_normal_workflow)
+{
+  // Get PDU repository, add a PDU to avoid a quiet notification, and release repository.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  repository->add_pucch_pdu(pucch_f0_pdu);
+  shared_resource_grid grid = repository.release();
+
+  // Initial state: tap has not been called.
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+
+  // The PUCCH Format 0 PDU ends at symbol 0. Process only that symbol.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(pucch_f0_nof_symb - 1, true);
+
+  // Tap should have been called for symbol 0.
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 1);
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+
+  // Execute PUCCH task.
+  pucch_executor.run_pending_tasks();
+  ASSERT_TRUE(pucch_spy->has_format0_been_called());
+
+  // Continue processing the remaining symbols (1..max_nof_symbols-1).
+  for (unsigned sym = 1; sym < max_nof_symbols; ++sym) {
+    ul_processor->get_slot_processor(slot).handle_rx_symbol(sym, true);
+    ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), sym + 1);
+  }
+
+  // No quiet grid shall be reported.
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+}
+
+TEST_F(UplinkProcessorFixture, phy_tap_quiet_workflow)
+{
+  // Get PDU repository, do nothing, and release repository.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  shared_resource_grid              grid       = repository.release();
+
+  // Initial state: tap has not been called.
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+
+  // Feed one symbol.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(slot_end_symbol_index - 1, true);
+
+  // Tap should have been called for symbol 0.
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+
+  // Notify the last symbol within the slot. Check the processor fed the remaining symbols (1..max_nof_symbols-1).
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(slot_end_symbol_index, true);
+
+  // The quiet grid shall be reported once.
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 1);
 }
 
 TEST_F(UplinkProcessorFixture, rx_symbol_bad_order)
@@ -397,102 +679,305 @@ TEST_F(UplinkProcessorFixture, pusch_locked_rx_buffer)
   ASSERT_TRUE(results_notifier.has_pusch_uci_result_been_notified());
 }
 
-TEST_F(UplinkProcessorFixture, pusch_fail_executor)
+TEST_F(UplinkProcessorFixture, pdu_fail_defer_workflow)
 {
-  // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
-  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
-  repository->add_pusch_pdu(pusch_pdu);
-  shared_resource_grid grid = repository.release();
+  // Get PDU repository, add a PDU of each and release repository.
+  {
+    unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+    repository->add_pusch_pdu(pusch_pdu);
+    repository->add_pucch_pdu(pucch_f0_pdu);
+    repository->add_pucch_pdu(pucch_f1_pdu);
+    repository->add_pucch_pdu(pucch_f2_pdu);
+    repository->add_pucch_pdu(pucch_f3_pdu);
+    repository->add_pucch_pdu(pucch_f4_pdu);
+    repository->add_srs_pdu(srs_pdu);
+  }
 
-  // Ensure PUSCH executor does not enqueue more tasks.
+  // Ensure executors do not accept more tasks.
+  pucch_executor.stop();
   pusch_executor.stop();
+  srs_executor.stop();
 
   unsigned end_symbol_index = pusch_pdu.pdu.start_symbol_index + pusch_pdu.pdu.nof_symbols - 1;
 
   // Notify reception of receive symbol.
   ul_processor->get_slot_processor(slot).handle_rx_symbol(end_symbol_index, true);
+
+  // PHY tap should be called as normal.
   ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), max_nof_symbols);
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
 
-  // Check PUSCH processing has been enqueued and the processor was not called.
-  ASSERT_FALSE(pusch_executor.has_pending_tasks());
+  // Check PUCCH, PUSCH, and SRS processing was not invoked.
+  ASSERT_FALSE(pucch_spy->has_format0_been_called());
+  ASSERT_FALSE(pucch_spy->has_format1_been_called());
+  ASSERT_FALSE(pucch_spy->has_format2_been_called());
+  ASSERT_FALSE(pucch_spy->has_format3_been_called());
+  ASSERT_FALSE(pucch_spy->has_format4_been_called());
   ASSERT_FALSE(pusch_spy->has_process_method_been_called());
+  ASSERT_FALSE(srs_spy->has_estimate_method_been_called());
+
+  // Validate notifiers.
+  ASSERT_EQ(results_notifier.get_nof_pucch_results(), 5);
   ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
   ASSERT_TRUE(results_notifier.has_pusch_uci_result_been_notified());
+  ASSERT_FALSE(results_notifier.has_srs_result_been_notified());
 }
 
-TEST_F(UplinkProcessorFixture, pusch_discard_slot)
+TEST_F(UplinkProcessorFixture, discard_slot_before_first_rx)
 {
   // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
   unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
   repository->add_pusch_pdu(pusch_pdu);
+  repository->add_pucch_pdu(pucch_f0_pdu);
+  repository->add_pucch_pdu(pucch_f1_pdu);
+  repository->add_pucch_pdu(pucch_f2_pdu);
+  repository->add_pucch_pdu(pucch_f3_pdu);
+  repository->add_pucch_pdu(pucch_f4_pdu);
+  repository->add_srs_pdu(srs_pdu);
   shared_resource_grid grid = repository.release();
 
-  // Discard slot.
-  ul_processor->get_slot_processor(slot).discard_slot();
+  uplink_slot_processor& slot_processor = ul_processor->get_slot_processor(slot);
 
-  // Handle another symbol.
-  ul_processor->get_slot_processor(slot).handle_rx_symbol(max_nof_symbols - 1, true);
+  // Discard twice from and release grid from different threads.
+  std::thread discard_slot_thread  = std::thread([&slot_processor]() {
+    slot_processor.discard_slot();
+    slot_processor.handle_rx_symbol(max_nof_symbols - 1, true);
+  });
+  std::thread discard_slot_thread2 = std::thread([&slot_processor]() { slot_processor.discard_slot(); });
+  std::thread release_grid_thread  = std::thread([grid_ = std::move(grid)]() {});
+  discard_slot_thread.join();
+  discard_slot_thread2.join();
+  release_grid_thread.join();
 
-  // Assert results.
+  // Assert no processor nor executor was used.
   ASSERT_FALSE(pusch_executor.has_pending_tasks());
-  ASSERT_FALSE(pusch_spy->has_process_method_been_called());
-  ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
-  ASSERT_TRUE(results_notifier.has_pusch_uci_result_been_notified());
-
-  // Assert tap handles were not invoked.
-  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
-  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
-}
-
-TEST_F(UplinkProcessorFixture, pucch_discard_twice)
-{
-  // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
-  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
-  repository->add_pucch_pdu(pucch_pdu);
-  shared_resource_grid grid = repository.release();
-
-  // Discard.
-  std::thread async1 = std::thread([this]() { ul_processor->get_slot_processor(slot).discard_slot(); });
-  std::thread async2 = std::thread([this]() { ul_processor->get_slot_processor(slot).discard_slot(); });
-  async1.join();
-  async2.join();
-
-  // Assert results.
   ASSERT_FALSE(pucch_executor.has_pending_tasks());
-  ASSERT_TRUE(results_notifier.has_pucch_result_been_notified());
+  ASSERT_FALSE(srs_executor.has_pending_tasks());
+  ASSERT_FALSE(prach_executor.has_pending_tasks());
+  ASSERT_FALSE(pusch_spy->has_process_method_been_called());
+  ASSERT_FALSE(pucch_spy->has_format0_been_called());
+  ASSERT_FALSE(pucch_spy->has_format1_been_called());
+  ASSERT_FALSE(pucch_spy->has_format2_been_called());
+  ASSERT_FALSE(pucch_spy->has_format3_been_called());
+  ASSERT_FALSE(pucch_spy->has_format4_been_called());
+  ASSERT_FALSE(srs_spy->has_estimate_method_been_called());
+
+  // Validate PUSCH results.
+  ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
+  const auto& pusch_uci = results_notifier.get_last_pusch_uci_result();
+  ASSERT_TRUE(pusch_uci.has_value());
+  ASSERT_TRUE(pusch_uci->harq_ack.has_value());
+  ASSERT_EQ(pusch_uci->harq_ack->payload.size(), pusch_pdu.pdu.uci.nof_harq_ack);
+  ASSERT_EQ(pusch_uci->harq_ack->status, uci_status::unknown);
+  ASSERT_FALSE(pusch_uci->csi1.has_value());
+  ASSERT_FALSE(pusch_uci->csi2.has_value());
+
+  // Validate PUCCH results.
+  ASSERT_EQ(results_notifier.get_nof_pucch_results(), 5);
 
   // Assert tap handles were not invoked.
   ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+
+  // Assert the UL processor is available again.
+  ASSERT_TRUE(ul_processor->get_pdu_slot_repository(slot + 1).is_valid());
 }
 
-TEST_F(UplinkProcessorFixture, pusch_discard_invalid_symbol)
+TEST_F(UplinkProcessorFixture, discard_slot_before_first_rx_no_pdu)
+{
+  // Get PDU repository, add PDU and release repository.
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  shared_resource_grid              grid       = repository.release();
+
+  // Discard twice from and release grid from different threads.
+  std::thread discard_slot_thread  = std::thread([this]() { ul_processor->get_slot_processor(slot).discard_slot(); });
+  std::thread discard_slot_thread2 = std::thread([this]() { ul_processor->get_slot_processor(slot).discard_slot(); });
+  std::thread release_grid_thread  = std::thread([grid_ = std::move(grid)]() {});
+  discard_slot_thread.join();
+  discard_slot_thread2.join();
+  release_grid_thread.join();
+
+  // Assert the UL processor is available again.
+  ASSERT_TRUE(ul_processor->get_pdu_slot_repository(slot + 1).is_valid());
+}
+
+TEST_F(UplinkProcessorFixture, invalid_first_symbol)
 {
   // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
+  {
+    unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+    repository->add_pusch_pdu(pusch_pdu);
+    repository->add_pucch_pdu(pucch_f0_pdu);
+    repository->add_pucch_pdu(pucch_f1_pdu);
+    repository->add_pucch_pdu(pucch_f2_pdu);
+    repository->add_pucch_pdu(pucch_f3_pdu);
+    repository->add_pucch_pdu(pucch_f4_pdu);
+    repository->add_srs_pdu(srs_pdu);
+  }
+
+  // Notify an invalid symbol.
+  uplink_slot_processor& slot_processor = ul_processor->get_slot_processor(slot);
+  slot_processor.handle_rx_symbol(0, false);
+
+  // Assert PUSCH PDU was discarded.
+  ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
+  const auto& pusch_uci = results_notifier.get_last_pusch_uci_result();
+  ASSERT_TRUE(pusch_uci.has_value());
+  ASSERT_TRUE(pusch_uci->harq_ack.has_value());
+  ASSERT_EQ(pusch_uci->harq_ack->payload.size(), pusch_pdu.pdu.uci.nof_harq_ack);
+  ASSERT_EQ(pusch_uci->harq_ack->status, uci_status::unknown);
+  ASSERT_FALSE(pusch_uci->csi1.has_value());
+  ASSERT_FALSE(pusch_uci->csi2.has_value());
+
+  // The uplink processor shall be available again.
+  ASSERT_TRUE(ul_processor->get_pdu_slot_repository(slot + 1).is_valid());
+}
+
+TEST_F(UplinkProcessorFixture, invalid_middle_symbol_with_pusch)
+{
+  // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
+  {
+    unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+    repository->add_pusch_pdu(pusch_pdu);
+  }
+
+  // Notify some valid symbols.
+  unsigned               nof_valid_symbols = 3;
+  uplink_slot_processor& slot_processor    = ul_processor->get_slot_processor(slot);
+  for (unsigned i_symbol = 0; i_symbol != nof_valid_symbols; ++i_symbol) {
+    slot_processor.handle_rx_symbol(i_symbol, true);
+  }
+
+  // Notify an invalid symbol.
+  slot_processor.handle_rx_symbol(nof_valid_symbols, false);
+
+  // Assert PUSCH PDU was discarded.
+  ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
+  const auto& pusch_uci = results_notifier.get_last_pusch_uci_result();
+  ASSERT_TRUE(pusch_uci.has_value());
+  ASSERT_TRUE(pusch_uci->harq_ack.has_value());
+  ASSERT_EQ(pusch_uci->harq_ack->payload.size(), pusch_pdu.pdu.uci.nof_harq_ack);
+  ASSERT_EQ(pusch_uci->harq_ack->status, uci_status::unknown);
+  ASSERT_FALSE(pusch_uci->csi1.has_value());
+  ASSERT_FALSE(pusch_uci->csi2.has_value());
+
+  // Clear notifier, complete symbol reception for the entire slot. No new notification should be reported.
+  results_notifier.clear();
+  for (unsigned i_symbol = nof_valid_symbols; i_symbol != MAX_NSYMB_PER_SLOT; ++i_symbol) {
+    slot_processor.handle_rx_symbol(i_symbol, true);
+  }
+  ASSERT_FALSE(results_notifier.has_pusch_data_result_been_notified());
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), nof_valid_symbols);
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+
+  // The uplink processor shall be available again.
+  ASSERT_TRUE(ul_processor->get_pdu_slot_repository(slot + 1).is_valid());
+}
+
+TEST_F(UplinkProcessorFixture, invalid_middle_symbol_with_pucch_f0)
+{
+  // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
+  {
+    unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+    repository->add_pucch_pdu(pucch_f0_pdu);
+  }
+
+  // Notify some valid symbols.
+  unsigned               nof_valid_symbols = slot_end_symbol_index - 1;
+  uplink_slot_processor& slot_processor    = ul_processor->get_slot_processor(slot);
+  for (unsigned i_symbol = 0; i_symbol != nof_valid_symbols; ++i_symbol) {
+    slot_processor.handle_rx_symbol(i_symbol, true);
+  }
+
+  // Process PUCCH requests that fall within the valid OFDM symbols.
+  ASSERT_TRUE(pucch_executor.run_pending_tasks());
+
+  // Notify an invalid symbol.
+  slot_processor.handle_rx_symbol(nof_valid_symbols, false);
+
+  // Clear notifier, complete symbol reception for the entire slot. No new notification should be reported.
+  results_notifier.clear();
+  for (unsigned i_symbol = nof_valid_symbols; i_symbol != MAX_NSYMB_PER_SLOT; ++i_symbol) {
+    slot_processor.handle_rx_symbol(i_symbol, true);
+  }
+  ASSERT_FALSE(results_notifier.has_pusch_data_result_been_notified());
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), nof_valid_symbols);
+  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+
+  // The uplink processor shall be available again.
+  ASSERT_TRUE(ul_processor->get_pdu_slot_repository(slot + 1).is_valid());
+}
+
+TEST_F(UplinkProcessorFixture, discard_invalid_symbol_twice)
+{
+  // The PUCCH PDU ends at the first symbol of the slot and the PUSCH PDU ends later. Two invalid OFDM symbols must fit
+  // in between.
+  static constexpr unsigned pucch_end_symbol_index = 0;
+  const unsigned            pusch_end_symbol_index = pusch_pdu.pdu.start_symbol_index + pusch_pdu.pdu.nof_symbols - 1;
+  ASSERT_GT(pusch_end_symbol_index, pucch_end_symbol_index + 2);
+
+  // Get PDU repository, add PDUs and release repository. Keep the grid alive until the end of the test.
   unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  repository->add_pucch_pdu(pucch_f0_pdu);
+  repository->add_pucch_pdu(pucch_f1_pdu);
+  repository->add_pucch_pdu(pucch_f2_pdu);
+  repository->add_pucch_pdu(pucch_f3_pdu);
+  repository->add_pucch_pdu(pucch_f4_pdu);
   repository->add_pusch_pdu(pusch_pdu);
   shared_resource_grid grid = repository.release();
 
-  unsigned end_symbol_index = pusch_pdu.pdu.start_symbol_index + pusch_pdu.pdu.nof_symbols - 1;
+  // Notify the PUCCH last OFDM symbol as valid. It enqueues the PUCCH processing task.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(pucch_end_symbol_index, true);
 
-  // Notify all symbols as valid except for the last one.
-  for (unsigned i_symbol = 0; i_symbol != end_symbol_index - 1; ++i_symbol) {
-    ul_processor->get_slot_processor(slot).handle_rx_symbol(i_symbol, true);
-  }
-  ul_processor->get_slot_processor(slot).handle_rx_symbol(end_symbol_index - 1, false);
-  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), end_symbol_index - 1);
-  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+  // The PUCCH task is left enqueued: the PUCCH PDU remains in execution and keeps the processor out of idle.
+  ASSERT_TRUE(pucch_executor.has_pending_tasks());
+  ASSERT_FALSE(results_notifier.has_pucch_result_been_notified());
 
-  // Assert PDU was discarded.
-  ASSERT_FALSE(pusch_executor.has_pending_tasks());
+  // Notify an invalid OFDM symbol. It discards the PUSCH PDU, which has not been processed yet.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(pucch_end_symbol_index + 1, false);
+  EXPECT_EQ(results_notifier.get_nof_pusch_data_results(), 1);
+  EXPECT_EQ(results_notifier.get_nof_pucch_results(), 4);
+
+  // Notify a second invalid OFDM symbol for the same slot. The PUSCH PDU has already been discarded, so it must not be
+  // discarded again.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(pucch_end_symbol_index + 2, false);
+  EXPECT_EQ(results_notifier.get_nof_pusch_data_results(), 1);
+  EXPECT_EQ(results_notifier.get_nof_pucch_results(), 4);
+
+  // Advance to the last OFDM symbol as valid. The all PDUs have already been discarded, so it must not be discarded
+  // again.
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(slot_end_symbol_index, true);
+  EXPECT_EQ(results_notifier.get_nof_pusch_data_results(), 1);
+  EXPECT_EQ(results_notifier.get_nof_pucch_results(), 4);
+
+  // Validate PUSCH results.
   ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
+  const auto& pusch_uci = results_notifier.get_last_pusch_uci_result();
+  ASSERT_TRUE(pusch_uci.has_value());
+  ASSERT_TRUE(pusch_uci->harq_ack.has_value());
+  ASSERT_EQ(pusch_uci->harq_ack->payload.size(), pusch_pdu.pdu.uci.nof_harq_ack);
+  ASSERT_EQ(pusch_uci->harq_ack->status, uci_status::unknown);
+  ASSERT_FALSE(pusch_uci->csi1.has_value());
+  ASSERT_FALSE(pusch_uci->csi2.has_value());
 
-  // Clear notifier spy, feed last OFDM symbol and make sure nothing was notified.
-  results_notifier.clear();
-  ul_processor->get_slot_processor(slot).handle_rx_symbol(end_symbol_index, true);
-  ASSERT_FALSE(results_notifier.has_pusch_data_result_been_notified());
-  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), end_symbol_index - 1);
+  // Run the pending PUCCH task and then the first PUCCH will be notified.
+  ASSERT_TRUE(pucch_executor.run_pending_tasks());
+  EXPECT_EQ(results_notifier.get_nof_pucch_results(), 5);
+  ASSERT_TRUE(pucch_spy->has_format0_been_called());
+
+  // Assert no processor nor executor was used.
+  ASSERT_FALSE(pusch_executor.has_pending_tasks());
+  ASSERT_FALSE(srs_executor.has_pending_tasks());
+  ASSERT_FALSE(prach_executor.has_pending_tasks());
+  ASSERT_FALSE(pusch_spy->has_process_method_been_called());
+  ASSERT_FALSE(pucch_spy->has_format1_been_called());
+  ASSERT_FALSE(pucch_spy->has_format2_been_called());
+  ASSERT_FALSE(pucch_spy->has_format3_been_called());
+  ASSERT_FALSE(pucch_spy->has_format4_been_called());
+  ASSERT_FALSE(srs_spy->has_estimate_method_been_called());
+
+  // Assert tap handles were not invoked.
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 1);
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
 }
 
@@ -518,11 +1003,11 @@ TEST_F(UplinkProcessorFixture, pusch_execute_after_stop)
   // Check PUSCH processing has been enqueued and the processor was not called.
   ASSERT_FALSE(pusch_executor.has_pending_tasks());
   ASSERT_FALSE(pusch_spy->has_process_method_been_called());
-  ASSERT_FALSE(results_notifier.has_pusch_data_result_been_notified());
-  ASSERT_FALSE(results_notifier.has_pusch_uci_result_been_notified());
+  ASSERT_TRUE(results_notifier.has_pusch_data_result_been_notified());
+  ASSERT_TRUE(results_notifier.has_pusch_uci_result_been_notified());
 
   // Assert tap handles were not invoked.
-  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
+  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), max_nof_symbols);
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
 }
 
@@ -636,7 +1121,7 @@ TEST_F(UplinkProcessorFixture, reserve_slot_twice_no_request_grid_alive)
   ASSERT_TRUE(repository.is_valid());
 }
 
-TEST_F(UplinkProcessorFixture, stop_no_pending_task)
+TEST_F(UplinkProcessorFixture, stop_while_no_pending_task)
 {
   // Direct stop.
   ul_processor->stop();
@@ -650,41 +1135,24 @@ TEST_F(UplinkProcessorFixture, stop_no_pending_task)
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
 }
 
-TEST_F(UplinkProcessorFixture, stop_accepting_tasks)
+TEST_F(UplinkProcessorFixture, stop_while_accepting_tasks)
 {
   // Add PDU to the repository.
   unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
 
-  // Create asynchronous task - it will block until the repository is released.
-  std::atomic<bool> stop_thread_running = false;
-  std::thread       stop_thread([this, &stop_thread_running]() {
-    stop_thread_running = true;
-    ul_processor->stop();
-  });
+  // Create asynchronous stop task.
+  std::thread stop_thread([this]() { ul_processor->stop(); });
 
-  // Wait for the thread to start - facilitates that the stop method blocks until the state is released.
-  while (!stop_thread_running.load()) {
-    std::this_thread::sleep_for(std::chrono::microseconds(10));
-  }
+  // Create asynchronous repository release thread.
+  std::thread repository_release_thread(
+      [local_repository = std::move(repository)]() mutable { local_repository.release(); });
 
-  // Release repository - the stop method shall return.
-  repository.release();
-
-  // Synchronize stopping thread.
+  // The stopping thread will block until the repository is released.
   stop_thread.join();
-
-  // Assert execution expectations.
-  ASSERT_FALSE(pusch_executor.has_pending_tasks());
-  ASSERT_FALSE(pusch_spy->has_process_method_been_called());
-  ASSERT_FALSE(results_notifier.has_pusch_data_result_been_notified());
-  ASSERT_FALSE(results_notifier.has_pusch_uci_result_been_notified());
-
-  // Assert tap handles were not invoked.
-  ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
-  ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+  repository_release_thread.join();
 }
 
-TEST_F(UplinkProcessorFixture, stop_pending_task)
+TEST_F(UplinkProcessorFixture, stop_while_pending_task)
 {
   // Get PDU repository, add PDU and release repository. Keep the grid alive until the end of the test.
   unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
@@ -717,7 +1185,28 @@ TEST_F(UplinkProcessorFixture, stop_pending_task)
   stop_thread.join();
 }
 
-TEST_F(UplinkProcessorFixture, pusch_discard_slot_after_stop)
+TEST_F(UplinkProcessorFixture, stop_while_grid_alive)
+{
+  // Get PDU repository, release repository and keep the grid.
+  shared_resource_grid grid;
+  {
+    unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+    grid                                         = repository.release();
+  }
+  ASSERT_TRUE(grid);
+
+  // Stop processor asynchronously.
+  std::thread stop_thread([this]() { ul_processor->stop(); });
+
+  // Thread containing the resource grid in its scope.
+  std::thread grid_scope([grid_ = std::move(grid)]() {});
+
+  // The stop thread will block until the resource grid is released.
+  stop_thread.join();
+  grid_scope.join();
+}
+
+TEST_F(UplinkProcessorFixture, pusch_discard_after_stop)
 {
   // Add PDU to the repository.
   {
@@ -725,11 +1214,13 @@ TEST_F(UplinkProcessorFixture, pusch_discard_slot_after_stop)
     repository->add_pusch_pdu(pusch_pdu);
   }
 
+  uplink_slot_processor& slot_processor = ul_processor->get_slot_processor(slot);
+
   // Stop.
   ul_processor->stop();
 
   // Discard.
-  ul_processor->get_slot_processor(slot).discard_slot();
+  slot_processor.discard_slot();
 
   // Assert results.
   ASSERT_FALSE(pusch_executor.has_pending_tasks());
@@ -742,12 +1233,32 @@ TEST_F(UplinkProcessorFixture, pusch_discard_slot_after_stop)
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
 }
 
+TEST_F(UplinkProcessorFixture, simultaneous_pusch_discard_and_stop)
+{
+  // Add PDU to the repository.
+  {
+    unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+    repository->add_pusch_pdu(pusch_pdu);
+  }
+
+  uplink_slot_processor& slot_processor = ul_processor->get_slot_processor(slot);
+
+  // Stop.
+  std::thread stop_thread([this]() { ul_processor->stop(); });
+
+  // Discard.
+  std::thread discard_thread([&slot_processor]() { slot_processor.discard_slot(); });
+
+  stop_thread.join();
+  discard_thread.join();
+}
+
 TEST_F(UplinkProcessorFixture, reception_count)
 {
   // Get PDU repository, add PDUs and release repository. Keep the grid alive until the end of the test.
   unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
   repository->add_pusch_pdu(pusch_pdu);
-  repository->add_pucch_pdu(pucch_pdu);
+  repository->add_pucch_pdu(pucch_f0_pdu);
   shared_resource_grid grid = repository.release();
 
   // The count covers the requests before any symbol arrives.

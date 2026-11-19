@@ -65,7 +65,7 @@ private:
   const unsigned          sector_id;
   const uint32_t          advance_time_in_symbols;
   const uint32_t          nof_symbols;
-  std::atomic<uint32_t>   count_val;
+  std::atomic<uint32_t>   count_val{0};
   std::atomic<uint32_t>   late_counter{0};
 };
 

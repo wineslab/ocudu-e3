@@ -3,13 +3,15 @@
 
 
 set(SOURCES
-        packing_utils_generic.cpp
+        beamforming_weights_compressor.cpp
         compression_factory.cpp
-        iq_compression_none_impl.cpp
+        compression_validator.cpp
         iq_compression_bfp_impl.cpp
-        iq_compression_death_impl.cpp
+        iq_compression_none_impl.cpp
+        iq_compression_unsupported_impl.cpp
         iq_compressor_selector.cpp
-        iq_decompressor_selector.cpp)
+        iq_decompressor_selector.cpp
+        packing_utils_generic.cpp)
 
 if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64")
     list(APPEND SOURCES

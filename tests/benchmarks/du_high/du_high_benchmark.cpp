@@ -52,6 +52,7 @@
 #include "ocudu/support/test_utils.h"
 #include "ocudu/support/tracing/event_tracing.h"
 #include <pthread.h>
+#include <sstream>
 
 using namespace ocudu;
 using namespace odu;
@@ -775,6 +776,29 @@ public:
     report_fatal_error_if_not(run_slot_until(dl_pdu_sched), "Msg4 with RRC Setup was not scheduled");
     test_logger.info("rnti={}: DU-high scheduled Msg4 (containing RRC Setup)", rnti);
 
+    // Wait until the HARQ-ACK for the Msg4 PDSCH is scheduled on PUCCH and its UCI indication is processed by the DU.
+    slot_point msg4_ack_slot;
+    auto       msg4_ack_sched = [this, rnti, &msg4_ack_slot]() {
+      if (sim_phy.slot_ul_result.ul_res != nullptr) {
+        const auto& pucchs = sim_phy.slot_ul_result.ul_res->pucchs.unsorted();
+        auto        it     = std::find_if(pucchs.begin(), pucchs.end(), [rnti](const pucch_info& pucch) {
+          return pucch.crnti == rnti and pucch.uci_bits.harq_ack_nof_bits > 0;
+        });
+        if (it != pucchs.end()) {
+          msg4_ack_slot = sim_phy.slot_ul_result.slot;
+          return true;
+        }
+      }
+      return false;
+    };
+    report_fatal_error_if_not(run_slot_until(msg4_ack_sched), "Msg4 HARQ-ACK was not scheduled");
+    // Note: the UL results are published ahead of their slot, so keep running until the UCI indication for the
+    // HARQ-ACK slot has been delivered to the DU and processed by the scheduler.
+    auto msg4_ack_processed = [this, &msg4_ack_slot]() {
+      return next_sl_tx.without_hyper_sfn() - tx_rx_delay > msg4_ack_slot + 1;
+    };
+    report_fatal_error_if_not(run_slot_until(msg4_ack_processed), "Msg4 HARQ-ACK was not processed");
+
     // Push MAC UL SDU that corresponds to the RRC Setup Complete.
     rx_ind             = {};
     rx_ind.sl_rx       = next_sl_tx.without_hyper_sfn() - tx_rx_delay;
@@ -854,7 +878,7 @@ public:
     // Mark the UE as fully setup.
     ue_created_flag_list[ue_idx] = true;
 
-    test_logger.info("ue={}: Creation completed successfully", fmt::underlying(ue_idx));
+    test_logger.info("ue={}: Creation completed successfully", ue_idx);
   }
 
   // \brief Push a DL PDUs to DU-high via F1-U interface.
@@ -972,8 +996,8 @@ public:
                (sim_phy.metrics.nof_ul_grants ==
                 sim_phy.metrics.nof_ul_grants + sim_phy.slot_ul_result.ul_res->puschs.size()))) {
             f2.sr_info.emplace();
-            f2.sr_info->resize(sr_nof_bits_to_uint(pucch.uci_bits.sr_bits));
-            f2.sr_info->fill(0, sr_nof_bits_to_uint(pucch.uci_bits.sr_bits), true);
+            f2.sr_info->resize(to_underlying(pucch.uci_bits.sr_bits));
+            f2.sr_info->fill(0, to_underlying(pucch.uci_bits.sr_bits), true);
           }
           if (pucch.csi_rep_cfg.has_value()) {
             f2.csi_part1_info.emplace();
@@ -1343,6 +1367,9 @@ int main(int argc, char** argv)
   auto all_log_level  = ocudulog::basic_levels::warning;
   auto test_log_level = ocudulog::basic_levels::warning;
   ocudulog::fetch_basic_logger("TEST").set_level(test_log_level);
+  ocudulog::fetch_basic_logger("ALL").set_level(all_log_level);
+  ocudulog::fetch_basic_logger("DU").set_level(all_log_level);
+  ocudulog::fetch_basic_logger("IO-EPOLL").set_level(all_log_level);
   ocudulog::fetch_basic_logger("RLC").set_level(all_log_level);
   ocudulog::fetch_basic_logger("MAC", true).set_level(test_log_level);
   ocudulog::fetch_basic_logger("SCHED", true).set_level(test_log_level);

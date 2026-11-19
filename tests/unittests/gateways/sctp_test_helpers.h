@@ -7,6 +7,7 @@
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/io/io_broker.h"
 #include <arpa/inet.h>
+#include <map>
 #include <netdb.h>
 #include <netinet/sctp.h>
 
@@ -16,11 +17,11 @@ namespace ocudu {
 class dummy_io_broker : public io_broker
 {
 public:
-  bool             accept_next_fd = true;
-  unique_fd        last_registered_fd;
-  recv_callback_t  handle_receive;
-  error_callback_t handle_error;
-  int              last_unregistered_fd = -1;
+  struct dummy_subscription {
+    unique_fd        registered_fd;
+    recv_callback_t  handle_receive;
+    error_callback_t handle_error;
+  };
 
   [[nodiscard]] subscriber register_fd(
       unique_fd        fd,
@@ -28,25 +29,44 @@ public:
       recv_callback_t  handler_,
       error_callback_t err_handler_ = [](error_code) {}) override
   {
-    last_registered_fd = std::move(fd);
     if (not accept_next_fd) {
       return {};
     }
-    handle_receive = handler_;
-    handle_error   = err_handler_;
-    return subscriber{*this, last_registered_fd.value()};
+    last_registered_fd          = fd.value();
+    sub_map[last_registered_fd] = dummy_subscription{std::move(fd), handler_, err_handler_};
+    registration_count++;
+    return subscriber{*this, last_registered_fd};
   }
 
   [[nodiscard]] bool unregister_fd(int fd, std::promise<bool>* complete_notifier) override
   {
-    last_unregistered_fd = fd;
-    handle_receive       = {};
-    handle_error         = {};
+    sub_map.erase(fd);
+    deregistration_count++;
     if (complete_notifier) {
       complete_notifier->set_value(true);
     }
     return true;
   }
+
+  int  nof_registered_sockets() const { return sub_map.size(); }
+  int  get_nof_registrations() const { return registration_count; }
+  int  get_nof_deregistrations() const { return deregistration_count; }
+  bool is_socket_registered(int fd) const { return sub_map.find(fd) != sub_map.end(); }
+  int  get_last_registered_fd() const { return last_registered_fd; }
+  void handle_receive(int fd)
+  {
+    if (not is_socket_registered(fd)) {
+      return;
+    }
+    sub_map[fd].handle_receive();
+  }
+  bool accept_next_fd = true;
+
+private:
+  std::map<int, dummy_subscription> sub_map;
+  uint32_t                          registration_count   = 0;
+  uint32_t                          deregistration_count = 0;
+  int                               last_registered_fd   = -1;
 };
 
 struct test_recv_data {

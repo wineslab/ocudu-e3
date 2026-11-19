@@ -51,7 +51,7 @@ static void fill_ru_sdr_expert_execution_section(YAML::Node node, const ru_sdr_u
     const auto& expert = config.cell_affinities[index];
 
     if (expert.ru_cpu_cfg.mask.any()) {
-      cell["ru_cpus"] = fmt::format("{:,}", span<const size_t>(expert.ru_cpu_cfg.mask.get_cpu_ids()));
+      cell["ru_cpus"] = fmt::format("{:n}", span<const size_t>(expert.ru_cpu_cfg.mask.get_cpu_ids()));
     }
     cell["ru_pinning"] = to_string(expert.ru_cpu_cfg.pinning_policy);
 

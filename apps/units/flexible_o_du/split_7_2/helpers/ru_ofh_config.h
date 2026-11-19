@@ -11,6 +11,7 @@
 #include "ocudu/ran/bs_channel_bandwidth.h"
 #include "ocudu/support/units.h"
 #include <chrono>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -60,6 +61,14 @@ struct ru_ofh_legacy_scaling_config {
   ///
   /// \warning Check the RU documentation before settings this parameter, as incorrect values may damage the RU.
   float iq_scaling = 0.1f;
+};
+
+/// Open Fronthaul downlink beamforming (Category B) configuration.
+struct ru_ofh_beamforming_config {
+  /// Beamforming weights compression method.
+  std::string compression_method = "none";
+  /// Beamforming weights compression bitwidth.
+  unsigned compression_bitwidth = 16;
 };
 
 /// gNB app Open Fronthaul base cell configuration.
@@ -116,6 +125,8 @@ struct ru_ofh_unit_base_cell_config {
   std::variant<std::monostate, ru_ofh_scaling_config, ru_ofh_legacy_scaling_config> iq_scaling_config;
   /// PRACH FFT size (to be used in the C-plane Type 3 messages).
   ofh::cplane_fft_size c_plane_prach_fft_len = ofh::cplane_fft_size::fft_4096;
+  /// Downlink beamforming (Category B) configuration. Unset means Category A.
+  std::optional<ru_ofh_beamforming_config> dl_beamforming;
 };
 
 /// gNB app Open Fronthaul cell configuration.
@@ -174,12 +185,6 @@ struct ru_ofh_unit_expert_execution_config {
   std::vector<ru_ofh_unit_cpu_affinities_cell_config> cell_affinities = {{}};
 };
 
-/// HAL configuration.
-struct ru_ofh_unit_hal_config {
-  /// EAL configuration arguments.
-  std::string eal_args;
-};
-
 /// Metrics configuration.
 struct ru_ofh_unit_metrics_config {
   /// Metrics configuration.
@@ -208,8 +213,6 @@ struct ru_ofh_unit_config {
   ///
   /// \note Add one cell by default.
   ru_ofh_unit_expert_execution_config expert_execution_cfg;
-  /// HAL configuration.
-  std::optional<ru_ofh_unit_hal_config> hal_config;
   /// Metrics configuration.
   ru_ofh_unit_metrics_config metrics_cfg;
 };

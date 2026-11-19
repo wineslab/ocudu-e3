@@ -23,7 +23,13 @@ public:
 
   // f1u_rx_sdu_notifier interface
   void on_new_sdu(byte_buffer sdu, bool is_retx) override { rx_sdu_list.push_back({std::move(sdu), is_retx}); }
-  void on_discard_sdu(uint32_t pdcp_sn) override { rx_discard_sdu_list.push_back(pdcp_sn); }
+  void on_discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) override
+  {
+    uint32_t pdcp_sn_end = pdcp_sn_start + block_size;
+    for (uint32_t pdcp_sn = pdcp_sn_start; pdcp_sn < pdcp_sn_end; pdcp_sn++) {
+      rx_discard_sdu_list.push_back(pdcp_sn);
+    }
+  }
 
   // f1u_tx_pdu_notifier interface
   void on_new_pdu(nru_ul_message msg) override { tx_msg_list.push_back(std::move(msg)); }

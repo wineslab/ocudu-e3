@@ -4,6 +4,8 @@
 
 
 add_executable(sched_ue_context_test
+        ue_channel_state_manager_test.cpp        
+        ue_configuration_test.cpp
         ue_drx_controller_test.cpp
         ue_repository_test.cpp
         logical_channel_system_test.cpp
@@ -15,9 +17,10 @@ target_link_libraries(sched_ue_context_test
         sched_support
         sched_ue_context
         sched_test_doubles
+        sched_rrm
         scheduler_test_utils
         ocudu_support
         ocudulog
         gtest
         ocudu_gtest_main)
-add_test(sched_ue_context_test sched_ue_context_test)
+gtest_discover_tests(sched_ue_context_test)

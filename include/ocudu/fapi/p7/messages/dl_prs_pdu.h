@@ -9,6 +9,7 @@
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/subcarrier_spacing.h"
 #include <optional>
+#include <type_traits>
 
 namespace ocudu {
 namespace fapi {
@@ -48,10 +49,10 @@ struct formatter<ocudu::fapi::dl_prs_pdu> {
               to_string(pdu.scs),
               pdu.cp.to_string(),
               pdu.nid_prs,
-              underlying(pdu.comb_size),
+              static_cast<std::underlying_type_t<ocudu::prs_comb_size>>(pdu.comb_size),
               pdu.comb_offset,
               pdu.first_symbol,
-              underlying(pdu.num_symbols),
+              static_cast<std::underlying_type_t<ocudu::prs_num_symbols>>(pdu.num_symbols),
               pdu.crbs,
               pdu.precoding_and_beamforming.prg_size);
 

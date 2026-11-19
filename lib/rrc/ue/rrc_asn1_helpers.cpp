@@ -137,7 +137,7 @@ void ocudu::ocucp::fill_asn1_rrc_reconfiguration_msg(asn1::rrc_nr::rrc_recfg_s& 
       ocudu_assert(drb_to_add.drb_id != drb_id_t::invalid, "Invalid DRB ID");
 
       asn1::rrc_nr::drb_to_add_mod_s asn1_drb_to_add;
-      asn1_drb_to_add.drb_id = drb_id_to_uint(drb_to_add.drb_id);
+      asn1_drb_to_add.drb_id = to_underlying(drb_to_add.drb_id);
 
       asn1_drb_to_add.reestablish_pdcp_present = drb_to_add.reestablish_pdcp_present;
 
@@ -165,7 +165,7 @@ void ocudu::ocucp::fill_asn1_rrc_reconfiguration_msg(asn1::rrc_nr::rrc_recfg_s& 
     // Fill DRB to release list.
     for (const auto& drb_to_release : cu_cp_radio_bearer_cfg.drb_to_release_list) {
       ocudu_assert(drb_to_release != drb_id_t::invalid, "Invalid DRB ID");
-      asn1_radio_bearer_cfg.drb_to_release_list.push_back(drb_id_to_uint(drb_to_release));
+      asn1_radio_bearer_cfg.drb_to_release_list.push_back(to_underlying(drb_to_release));
     }
 
     // Fill security config.
@@ -310,6 +310,9 @@ void ocudu::ocucp::fill_asn1_rrc_resume_msg(asn1::rrc_nr::rrc_resume_s&        a
   asn1_rrc_resume.rrc_transaction_id = rrc_transaction_id;
 
   rrc_resume_ies_s& asn1_resume_ies = asn1_rrc_resume.crit_exts.set_rrc_resume();
+
+  // Fill full configuration.
+  asn1_resume_ies.full_cfg_present = rrc_resume.full_cfg;
 
   // Fill radio bearer config.
   if (rrc_resume.radio_bearer_cfg.has_value()) {

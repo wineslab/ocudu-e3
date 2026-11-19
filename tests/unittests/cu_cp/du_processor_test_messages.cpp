@@ -5,6 +5,7 @@
 #include "du_processor_test_messages.h"
 #include "lib/f1ap/cu_cp/procedures/f1_setup_procedure.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/f1ap/f1ap_message.h"

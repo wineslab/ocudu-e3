@@ -30,15 +30,6 @@ namespace fmt {
 template <>
 struct formatter<ocudu::fapi::uci_indication> {
 private:
-  /// Converts the given FAPI UCI SINR to dB as per SCF-222 v4.0 section 3.4.9.
-  static float to_uci_ul_sinr(int sinr) { return static_cast<float>(sinr) * 0.002F; }
-
-  /// Converts the given FAPI UCI RSRP to dB as per SCF-222 v4.0 section 3.4.9.
-  static float to_uci_ul_rsrp(unsigned rsrp) { return static_cast<float>(static_cast<int>(rsrp) - 1280) * 0.1F; }
-
-  /// Converts the given FAPI UCI RSSI to dB as per SCF-222 v4.0 section 3.4.9.
-  static float to_uci_ul_rssi(unsigned rssi) { return static_cast<float>(static_cast<int>(rssi) - 1280) * 0.1F; }
-
   /// Logs the UCI PUSCH PDU.
   template <typename FormatContext>
   static auto
@@ -46,18 +37,18 @@ private:
   {
     format_to(ctx.out(), " PUSCH rnti={}", pdu.rnti);
 
-    if (pdu.ul_sinr_metric != std::numeric_limits<decltype(pdu.ul_sinr_metric)>::min()) {
-      format_to(ctx.out(), " sinr={:.1f}", to_uci_ul_sinr(pdu.ul_sinr_metric));
+    if (pdu.ul_sinr_metric_dB.has_value()) {
+      format_to(ctx.out(), " sinr={:.1f}dB", *pdu.ul_sinr_metric_dB);
     }
 
     ocudu::fapi::append_time_advance(ctx, pdu.timing_advance_offset, scs);
 
-    if (pdu.rssi != std::numeric_limits<decltype(pdu.rssi)>::max()) {
-      format_to(ctx.out(), " rssi={:.1f}", to_uci_ul_rssi(pdu.rssi));
+    if (pdu.rssi.has_value()) {
+      format_to(ctx.out(), " rssi={}", *pdu.rssi);
     }
 
-    if (pdu.rsrp != std::numeric_limits<decltype(pdu.rsrp)>::max()) {
-      format_to(ctx.out(), " rsrp={:.1f}", to_uci_ul_rsrp(pdu.rsrp));
+    if (pdu.rsrp.has_value()) {
+      format_to(ctx.out(), " rsrp={}", *pdu.rsrp);
     }
 
     if (pdu.harq.has_value()) {
@@ -92,18 +83,18 @@ private:
   {
     format_to(ctx.out(), " PUCCH format 0/1 format={} rnti={}", underlying(pdu.pucch_format), pdu.rnti);
 
-    if (pdu.ul_sinr_metric != std::numeric_limits<decltype(pdu.ul_sinr_metric)>::min()) {
-      format_to(ctx.out(), " sinr={:.1f}", to_uci_ul_sinr(pdu.ul_sinr_metric));
+    if (pdu.ul_sinr_metric_dB.has_value()) {
+      format_to(ctx.out(), " sinr={:.1f}dB", *pdu.ul_sinr_metric_dB);
     }
 
     ocudu::fapi::append_time_advance(ctx, pdu.timing_advance_offset, scs);
 
-    if (pdu.rssi != std::numeric_limits<decltype(pdu.rssi)>::max()) {
-      format_to(ctx.out(), " rssi={:.1f}", to_uci_ul_rssi(pdu.rsrp));
+    if (pdu.rssi.has_value()) {
+      format_to(ctx.out(), " rssi={}", *pdu.rssi);
     }
 
-    if (pdu.rsrp != std::numeric_limits<decltype(pdu.rsrp)>::max()) {
-      format_to(ctx.out(), " rsrp={:.1f}", to_uci_ul_rsrp(pdu.rsrp));
+    if (pdu.rsrp.has_value()) {
+      format_to(ctx.out(), " rsrp={}", *pdu.rsrp);
     }
 
     if (pdu.sr.has_value()) {
@@ -131,18 +122,18 @@ private:
   {
     format_to(ctx.out(), " PUCCH format 2/3/4 format={} rnti={}", underlying(pdu.pucch_format) + 2, pdu.rnti);
 
-    if (pdu.ul_sinr_metric != std::numeric_limits<decltype(pdu.ul_sinr_metric)>::min()) {
-      format_to(ctx.out(), " sinr={:.1f}", to_uci_ul_sinr(pdu.ul_sinr_metric));
+    if (pdu.ul_sinr_metric_dB.has_value()) {
+      format_to(ctx.out(), " sinr={:.1f}dB", *pdu.ul_sinr_metric_dB);
     }
 
     ocudu::fapi::append_time_advance(ctx, pdu.timing_advance_offset, scs);
 
-    if (pdu.rssi != std::numeric_limits<decltype(pdu.rssi)>::max()) {
-      format_to(ctx.out(), " rssi={:.1f}", to_uci_ul_rssi(pdu.rsrp));
+    if (pdu.rssi.has_value()) {
+      format_to(ctx.out(), " rssi={}", *pdu.rssi);
     }
 
-    if (pdu.rsrp != std::numeric_limits<decltype(pdu.rsrp)>::max()) {
-      format_to(ctx.out(), " rsrp={:.1f}", to_uci_ul_rsrp(pdu.rsrp));
+    if (pdu.rsrp.has_value()) {
+      format_to(ctx.out(), " rsrp={}", *pdu.rsrp);
     }
 
     if (pdu.sr.has_value()) {

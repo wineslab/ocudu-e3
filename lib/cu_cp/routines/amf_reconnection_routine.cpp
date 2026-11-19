@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "amf_reconnection_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ngap/ngap_setup.h"
 #include "ocudu/support/async/async_timer.h"
 #include "ocudu/support/async/coroutine.h"

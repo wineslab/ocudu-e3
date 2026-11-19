@@ -30,12 +30,12 @@ include:
       child_pipeline_rules:
         - if: $ON_MR && $GITLAB_TOKEN
           changes:
-            paths:
-              - &gitlab_changes .gitlab/main.tf
+            paths: &gitlab_changes
+              - .gitlab/main.tf
+              - .gitlab/ci-shared/gitlab_settings/**/*.tf
         - if: $ON_DEFAULT_BRANCH && $GITLAB_TOKEN
           changes:
-            paths:
-              - *gitlab_changes
+            paths: *gitlab_changes
             compare_to: "$CI_COMMIT_BEFORE_SHA"
       fmt_rules:
         - if: $ON_MR

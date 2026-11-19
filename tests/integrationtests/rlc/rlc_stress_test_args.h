@@ -6,12 +6,15 @@
 
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/pdcp/pdcp_config.h"
+#include "ocudu/ran/pdcp/pdcp_t_reordering.h"
 #include "ocudu/rlc/rlc_config.h"
-#include "ocudu/rlc/rlc_rx.h"
-#include "ocudu/rlc/rlc_tx.h"
 #include "ocudu/security/security.h"
 #include <getopt.h>
-#include <random>
+
+namespace ocudulog {
+class log_channel;
+class sink;
+} // namespace ocudulog
 
 namespace ocudu {
 

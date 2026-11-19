@@ -4,6 +4,7 @@
 
 #include "ocudu/rrc/rrc_du_factory.h"
 #include "rrc_du_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/rrc/rrc_config.h"
 
 using namespace ocudu;

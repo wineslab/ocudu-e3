@@ -10,7 +10,6 @@
 #include "tests/unittests/ngap/ngap_test_messages.h"
 #include "ocudu/cu_cp/cu_cp_configuration_helpers.h"
 #include "ocudu/cu_cp/cu_cp_factory.h"
-#include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/du/du_high/du_high_clock_controller.h"
 #include "ocudu/du/du_high/du_high_factory.h"
 #include "ocudu/mac/mac_cell_timing_context.h"
@@ -48,7 +47,7 @@ du_high_cu_cp_worker_manager::du_high_cu_cp_worker_manager(unsigned nof_dus, tim
         test_helpers::du_high_worker_config{1, false, {}, timers}));
   }
 
-  // CU-CP especific executor.
+  // CU-CP specific executor.
   // Note: Reuse one of the DU-high control executors.
   cu_cp_exec = &dus[0]->get_exec_mapper().du_control_executor();
 }
@@ -77,10 +76,11 @@ du_high_cu_test_simulator::du_high_cu_test_simulator(const du_high_cu_cp_test_si
   ocucp::cu_cp_configuration cu_cfg = config_helpers::make_default_cu_cp_config();
   cu_cfg.services.cu_cp_executor    = workers.cu_cp_exec;
   cu_cfg.services.timers            = &timers;
-  cu_cfg.ngap.ngaps.push_back(ocucp::cu_cp_configuration::ngap_config{
-      &n2_gw, {{7, {{plmn_identity::test_value(), {{slice_service_type{1}}}}}}}});
+  cu_cfg.ngap.n2_gws.push_back(&n2_gw);
+  cu_cfg.ngap.ngaps.push_back(
+      ocucp::cu_cp_configuration::ngap_config{{{7, {{plmn_identity::test_value(), {{slice_service_type{1}}}}}}}});
 
-  // Instatiate CU-CP.
+  // Instantiate CU-CP.
   cu_cp_inst = create_cu_cp(cu_cfg);
 
   // Start CU-CP.
@@ -137,7 +137,7 @@ void du_high_cu_test_simulator::start_dus()
     // Instantiate DU-high.
     odu::du_high_configuration& du_hi_cfg = du_ctxt.du_high_cfg;
     du_hi_cfg.ran.gnb_du_name             = fmt::format("ocudu{}", du_idx + 1);
-    du_hi_cfg.ran.gnb_du_id               = (gnb_du_id_t)(du_idx + 1);
+    du_hi_cfg.ran.gnb_du_id               = static_cast<gnb_du_id_t>(du_idx + 1);
     du_hi_cfg.ran.cells                   = cfg.dus[du_idx];
     du_hi_cfg.ran.sched_cfg               = config_helpers::make_default_scheduler_expert_config();
 
@@ -168,7 +168,7 @@ void du_high_cu_test_simulator::run_slot()
 
     // Wait for slot indication to be processed and the l2 results to be sent back to the l1 (in this case, the test
     // main thread).
-    const unsigned                            MAX_COUNT = 1000;
+    constexpr unsigned                        MAX_COUNT = 1000;
     const std::optional<mac_dl_sched_result>& dl_result = dus[i]->phy.cells[0].last_dl_res;
     for (unsigned count = 0;
          count < MAX_COUNT and (not dl_result.has_value() or dl_result->slot != dus[i]->next_slot.without_hyper_sfn());
@@ -181,14 +181,14 @@ void du_high_cu_test_simulator::run_slot()
     }
     EXPECT_TRUE(dl_result.has_value() and dl_result->slot == dus[i]->next_slot.without_hyper_sfn());
 
-    // Increament the DU slot.
+    // Increment the DU slot.
     ++dus[i]->next_slot;
   }
 }
 
 bool du_high_cu_test_simulator::run_until(unique_function<bool()> condition)
 {
-  const unsigned MAX_SLOT_COUNT = 1000;
+  constexpr unsigned MAX_SLOT_COUNT = 1000;
   for (unsigned count = 0; count != MAX_SLOT_COUNT; ++count) {
     if (condition()) {
       return true;

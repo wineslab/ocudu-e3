@@ -9,6 +9,7 @@
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_processor.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator_configuration.h"
 #include "ocudu/phy/upper/uplink_processor_context.h"
+#include "ocudu/support/synchronization/stop_event.h"
 #include <variant>
 
 namespace ocudu {
@@ -21,8 +22,6 @@ class uplink_pdu_slot_repository
 public:
   /// PUSCH PDU configuration.
   struct pusch_pdu {
-    /// HARQ process number.
-    unsigned harq_id;
     /// Transport block size.
     units::bytes tb_size;
     /// PUSCH processor PDU.

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/ran/cyclic_prefix.h"
+#include "ocudu/ran/pucch/pucch_mapping.h"
 #include "ocudu/ran/pucch/pucch_uci_bits.h"
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
@@ -89,6 +90,9 @@ struct ul_pucch_pdu {
   prb_interval            prbs;
   ofdm_symbol_range       symbols;
   std::optional<uint16_t> second_hop_prb;
+  /// Flushes, keeps or combines the buffer used for multiple-slot PUCCH transmissions, as per TS 38.213, Section
+  /// 9.2.6. Applicable to all PUCCH formats.
+  pucch_repetition_tx_slot multi_slot_tx_indicator = pucch_repetition_tx_slot::no_multi_slot;
 };
 
 } // namespace fapi
@@ -226,13 +230,14 @@ struct formatter<ocudu::fapi::ul_pucch_pdu> {
   auto format(const ocudu::fapi::ul_pucch_pdu& pdu, FormatContext& ctx) const
   {
     format_to(ctx.out(),
-              "\n\t- PUCCH rnti={} bwp={} scs={} cp={} prb={} symb={}",
+              "\n\t- PUCCH rnti={} bwp={} scs={} cp={} prb={} symb={} multi_slot={}",
               pdu.rnti,
               pdu.bwp,
               to_string(pdu.scs),
               pdu.cp.to_string(),
               pdu.prbs,
-              pdu.symbols);
+              pdu.symbols,
+              static_cast<unsigned>(pdu.multi_slot_tx_indicator));
 
     if (pdu.second_hop_prb.has_value()) {
       format_to(ctx.out(), " intra_slot_frequency_hopping={}", *pdu.second_hop_prb);

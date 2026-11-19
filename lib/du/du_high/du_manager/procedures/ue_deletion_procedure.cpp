@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_deletion_procedure.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
 
 using namespace ocudu;

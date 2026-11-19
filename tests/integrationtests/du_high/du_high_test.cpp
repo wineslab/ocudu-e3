@@ -5,9 +5,9 @@
 /// \file
 /// \brief Tests that check the setup/teardown, addition/removal of UEs in the DU-high class.
 
-#include "apps/units/flexible_o_du/o_du_high/du_high/commands/du_high_remote_commands.h"
-#include "nlohmann/json.hpp"
 #include "tests/integrationtests/du_high/test_utils/du_high_env_simulator.h"
+#include "tests/ocudu_test_requirements.h"
+#include "tests/test_doubles/du_high/rrm_policy_remote_command_helpers.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/mac/mac_test_messages.h"
@@ -204,10 +204,10 @@ TEST_F(du_high_tester,
     }
 
     // TEST CASE: Ensure UE1 UCI periodic resources are still scheduled.
-    if (find_ue_pucch_with_csi(rnti1, phy.cells[0].last_ul_res.value().ul_res->pucchs) != nullptr) {
+    if (find_ue_pucch_with_csi(rnti1, phy.cells[0].last_ul_res.value().ul_res->pucchs.unsorted()) != nullptr) {
       ue1_csi_count++;
     }
-    auto* pucch = find_ue_pucch_with_sr(rnti1, phy.cells[0].last_ul_res.value().ul_res->pucchs);
+    auto* pucch = find_ue_pucch_with_sr(rnti1, phy.cells[0].last_ul_res.value().ul_res->pucchs.unsorted());
     if (pucch != nullptr) {
       // Push SR indication to MAC. It should be ignored.
       mac_uci_indication_message uci;
@@ -255,6 +255,58 @@ TEST_F(du_high_tester, when_f1ap_reset_received_then_ues_are_removed)
         return pdsch != nullptr;
       },
       nof_slots_check));
+}
+
+TEST_F(du_high_tester, when_ue_removal_races_with_cell_stop_reset_sweep_then_du_does_not_crash)
+{
+  // Create UE.
+  rnti_t rnti = to_rnti(0x4601);
+  ASSERT_TRUE(add_ue(rnti));
+  ASSERT_TRUE(run_rrc_setup(rnti));
+  ASSERT_TRUE(run_ue_context_setup(rnti));
+
+  auto& u = ues.at(rnti);
+
+  // EVENT: CU-CP removes the (only) cell served by this DU via gNB-CU Configuration Update. This makes the DU
+  // start du_cell_stop_procedure::await_cu_to_release_ues(), which asks the CU to release the UE and then polls
+  // every 10ms, for up to 500ms, before giving up on the CU and forcing the UE removal itself.
+  cu_notifier.f1ap_ul_msgs.clear();
+  std::vector<nr_cell_global_id_t> cgis_to_deactivate = {
+      nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(0).value()}};
+  f1ap_message cu_cfg_update = test_helpers::generate_gnb_cu_configuration_update_request(0, {}, cgis_to_deactivate);
+  this->du_hi->get_f1ap_pdu_handler().handle_message(cu_cfg_update);
+
+  // TEST CASE: DU asks the CU to release the UE.
+  ASSERT_TRUE(this->run_until([this]() { return not cu_notifier.f1ap_ul_msgs.empty(); }));
+  ASSERT_TRUE(
+      test_helpers::is_valid_ue_context_release_request(cu_notifier.f1ap_ul_msgs.rbegin()->second, *u.du_ue_id));
+
+  // Deliberately do not respond to the UE CONTEXT RELEASE REQUEST for several slots, to race the UE CONTEXT RELEASE
+  // COMMAND with the gNB-CU Configuration Update procedure forced UE removal.
+  const unsigned slots_before_ue_release_cmd = test_rng::uniform_int(0, 500);
+  for (unsigned i = 0; i != slots_before_ue_release_cmd; ++i) {
+    run_slot();
+  }
+
+  // EVENT: Independently of the above, and racing with it, the CU decides to release the UE directly via a UE
+  // CONTEXT RELEASE COMMAND. This starts a *separate* UE deletion procedure for the same UE, which occupies the
+  // UE's own task queue until it completes. Unless the UE has already been force-removed by the cell-stop
+  // procedure above, in which case the DU discards the command (unrecognized gNB-DU UE F1AP ID) and no UE CONTEXT
+  // RELEASE COMPLETE is sent back. Both outcomes are valid, depending on how the race above resolved.
+  cu_notifier.f1ap_ul_msgs.clear();
+  f1ap_message rel_cmd = test_helpers::generate_ue_context_release_command(*u.cu_ue_id, *u.du_ue_id, srb_id_t::srb1);
+  this->du_hi->get_f1ap_pdu_handler().handle_message(rel_cmd);
+
+  // EVENT: The gNB-CU Configuration Update always eventually completes, regardless of how the race
+  // above resolved, so waiting for its acknowledgement is a safe, non-flaky way to know the DU has settled.
+  ASSERT_TRUE(this->run_until([this]() {
+    for (const auto& [msg_id, ul_msg] : cu_notifier.f1ap_ul_msgs) {
+      if (test_helpers::is_valid_gnb_cu_configuration_update_acknowledge(ul_msg)) {
+        return true;
+      }
+    }
+    return false;
+  }));
 }
 
 TEST_F(du_high_tester, when_du_high_is_stopped_then_ues_are_removed)
@@ -336,6 +388,8 @@ TEST_F(du_high_tester, when_ue_context_modification_with_rem_drbs_is_received_th
 
 TEST_F(du_high_tester, when_dl_rrc_message_with_old_du_ue_id_received_then_old_ue_traffic_stops)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   // Create UE1.
   rnti_t rnti = to_rnti(0x4601);
   ASSERT_TRUE(add_ue(rnti));
@@ -364,6 +418,8 @@ TEST_F(du_high_tester, when_dl_rrc_message_with_old_du_ue_id_received_then_old_u
 
 TEST_F(du_high_tester, when_dl_rrc_message_with_old_du_ue_id_received_then_drbs_are_reestablished)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   // Create UE1.
   rnti_t rnti1 = to_rnti(0x4601);
   ASSERT_TRUE(add_ue(rnti1));
@@ -393,6 +449,8 @@ TEST_F(du_high_tester, when_dl_rrc_message_with_old_du_ue_id_received_then_drbs_
 TEST_F(du_high_tester,
        when_dl_rrc_message_with_old_du_ue_id_received_but_same_cu_ue_f1ap_id_then_cu_ue_f1ap_id_is_reused)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   // Create UE1.
   rnti_t rnti1 = to_rnti(0x4601);
   ASSERT_TRUE(add_ue(rnti1));
@@ -422,6 +480,8 @@ TEST_F(du_high_tester,
 
 TEST_F(du_high_tester, when_reestablishment_takes_place_then_previous_ue_capabilities_are_considered_in_config)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   // Create UE1.
   rnti_t rnti1 = to_rnti(0x4601);
   ASSERT_TRUE(add_ue(rnti1));
@@ -437,7 +497,7 @@ TEST_F(du_high_tester, when_reestablishment_takes_place_then_previous_ue_capabil
   ASSERT_TRUE(this->run_until(
       [this, rnti1]() {
         auto* pdsch = find_ue_pdsch_with_lcid(rnti1, LCID_MIN_DRB, phy.cells[0].last_dl_res.value().dl_res->ue_grants);
-        return pdsch != nullptr and pdsch->pdsch_cfg.codewords[0].mcs_table == pdsch_mcs_table::qam256;
+        return pdsch != nullptr and pdsch->pdsch_cfg.mcs_table == pdsch_mcs_table::qam256;
       },
       nof_slots_test));
 
@@ -456,7 +516,7 @@ TEST_F(du_high_tester, when_reestablishment_takes_place_then_previous_ue_capabil
   ASSERT_TRUE(this->run_until(
       [this, rnti2]() {
         auto* pdsch = find_ue_pdsch_with_lcid(rnti2, LCID_MIN_DRB, phy.cells[0].last_dl_res.value().dl_res->ue_grants);
-        return pdsch != nullptr and pdsch->pdsch_cfg.codewords[0].mcs_table == pdsch_mcs_table::qam256;
+        return pdsch != nullptr and pdsch->pdsch_cfg.mcs_table == pdsch_mcs_table::qam256;
       },
       nof_slots_test));
 }
@@ -476,47 +536,13 @@ public:
     plmn_id(plmn_id_),
     s_nssai(s_nssai_)
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-17-3-e");
   }
 
   void apply_rrm_reconfiguration(unsigned max_rbs, unsigned min_rbs)
   {
-    nlohmann::json req;
-
-    /*
-      {
-        "cmd": "rrm_policy_ratio_set",
-        "policies": {
-          "resourceType": "PRB",
-          "rRMPolicyMemberList": [
-            {
-              "plmn": "00101",
-              "sst": 1,
-              "sd": 0xffffff
-            }
-          ],
-          "min_prb_policy_ratio": min_rbs,
-          "max_prb_policy_ratio": max_rbs,
-          "dedicated_ratio": 0
-        }
-      }
-    */
-
-    req["cmd"]                             = "rrm_policy_ratio_set";
-    req["policies"]["resourceType"]        = "PRB";
-    req["policies"]["rRMPolicyMemberList"] = nlohmann::json::array();
-    nlohmann::json policy;
-    policy["plmn"] = plmn_id.to_string();
-    policy["sst"]  = s_nssai.sst.value();
-    policy["sd"]   = s_nssai.sd.value();
-    req["policies"]["rRMPolicyMemberList"].push_back(policy);
-    req["policies"]["min_prb_policy_ratio"] = min_rbs;
-    req["policies"]["max_prb_policy_ratio"] = max_rbs;
-    req["policies"]["dedicated_ratio"]      = 0;
-
-    std::unique_ptr<app_services::remote_command> remote =
-        std::make_unique<rrm_policy_ratio_remote_command>(this->du_hi->get_du_configurator());
-
-    error_type<std::string> cmd_exec_res = remote->execute(req);
+    error_type<std::string> cmd_exec_res = test_helpers::apply_rrm_policy_reconfiguration(
+        this->du_hi->get_du_configurator(), plmn_id, s_nssai, min_rbs, max_rbs);
     ASSERT_TRUE(cmd_exec_res.has_value()) << cmd_exec_res.error();
   }
 
@@ -591,4 +617,129 @@ TEST_F(du_high_rrm_policy_tester, when_rrm_policy_remote_command_is_received_the
 
   // 2-C. Run the scheduler and assess RBs are according to the RRM config.
   run_sched_and_assess_rbs(max_rbs);
+}
+
+class du_high_cg_tester : public du_high_env_simulator, public testing::Test
+{
+protected:
+  du_high_cg_tester() :
+    du_high_env_simulator([]() {
+      du_high_configuration du_cfg            = create_du_high_configuration();
+      du_cfg.ran.cells[0].ran.init_bwp.cg_cfg = cg_builder_params{};
+      return du_cfg;
+    }())
+  {
+  }
+};
+
+TEST_F(du_high_cg_tester, when_ue_context_setup_with_drb_and_cg_enabled_then_cs_rnti_is_allocated)
+{
+  // Create UE.
+  rnti_t rnti = to_rnti(0x4601);
+  ASSERT_TRUE(add_ue(rnti));
+  ASSERT_TRUE(run_rrc_setup(rnti));
+
+  auto& u = ues[rnti];
+
+  // DU receives UE Context Setup Request (inlined from run_ue_context_setup to capture the response).
+  cu_notifier.f1ap_ul_msgs.clear();
+  f1ap_message msg = test_helpers::generate_ue_context_setup_request(
+      *u.cu_ue_id,
+      u.du_ue_id,
+      u.srbs[LCID_SRB1].next_pdcp_sn++,
+      {drb_id_t::drb1},
+      {plmn_identity::test_value(), nr_cell_identity::create(0).value()});
+  asn1::f1ap::ue_context_setup_request_s& cmd      = msg.pdu.init_msg().value.ue_context_setup_request();
+  auto&                                   drb_item = cmd->drbs_to_be_setup_list[0].value().drbs_to_be_setup_item();
+  auto&                                   drb_info = drb_item.qos_info.choice_ext().value().drb_info();
+  drb_info.drb_qos.qos_characteristics.non_dyn_5qi().five_qi = 7U;
+  drb_item.rlc_mode.value                                    = asn1::f1ap::rlc_mode_opts::rlc_um_bidirectional;
+  // UE supports 256QAM.
+  cmd->cu_to_du_rrc_info.ue_cap_rat_container_list =
+      byte_buffer::create({0x10, 0xc9, 0x83, 0x40, 0x67, 0x40, 0x8e, 0x8c, 0xb4, 0x04, 0xbf, 0x1b, 0x07, 0x0a, 0x40,
+                           0x00, 0x2c, 0x12, 0x62, 0xe0, 0x00, 0x30, 0x7e, 0x16, 0x00, 0x31, 0xbf, 0xf0, 0x01, 0x70,
+                           0x00, 0x98, 0xa0, 0x51, 0x00, 0x00, 0x00, 0x04, 0x40, 0x02, 0xc6, 0x80, 0x30, 0x03, 0xd0,
+                           0x38, 0xf2, 0x1c, 0xf8, 0x00, 0x01, 0x20, 0x20, 0x07, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x08,
+                           0x05, 0x03, 0x60, 0x00, 0x03, 0x80, 0x40, 0x4a, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                           0x39, 0x51, 0x40, 0x00, 0x40, 0x00, 0x02, 0x59, 0x65, 0x40, 0x0d, 0x2a, 0xaa, 0x1e, 0x00,
+                           0x0e, 0x00, 0x1e, 0x00, 0x00, 0x00, 0x08, 0x01, 0x00, 0x20, 0x48, 0x14})
+          .value();
+  this->du_hi->get_f1ap_pdu_handler().handle_message(msg);
+
+  // Wait until DU sends UE Context Setup Response and the whole RRC container is scheduled.
+  constexpr unsigned MAX_SLOT_COUNT   = 1000;
+  const unsigned     srb1_pdu_size    = cmd->rrc_container.size();
+  unsigned           srb1_bytes_sched = 0;
+  for (unsigned i = 0; i != MAX_SLOT_COUNT and (srb1_bytes_sched < srb1_pdu_size or cu_notifier.f1ap_ul_msgs.empty());
+       ++i) {
+    run_slot();
+
+    const dl_msg_alloc* pdsch =
+        find_ue_pdsch_with_lcid(rnti, LCID_SRB1, phy.cells[0].last_dl_res.value().dl_res->ue_grants);
+    if (pdsch != nullptr) {
+      for (const dl_msg_lc_info& lc_grant : pdsch->tb_list[0].lc_chs_to_sched) {
+        if (lc_grant.lcid == LCID_SRB1) {
+          srb1_bytes_sched += lc_grant.sched_bytes;
+        }
+      }
+    }
+  }
+  ASSERT_EQ(cu_notifier.f1ap_ul_msgs.size(), 1);
+  ASSERT_TRUE(test_helpers::is_valid_ue_context_setup_response(cu_notifier.f1ap_ul_msgs.rbegin()->second, msg));
+
+  // Decode CellGroupConfig from the UE Context Setup Response and verify CS-RNTI is allocated.
+  const auto& resp = cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.successful_outcome().value.ue_context_setup_resp();
+  ASSERT_FALSE(resp->du_to_cu_rrc_info.cell_group_cfg.empty());
+  {
+    asn1::cbit_ref                 bref{resp->du_to_cu_rrc_info.cell_group_cfg};
+    asn1::rrc_nr::cell_group_cfg_s cell_grp_cfg;
+    ASSERT_EQ(cell_grp_cfg.unpack(bref), asn1::OCUDUASN_SUCCESS);
+    ASSERT_TRUE(cell_grp_cfg.phys_cell_group_cfg_present) << "PhysCellGroupConfig should be present";
+    ASSERT_TRUE(cell_grp_cfg.phys_cell_group_cfg.cs_rnti_present) << "CS-RNTI should be allocated when CG is enabled";
+    ASSERT_EQ(cell_grp_cfg.phys_cell_group_cfg.cs_rnti.type(), asn1::setup_release_opts::setup)
+        << "CS-RNTI should be set to 'setup'";
+  }
+
+  // Complete Reconfiguration Complete.
+  cu_notifier.f1ap_ul_msgs.clear();
+  u.sim->enqueue_ul_mac_sdu(LCID_SRB1, byte_buffer::create({0x1, 0x2, 0x3}).value());
+  ASSERT_TRUE(run_until([this]() { return not cu_notifier.f1ap_ul_msgs.empty(); }));
+  ASSERT_TRUE(test_helpers::is_ul_rrc_msg_transfer_valid(cu_notifier.f1ap_ul_msgs.rbegin()->second, srb_id_t::srb1));
+}
+
+TEST_F(du_high_cg_tester, when_all_drbs_removed_then_cs_rnti_is_deallocated)
+{
+  // Create UE with DRB.
+  rnti_t rnti = to_rnti(0x4601);
+  ASSERT_TRUE(add_ue(rnti));
+  ASSERT_TRUE(run_rrc_setup(rnti));
+  ASSERT_TRUE(run_ue_context_setup(rnti));
+
+  // DU receives UE Context Modification removing DRB1.
+  cu_notifier.f1ap_ul_msgs.clear();
+  auto&        u   = ues[rnti];
+  f1ap_message msg = test_helpers::generate_ue_context_modification_request(
+      u.du_ue_id.value(), u.cu_ue_id.value(), {}, {}, {drb_id_t::drb1}, {});
+  this->du_hi->get_f1ap_pdu_handler().handle_message(msg);
+
+  // Wait for UE Context Modification Response.
+  ASSERT_TRUE(this->run_until([this]() { return not cu_notifier.f1ap_ul_msgs.empty(); }));
+
+  // Decode CellGroupConfig and verify CS-RNTI is deallocated.
+  const f1ap_message& f1ap_pdu = cu_notifier.f1ap_ul_msgs.rbegin()->second;
+  ASSERT_EQ(f1ap_pdu.pdu.type().value, asn1::f1ap::f1ap_pdu_c::types::options::successful_outcome);
+  ASSERT_EQ(f1ap_pdu.pdu.successful_outcome().proc_code, ASN1_F1AP_ID_UE_CONTEXT_MOD);
+  const asn1::f1ap::ue_context_mod_resp_s& resp = f1ap_pdu.pdu.successful_outcome().value.ue_context_mod_resp();
+  ASSERT_TRUE(resp->du_to_cu_rrc_info_present);
+  ASSERT_FALSE(resp->du_to_cu_rrc_info.cell_group_cfg.empty());
+  {
+    asn1::cbit_ref                 bref{resp->du_to_cu_rrc_info.cell_group_cfg};
+    asn1::rrc_nr::cell_group_cfg_s cell_grp_cfg;
+    ASSERT_EQ(cell_grp_cfg.unpack(bref), asn1::OCUDUASN_SUCCESS);
+    ASSERT_TRUE(cell_grp_cfg.phys_cell_group_cfg_present) << "PhysCellGroupConfig should be present";
+    ASSERT_TRUE(cell_grp_cfg.phys_cell_group_cfg.cs_rnti_present)
+        << "CS-RNTI field should be present when CS-RNTI is deallocated";
+    ASSERT_EQ(cell_grp_cfg.phys_cell_group_cfg.cs_rnti.type(), asn1::setup_release_opts::release)
+        << "CS-RNTI should be released when all DRBs are removed";
+  }
 }

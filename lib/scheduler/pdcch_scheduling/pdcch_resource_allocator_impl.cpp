@@ -42,13 +42,14 @@ void pdcch_resource_allocator_impl::slot_indication(slot_point sl_tx)
   last_sl_ind = sl_tx;
 
   // Clear old records.
-  slot_records[(last_sl_ind - 1).to_uint() % slot_records.size()]->clear();
+  slot_records[(last_sl_ind - 1).count() % slot_records.size()]->clear();
 }
 
-pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                                                           rnti_t                        rnti,
-                                                                           search_space_id               ss_id,
-                                                                           aggregation_level             aggr_lvl)
+pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                                                           rnti_t                         rnti,
+                                                                           search_space_id                ss_id,
+                                                                           aggregation_level              aggr_lvl,
+                                                                           std::optional<beam_identifier> beam)
 {
   // Find Common BWP and CORESET configurations.
   const sched_search_space_config& ss_cfg = *cell_cfg.init_bwp.dl.pdcch().search_spaces()[ss_id];
@@ -60,13 +61,15 @@ pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_common(cell_
                                ss_cfg.cs(),
                                ss_cfg.cfg(),
                                aggr_lvl,
-                               pdcch_common_candidates[ss_id][to_aggregation_level_index(aggr_lvl)].candidates);
+                               pdcch_common_candidates[ss_id][to_aggregation_level_index(aggr_lvl)].candidates,
+                               beam);
 }
 
-pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                                                           rnti_t                        rnti,
-                                                                           search_space_id               ss_id,
-                                                                           aggregation_level             aggr_lvl)
+pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                                                           rnti_t                         rnti,
+                                                                           search_space_id                ss_id,
+                                                                           aggregation_level              aggr_lvl,
+                                                                           std::optional<beam_identifier> beam)
 {
   // Find Common BWP and CORESET configurations.
   const sched_search_space_config& ss_cfg = *cell_cfg.init_bwp.dl.pdcch().search_spaces()[ss_id];
@@ -77,7 +80,8 @@ pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_common(cell_
                                ss_cfg.cs(),
                                ss_cfg.cfg(),
                                aggr_lvl,
-                               pdcch_common_candidates[ss_id][to_aggregation_level_index(aggr_lvl)].candidates);
+                               pdcch_common_candidates[ss_id][to_aggregation_level_index(aggr_lvl)].candidates,
+                               beam);
 }
 
 pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_ue(cell_slot_resource_allocator& slot_alloc,
@@ -91,7 +95,8 @@ pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_ue(cell_slot
   const bwp_configuration& bwp_cfg    = ss_cfg.bwp->dl.cfg();
   span<const uint8_t>      candidates = ss_cfg.get_pdcch_candidates(aggr_lvl, slot_alloc.slot);
 
-  return alloc_dl_pdcch_helper(slot_alloc, rnti, bwp_cfg, *ss_cfg.coreset, *ss_cfg.cfg, aggr_lvl, candidates);
+  return alloc_dl_pdcch_helper(
+      slot_alloc, rnti, bwp_cfg, *ss_cfg.coreset, *ss_cfg.cfg, aggr_lvl, candidates, std::nullopt);
 }
 
 pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_ue(cell_slot_resource_allocator& slot_alloc,
@@ -105,7 +110,8 @@ pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_ue(cell_slot
   const bwp_configuration&         bwp_cfg    = ss_cfg.bwp->ul.cfg();
   span<const pdcch_candidate_type> candidates = ss_cfg.get_pdcch_candidates(aggr_lvl, slot_alloc.slot);
 
-  return alloc_ul_pdcch_helper(slot_alloc, rnti, bwp_cfg, *ss_cfg.coreset, *ss_cfg.cfg, aggr_lvl, candidates);
+  return alloc_ul_pdcch_helper(
+      slot_alloc, rnti, bwp_cfg, *ss_cfg.coreset, *ss_cfg.cfg, aggr_lvl, candidates, std::nullopt);
 }
 
 pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_helper(cell_slot_resource_allocator&     slot_alloc,
@@ -114,7 +120,8 @@ pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_helper(cell_
                                                                            const sched_coreset_config&       cs_cfg,
                                                                            const search_space_configuration& ss_cfg,
                                                                            aggregation_level                 aggr_lvl,
-                                                                           span<const pdcch_candidate_type>  candidates)
+                                                                           span<const pdcch_candidate_type>  candidates,
+                                                                           std::optional<beam_identifier>    beam)
 {
   if (not pdcch_helper::is_pdcch_monitoring_active(slot_alloc.slot, ss_cfg)) {
     // PDCCH monitoring is not active in this slot.
@@ -138,6 +145,8 @@ pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_helper(cell_
   pdcch.ctx.n_rnti_pdcch_data = get_scrambling_n_RNTI(rnti, cs_cfg.cfg(), ss_cfg);
   pdcch.ctx.n_id_pdcch_dmrs   = get_N_ID_dmrs(cell_cfg.params.pci, cs_cfg.cfg());
   pdcch.ctx.context.ss_id     = ss_cfg.get_id();
+  // [Implementation-defined] The PDCCH is not precoded.
+  pdcch.ctx.precoding_and_beamforming = beam.has_value() ? make_single_beam_precoding(*beam) : make_default_precoding();
   pdcch.ctx.context.dci_format =
       (ss_cfg.is_common_search_space() ||
        (std::get<search_space_configuration::ue_specific_dci_format>(ss_cfg.get_monitored_dci_formats()) ==
@@ -170,7 +179,8 @@ pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_helper(cell_
                                                                            const sched_coreset_config&       cs_cfg,
                                                                            const search_space_configuration& ss_cfg,
                                                                            aggregation_level                 aggr_lvl,
-                                                                           span<const pdcch_candidate_type>  candidates)
+                                                                           span<const pdcch_candidate_type>  candidates,
+                                                                           std::optional<beam_identifier>    beam)
 {
   if (not pdcch_helper::is_pdcch_monitoring_active(slot_alloc.slot, ss_cfg)) {
     // PDCCH monitoring is not active in this slot.
@@ -194,6 +204,8 @@ pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_helper(cell_
   pdcch.ctx.n_rnti_pdcch_data = get_scrambling_n_RNTI(rnti, cs_cfg.cfg(), ss_cfg);
   pdcch.ctx.n_id_pdcch_dmrs   = get_N_ID_dmrs(cell_cfg.params.pci, cs_cfg.cfg());
   pdcch.ctx.context.ss_id     = ss_cfg.get_id();
+  // [Implementation-defined] The PDCCH is not precoded.
+  pdcch.ctx.precoding_and_beamforming = beam.has_value() ? make_single_beam_precoding(*beam) : make_default_precoding();
   pdcch.ctx.context.dci_format =
       (ss_cfg.is_common_search_space() ||
        (std::get<search_space_configuration::ue_specific_dci_format>(ss_cfg.get_monitored_dci_formats()) ==
@@ -237,5 +249,5 @@ void pdcch_resource_allocator_impl::stop()
 pdcch_slot_allocator& pdcch_resource_allocator_impl::get_pdcch_slot_alloc(slot_point sl)
 {
   ocudu_sanity_check(sl < last_sl_ind + SLOT_ALLOCATOR_RING_SIZE, "PDCCH being allocated to far into the future");
-  return *slot_records[sl.to_uint() % slot_records.size()];
+  return *slot_records[sl.count() % slot_records.size()];
 }

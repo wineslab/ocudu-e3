@@ -4,12 +4,13 @@
 #pragma once
 
 #include "ocudu/ocudulog/logger.h"
-#include "ocudu/support/io/unique_fd.h"
 #include <chrono>
 #include <netdb.h>
 #include <sys/socket.h>
 
 namespace ocudu {
+
+class unique_fd;
 
 /// Get the IP address and port from sockaddr structure.
 bool getnameinfo(const struct sockaddr&        ai_addr,

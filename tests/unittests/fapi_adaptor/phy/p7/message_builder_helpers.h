@@ -4,15 +4,7 @@
 
 #pragma once
 
-#include "ocudu/fapi/common/error_indication.h"
-#include "ocudu/fapi/p7/messages/crc_indication.h"
 #include "ocudu/fapi/p7/messages/dl_tti_request.h"
-#include "ocudu/fapi/p7/messages/rach_indication.h"
-#include "ocudu/fapi/p7/messages/rx_data_indication.h"
-#include "ocudu/fapi/p7/messages/slot_indication.h"
-#include "ocudu/fapi/p7/messages/srs_indication.h"
-#include "ocudu/fapi/p7/messages/tx_data_request.h"
-#include "ocudu/fapi/p7/messages/uci_indication.h"
 #include "ocudu/fapi/p7/messages/ul_dci_request.h"
 #include "ocudu/fapi/p7/messages/ul_tti_request.h"
 
@@ -46,18 +38,6 @@ ocudu::fapi::dl_tti_request build_valid_dl_tti_request();
 /// in SCF-222 v4.0 Section 3.4.2.5.
 ocudu::fapi::tx_precoding_and_beamforming_pdu build_valid_tx_precoding_and_beamforming_pdu();
 
-/// Builds and returns a valid UCI PUSCH PDU. Every parameter is within the range defined in SCF-222 v4.0
-/// Section 3.4.9.1.
-ocudu::fapi::uci_pusch_pdu build_valid_uci_pusch_pdu();
-
-/// Builds and returns a valid UCI PUCCH format 0/1 PDU. Every parameter is within the range defined in SCF-222 v4.0
-/// Section 3.4.9.2.
-ocudu::fapi::uci_pucch_pdu_format_0_1 build_valid_uci_pucch_format01_pdu();
-
-/// Builds and returns a valid UCI PUCCH format 2/3/4 PDU. Every parameter is within the range defined in SCF-222 v4.0
-/// Section 3.4.9.3.
-ocudu::fapi::uci_pucch_pdu_format_2_3_4 build_valid_uci_pucch_format234_pdu();
-
 /// Builds and returns a valid UL PRACH PDU. Every parameter is within the range defined in SCF-222 v4.0
 /// Section 3.4.3.1.
 ocudu::fapi::ul_prach_pdu build_valid_ul_prach_pdu();
@@ -85,13 +65,5 @@ ocudu::fapi::ul_pucch_pdu build_valid_ul_pucch_f4_pdu();
 /// Builds and returns a valid UL PUSCH PDU. Every parameter is within the range defined in SCF-222 v4.0
 /// Section 3.4.3.2.
 ocudu::fapi::ul_pusch_pdu build_valid_ul_pusch_pdu();
-
-/// Builds and returns a valid UL SRS PDU. Every parameter is within the range defined in SCF-222 v4.0
-/// Section 3.4.3.3.
-ocudu::fapi::ul_srs_pdu build_valid_ul_srs_pdu();
-
-/// Builds and returns a valid UL_TTI.request. Every parameter is within the range defined in SCF-222 v4.0
-/// Section 3.4.3.
-ocudu::fapi::ul_tti_request build_valid_ul_tti_request();
 
 } // namespace unittest

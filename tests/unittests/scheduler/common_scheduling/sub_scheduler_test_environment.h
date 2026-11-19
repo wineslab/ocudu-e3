@@ -10,8 +10,13 @@
 #include "lib/scheduler/logging/scheduler_event_logger.h"
 #include "lib/scheduler/logging/scheduler_result_logger.h"
 #include "lib/scheduler/pdcch_scheduling/pdcch_resource_allocator.h"
+#include "lib/scheduler/pucch_scheduling/pucch_allocator_impl.h"
+#include "lib/scheduler/uci_scheduling/uci_allocator_impl.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/scheduler/test_utils/config_generators.h"
+#include "tests/unittests/scheduler/test_utils/sched_random_utils.h"
+#include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/slot_point_extended.h"
 #include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
 
 namespace ocudu {
@@ -63,8 +68,8 @@ public:
   }
   virtual ~sub_scheduler_test_environment() = default;
 
-  slot_point          last_slot_tx() const { return next_slot - 1; }
-  slot_point          next_slot_rx() const { return next_slot - delay_tx_rx_slots; }
+  slot_point          last_slot_tx() const { return next_slot.without_hyper_sfn() - 1; }
+  slot_point          next_slot_rx() const { return next_slot.without_hyper_sfn() - delay_tx_rx_slots; }
   const sched_result& last_sched_result() const { return res_grid[0].result; }
 
   void run_slot();
@@ -101,6 +106,8 @@ public:
   cell_resource_allocator                   res_grid{cell_cfg};
   scheduler_result_logger                   result_logger{true, cell_cfg.params.pci};
   std::unique_ptr<pdcch_resource_allocator> pdcch_alloc;
+  pucch_allocator_impl                      pucch_alloc;
+  uci_allocator_impl                        uci_alloc{cell_cfg, pucch_alloc};
   const unsigned                            delay_tx_rx_slots;
 
   // -- Derived
@@ -110,11 +117,7 @@ public:
 
   // -- State
 
-  // Slot of the next call to the scheduler.
-  slot_point next_slot{to_numerology_value(cell_cfg.scs_common()),
-                       test_rng::uniform_int<unsigned>(
-                           0,
-                           ((NOF_SFNS * NOF_SUBFRAMES_PER_FRAME) << to_numerology_value(cell_cfg.scs_common())) - 1)};
+  slot_point_extended next_slot{test_helper::generate_random_slot_point(cell_cfg.scs_common())};
 
 private:
   /// Type erased run_slot for pdcch_allocator.

@@ -4,10 +4,13 @@
 
 #include "du_manager_procedure_test_helpers.h"
 #include "lib/du/du_high/du_manager/procedures/ue_creation_procedure.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/cell_group_config.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/ntn/ntn_cell_params.h"
+#include <chrono>
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -31,7 +34,11 @@ protected:
   {
   }
 
-  void start_procedure(du_ue_index_t ue_index = to_du_ue_index(0), rnti_t rnti = to_rnti(0x4601), bool success = true)
+  void start_procedure(du_ue_index_t             ue_index     = to_du_ue_index(0),
+                       rnti_t                    rnti         = to_rnti(0x4601),
+                       bool                      success      = true,
+                       msg3_mac_ce_list          msg3_mac_ces = {},
+                       std::optional<slot_point> slot_rx      = std::nullopt)
   {
     f1ap.f1ap_ues.emplace(ue_index);
     f1ap.f1ap_ues[ue_index].f1c_bearers.emplace(srb_id_t::srb0);
@@ -42,11 +49,14 @@ protected:
     f1ap.next_ue_create_response.f1c_bearers_added[1] = &f1ap.f1ap_ues[ue_index].f1c_bearers[srb_id_t::srb1];
 
     ul_ccch_indication_message ul_ccch_msg = create_test_ul_ccch_message(rnti);
+    const slot_point           msg3_slot   = slot_rx.value_or(ul_ccch_msg.slot_rx);
 
     proc = launch_async<ue_creation_procedure>(
-        du_ue_creation_request{ue_index, ul_ccch_msg.cell_index, rnti, std::move(ul_ccch_msg.subpdu)},
+        du_ue_creation_request{
+            ue_index, ul_ccch_msg.cell_index, rnti, std::move(ul_ccch_msg.subpdu), std::move(msg3_mac_ces), msg3_slot},
         ue_mng,
         params,
+        mem_resources,
         cell_res_alloc,
         proc_metrics);
     proc_launcher.emplace(proc);
@@ -89,7 +99,7 @@ TEST_F(du_manager_ue_creation_tester,
 {
   // Start Procedure.
   du_ue_index_t ue_index = to_du_ue_index(test_rng::uniform_int<unsigned>(0, MAX_DU_UE_INDEX));
-  rnti_t        rnti     = to_rnti(test_rng::uniform_int<unsigned>(1, to_value(rnti_t::MAX_CRNTI)));
+  rnti_t        rnti     = to_rnti(test_rng::uniform_int<unsigned>(1, to_underlying(rnti_t::MAX_CRNTI)));
   start_procedure(ue_index, rnti);
 
   // Check MAC received request to create UE with valid params.
@@ -112,7 +122,7 @@ TEST_F(du_manager_ue_creation_tester,
 {
   // Start Procedure.
   du_ue_index_t ue_index = to_du_ue_index(test_rng::uniform_int<unsigned>(0, MAX_DU_UE_INDEX));
-  rnti_t        rnti     = to_rnti(test_rng::uniform_int<unsigned>(1, to_value(rnti_t::MAX_CRNTI)));
+  rnti_t        rnti     = to_rnti(test_rng::uniform_int<unsigned>(1, to_underlying(rnti_t::MAX_CRNTI)));
   start_procedure(ue_index, rnti);
 
   ASSERT_FALSE(proc.ready());
@@ -123,6 +133,25 @@ TEST_F(du_manager_ue_creation_tester,
 
   // Check procedure has finished.
   ASSERT_TRUE(proc.ready());
+}
+
+TEST_F(du_manager_ue_creation_tester, when_ue_is_created_then_decoded_msg3_mac_ces_are_forwarded_to_mac)
+{
+  const du_ue_index_t ue_index = to_du_ue_index(0);
+  const rnti_t        rnti     = to_rnti(0x4601);
+  const slot_point    slot_rx{subcarrier_spacing::kHz15, 7};
+  msg3_mac_ce_list    msg3_mac_ces;
+  msg3_mac_ces.emplace_back(std::chrono::microseconds{7000});
+  start_procedure(ue_index, rnti, true, std::move(msg3_mac_ces), slot_rx);
+
+  mac.wait_ue_create.result.allocated_crnti = rnti;
+  mac.wait_ue_create.result.ue_index        = ue_index;
+  mac.wait_ue_create.result.cell_index      = to_du_cell_index(0);
+  mac.wait_ue_create.ready_ev.set();
+
+  ASSERT_TRUE(proc.ready());
+  ASSERT_EQ(1U, mac.last_msg3_mac_ces.size());
+  ASSERT_EQ(std::chrono::microseconds{7000}, std::get<std::chrono::microseconds>(mac.last_msg3_mac_ces.front()));
 }
 
 TEST_F(du_manager_ue_creation_tester,
@@ -169,7 +198,7 @@ TEST_F(du_manager_ue_creation_tester, when_ul_ccch_flush_fails_then_ue_is_destro
 {
   // Start Procedure.
   du_ue_index_t ue_index = to_du_ue_index(test_rng::uniform_int<unsigned>(0, MAX_DU_UE_INDEX));
-  rnti_t        rnti     = to_rnti(test_rng::uniform_int<unsigned>(1, to_value(rnti_t::MAX_CRNTI)));
+  rnti_t        rnti     = to_rnti(test_rng::uniform_int<unsigned>(1, to_underlying(rnti_t::MAX_CRNTI)));
   start_procedure(ue_index, rnti);
 
   // MAC fails to dispatch UL-CCCH to upper layers.
@@ -200,6 +229,8 @@ TEST_F(du_manager_ue_creation_tester, when_ul_ccch_flush_fails_then_ue_is_destro
 
 TEST_F(du_manager_ue_creation_tester, when_ue_is_created_on_non_ntn_cell_then_mac_dl_harq_buffer_uses_nof_harq_proc)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-HARQ-1");
+
   start_procedure();
 
   ASSERT_TRUE(this->mac.last_ue_create_msg.has_value());
@@ -215,8 +246,9 @@ protected:
 
   static du_cell_config make_ntn_du_cell_config()
   {
-    du_cell_config cell                    = config_helpers::make_default_du_cell_config();
-    cell.ran.ntn_params                    = ntn_cell_params{};
+    du_cell_config cell = config_helpers::make_default_du_cell_config();
+    cell.ran.ntn_params = ntn_cell_params{};
+    cell.ran.ntn_params->ntn_cfg.cell_specific_koffset.emplace(std::chrono::milliseconds(260));
     cell.ran.init_bwp.pdsch.max_harq_procs = 32;
     return cell;
   }
@@ -234,9 +266,11 @@ protected:
     ul_ccch_indication_message ul_ccch_msg = create_test_ul_ccch_message(rnti);
 
     proc = launch_async<ue_creation_procedure>(
-        du_ue_creation_request{ue_index, ul_ccch_msg.cell_index, rnti, std::move(ul_ccch_msg.subpdu)},
+        du_ue_creation_request{
+            ue_index, ul_ccch_msg.cell_index, rnti, std::move(ul_ccch_msg.subpdu), {}, ul_ccch_msg.slot_rx},
         ue_mng,
         params,
+        mem_resources,
         cell_res_alloc,
         proc_metrics);
     proc_launcher.emplace(proc);
@@ -249,6 +283,8 @@ protected:
 TEST_F(du_manager_ntn_ue_creation_tester,
        when_ue_is_created_on_ntn_cell_then_mac_dl_harq_buffer_is_pre_sized_to_cell_maximum)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-HARQ-1");
+
   start_procedure();
 
   ASSERT_TRUE(this->mac.last_ue_create_msg.has_value());

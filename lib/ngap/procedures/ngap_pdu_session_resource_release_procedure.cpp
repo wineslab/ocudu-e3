@@ -27,7 +27,7 @@ void ngap_pdu_session_resource_release_procedure::operator()(coro_context<async_
 {
   CORO_BEGIN(ctx);
 
-  logger.log_debug("\"{}\" started...", name());
+  logger.log_info("\"{}\" started...", name());
 
   // Handle mandatory IEs.
   CORO_AWAIT_VALUE(response, cu_cp_notifier.on_new_pdu_session_resource_release_command(command));
@@ -35,9 +35,9 @@ void ngap_pdu_session_resource_release_procedure::operator()(coro_context<async_
   // TODO: Handle optional IEs.
 
   if (validate_and_send_response()) {
-    logger.log_debug("\"{}\" finished successfully", name());
+    logger.log_info("\"{}\" finished successfully", name());
   } else {
-    logger.log_debug("\"{}\" failed", name());
+    logger.log_warning("\"{}\" failed", name());
   }
 
   CORO_RETURN();
@@ -55,7 +55,7 @@ fill_asn1_pdu_session_resource_release_response(asn1::ngap::pdu_session_res_rele
   for (const auto& cu_cp_pdu_session_res_released_item : cu_cp_resp.released_pdu_sessions) {
     asn1::ngap::pdu_session_res_released_item_rel_res_s asn1_pdu_session_res_released_item;
     asn1_pdu_session_res_released_item.pdu_session_id =
-        pdu_session_id_to_uint(cu_cp_pdu_session_res_released_item.pdu_session_id);
+        to_underlying(cu_cp_pdu_session_res_released_item.pdu_session_id);
 
     asn1::ngap::pdu_session_res_release_resp_transfer_s res_release_resp_transfer;
 
@@ -90,7 +90,7 @@ fill_asn1_pdu_session_resource_release_response(asn1::ngap::pdu_session_res_rele
            cu_cp_pdu_session_res_released_item.resp_transfer.secondary_rat_usage_info.value()
                .qos_flows_usage_report_list) {
         asn1::ngap::qos_flows_usage_report_item_s asn1_qos_flows_usage_report_item;
-        asn1_qos_flows_usage_report_item.qos_flow_id = qos_flow_id_to_uint(qos_flows_usage_report_item.qos_flow_id);
+        asn1_qos_flows_usage_report_item.qos_flow_id = to_underlying(qos_flows_usage_report_item.qos_flow_id);
 
         if (!asn1::string_to_enum(asn1_qos_flows_usage_report_item.rat_type, qos_flows_usage_report_item.rat_type)) {
           return false;
@@ -139,8 +139,8 @@ bool ngap_pdu_session_resource_release_procedure::validate_and_send_response()
   ngap_msg.pdu.set_successful_outcome().load_info_obj(ASN1_NGAP_ID_PDU_SESSION_RES_RELEASE);
   auto& pdu_session_res_release_resp = ngap_msg.pdu.successful_outcome().value.pdu_session_res_release_resp();
 
-  pdu_session_res_release_resp->amf_ue_ngap_id = amf_ue_id_to_uint(ue_ids.amf_ue_id);
-  pdu_session_res_release_resp->ran_ue_ngap_id = ran_ue_id_to_uint(ue_ids.ran_ue_id);
+  pdu_session_res_release_resp->amf_ue_ngap_id = to_underlying(ue_ids.amf_ue_id);
+  pdu_session_res_release_resp->ran_ue_ngap_id = to_underlying(ue_ids.ran_ue_id);
 
   if (response.released_pdu_sessions.empty()) {
     send_error_indication(amf_notifier,
@@ -160,7 +160,7 @@ bool ngap_pdu_session_resource_release_procedure::validate_and_send_response()
 
   // Forward message to AMF.
   if (!amf_notifier.on_new_message(ngap_msg)) {
-    logger.log_warning("AMF notifier is not set. Cannot send PDUSessionResourceReleaseResponse");
+    logger.log_warning("Cannot send PDUSessionResourceReleaseResponse");
     return false;
   }
 

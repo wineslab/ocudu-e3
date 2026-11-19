@@ -4,6 +4,7 @@
 
 #include "ngap_test_helpers.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/support/async/async_test_utils.h"
@@ -172,7 +173,7 @@ TEST_F(ngap_ue_context_management_procedure_test,
   amf_ue_id_t new_id = old_id;
   while (new_id == old_id) {
     new_id = uint_to_amf_ue_id(
-        test_rng::uniform_int<uint64_t>(amf_ue_id_to_uint(amf_ue_id_t::min), amf_ue_id_to_uint(amf_ue_id_t::max)));
+        test_rng::uniform_int<uint64_t>(to_underlying(amf_ue_id_t::min), to_underlying(amf_ue_id_t::max)));
   }
   ASSERT_NE(old_id, new_id);
 
@@ -241,8 +242,9 @@ TEST_F(ngap_ue_context_management_procedure_test,
       generate_valid_initial_context_setup_request_message(ue1.amf_ue_id.value(), ue2.ran_ue_id.value());
   ngap->handle_message(init_context_setup_request);
 
-  // Check that release of old UE has been requested.
-  ASSERT_TRUE(was_ue_release_requested(ue1));
+  // Check that both UEs are released: per TS 38.413 section 10.6, when the received IDs exist in
+  // context but belong to different UEs, both connections must be locally released.
+  ASSERT_TRUE(was_ue_removed());
 
   // Check that error indication has been sent to AMF.
   ASSERT_TRUE(was_error_indication_sent());
@@ -435,9 +437,36 @@ TEST_F(ngap_ue_context_management_procedure_test,
   ASSERT_TRUE(was_ue_added());
 
   // Inject UE Context Release Command for unknown UE.
-  amf_ue_id_t unknown_ue_id = uint_to_amf_ue_id(amf_ue_id_to_uint(ue.amf_ue_id.value()) + 1);
+  amf_ue_id_t unknown_ue_id = uint_to_amf_ue_id(to_underlying(ue.amf_ue_id.value()) + 1);
 
   ngap_message ue_context_release_cmd = generate_valid_ue_context_release_command_with_amf_ue_ngap_id(unknown_ue_id);
+  ngap->handle_message(ue_context_release_cmd);
+
+  ASSERT_FALSE(was_ue_context_release_complete_sent());
+  ASSERT_FALSE(was_ue_removed());
+}
+
+/// Regression test: the UE-NGAP-IDs choice can legally decode into its extension alternative
+/// (choice_exts), which carries neither an AMF UE NGAP ID nor a UE NGAP ID pair. The handler must
+/// reject the message instead of looking up a UE context with an invalid/default-constructed AMF UE
+/// ID.
+TEST_F(ngap_ue_context_management_procedure_test,
+       when_ue_context_release_command_has_choice_exts_ue_ngap_ids_then_message_is_dropped)
+{
+  // Test preamble
+  cu_cp_ue_index_t ue_index = this->start_procedure();
+
+  auto& ue = test_ues.at(ue_index);
+
+  // Inject Initial Context Setup Request.
+  ngap_message init_context_setup_request =
+      generate_valid_initial_context_setup_request_message(ue.amf_ue_id.value(), ue.ran_ue_id.value());
+  ngap->handle_message(init_context_setup_request);
+
+  ASSERT_TRUE(was_ue_added());
+
+  // Inject UE Context Release Command with an unsupported UE-NGAP-IDs choice.
+  ngap_message ue_context_release_cmd = generate_ue_context_release_command_with_choice_exts_ue_ngap_ids();
   ngap->handle_message(ue_context_release_cmd);
 
   ASSERT_FALSE(was_ue_context_release_complete_sent());
@@ -526,10 +555,65 @@ TEST_F(ngap_ue_context_management_procedure_test,
       generate_valid_ue_context_release_command_with_ue_ngap_id_pair(ue1.amf_ue_id.value(), ue2.ran_ue_id.value());
   ngap->handle_message(ue_context_release_cmd);
 
-  // Check that release of old UE has been requested.
-  ASSERT_TRUE(was_ue_release_requested(ue1));
+  // Check that both UEs are released: per TS 38.413 section 10.6, when the received IDs exist in
+  // context but belong to different UEs, both connections must be locally released.
+  ASSERT_TRUE(was_ue_removed());
 
   // Check that error indication has been sent to AMF.
+  ASSERT_TRUE(was_error_indication_sent());
+  ASSERT_EQ(n2_gw.last_ngap_msgs.back().pdu.init_msg().value.error_ind()->cause.radio_network(),
+            asn1::ngap::cause_radio_network_e::options::inconsistent_remote_ue_ngap_id);
+}
+
+/// Test when a UE Context Release Command contains a pair where the AMF UE NGAP ID does not
+/// match the stored AMF UE NGAP ID for the given RAN UE NGAP ID, the UE is locally released
+/// and an error indication is sent (TS 38.413 section 10.6).
+TEST_F(
+    ngap_ue_context_management_procedure_test,
+    when_ue_context_release_command_has_mismatched_amf_ue_ngap_id_for_known_ran_ue_ngap_id_then_ue_is_released_and_error_indication_is_sent)
+{
+  // Test preamble: set up a UE with known AMF UE ID and RAN UE ID.
+  cu_cp_ue_index_t ue_index = this->start_procedure();
+  auto&            ue       = test_ues.at(ue_index);
+
+  // Inject UE Context Release Command with the correct RAN UE NGAP ID but a different
+  // AMF UE NGAP ID than the one stored for this UE.
+  amf_ue_id_t  wrong_amf_ue_id = uint_to_amf_ue_id(to_underlying(ue.amf_ue_id.value()) + 1);
+  ngap_message ue_context_release_cmd =
+      generate_valid_ue_context_release_command_with_ue_ngap_id_pair(wrong_amf_ue_id, ue.ran_ue_id.value());
+  ngap->handle_message(ue_context_release_cmd);
+
+  // Check that local release of the UE has been requested.
+  ASSERT_TRUE(was_ue_release_requested(ue));
+
+  // Check that an error indication with cause inconsistent_remote_ue_ngap_id has been sent.
+  ASSERT_TRUE(was_error_indication_sent());
+  ASSERT_EQ(n2_gw.last_ngap_msgs.back().pdu.init_msg().value.error_ind()->cause.radio_network(),
+            asn1::ngap::cause_radio_network_e::options::inconsistent_remote_ue_ngap_id);
+}
+
+/// Test when a UE Context Release Command carries an AMF UE NGAP ID that is known but maps to a
+/// different RAN UE NGAP ID than the one in the message, and the received RAN UE NGAP ID is
+/// unknown, the UE with the known AMF UE ID is locally released and an error indication is sent
+/// (TS 38.413 section 10.6).
+TEST_F(
+    ngap_ue_context_management_procedure_test,
+    when_ue_context_release_command_has_known_amf_ue_ngap_id_paired_with_unknown_ran_ue_ngap_id_then_ue_is_released_and_error_indication_is_sent)
+{
+  cu_cp_ue_index_t ue_index = this->start_procedure();
+  auto&            ue       = test_ues.at(ue_index);
+
+  // Inject a UE Context Release Command with ue's AMF UE NGAP ID paired with a RAN UE NGAP ID that
+  // does not exist in any context.
+  ran_ue_id_t  unknown_ran_ue_id = uint_to_ran_ue_id(to_underlying(ue.ran_ue_id.value()) + 1);
+  ngap_message ue_context_release_cmd =
+      generate_valid_ue_context_release_command_with_ue_ngap_id_pair(ue.amf_ue_id.value(), unknown_ran_ue_id);
+  ngap->handle_message(ue_context_release_cmd);
+
+  // The UE owning the known AMF UE ID must be released.
+  ASSERT_TRUE(was_ue_release_requested(ue));
+
+  // Check that an error indication with cause inconsistent_remote_ue_ngap_id has been sent.
   ASSERT_TRUE(was_error_indication_sent());
   ASSERT_EQ(n2_gw.last_ngap_msgs.back().pdu.init_msg().value.error_ind()->cause.radio_network(),
             asn1::ngap::cause_radio_network_e::options::inconsistent_remote_ue_ngap_id);
@@ -560,7 +644,7 @@ TEST_F(ngap_ue_context_management_procedure_test,
       ue.amf_ue_id.value(),
       ue.ran_ue_id.value(),
       aggregate_maximum_bit_rate_t{.dl = 100000, .ul = 100000},
-      ngap_core_network_assist_info_for_inactive{.ue_id_idx_value = 0x64c0},
+      cu_cp_core_network_assist_info_for_inactive{.ue_id_idx_value = 0x64c0},
       guami_t{.plmn = plmn_identity::test_value(), .amf_set_id = 1, .amf_pointer = 1, .amf_region_id = 1});
   ngap->handle_message(ue_context_mod_request);
 
@@ -610,14 +694,14 @@ TEST_F(ngap_ue_context_management_procedure_test,
   ASSERT_TRUE(was_ue_added());
 
   // Inject UE Context Modification Request for unknown UE.
-  amf_ue_id_t unknown_amf_ue_id = uint_to_amf_ue_id(amf_ue_id_to_uint(ue.amf_ue_id.value()) + 1);
-  ran_ue_id_t unknown_ran_ue_id = uint_to_ran_ue_id(ran_ue_id_to_uint(ue.ran_ue_id.value()) + 1);
+  amf_ue_id_t unknown_amf_ue_id = uint_to_amf_ue_id(to_underlying(ue.amf_ue_id.value()) + 1);
+  ran_ue_id_t unknown_ran_ue_id = uint_to_ran_ue_id(to_underlying(ue.ran_ue_id.value()) + 1);
 
   ngap_message ue_context_mod_request = generate_valid_ue_context_modification_request_message(
       unknown_amf_ue_id,
       unknown_ran_ue_id,
       aggregate_maximum_bit_rate_t{.dl = 100000, .ul = 100000},
-      ngap_core_network_assist_info_for_inactive{.ue_id_idx_value = 0x64c0},
+      cu_cp_core_network_assist_info_for_inactive{.ue_id_idx_value = 0x64c0},
       guami_t{.plmn = plmn_identity::test_value(), .amf_set_id = 1, .amf_pointer = 1, .amf_region_id = 1});
   ngap->handle_message(ue_context_mod_request);
 

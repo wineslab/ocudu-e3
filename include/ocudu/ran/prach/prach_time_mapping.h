@@ -8,6 +8,7 @@
 #include "ocudu/ran/nr_band.h"
 #include "ocudu/ran/prach/prach_constants.h"
 #include "ocudu/ran/slot_point.h"
+#include "ocudu/ran/subcarrier_spacing.h"
 
 namespace ocudu::prach_helper {
 

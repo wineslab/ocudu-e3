@@ -10,7 +10,7 @@
 
 namespace ocudu {
 
-template <typename PucchProcessorParam, unsigned MaxNofSymbols = MAX_NSYMB_PER_SLOT, unsigned MaxNofRxPorts = 4>
+template <typename PucchProcessorParam, unsigned MaxNofSymbols = MAX_NSYMB_PER_SLOT, unsigned MaxNofRxPorts = 8>
 class PucchProcessorTestFixture : public ::testing::TestWithParam<PucchProcessorParam>
 {
 public:

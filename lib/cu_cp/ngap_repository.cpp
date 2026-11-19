@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ngap_repository.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ngap/ngap_context.h"
 #include "ocudu/ngap/ngap_factory.h"
 #include "ocudu/support/ocudu_assert.h"
@@ -10,36 +11,47 @@
 using namespace ocudu;
 using namespace ocucp;
 
-ngap_repository::ngap_repository(ngap_repository_config cfg_) :
+ngap_repository::ngap_repository(const ngap_repository_config& cfg_, const ngap_repository_dependencies& dependencies) :
   cfg(cfg_),
-  logger(cfg.logger),
-  amf_task_sched(*cfg.cu_cp.services.timers, *cfg.cu_cp.services.cu_cp_executor, cfg.cu_cp.ngap.ngaps.size(), logger)
+  cu_cp_executor(dependencies.cu_cp_executor),
+  timers(dependencies.timers),
+  n2_gws(dependencies.n2_gws),
+  cu_cp_notifier(dependencies.cu_cp_notifier),
+  paging_handler(dependencies.paging_handler),
+  logger(dependencies.logger),
+  amf_task_sched(ngap_task_scheduler_config{.max_nof_amfs = static_cast<uint16_t>(n2_gws.size())},
+                 ngap_task_scheduler_dependencies{.timers = dependencies.timers,
+                                                  .exec   = dependencies.cu_cp_executor,
+                                                  .logger = dependencies.logger})
 {
-  for (uint16_t amf_idx = 0; amf_idx < cfg.cu_cp.ngap.ngaps.size(); amf_idx++) {
-    auto* ngap_entity = add_ngap(uint_to_cu_cp_amf_index(amf_idx), cfg.cu_cp.ngap.ngaps.at(amf_idx));
+  ocudu_assert(n2_gws.size() == cfg.ngaps.size(), "N2 gateways must have the same sice as NGAPs");
+
+  for (uint16_t amf_idx = 0; amf_idx < n2_gws.size(); amf_idx++) {
+    auto* ngap_entity = add_ngap(uint_to_cu_cp_amf_index(amf_idx));
     ocudu_assert(ngap_entity != nullptr, "Failed to add NGAP for gateway");
   }
 }
 
-ngap_interface* ngap_repository::add_ngap(cu_cp_amf_index_t amf_index, const cu_cp_configuration::ngap_config& config)
+ngap_interface* ngap_repository::add_ngap(cu_cp_amf_index_t amf_index)
 {
+  n2_connection_client&             n2_gw  = *n2_gws[static_cast<uint16_t>(amf_index)];
+  cu_cp_configuration::ngap_config& config = cfg.ngaps[static_cast<uint16_t>(amf_index)];
+
   // Create NGAP object
   auto it = ngap_db.insert(std::make_pair(amf_index, ngap_context{}));
   ocudu_assert(it.second, "Unable to insert NGAP in map");
   ngap_context& ngap_ctxt = it.first->second;
-  ngap_ctxt.ngap_to_cu_cp_notifier.connect_cu_cp(cfg.cu_cp_notifier, cfg.paging_handler);
+  ngap_ctxt.ngap_to_cu_cp_notifier.connect_cu_cp(cu_cp_notifier, paging_handler, amf_index, amf_task_sched);
 
-  ngap_configuration              ngap_cfg    = {cfg.cu_cp.node.gnb_id,
-                                                 cfg.cu_cp.node.ran_node_name,
-                                                 amf_index,
-                                                 config.supported_tas,
-                                                 cfg.cu_cp.ngap.procedure_timeout,
-                                                 cfg.cu_cp.ue.request_pdu_session_timeout};
-  std::unique_ptr<ngap_interface> ngap_entity = create_ngap(ngap_cfg,
-                                                            ngap_ctxt.ngap_to_cu_cp_notifier,
-                                                            *config.n2_gw,
-                                                            *cfg.cu_cp.services.timers,
-                                                            *cfg.cu_cp.services.cu_cp_executor);
+  ngap_configuration              ngap_cfg = {cfg.gnb_id,
+                                              cfg.ran_node_name,
+                                              amf_index,
+                                              config.supported_tas,
+                                              config.amf_addr,
+                                              cfg.procedure_timeout,
+                                              cfg.request_pdu_session_timeout};
+  std::unique_ptr<ngap_interface> ngap_entity =
+      create_ngap(ngap_cfg, ngap_ctxt.ngap_to_cu_cp_notifier, n2_gw, timers, cu_cp_executor);
 
   if (ngap_entity == nullptr) {
     logger.error("Failed to create NGAP");
@@ -55,7 +67,7 @@ void ngap_repository::update_plmn_lookup(cu_cp_amf_index_t amf_index)
 {
   auto ngap = ngap_db.find(amf_index);
   if (ngap == ngap_db.end()) {
-    logger.error("NGAP not found for AMF index {}", fmt::underlying(amf_index));
+    logger.error("NGAP not found for AMF index {}", amf_index);
     return;
   }
 
@@ -83,18 +95,18 @@ ngap_interface* ngap_repository::find_ngap(const cu_cp_amf_index_t& amf_index)
   return ngap_db.at(amf_index).ngap.get();
 }
 
-std::map<cu_cp_amf_index_t, ngap_interface*> ngap_repository::get_ngaps()
+std::map<cu_cp_amf_index_t, ngap_interface*> ngap_repository::get_ngaps() const
 {
-  std::map<cu_cp_amf_index_t, ngap_interface*> ngaps;
-  for (auto& amf : ngap_db) {
-    ngaps.emplace(amf.first, amf.second.ngap.get());
+  std::map<cu_cp_amf_index_t, ngap_interface*> calculated_ngaps;
+  for (const auto& amf : ngap_db) {
+    calculated_ngaps.emplace(amf.first, amf.second.ngap.get());
   }
-  return ngaps;
+  return calculated_ngaps;
 }
 
 std::vector<ngap_info> ngap_repository::handle_ngap_metrics_report_request() const
 {
-  if (!cfg.cu_cp.metrics.layers_cfg.enable_ngap) {
+  if (!cfg.enable_ngap_metrics) {
     return {};
   }
   std::vector<ngap_info> ngap_reports;
@@ -105,10 +117,10 @@ std::vector<ngap_info> ngap_repository::handle_ngap_metrics_report_request() con
   return ngap_reports;
 }
 
-size_t ngap_repository::get_nof_ngap_ues()
+size_t ngap_repository::get_nof_ngap_ues() const
 {
   size_t nof_ues = 0;
-  for (auto& du : ngap_db) {
+  for (const auto& du : ngap_db) {
     nof_ues += du.second.ngap->get_nof_ues();
   }
   return nof_ues;

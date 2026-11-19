@@ -5,6 +5,7 @@
 #include "ngap_test_helpers.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/ngap/test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/cu_cp/cu_cp_configuration_helpers.h"
 #include "ocudu/ngap/ngap_configuration.h"
@@ -20,16 +21,29 @@ using namespace ocucp;
 
 ngap_test::ngap_test() :
   cu_cp_cfg([this]() {
-    cu_cp_configuration cucfg     = config_helpers::make_default_cu_cp_config();
-    cucfg.services.timers         = &timers;
-    cucfg.services.cu_cp_executor = &ctrl_worker;
-    cucfg.ngap.ngaps.push_back(cu_cp_configuration::ngap_config{
-        &n2_gw,
-        {supported_tracking_area{
-            7,
-            {plmn_item{plmn_identity::test_value(),
-                       std::vector<s_nssai_t>{s_nssai_t{slice_service_type{1}, slice_differentiator{}}}}}}}});
-    return cucfg;
+    cu_cp_configuration conf     = config_helpers::make_default_cu_cp_config();
+    conf.services.timers         = &timers;
+    conf.services.cu_cp_executor = &ctrl_worker;
+    conf.ngap.n2_gws.push_back(&n2_gw);
+    conf.ngap.ngaps.push_back(cu_cp_configuration::ngap_config{{supported_tracking_area{
+        7,
+        {plmn_item{plmn_identity::test_value(),
+                   std::vector<s_nssai_t>{s_nssai_t{slice_service_type{1}, slice_differentiator{}}}}}}}});
+    return conf;
+  }()),
+  ue_cfg([this]() {
+    return ue_manager_config{.gnb_id              = cu_cp_cfg.node.gnb_id,
+                             .max_nof_ues         = cu_cp_cfg.admission.max_nof_ues,
+                             .drb_config          = cu_cp_cfg.bearers.drb_config,
+                             .max_nof_drbs_per_ue = cu_cp_cfg.admission.max_nof_drbs_per_ue,
+                             .int_algo_pref_list  = cu_cp_cfg.security.int_algo_pref_list,
+                             .enc_algo_pref_list  = cu_cp_cfg.security.enc_algo_pref_list,
+                             .enable_rrc_metrics  = cu_cp_cfg.metrics.layers_cfg.enable_rrc_metrics,
+                             .ue                  = cu_cp_cfg.ue};
+  }()),
+  ue_dependencies([this]() {
+    return ue_manager_dependencies{
+        .timers = timers, .cu_cp_executor = ctrl_worker, .logger = ocudulog::fetch_basic_logger("CU-CP")};
   }())
 {
   test_logger.set_level(ocudulog::basic_levels::debug);
@@ -41,7 +55,7 @@ ngap_test::ngap_test() :
   ngap_cfg.ran_node_name               = cu_cp_cfg.node.ran_node_name;
   ngap_cfg.supported_tas               = cu_cp_cfg.ngap.ngaps.front().supported_tas;
   ngap_cfg.request_pdu_session_timeout = cu_cp_cfg.ue.request_pdu_session_timeout;
-  ngap = create_ngap(ngap_cfg, cu_cp_notifier, *cu_cp_cfg.ngap.ngaps.front().n2_gw, timers, ctrl_worker);
+  ngap = create_ngap(ngap_cfg, cu_cp_notifier, *cu_cp_cfg.ngap.n2_gws.front(), timers, ctrl_worker);
 
   cu_cp_notifier.connect_ngap(ngap->get_ngap_ue_context_removal_handler());
   n2_gw.attach_handler(&dummy_amf);
@@ -56,7 +70,7 @@ ngap_test::~ngap_test()
   ocudulog::flush();
 }
 
-bool ngap_test::run_ng_setup()
+bool ngap_test::run_ng_setup() const
 {
   // Launch NG setup procedure
   test_logger.info("Launch ng setup request procedure...");
@@ -163,21 +177,21 @@ void ngap_test::run_dl_nas_transport(cu_cp_ue_index_t ue_index)
   auto& ue     = test_ues.at(ue_index);
   ue.amf_ue_id = uint_to_amf_ue_id(test_rng::uniform_int<uint64_t>(16, 128));
   ue.amf_ue_id = uint_to_amf_ue_id(
-      test_rng::uniform_int<uint64_t>(amf_ue_id_to_uint(amf_ue_id_t::min), amf_ue_id_to_uint(amf_ue_id_t::max)));
+      test_rng::uniform_int<uint64_t>(to_underlying(amf_ue_id_t::min), to_underlying(amf_ue_id_t::max)));
 
   ngap_message dl_nas_transport = generate_downlink_nas_transport_message(ue.amf_ue_id.value(), ue.ran_ue_id.value());
   ngap->handle_message(dl_nas_transport);
 }
 
-void ngap_test::run_ul_nas_transport(cu_cp_ue_index_t ue_index)
+void ngap_test::run_ul_nas_transport(cu_cp_ue_index_t ue_index) const
 {
   cu_cp_ul_nas_transport ul_nas_transport = generate_ul_nas_transport_message(ue_index);
   ngap->handle_ul_nas_transport_message(ul_nas_transport);
 }
 
-void ngap_test::run_initial_context_setup(cu_cp_ue_index_t ue_index)
+void ngap_test::run_initial_context_setup(cu_cp_ue_index_t ue_index) const
 {
-  auto& ue = test_ues.at(ue_index);
+  const auto& ue = test_ues.at(ue_index);
 
   ngap_message init_context_setup_request =
       generate_valid_initial_context_setup_request_message(ue.amf_ue_id.value(), ue.ran_ue_id.value());
@@ -209,9 +223,9 @@ bool ngap_test::enable_ue_security(cu_cp_ue_index_t ue_index)
   return true;
 }
 
-void ngap_test::run_pdu_session_resource_setup(cu_cp_ue_index_t ue_index, pdu_session_id_t pdu_session_id)
+void ngap_test::run_pdu_session_resource_setup(cu_cp_ue_index_t ue_index, pdu_session_id_t pdu_session_id) const
 {
-  auto& ue = test_ues.at(ue_index);
+  const auto& ue = test_ues.at(ue_index);
 
   ngap_message pdu_session_resource_setup_request = generate_valid_pdu_session_resource_setup_request_message(
       ue.amf_ue_id.value(),
@@ -220,12 +234,12 @@ void ngap_test::run_pdu_session_resource_setup(cu_cp_ue_index_t ue_index, pdu_se
   ngap->handle_message(pdu_session_resource_setup_request);
 }
 
-void ngap_test::add_pdu_session_to_up_manager(cu_cp_ue_index_t        ue_index,
-                                              pdu_session_id_t        pdu_session_id,
-                                              pdu_session_type_t      pdu_session_type,
-                                              up_transport_layer_info ul_ngu_up_tnl_info,
-                                              drb_id_t                drb_id,
-                                              qos_flow_id_t           qos_flow_id)
+void ngap_test::add_pdu_session_to_up_manager(cu_cp_ue_index_t               ue_index,
+                                              pdu_session_id_t               pdu_session_id,
+                                              pdu_session_type_t             pdu_session_type,
+                                              const up_transport_layer_info& ul_ngu_up_tnl_info,
+                                              drb_id_t                       drb_id,
+                                              qos_flow_id_t                  qos_flow_id)
 {
   auto&                                        up_mng = ue_mng.find_ue(ue_index)->get_up_resource_manager();
   up_config_update_result                      result;

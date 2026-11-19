@@ -4,7 +4,6 @@
 #pragma once
 
 #include "ocudu/adt/bf16.h"
-#include "fmt/format.h"
 #include <complex>
 
 namespace ocudu {
@@ -89,82 +88,3 @@ template <typename T>
 struct is_complex<const std::complex<T>> : std::true_type {};
 
 } // namespace ocudu
-
-namespace fmt {
-
-/// FMT formatter of cf_t type.
-template <typename ComplexType>
-struct formatter_template {
-  // Stores parsed format string.
-  memory_buffer format_buffer;
-
-  formatter_template()
-  {
-    static constexpr std::string_view DEFAULT_FORMAT =
-        (std::is_same<ComplexType, ocudu::cf_t>::value) ? "{:+f}{:+f}j" : "{:+d}{:+d}j";
-    format_buffer.append(DEFAULT_FORMAT.begin(), DEFAULT_FORMAT.end());
-  }
-
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    static constexpr std::string_view PREAMBLE_FORMAT = "{:";
-
-    // Skip if context is empty and use default format.
-    if (ctx.begin() == ctx.end()) {
-      return ctx.end();
-    }
-
-    // Store the format string.
-    format_buffer.clear();
-    format_buffer.append(PREAMBLE_FORMAT.begin(), PREAMBLE_FORMAT.end());
-    for (auto& it : ctx) {
-      format_buffer.push_back(it);
-
-      // Found the end of the context.
-      if (it == '}') {
-        // Replicate the format string for the imaginary part.
-        format_buffer.append(format_buffer.begin(), format_buffer.end());
-        format_buffer.push_back('j');
-        return &it;
-      }
-    }
-
-    // No end of context was found.
-    return ctx.end();
-  }
-
-  template <typename FormatContext>
-  auto format(ComplexType value, FormatContext& ctx) const
-  {
-    const string_view format_str = string_view(format_buffer.data(), format_buffer.size());
-    return format_to(ctx.out(), format_str, value.real(), value.imag());
-  }
-};
-
-template <>
-struct formatter<ocudu::cf_t> : public formatter_template<ocudu::cf_t> {};
-template <>
-struct formatter<ocudu::ci8_t> : public formatter_template<ocudu::ci8_t> {};
-template <>
-struct formatter<ocudu::ci16_t> : public formatter_template<ocudu::ci16_t> {};
-
-/// FMT formatter of cbf16_t type.
-template <>
-struct formatter<ocudu::cbf16_t> {
-  formatter_template<ocudu::cf_t> cf_formatter;
-
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return cf_formatter.parse(ctx);
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::cbf16_t value, FormatContext& ctx) const
-  {
-    return cf_formatter.format(ocudu::to_cf(value), ctx);
-  }
-};
-
-} // namespace fmt

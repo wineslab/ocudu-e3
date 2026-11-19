@@ -5,6 +5,7 @@
 #include "lib/e1ap/common/e1ap_asn1_converters.h"
 #include "lib/f1ap/asn1_helpers.h"
 #include "lib/ngap/ngap_asn1_converters.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cause/e1ap_cause_converters.h"
 #include "ocudu/ran/cause/f1ap_cause_converters.h"
 #include "ocudu/ran/cause/ngap_cause_converters.h"

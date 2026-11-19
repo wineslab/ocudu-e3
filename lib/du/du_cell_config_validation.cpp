@@ -3,20 +3,28 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/du/du_cell_config_validation.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/sys_info.h"
 #include "ocudu/du/du_update_config_helpers.h"
+#include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/pdcch/pdcch_candidates.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_occasions.h"
 #include "ocudu/ran/prach/prach_configuration.h"
 #include "ocudu/ran/prach/prach_frequency_mapping.h"
 #include "ocudu/ran/prach/prach_preamble_information.h"
+#include "ocudu/ran/prs/prs.h"
+#include "ocudu/ran/prs/prs_constants.h"
+#include "ocudu/ran/srs/srs_bandwidth_configuration.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
+#include "ocudu/scheduler/config/periodic_resource_sched_validator.h"
+#include "ocudu/scheduler/config/pucch_guardbands.h"
 #include "ocudu/scheduler/config/pucch_resource_generator.h"
 #include "ocudu/scheduler/config/sched_cell_config_helpers.h"
 #include "ocudu/scheduler/config/serving_cell_config.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
 #include "ocudu/scheduler/config/serving_cell_config_validator.h"
+#include "ocudu/scheduler/sched_consts.h"
 #include "ocudu/support/config/validator_helpers.h"
 
 using namespace ocudu;
@@ -244,11 +252,12 @@ static check_outcome check_rlm_config(const du_cell_config& cell_cfg)
     }
 
     if (std::holds_alternative<ssb_id_t>(rlm_res.detection_resource)) {
-      const ssb_id_t ssb_rs_id = std::get<ssb_id_t>(rlm_res.detection_resource);
-      CHECK_TRUE(std::any_of(cell_cfg.ran.ssb_cfg.beam_ids.begin(),
-                             cell_cfg.ran.ssb_cfg.beam_ids.end(),
-                             [ssb_rs_id](const uint8_t ssb_idx) { return ssb_idx == static_cast<uint8_t>(ssb_rs_id); }),
-                 "RLM resource id={} points at SSB index={}, which wasn't found in SSB configuration",
+      const ssb_id_t          ssb_rs_id = std::get<ssb_id_t>(rlm_res.detection_resource);
+      const ssb_beam_mapping& ssb_beams = cell_cfg.ran.ssb_cfg.ssb_beams;
+      CHECK_BELOW(
+          ssb_rs_id.value(), ssb_beams.get_L_max(), "SSB index of RLM resource id={}", fmt::underlying(rlm_res.res_id));
+      CHECK_TRUE(ssb_beams.is_transmitted(ssb_rs_id.value()),
+                 "RLM resource id={} points at SSB index={}, which is not transmitted",
                  fmt::underlying(rlm_res.res_id),
                  ssb_rs_id);
     }
@@ -344,9 +353,42 @@ static check_outcome check_ssb_configuration(const du_cell_config& cell_cfg)
         fmt::underlying(ssb_cfg.scs), fmt::underlying(subcarrier_spacing::kHz120), "SSB SCS must be 120kHz for FR2.");
   }
 
-  // TODO: remove this when multiple beams are supported.
-  CHECK_TRUE(ssb_cfg.ssb_bitmap.test(0) and ssb_cfg.ssb_bitmap.none(1U, ssb_cfg.ssb_bitmap.get_L_max()),
-             "Multiple beams not supported for SSB.");
+  CHECK_TRUE(not ssb_cfg.ssb_beams.empty(), "At least one SSB candidate must be transmitted.");
+
+  // SearchSpace#0 holds the Type0-PDCCH monitoring occasions of the first MAX_NOF_SS0_SSB_CANDIDATES candidates only,
+  // and SIB1 needs them for every transmitted candidate.
+  for (uint8_t ssb_idx : ssb_cfg.ssb_beams.transmitted_indexes()) {
+    CHECK_BELOW(ssb_idx, MAX_NOF_SS0_SSB_CANDIDATES, "index of a transmitted SSB candidate");
+  }
+
+  if (ssb_cfg.ssb_beams.nof_transmitted() > 1) {
+    // The SS/PBCH block associated with a detected preamble is derived from the position of its PRACH occasion in the
+    // occasion ordering of TS 38.213, Section 8.1, which requires the occasion to be identified unambiguously. The
+    // lower layers report neither the frequency-domain occasion index nor the time-domain one.
+    const rach_config_common& rach_cfg = *cell_cfg.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common;
+    const prach_configuration prach_cfg =
+        prach_configuration_get(band_helper::get_freq_range(cell_cfg.ran.dl_carrier.band),
+                                band_helper::get_duplex_mode(cell_cfg.ran.dl_carrier.band),
+                                rach_cfg.rach_cfg_generic.prach_config_index);
+    CHECK_EQ(rach_cfg.rach_cfg_generic.msg1_fdm,
+             1,
+             "Frequency multiplexed PRACH occasions are not supported with multiple SSB candidates.");
+    CHECK_EQ_OR_BELOW(prach_cfg.nof_occasions_within_slot,
+                      1,
+                      "Time multiplexed PRACH occasions are not supported with multiple SSB candidates.");
+    CHECK_EQ(fmt::underlying(rach_cfg.nof_ssb_per_ro),
+             fmt::underlying(ssb_per_rach_occasions::one),
+             "Only one SSB per RACH occasion is supported with multiple SSB candidates.");
+
+    // TODO: repeat the SI messages in the Type0-PDCCH CSS occasion of every transmitted SSB candidate, the way the SIB1
+    // scheduler does. The SI message scheduler resolves the monitoring occasions of SearchSpace#0 for SSB index 0 only.
+    if (cell_cfg.si.si_config.has_value()) {
+      const auto& pdcch_common = cell_cfg.ran.dl_cfg_common.init_dl_bwp.pdcch_common;
+      CHECK_TRUE(pdcch_common.other_si_search_space_id.value_or(pdcch_common.sib1_search_space_id) !=
+                     to_search_space_id(0),
+                 "SI messages scheduled on SearchSpace#0 are not supported with multiple SSB candidates.");
+    }
+  }
 
   // Checks that SSB does not get located outside the band.
   if (scs_common == subcarrier_spacing::kHz15) {
@@ -388,17 +430,18 @@ static check_outcome check_ssb_configuration(const du_cell_config& cell_cfg)
 
   ssb_pattern_case ssb_case = band_helper::get_ssb_pattern(cell_cfg.ran.dl_carrier.band, ssb_cfg.scs);
   const uint8_t L_max = ssb_get_L_max(ssb_cfg.scs, cell_cfg.ran.dl_carrier.arfcn_f_ref, cell_cfg.ran.dl_carrier.band);
-  CHECK_TRUE(ssb_cfg.ssb_bitmap.get_L_max() == L_max, "Mismatch between SSB bitmap size and L_max");
+  CHECK_TRUE(ssb_cfg.ssb_beams.get_L_max() == L_max, "Mismatch between the SSB beam mapping size and L_max");
 
   // (Only for Lmax = 64) It is assumed in \c inOneGroup, \c ssb-PositionsInBurst, \c ServingCellConfigCommonSIB,
   // TS 38.331 that, if a group of 8-bit bitmaps [n, n+8), with n=0, 8, 16, ...56 has non-zero bits, then these 8
   // bits are common to all non-zero 8-bit bitmaps starting with n=0, 8, 16, ...56.
   if (L_max == 64) {
+    const ssb_bitmap_t     ssb_bitmap                 = ssb_cfg.ssb_beams.get_ssb_bitmap();
     constexpr uint8_t      nof_groups_and_bits_per_gr = 8U;
     std::optional<uint8_t> first_non_zero_group;
     for (uint8_t group_idx = 0; group_idx != nof_groups_and_bits_per_gr; ++group_idx) {
       const auto group_8_bits =
-          ssb_cfg.ssb_bitmap.extract<uint8_t>(nof_groups_and_bits_per_gr * group_idx, nof_groups_and_bits_per_gr);
+          ssb_bitmap.extract<uint8_t>(nof_groups_and_bits_per_gr * group_idx, nof_groups_and_bits_per_gr);
       if (group_8_bits != 0U and not first_non_zero_group.has_value()) {
         first_non_zero_group.emplace(group_8_bits);
       }
@@ -746,6 +789,66 @@ static check_outcome check_prach_config(const du_cell_config& cell_cfg)
   return {};
 }
 
+/// Fails if the dedicated PUCCH resources overlap the SRS symbols. Warns if a manually configured SRS bandwidth
+/// overlaps with the common PUCCH resources, which the scheduler tolerates.
+static check_outcome check_srs_config(const du_cell_config& cell_cfg)
+{
+  const auto& srs_cfg = cell_cfg.ran.init_bwp.srs_cfg;
+  if (srs_cfg.srs_type_enabled == srs_type::disabled) {
+    return {};
+  }
+
+  // The dedicated PUCCH resources are placed starting from the first symbol of the slot, so their symbol budget must
+  // leave the last symbols of the slot free for the SRS. Otherwise, the PUCCH resources at the BWP edges overlap the
+  // SRS RBs, and the two are transmitted on top of each other.
+  const unsigned max_nof_pucch_symbols = config_helpers::compute_max_nof_pucch_symbols(srs_cfg).value();
+  CHECK_TRUE(cell_cfg.ran.init_bwp.pucch.resources.max_nof_symbols.value() <= max_nof_pucch_symbols,
+             "The cell PUCCH resources span up to {} symbols, which overlaps the last {} symbols of the slot reserved "
+             "for the SRS. The PUCCH resources must be capped to {} symbols",
+             cell_cfg.ran.init_bwp.pucch.resources.max_nof_symbols,
+             srs_cfg.max_nof_symbols,
+             max_nof_pucch_symbols);
+
+  if (not srs_cfg.c_srs.has_value()) {
+    return {};
+  }
+
+  const crb_interval srs_avail_crbs = compute_available_crbs_without_common_pucch(
+      cell_cfg.ran.ul_cfg_common.init_ul_bwp.generic_params.crbs,
+      cell_cfg.ran.ul_cfg_common.init_ul_bwp.pucch_cfg_common->pucch_resource_common);
+  constexpr uint8_t                      b_srs_0    = 0;
+  const std::optional<srs_configuration> srs_bw_cfg = srs_configuration_get(srs_cfg.c_srs.value(), b_srs_0);
+  ocudu_assert(srs_bw_cfg.has_value(), "Invalid SRS bandwidth configuration");
+  const crb_interval srs_crbs{srs_cfg.freq_domain_shift.value(),
+                              srs_cfg.freq_domain_shift.value() + srs_bw_cfg.value().m_srs};
+  if (not srs_avail_crbs.contains(srs_crbs)) {
+    ocudulog::fetch_basic_logger("DU-MNG").warning(
+        "The manually configured SRS bandwidth crbs={} overlaps with the common PUCCH resources; this may starve "
+        "the common PUCCH resources of RBs. Consider restricting the SRS to crbs={}",
+        srs_crbs,
+        srs_avail_crbs);
+  }
+
+  return {};
+}
+
+/// Validates the mapping of SIBs to SI messages.
+static check_outcome check_si_sched_config(const du_cell_config& cell_cfg)
+{
+  if (not cell_cfg.si.si_config.has_value()) {
+    return {};
+  }
+
+  for (const si_message_sched_info& si_msg : cell_cfg.si.si_config->si_sched_info) {
+    // An SI message carrying a warning has parameters of its own, and takes a position in the schedulingInfoList only
+    // while the warning is on air, so it is no part of the SI scheduling info.
+    const bool has_pws = std::any_of(si_msg.sib_mapping_info.begin(), si_msg.sib_mapping_info.end(), is_pws_sib);
+    CHECK_TRUE(not has_pws, "SIB6/7/8 cannot be mapped to an SI message of the SI scheduling info");
+  }
+
+  return {};
+}
+
 /// Validates NTN cell configuration parameters.
 static check_outcome check_ntn_config(const du_cell_config& cell_cfg)
 {
@@ -758,12 +861,22 @@ static check_outcome check_ntn_config(const du_cell_config& cell_cfg)
   // Validate cell_specific_koffset (required for NTN).
   if (ntn.cell_specific_koffset.has_value()) {
     CHECK_EQ_OR_ABOVE(ntn.cell_specific_koffset.value().count(), 1, "cell_specific_koffset");
-    CHECK_EQ_OR_BELOW(ntn.cell_specific_koffset.value().count(), 1023, "cell_specific_koffset");
+    CHECK_EQ_OR_BELOW(
+        ntn.cell_specific_koffset.value().count(), NTN_CELL_SPECIFIC_KOFFSET_MAX, "cell_specific_koffset");
   }
 
   if (ntn.k_mac.has_value()) {
-    CHECK_EQ_OR_ABOVE(ntn.k_mac.value(), 1, "k_mac");
-    CHECK_EQ_OR_BELOW(ntn.k_mac.value(), 512, "k_mac");
+    CHECK_EQ_OR_ABOVE(ntn.k_mac.value().count(), 1, "k_mac");
+    CHECK_EQ_OR_BELOW(ntn.k_mac.value().count(), NTN_K_MAC_MAX, "k_mac");
+  }
+
+  // ta_common and ta_common_offset are summed into the single taCommon-r17 field
+  // (see make_asn1_rrc_cell_ntn_cfg), constrained to 0..66485757, i.e. <= 270730 us.
+  // The two are bounded individually at the CLI but their sum is not.
+  if (ntn.ta_info.has_value()) {
+    const double ta_common_total = ntn.ta_info->ta_common + ntn.ta_info->ta_common_offset.value_or(0.0);
+    CHECK_EQ_OR_ABOVE(ta_common_total, 0.0, "ta_common + ta_common_offset");
+    CHECK_EQ_OR_BELOW(ta_common_total, 270730.0, "ta_common + ta_common_offset");
   }
 
   if (ntn.ntn_ul_sync_validity_dur.has_value()) {
@@ -775,6 +888,235 @@ static check_outcome check_ntn_config(const du_cell_config& cell_cfg)
   if (ntn.epoch_time.has_value()) {
     CHECK_EQ_OR_BELOW(ntn.epoch_time->sfn, 1023, "epoch_time.sfn");
     CHECK_EQ_OR_BELOW(ntn.epoch_time->subframe_number, 9, "epoch_time.subframe_number");
+  }
+
+  return {};
+}
+
+static check_outcome check_tac_list(const du_cell_config& cell_cfg)
+{
+  if (cell_cfg.tac_list.empty()) {
+    // TN cell: SIB1 broadcasts trackingAreaCode.
+    return {};
+  }
+
+  // A single-entry list carries no more than trackingAreaCode. The first entry mirrors du_cell_config::tac.
+  CHECK_EQ_OR_ABOVE(cell_cfg.tac_list.size(), 2, "TAC list size");
+  CHECK_EQ_OR_BELOW(cell_cfg.tac_list.size(), MAX_NOF_TACS_NTN, "TAC list size");
+  CHECK_EQ(cell_cfg.tac_list.front(), cell_cfg.tac, "first entry of the TAC list");
+
+  for (unsigned i = 0, e = cell_cfg.tac_list.size(); i != e; ++i) {
+    CHECK_TRUE(is_valid(cell_cfg.tac_list[i]), "Invalid TAC {} in the TAC list", cell_cfg.tac_list[i]);
+    for (unsigned j = i + 1; j != e; ++j) {
+      CHECK_NEQ(cell_cfg.tac_list[j], cell_cfg.tac_list[i], "duplicate TAC in the TAC list");
+    }
+  }
+
+  return {};
+}
+
+/// Determines whether the given value belongs to a list of valid values.
+template <typename T, size_t N>
+static bool is_one_of(unsigned value, const std::array<T, N>& valid_values)
+{
+  return std::find(valid_values.begin(), valid_values.end(), value) != valid_values.end();
+}
+
+static check_outcome check_prs_resource_set(const prs_resource_set&                       res_set,
+                                            unsigned                                      set_id,
+                                            const scs_specific_carrier&                   dl_carrier,
+                                            const std::optional<tdd_ul_dl_config_common>& tdd_cfg)
+{
+  const unsigned comb_size         = static_cast<unsigned>(res_set.comb_size);
+  const unsigned nof_symbols       = static_cast<unsigned>(res_set.nof_symbols);
+  const unsigned repetition_factor = static_cast<unsigned>(res_set.repetition_factor);
+  const unsigned time_gap          = static_cast<unsigned>(res_set.time_gap);
+  const unsigned mu                = to_numerology_value(dl_carrier.scs);
+
+  CHECK_TRUE(is_one_of(comb_size, prs_constants::VALID_COMB_SIZES),
+             "Invalid comb size ({}) of PRS resource set {}",
+             comb_size,
+             set_id);
+  CHECK_TRUE(is_one_of(nof_symbols, prs_constants::VALID_NOF_SYMBOLS),
+             "Invalid number of symbols ({}) of PRS resource set {}",
+             nof_symbols,
+             set_id);
+  CHECK_TRUE(is_one_of(repetition_factor, prs_constants::VALID_REPETITION_FACTORS),
+             "Invalid repetition factor ({}) of PRS resource set {}",
+             repetition_factor,
+             set_id);
+  CHECK_TRUE(is_one_of(time_gap, prs_constants::VALID_TIME_GAPS),
+             "Invalid time gap ({} slots) of PRS resource set {}",
+             time_gap,
+             set_id);
+  CHECK_TRUE(prs_valid_periodicity(res_set.periodicity_slots, mu),
+             "Invalid periodicity ({} slots) of PRS resource set {} for numerology {}",
+             res_set.periodicity_slots,
+             set_id,
+             mu);
+
+  // The valid combinations are given in TS 38.211, Section 7.4.1.7.3.
+  CHECK_TRUE(prs_valid_num_symbols_and_comb_size(res_set.nof_symbols, res_set.comb_size),
+             "Invalid number of symbols ({}) and comb size ({}) combination of PRS resource set {}. See TS 38.211, "
+             "Section 7.4.1.7.3",
+             nof_symbols,
+             comb_size,
+             set_id);
+
+  CHECK_TRUE(res_set.bandwidth_prbs % prs_constants::PRB_GRANULARITY == 0,
+             "Invalid bandwidth ({} PRBs) of PRS resource set {}. It must be a multiple of {}",
+             res_set.bandwidth_prbs,
+             set_id,
+             prs_constants::PRB_GRANULARITY);
+  CHECK_EQ_OR_ABOVE(
+      res_set.bandwidth_prbs, prs_constants::MIN_PRBS, "bandwidth, in PRBs, of PRS resource set {}", set_id);
+  CHECK_EQ_OR_BELOW(
+      res_set.bandwidth_prbs, prs_constants::MAX_PRBS, "bandwidth, in PRBs, of PRS resource set {}", set_id);
+  CHECK_EQ_OR_ABOVE(res_set.power_offset_db,
+                    prs_constants::MIN_POWER_OFFSET_DB,
+                    "power offset, in dB, of PRS resource set {}",
+                    set_id);
+  CHECK_EQ_OR_BELOW(res_set.power_offset_db,
+                    prs_constants::MAX_POWER_OFFSET_DB,
+                    "power offset, in dB, of PRS resource set {}",
+                    set_id);
+
+  // The start PRB of the resource set is relative to Point A, as is the offset of the DL carrier.
+  CHECK_EQ_OR_BELOW(res_set.start_prb, prs_constants::MAX_START_PRB, "start PRB of PRS resource set {}", set_id);
+  CHECK_EQ_OR_ABOVE(res_set.start_prb, dl_carrier.offset_to_carrier, "start PRB of PRS resource set {}", set_id);
+  CHECK_EQ_OR_BELOW(res_set.start_prb + res_set.bandwidth_prbs,
+                    dl_carrier.offset_to_carrier + dl_carrier.carrier_bandwidth,
+                    "last PRB of PRS resource set {}",
+                    set_id);
+
+  CHECK_BELOW(res_set.slot_offset, res_set.periodicity_slots, "slot offset of PRS resource set {}", set_id);
+
+  // As per TS 38.214, Section 5.1.6.5, all the repetitions of a PRS resource must fit within one period.
+  CHECK_EQ_OR_BELOW(repetition_factor * time_gap,
+                    res_set.periodicity_slots,
+                    "product of the repetition factor and the time gap, in slots, of PRS resource set {}",
+                    set_id);
+
+  // [Implementation-defined] Only PRS periodicities that are a multiple of the TDD period are supported, so that the
+  // PRS occasions always fall in the same slots of the TDD pattern.
+  if (tdd_cfg.has_value()) {
+    const unsigned tdd_period_slots = nof_slots_per_tdd_period(tdd_cfg.value());
+    CHECK_TRUE(res_set.periodicity_slots % tdd_period_slots == 0,
+               "Invalid periodicity ({} slots) of PRS resource set {}. In TDD mode, it must be a multiple of the TDD "
+               "period ({} slots)",
+               res_set.periodicity_slots,
+               set_id,
+               tdd_period_slots);
+  }
+
+  if (res_set.muting_option1.has_value()) {
+    const prs_muting_option1& muting_opt1           = res_set.muting_option1.value();
+    const unsigned            muting_pattern_size   = muting_opt1.muting_pattern.size();
+    const unsigned            muting_bit_rep_factor = static_cast<unsigned>(muting_opt1.muting_bit_repetition_factor);
+
+    CHECK_TRUE(is_one_of(muting_pattern_size, prs_constants::VALID_MUTING_PATTERN_SIZES),
+               "Invalid muting pattern size ({} bits) of Muting Option 1 of PRS resource set {}",
+               muting_pattern_size,
+               set_id);
+
+    // As per TS 38.214, Section 5.1.6.5, the UE does not expect the product of the periodicity, the muting bit
+    // repetition factor and the muting pattern size of Muting Option 1 to exceed 2^mu x 10240.
+    CHECK_EQ_OR_BELOW(res_set.periodicity_slots * muting_bit_rep_factor * muting_pattern_size,
+                      (1U << mu) * prs_constants::MAX_MUTING_OPTION1_PRODUCT_NUMEROLOGY_0,
+                      "product of the periodicity, the muting bit repetition factor and the muting pattern size of "
+                      "Muting Option 1 of PRS resource set {}",
+                      set_id);
+
+    CHECK_TRUE(res_set.muting_option1->muting_pattern.any(),
+               "Every instance of PRS resource set {} is disabled by Muting Option 1",
+               set_id);
+  }
+
+  if (res_set.muting_option2.has_value()) {
+    const unsigned muting_pattern_size = res_set.muting_option2.value().muting_pattern.size();
+
+    CHECK_EQ(muting_pattern_size,
+             repetition_factor,
+             "muting pattern size of Muting Option 2 of PRS resource set {}. It must be equal to the resource "
+             "repetition factor",
+             set_id);
+
+    CHECK_TRUE(res_set.muting_option2->muting_pattern.any(),
+               "Every repetition in PRS resource set {} is disabled by Muting Option 2.",
+               set_id);
+  }
+
+  CHECK_TRUE(not res_set.resources.empty(), "No PRS resource configured in PRS resource set {}", set_id);
+  CHECK_EQ_OR_BELOW(res_set.resources.size(),
+                    prs_constants::MAX_NOF_RESOURCES_PER_SET,
+                    "number of PRS resources of PRS resource set {}",
+                    set_id);
+
+  for (unsigned res_id = 0, nof_res = res_set.resources.size(); res_id != nof_res; ++res_id) {
+    const prs_resource& res = res_set.resources[res_id];
+
+    CHECK_EQ_OR_BELOW(res.sequence_id,
+                      prs_constants::MAX_SEQUENCE_ID,
+                      "sequence ID of PRS resource {} of resource set {}",
+                      res_id,
+                      set_id);
+    CHECK_BELOW(res.re_offset, comb_size, "RE offset of PRS resource {} of resource set {}", res_id, set_id);
+    CHECK_EQ_OR_BELOW(res.slot_offset,
+                      prs_constants::MAX_RES_SLOT_OFFSET,
+                      "slot offset of PRS resource {} of resource set {}",
+                      res_id,
+                      set_id);
+    CHECK_EQ_OR_BELOW(res.symbol_offset + nof_symbols,
+                      get_nsymb_per_slot(cyclic_prefix::NORMAL),
+                      "last symbol of PRS resource {} of resource set {}",
+                      res_id,
+                      set_id);
+
+    // Slot offset of the last repetition of the resource, relative to the beginning of the period.
+    const unsigned last_rep_slot_offset = res_set.slot_offset + res.slot_offset + (repetition_factor - 1) * time_gap;
+    CHECK_BELOW(last_rep_slot_offset,
+                res_set.periodicity_slots,
+                "slot offset of the last repetition of PRS resource {} of resource set {}",
+                res_id,
+                set_id);
+  }
+
+  // Two resources of the same set that share the slot offset, the symbol offset and the comb offset are mapped onto
+  // exactly the same REs, as all the resources of a set have the same comb size and number of symbols.
+  //
+  // Note that resources with different symbol offsets are not necessarily in conflict, even if their symbols overlap:
+  // the comb offset hops with the symbol index within the resource, as per TS 38.211, Table 7.4.1.7.3-1.
+  CHECK_TRUE(has_unique_ids(res_set.resources,
+                            [](const prs_resource& res) {
+                              return std::make_tuple(res.slot_offset, res.symbol_offset, res.re_offset);
+                            }),
+             "Two PRS resources of resource set {} share the slot offset, the symbol offset and the RE offset, so they "
+             "are mapped onto the same REs",
+             set_id);
+
+  return {};
+}
+
+static check_outcome check_prs_config(const du_cell_config& cell_cfg)
+{
+  const prs_config& prs_cfg = cell_cfg.ran.prs_cfg;
+
+  // DL-PRS is disabled when no resource set is configured.
+  if (prs_cfg.resource_sets.empty()) {
+    return {};
+  }
+
+  CHECK_EQ_OR_BELOW(prs_cfg.resource_sets.size(), prs_constants::MAX_NOF_RESOURCE_SETS, "number of PRS resource sets");
+
+  // DL-PRS is transmitted in the DL carrier of the cell, with the SCS common.
+  const subcarrier_spacing scs        = cell_cfg.ran.dl_cfg_common.init_dl_bwp.generic_params.scs;
+  const auto&              carriers   = cell_cfg.ran.dl_cfg_common.freq_info_dl.scs_carrier_list;
+  const auto               dl_carrier = std::find_if(
+      carriers.begin(), carriers.end(), [scs](const scs_specific_carrier& carrier) { return carrier.scs == scs; });
+  CHECK_TRUE(dl_carrier != carriers.end(), "No DL carrier configured for the SCS common, required to transmit DL-PRS");
+
+  for (unsigned set_id = 0, nof_sets = prs_cfg.resource_sets.size(); set_id != nof_sets; ++set_id) {
+    HANDLE_ERROR(check_prs_resource_set(prs_cfg.resource_sets[set_id], set_id, *dl_carrier, cell_cfg.ran.tdd_cfg));
   }
 
   return {};
@@ -794,12 +1136,17 @@ check_outcome odu::is_du_cell_config_valid(const du_cell_config& cell_cfg)
   HANDLE_ERROR(config_helpers::pucch_parameters_validator(
       cell_cfg.ran.init_bwp.pucch.resources, cell_cfg.ran.dl_cfg_common.init_dl_bwp.generic_params.crbs.length()));
   HANDLE_ERROR(check_prach_config(cell_cfg));
+  HANDLE_ERROR(check_srs_config(cell_cfg));
   const serving_cell_config ue_serv_cell_cfg = config_helpers::make_default_ue_cell_config(cell_cfg.ran).serv_cell_cfg;
   HANDLE_ERROR(
       config_validators::validate_csi_meas_cfg(ue_serv_cell_cfg, cell_cfg.ran.tdd_cfg, cell_cfg.ran.ul_cfg_common));
   HANDLE_ERROR(check_dl_config_dedicated(cell_cfg));
   HANDLE_ERROR(check_ul_config_dedicated(cell_cfg));
+  HANDLE_ERROR(check_si_sched_config(cell_cfg));
   HANDLE_ERROR(check_ntn_config(cell_cfg));
+  HANDLE_ERROR(check_tac_list(cell_cfg));
+  HANDLE_ERROR(check_prs_config(cell_cfg));
+  HANDLE_ERROR(check_periodic_resource_collisions(cell_cfg.ran));
   // TODO: Remaining.
   return {};
 }

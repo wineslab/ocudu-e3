@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "upper_phy_ssb_example.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/phy/support/prach_buffer.h"
 #include "ocudu/phy/support/prach_buffer_context.h"
@@ -16,6 +17,7 @@
 #include "ocudu/phy/upper/channel_processors/ssb/ssb_processor.h"
 #include "ocudu/phy/upper/sequence_generators/sequence_generator_factories.h"
 #include "ocudu/phy/upper/upper_phy_timing_context.h"
+#include "ocudu/ran/beamforming/beam_identifier_helpers.h"
 #include "ocudu/ran/prach/prach_constants.h"
 #include "ocudu/ran/precoding/precoding_codebooks.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
@@ -195,17 +197,17 @@ public:
         }
 
         ssb_processor::pdu_t pdu;
-        pdu.slot              = context.slot.without_hyper_sfn();
-        pdu.phys_cell_id      = ssb_config.phys_cell_id;
-        pdu.beta_pss          = ssb_config.beta_pss_dB;
-        pdu.ssb_idx           = ssb_idx;
-        pdu.L_max             = ssb_config.L_max;
-        pdu.common_scs        = to_subcarrier_spacing(ssb_config.pattern_case);
-        pdu.subcarrier_offset = ssb_config.subcarrier_offset;
-        pdu.offset_to_pointA  = ssb_config.offset_pointA;
-        pdu.pattern_case      = ssb_config.pattern_case;
-        pdu.mib_payload       = {};
-        pdu.ports             = {0};
+        pdu.slot                      = context.slot.without_hyper_sfn();
+        pdu.phys_cell_id              = ssb_config.phys_cell_id;
+        pdu.beta_pss                  = ssb_config.beta_pss_dB;
+        pdu.ssb_idx                   = ssb_idx;
+        pdu.L_max                     = ssb_config.L_max;
+        pdu.common_scs                = to_subcarrier_spacing(ssb_config.pattern_case);
+        pdu.subcarrier_offset         = ssb_config.subcarrier_offset;
+        pdu.offset_to_pointA          = ssb_config.offset_pointA;
+        pdu.pattern_case              = ssb_config.pattern_case;
+        pdu.mib_payload               = {};
+        pdu.precoding_and_beamforming = precoding_beamforming_configuration(1, 1, 1, MAX_NOF_PRBS);
 
         ssb->process(rg.get().get_writer(), pdu);
         logger.info("SSB: phys_cell_id={}; ssb_idx={};", pdu.phys_cell_id, pdu.ssb_idx);
@@ -237,7 +239,8 @@ public:
       re_pattern grid_allocation(0, nof_subcs / NOF_SUBCARRIERS_PER_RB, 1, ~re_prb_mask(), ~symbol_slot_mask());
 
       // Map the data symbols to the grid.
-      mapper->map(rg.get_writer(), data_symbols, grid_allocation, precoding_config);
+      mapper->map(
+          rg.get_writer(), data_symbols, grid_allocation, to_precoding_beamforming_configuration(precoding_config));
     }
 
     resource_grid_context rg_context;
@@ -363,9 +366,9 @@ std::unique_ptr<upper_phy_ssb_example> ocudu::upper_phy_ssb_example::create(cons
 
     for (unsigned sector_id = 0; sector_id != nof_sectors; ++sector_id) {
       for (unsigned slot_id = 0; slot_id != nof_slots; ++slot_id) {
-        dl_grids.push_back(rg_factory->create(config.max_nof_ports, MAX_NSYMB_PER_SLOT, nof_subcs));
+        dl_grids.push_back(rg_factory->create(config.nof_tx_beams, MAX_NSYMB_PER_SLOT, nof_subcs));
         ASSERT_FACTORY(dl_grids.back());
-        ul_grids.push_back(rg_factory->create(config.max_nof_ports, MAX_NSYMB_PER_SLOT, nof_subcs));
+        ul_grids.push_back(rg_factory->create(config.nof_rx_ports, MAX_NSYMB_PER_SLOT, nof_subcs));
         ASSERT_FACTORY(ul_grids.back());
       }
     }
@@ -400,5 +403,5 @@ std::unique_ptr<upper_phy_ssb_example> ocudu::upper_phy_ssb_example::create(cons
                                                 config.enable_prach_processing,
                                                 config.data_modulation,
                                                 nof_subcs,
-                                                config.max_nof_ports);
+                                                config.nof_rx_ports);
 }

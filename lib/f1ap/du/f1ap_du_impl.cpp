@@ -13,13 +13,17 @@
 #include "procedures/f1ap_du_gnbdu_config_update_procedure.h"
 #include "procedures/f1ap_du_initiated_reset_procedure.h"
 #include "procedures/f1ap_du_paging_procedure.h"
+#include "procedures/f1ap_du_ref_time_info_report_procedure.h"
 #include "procedures/f1ap_du_removal_procedure.h"
 #include "procedures/f1ap_du_reset_procedure.h"
 #include "procedures/f1ap_du_setup_procedure.h"
+#include "procedures/f1ap_du_ue_context_modification_procedure.h"
 #include "procedures/f1ap_du_ue_context_release_procedure.h"
 #include "procedures/f1ap_du_ue_context_setup_procedure.h"
+#include "procedures/f1ap_du_write_replace_warning_procedure.h"
 #include "procedures/gnb_cu_configuration_update_procedure.h"
 #include "ue_context/f1ap_du_ue_config_update.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/f1ap/f1ap_message.h"
@@ -57,11 +61,13 @@ f1ap_du_impl::f1ap_du_impl(f1c_connection_client&   f1c_client_handler_,
                            task_executor&           ctrl_exec_,
                            f1ap_ue_executor_mapper& ue_exec_mapper_,
                            f1ap_du_paging_notifier& paging_notifier_,
+                           f1ap_du_pws_notifier&    pws_notifier_,
                            timer_manager&           timers_) :
   logger(ocudulog::fetch_basic_logger("DU-F1")),
   ctrl_exec(ctrl_exec_),
   du_mng(du_mng_),
   paging_notifier(paging_notifier_),
+  pws_notifier(pws_notifier_),
   timers(timers_),
   connection_handler(f1c_client_handler_, *this, du_mng, ctxt, ctrl_exec),
   ues(du_mng, ctrl_exec, ue_exec_mapper_, timers_),
@@ -80,6 +86,10 @@ bool f1ap_du_impl::connect_to_cu_cp()
     return false;
   }
 
+  // Reset Reference Time reporting procedure. It holds a reference to the previous Tx PDU notifier, which is about
+  // to be destroyed, and its periodic reporting (if any) belongs to the previous CU-CP association.
+  ref_time_proc.reset();
+
   if (logger.info.enabled()) {
     // Decorate notifier with logging, if the logger is enabled.
     tx_pdu_notifier.reset(new tx_pdu_notifier_with_logging(*this, std::move(pdu_notifier)));
@@ -95,6 +105,9 @@ bool f1ap_du_impl::connect_to_cu_cp()
 
 async_task<void> f1ap_du_impl::disconnect_from_cu_cp()
 {
+  // Stop Reference Time reporting procedure; it is tied to the CU-CP association being torn down.
+  ref_time_proc.reset();
+
   return connection_handler.handle_tnl_association_removal();
 }
 
@@ -105,6 +118,9 @@ async_task<f1_setup_result> f1ap_du_impl::handle_f1_setup_request(const f1_setup
 
 async_task<void> f1ap_du_impl::handle_f1_removal_request()
 {
+  // Stop Reference Time reporting procedure; it is tied to the CU-CP association being removed.
+  ref_time_proc.reset();
+
   return launch_async<f1ap_du_removal_procedure>(connection_handler, *tx_pdu_notifier, *events, ctxt);
 }
 
@@ -125,7 +141,7 @@ f1ap_ue_creation_response f1ap_du_impl::handle_ue_creation_request(const f1ap_ue
   if (resp.result) {
     logger.info("{}: F1 UE context created successfully.", ues[msg.ue_index].context);
   } else {
-    logger.warning("ue={} crnti={}: F1 UE context failed to be created.", fmt::underlying(msg.ue_index), msg.c_rnti);
+    logger.warning("ue={} crnti={}: F1 UE context failed to be created.", msg.ue_index, msg.c_rnti);
   }
   return resp;
 }
@@ -216,7 +232,8 @@ void f1ap_du_impl::handle_ue_context_modification_request(const asn1::f1ap::ue_c
     return;
   }
 
-  ue->handle_ue_context_modification_request(msg, ctxt);
+  du_mng.get_ue_handler(ue->context.ue_index)
+      .schedule_async_task(launch_async<f1ap_du_ue_context_modification_procedure>(msg, *ue, ctxt));
 }
 
 void f1ap_du_impl::handle_dl_rrc_message_transfer(const asn1::f1ap::dl_rrc_msg_transfer_s& msg)
@@ -296,8 +313,7 @@ void f1ap_du_impl::handle_ue_context_release_request(const f1ap_ue_context_relea
 {
   f1ap_du_ue* ue = ues.find(request.ue_index);
   if (ue == nullptr) {
-    logger.error("ue={}: Skipping UEContextReleaseRequest transmission. Cause: UE not found",
-                 fmt::underlying(request.ue_index));
+    logger.error("ue={}: Skipping UEContextReleaseRequest transmission. Cause: UE not found", request.ue_index);
     return;
   }
   if (ue->context.gnb_cu_ue_f1ap_id == gnb_cu_ue_f1ap_id_t::invalid) {
@@ -322,8 +338,8 @@ void f1ap_du_impl::handle_ue_context_release_request(const f1ap_ue_context_relea
   msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_UE_CONTEXT_RELEASE_REQUEST);
   auto& rel_req = msg.pdu.init_msg().value.ue_context_release_request();
 
-  rel_req->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(ue->context.gnb_du_ue_f1ap_id);
-  rel_req->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(ue->context.gnb_cu_ue_f1ap_id);
+  rel_req->gnb_du_ue_f1ap_id = to_underlying(ue->context.gnb_du_ue_f1ap_id);
+  rel_req->gnb_cu_ue_f1ap_id = to_underlying(ue->context.gnb_cu_ue_f1ap_id);
 
   // Set F1AP cause.
   using cause_type = f1ap_ue_context_release_request::cause_type;
@@ -422,14 +438,23 @@ void f1ap_du_impl::handle_initiating_message(const init_msg_s& msg)
     case msg_types::paging:
       handle_paging_request(msg.value.paging());
       break;
+    case msg_types::write_replace_warning_request:
+      handle_write_replace_warning_request(msg.value.write_replace_warning_request());
+      break;
     case msg_types::positioning_meas_request:
       handle_positioning_measurement_request(msg.value.positioning_meas_request());
       break;
     case msg_types::trp_info_request:
       handle_trp_information_request(msg.value.trp_info_request());
       break;
+    case msg_types::e_c_id_meas_initiation_request:
+      handle_e_cid_measurement_initiation_request(msg.value.e_c_id_meas_initiation_request());
+      break;
     case msg_types::positioning_info_request:
       handle_positioning_information_request(msg.value.positioning_info_request());
+      break;
+    case msg_types::ref_time_info_report_ctrl:
+      handle_ref_time_info_report_ctrl(msg.value.ref_time_info_report_ctrl());
       break;
     default:
       logger.error("Initiating message of type {} is not supported", msg.value.type().to_string());
@@ -519,11 +544,11 @@ void f1ap_du_impl::send_error_indication(const asn1::f1ap::cause_c&         caus
   // the gNB-CU UE F1AP ID IE and gNBDU UE F1AP ID IE shall be included in the ERROR INDICATION message.
   err_ind->gnb_cu_ue_f1ap_id_present = cu_ue_id.has_value();
   if (err_ind->gnb_cu_ue_f1ap_id_present) {
-    err_ind->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(*cu_ue_id);
+    err_ind->gnb_cu_ue_f1ap_id = to_underlying(*cu_ue_id);
   }
   err_ind->gnb_du_ue_f1ap_id_present = du_ue_id.has_value();
   if (err_ind->gnb_du_ue_f1ap_id_present) {
-    err_ind->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(*du_ue_id);
+    err_ind->gnb_du_ue_f1ap_id = to_underlying(*du_ue_id);
   }
 
   // Send message to CU.
@@ -538,6 +563,12 @@ void f1ap_du_impl::handle_paging_request(const asn1::f1ap::paging_s& msg)
     cause.set_misc().value = asn1::f1ap::cause_misc_opts::unspecified;
     send_error_indication(cause, std::nullopt, std::nullopt, std::nullopt);
   }
+}
+
+void f1ap_du_impl::handle_write_replace_warning_request(const write_replace_warning_request_s& msg)
+{
+  du_mng.schedule_async_task(
+      launch_async<f1ap_du_write_replace_warning_procedure>(msg, ctxt, pws_notifier, *tx_pdu_notifier));
 }
 
 void f1ap_du_impl::handle_positioning_measurement_request(const positioning_meas_request_s& msg)
@@ -566,6 +597,27 @@ void f1ap_du_impl::handle_positioning_information_request(const asn1::f1ap::posi
   du_mng.get_ue_handler(ue->context.ue_index)
       .schedule_async_task(
           launch_async<f1ap_du_positioning_information_exchange_procedure>(msg, du_mng.get_positioning_handler(), *ue));
+}
+
+void f1ap_du_impl::handle_e_cid_measurement_initiation_request(const asn1::f1ap::e_c_id_meas_initiation_request_s& msg)
+{
+  using namespace asn1::f1ap;
+
+  logger.info("du_ue={}: Declining ECIDMeasurementInitiationRequest. Cause: The gNB-DU does not measure the E-CID "
+              "quantities",
+              msg->gnb_du_ue_f1ap_id);
+
+  f1ap_message f1ap_msg;
+  f1ap_msg.pdu.set_unsuccessful_outcome().load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_INITIATION);
+  e_c_id_meas_initiation_fail_s& fail = f1ap_msg.pdu.unsuccessful_outcome().value.e_c_id_meas_initiation_fail();
+
+  fail->gnb_cu_ue_f1ap_id               = msg->gnb_cu_ue_f1ap_id;
+  fail->gnb_du_ue_f1ap_id               = msg->gnb_du_ue_f1ap_id;
+  fail->lmf_ue_meas_id                  = msg->lmf_ue_meas_id;
+  fail->ran_ue_meas_id                  = msg->ran_ue_meas_id;
+  fail->cause.set_radio_network().value = cause_radio_network_opts::meas_not_supported_for_the_obj;
+
+  tx_pdu_notifier->on_new_message(f1ap_msg);
 }
 
 std::optional<gnb_cu_ue_f1ap_id_t> f1ap_du_impl::get_gnb_cu_ue_f1ap_id(const du_ue_index_t& ue_index) const
@@ -630,7 +682,7 @@ void f1ap_du_impl::handle_access_success(const f1ap_access_success_event& msg)
 {
   f1ap_du_ue* ue = ues.find(msg.ue_index);
   if (ue == nullptr) {
-    logger.error("ue={}: Skipping AccessSuccess transmission. Cause: UE not found", fmt::underlying(msg.ue_index));
+    logger.error("ue={}: Skipping AccessSuccess transmission. Cause: UE not found", msg.ue_index);
     return;
   }
   if (ue->context.gnb_cu_ue_f1ap_id == gnb_cu_ue_f1ap_id_t::invalid) {
@@ -644,8 +696,8 @@ void f1ap_du_impl::handle_access_success(const f1ap_access_success_event& msg)
   f1ap_msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_ACCESS_SUCCESS);
   auto& access_succ = f1ap_msg.pdu.init_msg().value.access_success();
 
-  access_succ->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(ue->context.gnb_du_ue_f1ap_id);
-  access_succ->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(ue->context.gnb_cu_ue_f1ap_id);
+  access_succ->gnb_du_ue_f1ap_id = to_underlying(ue->context.gnb_du_ue_f1ap_id);
+  access_succ->gnb_cu_ue_f1ap_id = to_underlying(ue->context.gnb_cu_ue_f1ap_id);
   access_succ->nr_cgi            = cgi_to_asn1(msg.cgi);
 
   ue->f1ap_msg_notifier.on_new_message(f1ap_msg);
@@ -671,4 +723,13 @@ void f1ap_du_impl::log_pdu(bool is_rx, const f1ap_message& msg)
 
   // Log PDU.
   log_f1ap_pdu(logger, is_rx, ctxt.du_id, ue_idx, msg, logger.debug.enabled());
+}
+
+void f1ap_du_impl::handle_ref_time_info_report_ctrl(const asn1::f1ap::ref_time_info_report_ctrl_s& msg)
+{
+  if (ref_time_proc == nullptr) {
+    ref_time_proc = std::make_unique<f1ap_du_ref_time_info_report_procedure>(
+        du_mng.get_time_provider(), *tx_pdu_notifier, du_mng.get_timer_factory(), subcarrier_spacing::kHz15);
+  }
+  ref_time_proc->handle_control(msg);
 }

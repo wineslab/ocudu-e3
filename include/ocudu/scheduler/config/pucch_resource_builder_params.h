@@ -256,17 +256,6 @@ struct pucch_resource_builder_params {
   pucch_res_id_t harq_res_id(pucch_resource_set_config_id res_set_cfg_id, unsigned pri) const
   {
     static_assert(ResourceSetId == 0 or ResourceSetId == 1, "Only Resource Sets ID 0 and 1 are supported");
-    if constexpr (ResourceSetId == 0) {
-      ocudu_assert(res_set_cfg_id.value() < nof_cell_res_set_configs,
-                   "Resource set config index={} exceeds configured number of resource set configs={}",
-                   res_set_cfg_id.value(),
-                   nof_cell_res_set_configs);
-      ocudu_assert(pri < res_set_size.value(),
-                   "Resource index={} exceeds configured resource set size={}",
-                   pri,
-                   res_set_size.value());
-      return pucch_res_id_t::make_ded(res_set_cfg_id.value() * res_set_size.value() + pri, pri);
-    }
     ocudu_assert(res_set_cfg_id.value() < nof_cell_res_set_configs,
                  "Resource set config index={} exceeds configured number of resource set configs={}",
                  res_set_cfg_id.value(),
@@ -275,6 +264,9 @@ struct pucch_resource_builder_params {
                  "Resource index={} exceeds configured resource set size={}",
                  pri,
                  res_set_size.value());
+    if constexpr (ResourceSetId == 0) {
+      return pucch_res_id_t::make_ded(res_set_cfg_id.value() * res_set_size.value() + pri, pri);
+    }
     return pucch_res_id_t::make_ded(nof_cell_res_set_configs * res_set_size.value() + nof_cell_sr_resources +
                                         res_set_cfg_id.value() * res_set_size.value() + pri,
                                     res_set_size.value() + nof_sr_res_per_ue + pri);
@@ -330,7 +322,8 @@ struct pucch_resource_builder_params {
   /// \return The ID of the PUCCH resource.
   pucch_res_id_t csi_f0_res_id(pucch_csi_resource_id csi_res_id) const
   {
-    ocudu_assert(format_01() == pucch_format::FORMAT_0 and format_234() == pucch_format::FORMAT_2,
+    ocudu_assert(nof_cell_csi_resources != 0 and format_01() == pucch_format::FORMAT_0 and
+                     format_234() == pucch_format::FORMAT_2,
                  "CSI_F0 resource is only present in the F0+F2 case");
     return pucch_res_id_t::make_ded(nof_cell_res_set_configs * res_set_size.value() + nof_cell_sr_resources +
                                         nof_cell_res_set_configs * res_set_size.value() + nof_cell_csi_resources +
@@ -380,7 +373,8 @@ struct pucch_resource_builder_params {
     }
 
     const auto& f1_params = std::get<pucch_f1_params>(f0_or_f1_params);
-    return to_uint(f1_params.nof_cyc_shifts) * (f1_params.occ_supported ? pucch_constants::f1::NOF_TD_OCC : 1U);
+    return to_uint(f1_params.nof_cyc_shifts) *
+           (f1_params.occ_supported ? format1_nof_td_occs(f1_params.nof_syms, f1_params.intraslot_freq_hopping) : 1U);
   }
   /// Get the configured maximum number of Format 2, 3 or 4 resources to be multiplexed over the same PRBs and symbols.
   unsigned mux_capacity_234() const
@@ -452,5 +446,30 @@ struct pucch_resource_builder_params {
                                          f4_params.occ_length);
   }
 };
+
+namespace pucch_helper {
+
+/// Cap maximum UE-dedicated PUCCH OFDM symbols.
+///
+/// This is useful for limiting the number of symbols used by the PUCCH to avoid conflicts with other uplink
+/// transmissions, such as SRS.
+inline void cap_pucch_symbols(pucch_resource_builder_params& user_params, unsigned max_nof_pucch_syms)
+{
+  user_params.max_nof_symbols = max_nof_pucch_syms;
+
+  if (std::holds_alternative<pucch_f1_params>(user_params.f0_or_f1_params)) {
+    auto& f1_params    = std::get<pucch_f1_params>(user_params.f0_or_f1_params);
+    f1_params.nof_syms = std::min(max_nof_pucch_syms, f1_params.nof_syms.value());
+  }
+  if (std::holds_alternative<pucch_f3_params>(user_params.f2_or_f3_or_f4_params)) {
+    auto& f3_params    = std::get<pucch_f3_params>(user_params.f2_or_f3_or_f4_params);
+    f3_params.nof_syms = std::min(max_nof_pucch_syms, f3_params.nof_syms.value());
+  } else if (std::holds_alternative<pucch_f4_params>(user_params.f2_or_f3_or_f4_params)) {
+    auto& f4_params    = std::get<pucch_f4_params>(user_params.f2_or_f3_or_f4_params);
+    f4_params.nof_syms = std::min(max_nof_pucch_syms, f4_params.nof_syms.value());
+  }
+}
+
+} // namespace pucch_helper
 
 } // namespace ocudu

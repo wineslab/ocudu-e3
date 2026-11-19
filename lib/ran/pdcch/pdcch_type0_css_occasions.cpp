@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/pdcch/pdcch_type0_css_occasions.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

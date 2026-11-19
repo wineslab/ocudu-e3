@@ -5,11 +5,14 @@
 #include "du_low_config_translator.h"
 #include "apps/services/worker_manager/worker_manager_config.h"
 #include "du_low_config.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/upper/channel_coding/ldpc/ldpc.h"
 #include "ocudu/phy/upper/upper_phy_factories.h"
 #include "ocudu/ran/duplex_mode.h"
 #include "ocudu/ran/prach/prach_configuration.h"
 #include "ocudu/ran/pusch/pusch_constants.h"
+#include "ocudu/support/cpu_architecture_info.h"
+#include <cmath>
 
 using namespace ocudu;
 
@@ -36,13 +39,21 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
   upper_phy_factory_config.enable_metrics                   = du_low.metrics_cfg.enable_du_low;
   upper_phy_factory_config.pusch_sinr_calc_method =
       channel_state_information::sinr_type_from_string(du_low.expert_phy_cfg.pusch_sinr_calc_method);
-  upper_phy_factory_config.rx_symbol_printer_filename = du_low.loggers.phy_rx_symbols_filename;
-  upper_phy_factory_config.rx_symbol_printer_port     = du_low.loggers.phy_rx_symbols_port;
-  upper_phy_factory_config.rx_symbol_printer_prach    = du_low.loggers.phy_rx_symbols_prach;
+  upper_phy_factory_config.rx_symbol_printer.filename = du_low.loggers.phy_rx_symbol_printer.filename;
+  upper_phy_factory_config.rx_symbol_printer.ul_ports = {0, max_nof_rx_antennas};
+  upper_phy_factory_config.rx_symbol_printer.triggers.prach_threshold_rssi_dB =
+      du_low.loggers.phy_rx_symbol_printer.triggers.prach_threshold_rssi_dB;
+  upper_phy_factory_config.rx_symbol_printer.triggers.pusch_on_ko =
+      du_low.loggers.phy_rx_symbol_printer.triggers.pusch_on_ko;
+  upper_phy_factory_config.rx_symbol_printer.triggers.pusch_threshold_sinr_dB =
+      du_low.loggers.phy_rx_symbol_printer.triggers.pusch_threshold_sinr_dB;
+  upper_phy_factory_config.rx_symbol_printer.triggers.pusch_threshold_iter =
+      du_low.loggers.phy_rx_symbol_printer.triggers.pusch_threshold_iter;
   upper_phy_factory_config.ldpc_encoder_type          = "auto";
   upper_phy_factory_config.ldpc_decoder_type          = "auto";
   upper_phy_factory_config.ldpc_rate_dematcher_type   = "auto";
   upper_phy_factory_config.crc_calculator_type        = "auto";
+  upper_phy_factory_config.prach_th_correction_factor = du_low.expert_phy_cfg.prach_th_correction_factor;
   upper_phy_factory_config.pusch_channel_estimator_fd_strategy =
       du_low.expert_phy_cfg.pusch_channel_estimator_fd_strategy;
   upper_phy_factory_config.pusch_channel_estimator_td_strategy =
@@ -57,7 +68,10 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
   upper_phy_factory_config.ul_bw_rb                          = max_ul_bw_rb;
   upper_phy_factory_config.pusch_max_nof_layers              = pusch_max_nof_layers;
   upper_phy_factory_config.enable_metrics                    = du_low.metrics_cfg.enable_du_low;
-  upper_phy_factory_config.ldpc_decoder_type                 = "auto";
+  if (du_low.loggers.phy_rx_symbol_printer.port.has_value()) {
+    upper_phy_factory_config.rx_symbol_printer.ul_ports.set(*du_low.loggers.phy_rx_symbol_printer.port,
+                                                            *du_low.loggers.phy_rx_symbol_printer.port + 1);
+  }
   // One TDD pattern per upper PHY factory, like the PHY tap below: the first cell's.
   upper_phy_factory_config.tdd_pattern = cells[0].tdd_pattern;
   if (du_low.expert_phy_cfg.enable_phy_tap) {
@@ -66,6 +80,10 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
       upper_phy_factory_config.phy_tap_tdd_pattern = cells[0].tdd_pattern;
     }
   }
+  upper_phy_factory_config.doa_enabled = du_low.expert_phy_cfg.doa_enabled;
+  upper_phy_factory_config.doa_antenna_distance_over_wavelength =
+      du_low.expert_phy_cfg.doa_antenna_distance_over_wavelength;
+  upper_phy_factory_config.doa_cross_polarized = du_low.expert_phy_cfg.doa_cross_polarized;
 
   // The flexible PDSCH processor implementation will be used by default.
   const auto& upper_phy_threads_cfg = du_low.expert_execution_cfg.threads;
@@ -114,6 +132,9 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
     // In a NTN cell, extend the HARQ process lifetime by the cell-specific-k-offset.
     if (cell.ntn_cs_koffset) {
       expire_pusch_harq_timeout_slots += cell.ntn_cs_koffset->count() * nof_slots_per_subframe;
+    }
+    if (cell.ntn_k_mac) {
+      expire_pusch_harq_timeout_slots += cell.ntn_k_mac->count() * nof_slots_per_subframe;
     }
 
     // Calculate the number of UL slots in a frame and in a PUSCH HARQ process lifetime.
@@ -169,7 +190,8 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
                  to_string(cell.freq_range),
                  to_string(cell.duplex));
 
-    upper_phy_cell.nof_tx_ports               = cell.nof_tx_antennas;
+    upper_phy_cell.sector                     = i;
+    upper_phy_cell.tx_ant_topology            = cell.tx_ant_topology;
     upper_phy_cell.nof_rx_ports               = cell.nof_rx_antennas;
     upper_phy_cell.nof_dl_rg                  = dl_pipeline_depth + 2;
     upper_phy_cell.nof_ul_rg                  = ul_pipeline_depth;
@@ -204,26 +226,58 @@ void ocudu::generate_o_du_low_config(odu::o_du_low_config&                      
   out_config.du_low_cfg = generate_du_low_config(du_low_unit_cfg, cells);
 }
 
-void ocudu::fill_du_low_worker_manager_config(worker_manager_config&    config,
-                                              const du_low_unit_config& unit_cfg,
-                                              unsigned                  is_blocking_mode_active,
-                                              span<const unsigned>      nof_dl_antennas,
-                                              span<const unsigned>      nof_ul_antennas)
+/// \brief Derives the required PUSCH and SRS concurrency level from the per-cell parameters.
+///
+/// Applies the formula: 12.5 cores for every 100MHz, layer and cell, scaled by the cell's UL slot ratio, aggregated
+/// across all cells, since PUSCH and SRS executors are shared globally rather than partitioned per cell. Unspecified
+/// fields use sensible defaults (1 antenna, 100MHz, 1 layer, FDD i.e. UL ratio of 1).
+static unsigned derive_pusch_and_srs_concurrency(span<const du_low_cell_config> cell_params)
 {
-  report_error_if_not(nof_dl_antennas.size() == nof_ul_antennas.size(),
-                      "The length of nof_dl_antennas ({}) must be equal to the length of nof_ul_antennas ({}), which "
-                      "should match the number of cells.",
-                      nof_dl_antennas.size(),
-                      nof_ul_antennas.size());
+  report_error_if_not(!cell_params.empty(),
+                      "At least one cell must be configured before auto-deriving PUSCH/SRS concurrency.");
 
+  // Number of CPU cores required per 100MHz of channel bandwidth, per PUSCH layer, per cell (at 2 LDPC iterations).
+  constexpr double cores_per_100mhz_layer_cell = 12.5;
+
+  unsigned nof_available_cpus = cpu_architecture_info::get().get_host_nof_available_cpus();
+
+  double required = 0.0;
+  for (const auto& c : cell_params) {
+    required += cores_per_100mhz_layer_cell * static_cast<double>(c.channel_bw_mhz) / 100.0 *
+                static_cast<double>(c.pusch_max_nof_layers) * c.ul_ratio;
+  }
+
+  unsigned required_concurrency = std::max(1U, static_cast<unsigned>(std::ceil(required)));
+
+  // A requirement that meets or exceeds the number of available cores is equivalent to no limitation.
+  if (required_concurrency >= nof_available_cpus) {
+    return du_low_unit_expert_threads_config::concurrency_unlimited;
+  }
+  return required_concurrency;
+}
+
+void ocudu::fill_du_low_worker_manager_config(worker_manager_config&         config,
+                                              const du_low_unit_config&      unit_cfg,
+                                              unsigned                       is_blocking_mode_active,
+                                              span<const du_low_cell_config> cell_params)
+{
   auto& du_low_cfg = config.du_low_cfg.emplace();
 
   du_low_cfg.is_sequential_mode_active = is_blocking_mode_active;
-  du_low_cfg.cell_nof_dl_antennas.assign(nof_dl_antennas.begin(), nof_dl_antennas.end());
-  du_low_cfg.cell_nof_ul_antennas.assign(nof_ul_antennas.begin(), nof_ul_antennas.end());
+
+  du_low_cfg.cell_nof_dl_antennas.reserve(cell_params.size());
+  du_low_cfg.cell_nof_ul_antennas.reserve(cell_params.size());
+  for (const auto& c : cell_params) {
+    du_low_cfg.cell_nof_dl_antennas.push_back(c.nof_dl_antennas);
+    du_low_cfg.cell_nof_ul_antennas.push_back(c.nof_ul_antennas);
+  }
 
   unsigned max_pdsch_concurrency         = unit_cfg.expert_execution_cfg.threads.max_pdsch_concurrency;
   unsigned max_pusch_and_srs_concurrency = unit_cfg.expert_execution_cfg.threads.max_pusch_and_srs_concurrency;
+
+  if (max_pusch_and_srs_concurrency == du_low_unit_expert_threads_config::concurrency_auto) {
+    max_pusch_and_srs_concurrency = derive_pusch_and_srs_concurrency(cell_params);
+  }
 
   // Override PDSCH and PUSCH maximum concurrency if hardware acceleration is present.
   if (unit_cfg.hal_config.has_value()) {

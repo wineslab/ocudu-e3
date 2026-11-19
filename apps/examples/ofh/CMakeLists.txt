@@ -28,3 +28,4 @@ endif (DPDK_FOUND)
 
 install(TARGETS ru_emulator
         RUNTIME)
+notify_binary_target(ru_emulator)

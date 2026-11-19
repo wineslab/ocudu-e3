@@ -5,9 +5,11 @@
 #pragma once
 
 #include "ocudu/adt/byte_buffer.h"
+#include "ocudu/ran/cu_cp_cell_configuration.h"
 #include "ocudu/ran/du_cell_index.h"
 #include "ocudu/ran/nr_band.h"
 #include "ocudu/ran/nr_cgi.h"
+#include "ocudu/ran/ntn_location_mapping.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/tac.h"
 
@@ -24,16 +26,26 @@ struct du_cell_configuration {
   du_cell_index_t cell_index = INVALID_DU_CELL_INDEX;
   /// Global cell ID.
   nr_cell_global_id_t cgi;
-  /// Tracking Area Code
-  tac_t tac;
+  /// Tracking Area Code. Invalid if the gNB-DU did not provide the 5GS TAC of the cell.
+  tac_t tac = INVALID_TAC;
+  /// \brief TACs the cell broadcasts in \c trackingAreaList, TS 38.331. Empty unless several.
+  ///
+  /// Read back from the gNB-DU's SIB1, so it matches what the cell broadcasts, in broadcast order.
+  tac_list_t tac_list;
   /// Physical cell ID
   pci_t pci;
   /// PLMN identitys served by the cell.
   std::vector<plmn_identity> served_plmns;
   /// NR bands provided/supported by the cell.
   std::vector<nr_band> bands;
+  /// Duplex mode and carrier frequencies of the cell.
+  cu_cp_nr_mode_info nr_mode_info;
+  /// MeasurementTimingConfiguration of the cell, as defined in TS 38.331 section 6.2.2.
+  byte_buffer meas_timing_cfg;
   /// System Information provided by the DU for this cell.
   du_sys_info sys_info;
+  /// \brief Coarse UE location to TAC mapping configured for this cell. Empty unless configured.
+  ntn_location_mapping location_mapping;
   /// Deactivated PLMN identitys initially served by the cell.
   std::vector<plmn_identity> deactivated_plmns;
 };

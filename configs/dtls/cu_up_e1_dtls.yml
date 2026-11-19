@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+# SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+
+
+# Example config for a CU-UP that uses DTLS for connection with the CP.
+
+cu_up:
+  e1ap:
+    gateways:
+      - bind_addrs: 127.0.20.2
+        addrs: 127.0.20.1
+        dtls:
+          cert_filename: "/tmp/client-cert.pem"
+          key_filename: "/tmp/client-key.pem"
+          ca_cert_filename: "/tmp/ca-cert.pem"

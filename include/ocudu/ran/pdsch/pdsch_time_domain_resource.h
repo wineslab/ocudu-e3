@@ -6,6 +6,7 @@
 
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 #include "ocudu/ran/sch/sch_mapping_type.h"
+#include <optional>
 
 namespace ocudu {
 
@@ -22,10 +23,14 @@ struct pdsch_time_domain_resource_allocation {
   /// \brief Symbols used within the slot. Parameters \f$S\f$ and \f$L\f$. Values for \f$S\f$ are (0..10) and for
   /// \f$L\f$, (2..12).
   ofdm_symbol_range symbols;
+  /// \brief Number of PDSCH repetitions, parameter \e repetitionNumber-r16, set only for an entry of a Rel-16
+  /// dedicated TDRA list (see TS 38.331, \c PDSCH-TimeDomainResourceAllocation-r16). Values: {2,...,8,16}.
+  /// Unset for a legacy (Rel-15) entry, or a Rel-16 entry with no repetitions configured.
+  std::optional<uint8_t> rep_number;
 
   bool operator==(const pdsch_time_domain_resource_allocation& rhs) const
   {
-    return k0 == rhs.k0 && map_type == rhs.map_type && symbols == rhs.symbols;
+    return k0 == rhs.k0 && map_type == rhs.map_type && symbols == rhs.symbols && rep_number == rhs.rep_number;
   }
   bool operator!=(const pdsch_time_domain_resource_allocation& rhs) const { return !(rhs == *this); }
 };

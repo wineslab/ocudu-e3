@@ -5,10 +5,14 @@
 #pragma once
 
 #include "cu_cp_unit_config.h"
+#include "ocudu/adt/expected.h"
 
 namespace ocudu {
 
 /// Validates the given CU-CP unit configuration. Returns true on success, false otherwise.
 bool validate_cu_cp_unit_config(const cu_cp_unit_config& config);
+
+/// Validates a single report configuration. Returns the reason when it is invalid.
+error_type<std::string> validate_report_config(const cu_cp_unit_report_config& config);
 
 } // namespace ocudu

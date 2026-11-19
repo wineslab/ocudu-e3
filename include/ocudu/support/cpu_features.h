@@ -87,6 +87,11 @@ constexpr const char* to_string(cpu_feature feature)
   return "invalid_cpu_feature";
 }
 
+constexpr const char* format_as(cpu_feature feature)
+{
+  return to_string(feature);
+}
+
 /// \brief Query the CPU whether a CPU feature is supported in runtime.
 ///
 /// \param[in] feature Selects the given feature to query.
@@ -205,20 +210,3 @@ inline bool cpu_supports_included_features()
 }
 
 } // namespace ocudu
-
-namespace fmt {
-template <>
-struct formatter<ocudu::cpu_feature> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::cpu_feature feature, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", ocudu::to_string(feature));
-  }
-};
-} // namespace fmt

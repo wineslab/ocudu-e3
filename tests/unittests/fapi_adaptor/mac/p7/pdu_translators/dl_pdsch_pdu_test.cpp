@@ -4,7 +4,7 @@
 
 #include "helpers.h"
 #include "pdsch.h"
-#include "ocudu/fapi_adaptor/precoding_matrix_table_generator.h"
+#include "ocudu/fapi_adaptor/precoding_codebook_generator.h"
 #include "ocudu/mac/mac_cell_result.h"
 #include <gtest/gtest.h>
 
@@ -23,8 +23,8 @@ static void validate_pdsch_information(const pdsch_information& pdsch_cfg, const
   // Codewords.
   const auto& fapi_cw = fapi_pdu.cws.front();
   const auto& mac_cw  = pdsch_cfg.codewords.front();
+  ASSERT_EQ(pdsch_cfg.mcs_table, fapi_cw.mcs_table);
   ASSERT_EQ(mac_cw.rv_index, fapi_cw.rv_index);
-  ASSERT_EQ(mac_cw.mcs_table, fapi_cw.mcs_table);
   ASSERT_EQ(mac_cw.mcs_index, fapi_cw.mcs_index);
   ASSERT_EQ(mac_cw.mcs_descr.modulation, fapi_cw.qam_mod_order);
   ASSERT_EQ(mac_cw.tb_size_bytes, fapi_cw.tb_size);
@@ -53,7 +53,7 @@ TEST(mac_fapi_pdsch_pdu_conversor_test, valid_sib1_pdu_should_pass)
 
   fapi::dl_pdsch_pdu         fapi_pdu;
   fapi::dl_pdsch_pdu_builder builder(fapi_pdu);
-  auto                       pm_tools = generate_precoding_matrix_tables(1, 0);
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_one_port{}, antenna_topology::one_port, 0);
   convert_pdsch_mac_to_fapi(builder, pdu, nof_csi_pdus, *std::get<0>(pm_tools), nof_prbs);
 
   validate_pdsch_information(pdu.pdsch_cfg, fapi_pdu);
@@ -70,7 +70,7 @@ TEST(mac_fapi_pdsch_pdu_conversor_test, valid_rar_pdu_should_pass)
 
   fapi::dl_pdsch_pdu         fapi_pdu;
   fapi::dl_pdsch_pdu_builder builder(fapi_pdu);
-  auto                       pm_tools = generate_precoding_matrix_tables(2, 0);
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_two_port{}, antenna_topology::two_port, 0);
   convert_pdsch_mac_to_fapi(builder, pdu, nof_csi_pdus, *std::get<0>(pm_tools), nof_prbs);
 
   validate_pdsch_information(pdu.pdsch_cfg, fapi_pdu);
@@ -79,7 +79,9 @@ TEST(mac_fapi_pdsch_pdu_conversor_test, valid_rar_pdu_should_pass)
 
   const auto& fapi_prec = fapi_pdu.precoding_and_beamforming;
   ASSERT_EQ(nof_prbs, fapi_prec.prg_size);
-  ASSERT_FALSE(std::get<1>(pm_tools)->get_precoding_matrix(fapi_prec.prg.pm_index).get_nof_layers() == 0);
+  ASSERT_FALSE(std::get<1>(pm_tools)
+                   ->get_precoding_config(std::get<fapi::precoding_matrix_index>(fapi_prec.prg.precoding))
+                   .mimo.get_nof_layers() == 0);
 }
 
 TEST(mac_fapi_pdsch_pdu_conversor_test, valid_dl_paging_pdu_should_pass)
@@ -91,7 +93,7 @@ TEST(mac_fapi_pdsch_pdu_conversor_test, valid_dl_paging_pdu_should_pass)
 
   fapi::dl_pdsch_pdu         fapi_pdu;
   fapi::dl_pdsch_pdu_builder builder(fapi_pdu);
-  auto                       pm_tools = generate_precoding_matrix_tables(1, 0);
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_one_port{}, antenna_topology::one_port, 0);
   convert_pdsch_mac_to_fapi(builder, pdu, nof_csi_pdus, *std::get<0>(pm_tools), nof_prbs);
 
   validate_pdsch_information(pdu.pdsch_cfg, fapi_pdu);
@@ -108,7 +110,10 @@ TEST(mac_fapi_pdsch_pdu_conversor_test, valid_dl_msg_alloc_pdu_should_pass)
 
   fapi::dl_pdsch_pdu         fapi_pdu;
   fapi::dl_pdsch_pdu_builder builder(fapi_pdu);
-  auto                       pm_tools = generate_precoding_matrix_tables(4, 0);
+  auto                       pm_tools = generate_precoding_codebooks(
+      pmi_codebook_typeI_single_panel{pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
+      antenna_topology::four_ports,
+      0);
   convert_pdsch_mac_to_fapi(builder, pdu, nof_csi_pdus, *std::get<0>(pm_tools), nof_prbs);
 
   validate_pdsch_information(pdu.pdsch_cfg, fapi_pdu);
@@ -119,8 +124,29 @@ TEST(mac_fapi_pdsch_pdu_conversor_test, valid_dl_msg_alloc_pdu_should_pass)
   ASSERT_EQ(pdu.pdsch_cfg.harq_id, fapi_pdu.context->get_h_id());
   ASSERT_EQ(bool(pdu.context.nof_retxs), !fapi_pdu.context->is_new_data());
 
-  const auto& mac_prec  = *pdu.pdsch_cfg.precoding;
   const auto& fapi_prec = fapi_pdu.precoding_and_beamforming;
-  ASSERT_EQ(mac_prec.nof_rbs_per_prg, fapi_prec.prg_size);
-  ASSERT_FALSE(std::get<1>(pm_tools)->get_precoding_matrix(fapi_prec.prg.pm_index).get_nof_layers() == 0);
+  ASSERT_EQ(nof_prbs, fapi_prec.prg_size);
+  ASSERT_FALSE(std::get<1>(pm_tools)
+                   ->get_precoding_config(std::get<fapi::precoding_matrix_index>(fapi_prec.prg.precoding))
+                   .mimo.get_nof_layers() == 0);
+}
+
+TEST(mac_fapi_pdsch_pdu_conversor_test, beamformed_rar_carries_its_beam)
+{
+  rar_information_test_helper pdu_test     = build_valid_rar_information_pdu();
+  rar_information             pdu          = pdu_test.pdu;
+  unsigned                    nof_csi_pdus = 2;
+  unsigned                    nof_prbs     = 51U;
+
+  const beam_identifier beam_id           = to_beam_id(3);
+  pdu.pdsch_cfg.nof_layers                = 1;
+  pdu.pdsch_cfg.precoding_and_beamforming = make_single_beam_precoding(beam_id);
+
+  fapi::dl_pdsch_pdu         fapi_pdu;
+  fapi::dl_pdsch_pdu_builder builder(fapi_pdu);
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_two_port{}, antenna_topology::two_port, 0);
+  convert_pdsch_mac_to_fapi(builder, pdu, nof_csi_pdus, *std::get<0>(pm_tools), nof_prbs);
+
+  ASSERT_EQ(nof_prbs, fapi_pdu.precoding_and_beamforming.prg_size);
+  ASSERT_EQ(precoding_beam_list({beam_id}), fapi_pdu.precoding_and_beamforming.prg.beams);
 }

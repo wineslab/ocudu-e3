@@ -13,6 +13,7 @@ set(SOURCES
 add_library(odu_base STATIC ${SOURCES})
 target_link_libraries(odu_base PRIVATE
         ocudu_app_helpers
+        ocudu_config_app_helpers
         ocudu_app_services
         ocudu_f1u_du_split_connector
         ocudu_cu_cp
@@ -55,5 +56,5 @@ foreach (NAME LIB IN ZIP_LISTS EXTENSIONS LIBRARIES)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/../${NAME}"  # Path to the binary.
             RUNTIME_OUTPUT_NAME "odu"                                        # Binary name.
             EXCLUDE_FROM_ALL 1)                                                # Do not build by default.
-    notify_binary_target(${TARGET})
+    notify_binary_target(${TARGET} FILENAME "${CMAKE_INSTALL_BINDIR}/${TARGET}")
 endforeach ()

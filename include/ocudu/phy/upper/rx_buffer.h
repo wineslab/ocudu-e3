@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/span.h"
+#include "ocudu/adt/unique_function.h"
 #include "ocudu/phy/upper/log_likelihood_ratio.h"
 
 namespace ocudu {

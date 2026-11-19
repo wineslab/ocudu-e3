@@ -7,7 +7,7 @@
 #include "rlc_am_pdu.h"
 #include "ocudu/adt/ring_buffer.h"
 #include "ocudu/support/ocudu_assert.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 #include <cstdint>
 
 namespace ocudu {

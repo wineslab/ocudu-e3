@@ -19,6 +19,7 @@
 #include "du_low_appconfig_translators.h"
 #include "du_low_appconfig_validators.h"
 #include "du_low_appconfig_yaml_writer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/scope_exit.h"
 #include "ocudu/support/backtrace.h"
 #include "ocudu/support/config_parsers.h"
@@ -199,7 +200,7 @@ int main(int argc, char** argv)
   if (not du_low_cfg.trace_cfg.filename.empty()) {
     app_tracer.enable_tracer(du_low_cfg.trace_cfg.filename,
                              du_low_cfg.trace_cfg.max_tracing_events_per_file,
-                             du_low_cfg.trace_cfg.nof_tracing_events_after_severe,
+                             du_low_cfg.trace_cfg.nof_tracing_events_before_severe,
                              app_logger);
   }
 
@@ -226,7 +227,8 @@ int main(int argc, char** argv)
   if (du_low_cfg.hal_config) {
     // Prepend the application name in argv[0] as it is expected by EAL.
     eal = dpdk::create_dpdk_eal(std::string(argv[0]) + " " + du_low_cfg.hal_config->eal_args,
-                                ocudulog::fetch_basic_logger("EAL", false));
+                                ocudulog::fetch_basic_logger("EAL", false),
+                                du_low_cfg.hal_config->enable_pdump_init);
   }
 #endif
 

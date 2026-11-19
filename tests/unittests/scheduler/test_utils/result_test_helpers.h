@@ -40,14 +40,30 @@ inline const dl_msg_alloc* find_ue_pdsch(rnti_t rnti, const sched_result& res)
   return find_ue_pdsch(rnti, res.dl.ue_grants);
 }
 
+inline const dl_msg_alloc* find_ue_pdsch_with_lcid(rnti_t rnti, lcid_dl_sch_t lcid, const sched_result& res)
+{
+  const dl_msg_alloc* pdsch = find_ue_pdsch(rnti, res.dl.ue_grants);
+  if (pdsch == nullptr) {
+    return nullptr;
+  }
+  for (unsigned tb = 0, tb_sz = pdsch->tb_list.size(); tb != tb_sz; ++tb) {
+    if (std::any_of(pdsch->tb_list[tb].lc_chs_to_sched.begin(),
+                    pdsch->tb_list[tb].lc_chs_to_sched.end(),
+                    [lcid](const auto& lc) { return lc.lcid == lcid; })) {
+      return pdsch;
+    }
+  }
+  return nullptr;
+}
+
 inline const pucch_info* find_ue_pucch(rnti_t rnti, const sched_result& res)
 {
-  return find_ue_pucch(rnti, res.ul.pucchs);
+  return find_ue_pucch(rnti, res.ul.pucchs.unsorted());
 }
 
 inline const pucch_info* find_ue_pucch_with_harq_ack(rnti_t rnti, const sched_result& res)
 {
-  return find_ue_pucch_with_harq_ack(rnti, res.ul.pucchs);
+  return find_ue_pucch_with_harq_ack(rnti, res.ul.pucchs.unsorted());
 }
 
 inline uci_indication::uci_pdu create_uci_pdu_with_harq_ack(du_ue_index_t ue_index, const pucch_info& pucch_pdu)

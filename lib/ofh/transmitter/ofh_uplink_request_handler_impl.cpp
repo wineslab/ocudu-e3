@@ -4,6 +4,7 @@
 #include "ofh_uplink_request_handler_impl.h"
 #include "../support/logger_utils.h"
 #include "helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ofh/ofh_error_notifier.h"
 #include "ocudu/phy/support/shared_resource_grid.h"
 #include "ocudu/ran/prach/prach_configuration.h"

@@ -4,6 +4,7 @@
 
 #include "pdcp_rx_test.h"
 #include "pdcp_test_vectors.h"
+#include "tests/ocudu_test_requirements.h"
 #include "ocudu/pdcp/pdcp_config.h"
 #include "ocudu/support/test_utils.h"
 #include <gtest/gtest.h>
@@ -14,12 +15,17 @@ using namespace ocudu;
 /// Test creation of PDCP RX entities
 TEST_P(pdcp_rx_test_drb, create_new_entity)
 {
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  ocudu::test_delimit_logger delimiter("Entity creation test. SN_SIZE={} ", sn_size);
-  unsigned                   exp_nof_deompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  ocudu::test_delimit_logger delimiter("Entity creation test. SN_SIZE={} ", config.sn_size);
+  unsigned                   exp_nof_deompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_deompressors);
-  EXPECT_EQ(pdcp_rohc_factory->get_last_decompressor_config(), header_compression);
+  EXPECT_EQ(pdcp_rohc_factory->get_last_decompressor_config(), config.header_compression);
 
   ASSERT_NE(pdcp_rx, nullptr);
   ASSERT_NE(test_frame, nullptr);
@@ -32,13 +38,18 @@ TEST_P(pdcp_rx_test_drb, create_new_entity)
 /// Test extraction of PDCP sequence numbers
 TEST_P(pdcp_rx_test_drb, sn_unpack)
 {
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_hdr_reader = [this](uint32_t count) {
-    ocudu::test_delimit_logger delimiter("Header reader test. SN_SIZE={} COUNT={}", sn_size, count);
+    ocudu::test_delimit_logger delimiter("Header reader test. SN_SIZE={} COUNT={}", config.sn_size, count);
     // Get PDU to test
     byte_buffer test_pdu;
     get_test_pdu(count, test_pdu);
@@ -47,12 +58,12 @@ TEST_P(pdcp_rx_test_drb, sn_unpack)
     ASSERT_EQ(hdr.sn, SN(count));
   };
 
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_hdr_reader(0);
     test_hdr_reader(2048);
     test_hdr_reader(4096);
     test_hdr_reader(4294967295);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_hdr_reader(0);
     test_hdr_reader(131072);
     test_hdr_reader(262144);
@@ -72,13 +83,18 @@ TEST_P(pdcp_rx_test_drb, sn_unpack)
 /// Test in-order reception of PDCP PDUs
 TEST_P(pdcp_rx_test_drb, rx_in_order)
 {
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_in_order = [this](uint32_t count) {
-    ocudu::test_delimit_logger delimiter("RX in order test. SN_SIZE={} COUNT={}", sn_size, count);
+    ocudu::test_delimit_logger delimiter("RX in order test. SN_SIZE={} COUNT={}", config.sn_size, count);
 
     pdcp_rx->configure_security(sec_cfg, security::integrity_enabled::on, security::ciphering_enabled::on);
 
@@ -101,11 +117,11 @@ TEST_P(pdcp_rx_test_drb, rx_in_order)
     }
   };
 
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_rx_in_order(0);
     test_rx_in_order(2047);
     test_rx_in_order(4095);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_rx_in_order(0);
     test_rx_in_order(131071);
     test_rx_in_order(262143);
@@ -125,14 +141,19 @@ TEST_P(pdcp_rx_test_drb, rx_in_order)
 /// All PDUs are received before the t-Reordering expires.
 TEST_P(pdcp_rx_test_drb, rx_out_of_order)
 {
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_out_of_order = [this](uint32_t count) {
     ocudu::test_delimit_logger delimiter(
-        "RX out-of-order test, no t-Reordering. SN_SIZE={} COUNT=[{}, {}]", sn_size, count + 1, count);
+        "RX out-of-order test, no t-Reordering. SN_SIZE={} COUNT=[{}, {}]", config.sn_size, count + 1, count);
 
     pdcp_rx->configure_security(sec_cfg, security::integrity_enabled::on, security::ciphering_enabled::on);
 
@@ -150,7 +171,13 @@ TEST_P(pdcp_rx_test_drb, rx_out_of_order)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(0, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+      ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
+      test_frame->sdu_queue.pop();
+    } else {
+      ASSERT_EQ(0, test_frame->sdu_queue.size());
+    }
     // check rx_reord matches rx_next matches count + 2
     EXPECT_EQ(pdcp_rx->get_state().rx_reord, count + 2);
     EXPECT_EQ(pdcp_rx->get_state().rx_reord, pdcp_rx->get_state().rx_next);
@@ -160,7 +187,13 @@ TEST_P(pdcp_rx_test_drb, rx_out_of_order)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(0, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+      ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
+      test_frame->sdu_queue.pop();
+    } else {
+      ASSERT_EQ(0, test_frame->sdu_queue.size());
+    }
     // check rx_reord still maches count + 2, i.e did not change because t_reord is already running; rx_next moved on
     EXPECT_EQ(pdcp_rx->get_state().rx_reord, count + 2);
     EXPECT_EQ(pdcp_rx->get_state().rx_next, count + 3);
@@ -170,18 +203,22 @@ TEST_P(pdcp_rx_test_drb, rx_out_of_order)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(3, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+    } else {
+      ASSERT_EQ(3, test_frame->sdu_queue.size());
+    }
     while (not test_frame->sdu_queue.empty()) {
       ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
       test_frame->sdu_queue.pop();
     }
   };
 
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_rx_out_of_order(0);
     test_rx_out_of_order(2047);
     test_rx_out_of_order(4095);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_rx_out_of_order(0);
     test_rx_out_of_order(131071);
     test_rx_out_of_order(262143);
@@ -200,13 +237,19 @@ TEST_P(pdcp_rx_test_drb, rx_out_of_order)
 /// Test reception of duplicate PDCP PDUs
 TEST_P(pdcp_rx_test_drb, rx_duplicate)
 {
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_out_of_order = [this](uint32_t count) {
-    ocudu::test_delimit_logger delimiter("RX duplicate test. SN_SIZE={} COUNT=[{}, {}]", sn_size, count + 1, count);
+    ocudu::test_delimit_logger delimiter(
+        "RX duplicate test. SN_SIZE={} COUNT=[{}, {}]", config.sn_size, count + 1, count);
 
     pdcp_rx->configure_security(sec_cfg, security::integrity_enabled::on, security::ciphering_enabled::on);
 
@@ -226,7 +269,13 @@ TEST_P(pdcp_rx_test_drb, rx_duplicate)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(0, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+      ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
+      test_frame->sdu_queue.pop();
+    } else {
+      ASSERT_EQ(0, test_frame->sdu_queue.size());
+    }
     // check rx_reord matches rx_next matches count + 2
     EXPECT_EQ(pdcp_rx->get_state().rx_reord, count + 2);
     EXPECT_EQ(pdcp_rx->get_state().rx_reord, pdcp_rx->get_state().rx_next);
@@ -236,7 +285,13 @@ TEST_P(pdcp_rx_test_drb, rx_duplicate)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(0, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+      ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
+      test_frame->sdu_queue.pop();
+    } else {
+      ASSERT_EQ(0, test_frame->sdu_queue.size());
+    }
     // check rx_reord still maches count + 2, i.e did not change because t_reord is already running; rx_next moved on
     EXPECT_EQ(pdcp_rx->get_state().rx_reord, count + 2);
     EXPECT_EQ(pdcp_rx->get_state().rx_next, count + 3);
@@ -257,18 +312,22 @@ TEST_P(pdcp_rx_test_drb, rx_duplicate)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(3, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+    } else {
+      ASSERT_EQ(3, test_frame->sdu_queue.size());
+    }
     while (not test_frame->sdu_queue.empty()) {
       ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
       test_frame->sdu_queue.pop();
     }
   };
 
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_rx_out_of_order(0);
     test_rx_out_of_order(2047);
     test_rx_out_of_order(4095);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_rx_out_of_order(0);
     test_rx_out_of_order(131071);
     test_rx_out_of_order(262143);
@@ -285,17 +344,22 @@ TEST_P(pdcp_rx_test_drb, rx_duplicate)
 }
 
 /// Test out of order reception of PDUs.
-/// The out-of-order PDU is received after the t-Reordering expires.
+/// The out-of-order PDU is received after the t-Reordering expires (except if OOO delivery is configured).
 TEST_P(pdcp_rx_test_drb, rx_reordering_timer)
 {
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_t_reorder = [this](uint32_t count) {
     ocudu::test_delimit_logger delimiter(
-        "RX out-of-order test, t-Reordering expires. SN_SIZE={} COUNT=[{}, {}]", sn_size, count + 1, count);
+        "RX out-of-order test, t-Reordering expires. SN_SIZE={} COUNT=[{}, {}]", config.sn_size, count + 1, count);
 
     pdcp_rx->configure_security(sec_cfg, security::integrity_enabled::on, security::ciphering_enabled::on);
 
@@ -310,7 +374,12 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(0, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+      ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
+    } else {
+      ASSERT_EQ(0, test_frame->sdu_queue.size());
+    }
     tick_all(10);
     ASSERT_EQ(1, test_frame->sdu_queue.size());
     pdcp_rx->handle_pdu(byte_buffer_chain::create(std::move(test_pdu1)).value());
@@ -324,11 +393,11 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer)
       test_frame->sdu_queue.pop();
     }
   };
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_rx_t_reorder(0);
     test_rx_t_reorder(2047);
     test_rx_t_reorder(4095);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_rx_t_reorder(0);
     test_rx_t_reorder(131071);
     test_rx_t_reorder(262143);
@@ -348,19 +417,20 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer)
 /// t-Reordering is set to 0, so PDUs are immediately delivered.
 TEST_P(pdcp_rx_test_drb, rx_reordering_timer_0ms)
 {
-  init(std::get<pdcp_sn_size>(GetParam()),
-       std::get<unsigned>(GetParam()),
-       std::get<rohc_test_params>(GetParam()),
-       pdcp_rb_type::drb,
-       pdcp_rlc_mode::am,
-       pdcp_t_reordering::ms0);
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  set_t_reordering(pdcp_t_reordering::ms0);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_t_reorder = [this](uint32_t count) {
     ocudu::test_delimit_logger delimiter(
-        "RX out-of-order test, t-Reordering is set to 0. SN_SIZE={} COUNT=[{}, {}]", sn_size, count + 1, count);
+        "RX out-of-order test, t-Reordering is set to 0. SN_SIZE={} COUNT=[{}, {}]", config.sn_size, count + 1, count);
 
     pdcp_rx->configure_security(sec_cfg, security::integrity_enabled::on, security::ciphering_enabled::on);
 
@@ -387,11 +457,11 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer_0ms)
       test_frame->sdu_queue.pop();
     }
   };
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_rx_t_reorder(0);
     test_rx_t_reorder(2047);
     test_rx_t_reorder(4095);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_rx_t_reorder(0);
     test_rx_t_reorder(131071);
     test_rx_t_reorder(262143);
@@ -408,23 +478,27 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer_0ms)
 }
 
 /// Test out of order reception of PDUs.
-/// t-Reordering is set to infinite, so  no PDUs are delivered
-/// until they are received in order.
+/// t-Reordering is set to infinite, so no PDUs are delivered
+/// until they are received in order (except if OOO delivery is configured).
 TEST_P(pdcp_rx_test_drb, rx_reordering_timer_infinite)
 {
-  init(std::get<pdcp_sn_size>(GetParam()),
-       std::get<unsigned>(GetParam()),
-       std::get<rohc_test_params>(GetParam()),
-       pdcp_rb_type::drb,
-       pdcp_rlc_mode::am,
-       pdcp_t_reordering::infinity);
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  set_t_reordering(pdcp_t_reordering::infinity);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_t_reorder = [this](uint32_t count) {
     ocudu::test_delimit_logger delimiter(
-        "RX out-of-order test, t-Reordering is set to infinity. SN_SIZE={} COUNT=[{}, {}]", sn_size, count + 1, count);
+        "RX out-of-order test, t-Reordering is set to infinity. SN_SIZE={} COUNT=[{}, {}]",
+        config.sn_size,
+        count + 1,
+        count);
 
     pdcp_rx->configure_security(sec_cfg, security::integrity_enabled::on, security::ciphering_enabled::on);
 
@@ -440,7 +514,12 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer_infinite)
     // Wait for crypto and reordering
     wait_pending_crypto();
     worker.run_pending_tasks();
-    ASSERT_EQ(0, test_frame->sdu_queue.size());
+    if (config.out_of_order_delivery) {
+      ASSERT_EQ(1, test_frame->sdu_queue.size());
+      ASSERT_EQ(test_frame->sdu_queue.front(), sdu1);
+    } else {
+      ASSERT_EQ(0, test_frame->sdu_queue.size());
+    }
 
     pdcp_rx->handle_pdu(byte_buffer_chain::create(std::move(test_pdu1)).value());
 
@@ -453,11 +532,11 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer_infinite)
       test_frame->sdu_queue.pop();
     }
   };
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_rx_t_reorder(0);
     test_rx_t_reorder(2047);
     test_rx_t_reorder(4095);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_rx_t_reorder(0);
     test_rx_t_reorder(131071);
     test_rx_t_reorder(262143);
@@ -477,13 +556,18 @@ TEST_P(pdcp_rx_test_drb, rx_reordering_timer_infinite)
 /// The PDCP should notify the RRC of the integrity error.
 TEST_P(pdcp_rx_test_drb, rx_integrity_fail)
 {
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_integrity_fail = [this](uint32_t count) {
-    ocudu::test_delimit_logger delimiter("RX PDU with bad integrity. SN_SIZE={} COUNT={}", sn_size, count);
+    ocudu::test_delimit_logger delimiter("RX PDU with bad integrity. SN_SIZE={} COUNT={}", config.sn_size, count);
 
     pdcp_rx->configure_security(sec_cfg, security::integrity_enabled::on, security::ciphering_enabled::on);
 
@@ -502,11 +586,11 @@ TEST_P(pdcp_rx_test_drb, rx_integrity_fail)
     ASSERT_EQ(prev_integrity_fail_counter + 1, test_frame->integrity_fail_counter);
   };
 
-  if (sn_size == pdcp_sn_size::size12bits) {
+  if (config.sn_size == pdcp_sn_size::size12bits) {
     test_rx_integrity_fail(0);
     test_rx_integrity_fail(2047);
     test_rx_integrity_fail(4095);
-  } else if (sn_size == pdcp_sn_size::size18bits) {
+  } else if (config.sn_size == pdcp_sn_size::size18bits) {
     test_rx_integrity_fail(0);
     test_rx_integrity_fail(131071);
     test_rx_integrity_fail(262143);
@@ -526,13 +610,15 @@ TEST_P(pdcp_rx_test_drb, rx_integrity_fail)
 /// The PDCP should reject the PDUs only in when integrity is fully enabled.
 TEST_P(pdcp_rx_test_srb, rx_zero_padded_mac)
 {
-  init(pdcp_sn_size::size12bits, 2, cfg_rohc_disabled, pdcp_rb_type::srb);
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  set_rb_type(pdcp_rb_type::srb);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_integrity_mode = [this](uint32_t count) {
-    ocudu::test_delimit_logger delimiter("RX PDU with unverified integrity. SN_SIZE={} COUNT={}", sn_size, count);
+    ocudu::test_delimit_logger delimiter(
+        "RX PDU with unverified integrity. SN_SIZE={} COUNT={}", config.sn_size, count);
 
     if (std::get<security::integrity_enabled>(GetParam()) != security::integrity_enabled::off) {
       pdcp_rx->configure_security(
@@ -588,13 +674,15 @@ TEST_P(pdcp_rx_test_srb, rx_zero_padded_mac)
 /// The PDCP should reject all PDUs.
 TEST_P(pdcp_rx_test_srb, rx_non_zero_padded_mac)
 {
-  init(pdcp_sn_size::size12bits, 2, cfg_rohc_disabled, pdcp_rb_type::srb);
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  set_rb_type(pdcp_rb_type::srb);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
   auto test_rx_integrity_mode = [this](uint32_t count) {
-    ocudu::test_delimit_logger delimiter("RX PDU with unverified integrity. SN_SIZE={} COUNT={}", sn_size, count);
+    ocudu::test_delimit_logger delimiter(
+        "RX PDU with unverified integrity. SN_SIZE={} COUNT={}", config.sn_size, count);
 
     if (std::get<security::integrity_enabled>(GetParam()) != security::integrity_enabled::off) {
       pdcp_rx->configure_security(
@@ -637,19 +725,21 @@ TEST_P(pdcp_rx_test_srb, rx_non_zero_padded_mac)
 /// limit and one after the hard limit.
 TEST_P(pdcp_rx_test_drb, count_wraparound)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
   uint32_t       rx_next_notify = 262144;
   uint32_t       rx_next_max    = 262148;
   uint32_t       rx_next_start  = 262143;
   uint32_t       n_sdus         = 6;
   pdcp_max_count max_count{rx_next_notify, rx_next_max};
-  init(std::get<pdcp_sn_size>(GetParam()),
-       std::get<unsigned>(GetParam()),
-       std::get<rohc_test_params>(GetParam()),
-       pdcp_rb_type::drb,
-       pdcp_rlc_mode::am,
-       pdcp_t_reordering::ms10,
-       max_count);
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  set_max_count(max_count);
+  init();
+
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
@@ -690,10 +780,15 @@ TEST_P(pdcp_rx_test_drb, count_wraparound)
 /// Test TX SDU buffering.
 TEST_P(pdcp_rx_test_drb, rx_buffer)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-SEC-O-CU-13");
+
   uint32_t n_no_buffer_pdus = 1;
   uint32_t n_buffer_pdus    = 2;
-  init(std::get<pdcp_sn_size>(GetParam()), std::get<unsigned>(GetParam()), std::get<rohc_test_params>(GetParam()));
-  unsigned exp_nof_decompressors = header_compression.has_value() ? 1 : 0;
+  set_sn_size(std::get<pdcp_sn_size>(GetParam()));
+  set_algo(std::get<unsigned>(GetParam()));
+  set_header_compression(std::get<rohc_test_params>(GetParam()).config);
+  init();
+  unsigned exp_nof_decompressors = config.header_compression.has_value() ? 1 : 0;
   EXPECT_EQ(pdcp_rohc_factory->get_nof_compressors(), 0);
   EXPECT_EQ(pdcp_rohc_factory->get_nof_decompressors(), exp_nof_decompressors);
 
@@ -738,25 +833,35 @@ TEST_P(pdcp_rx_test_drb, rx_buffer)
 // Finally, instantiate all testcases for each supported SN size //
 ///////////////////////////////////////////////////////////////////
 static std::string pdcp_rx_test_drb_param_info_to_string(
-    const ::testing::TestParamInfo<std::tuple<pdcp_sn_size, unsigned, rohc_test_params>>& info)
+    const ::testing::TestParamInfo<std::tuple<pdcp_sn_size, unsigned, rohc_test_params, bool>>& info)
 {
   fmt::memory_buffer buffer;
   fmt::format_to(std::back_inserter(buffer),
-                 "{}bit_nia{}_nea{}_{}",
+                 "{}bit_nia{}_nea{}_{}_ooo_{}",
                  pdcp_sn_size_to_uint(std::get<pdcp_sn_size>(info.param)),
                  std::get<unsigned>(info.param),
                  std::get<unsigned>(info.param),
-                 std::get<rohc_test_params>(info.param).name);
+                 std::get<rohc_test_params>(info.param).name,
+                 std::get<bool>(info.param));
   return fmt::to_string(buffer);
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    pdcp_rx_test_all_variants,
+    pdcp_rx_test_sn_all_algo_all_rohc_all_ooo_off,
     pdcp_rx_test_drb,
     ::testing::Combine(::testing::Values(pdcp_sn_size::size12bits, pdcp_sn_size::size18bits),
                        ::testing::Values(1, 2, 3),
-                       ::testing::Values(cfg_rohc_disabled, cfg_rohc_uncompressed, cfg_rohc_compressed)),
+                       ::testing::Values(cfg_rohc_disabled, cfg_rohc_uncompressed, cfg_rohc_compressed),
+                       ::testing::Values(false)),
     pdcp_rx_test_drb_param_info_to_string);
+
+INSTANTIATE_TEST_SUITE_P(pdcp_rx_test_sn_all_algo_all_rohc_off_ooo_all,
+                         pdcp_rx_test_drb,
+                         ::testing::Combine(::testing::Values(pdcp_sn_size::size12bits, pdcp_sn_size::size18bits),
+                                            ::testing::Values(1, 2, 3),
+                                            ::testing::Values(cfg_rohc_disabled),
+                                            ::testing::Values(true)),
+                         pdcp_rx_test_drb_param_info_to_string);
 
 static std::string pdcp_rx_test_srb_param_info_to_string(
     const ::testing::TestParamInfo<std::tuple<unsigned, security::integrity_enabled>>& info)

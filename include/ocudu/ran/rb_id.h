@@ -5,7 +5,8 @@
 #pragma once
 
 #include "ocudu/ran/logical_channel/lcid.h"
-#include "fmt/format.h"
+#include "ocudu/support/enum_utils.h"
+#include "fmt/base.h"
 
 namespace ocudu {
 
@@ -75,11 +76,6 @@ enum class drb_id_t : uint8_t {
 
 constexpr std::size_t MAX_NOF_DRBS = 29;
 
-constexpr uint8_t drb_id_to_uint(drb_id_t id)
-{
-  return static_cast<uint8_t>(id);
-}
-
 constexpr drb_id_t uint_to_drb_id(uint8_t id)
 {
   return static_cast<drb_id_t>(id);
@@ -96,8 +92,8 @@ public:
   rb_id_t(srb_id_t srb_id_) : rb_type(rb_type_t::srb), srb_id(srb_id_) {}
   rb_id_t(drb_id_t drb_id_) : rb_type(rb_type_t::drb), drb_id(drb_id_) {}
 
-  bool is_srb() { return rb_type == rb_type_t::srb; }
-  bool is_drb() { return rb_type == rb_type_t::drb; }
+  bool is_srb() const { return rb_type == rb_type_t::srb; }
+  bool is_drb() const { return rb_type == rb_type_t::drb; }
 
   srb_id_t get_srb_id() const { return srb_id; }
   drb_id_t get_drb_id() const { return drb_id; }
@@ -130,7 +126,7 @@ struct formatter<ocudu::drb_id_t> {
       case ocudu::drb_id_t::invalid:
         return format_to(ctx.out(), "invalid DRB");
       default:
-        return format_to(ctx.out(), "DRB{}", drb_id_to_uint(o));
+        return format_to(ctx.out(), "DRB{}", to_underlying(o));
     }
   }
 };

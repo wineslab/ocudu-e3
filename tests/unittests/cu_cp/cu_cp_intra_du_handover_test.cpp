@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
@@ -10,8 +11,8 @@
 #include "tests/test_doubles/rrc/rrc_test_messages.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/cu_cp/test_helpers.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/e1ap/common/e1ap_types.h"
@@ -413,7 +414,7 @@ public:
   {
     ASSERT_TRUE(test_helpers::is_valid_location_report(msg));
     const auto& report = msg.pdu.init_msg().value.location_report();
-    EXPECT_EQ(report->amf_ue_ngap_id, amf_ue_id_to_uint(amf_ue_id));
+    EXPECT_EQ(report->amf_ue_ngap_id, to_underlying(amf_ue_id));
     // Verify the configured event type is echoed back.
     EXPECT_EQ(report->location_report_request_type.event_type,
               asn1::ngap::event_type_opts::options::change_of_serve_cell);
@@ -435,7 +436,7 @@ public:
   rnti_t              crnti     = to_rnti(0x4601);
   pci_t               pci       = 0;
   amf_ue_id_t         amf_ue_id = uint_to_amf_ue_id(
-      test_rng::uniform_int<uint64_t>(amf_ue_id_to_uint(amf_ue_id_t::min), amf_ue_id_to_uint(amf_ue_id_t::max)));
+      test_rng::uniform_int<uint64_t>(to_underlying(amf_ue_id_t::min), to_underlying(amf_ue_id_t::max)));
   gnb_cu_up_ue_e1ap_id_t cu_up_e1ap_id = gnb_cu_up_ue_e1ap_id_t::min;
 
   const ue_context* ue_ctx = nullptr;

@@ -5,7 +5,6 @@
 
 #include "ocudu/support/async/detail/awaiter_memory_storage.h"
 #include "ocudu/support/async/detail/function_signature.h"
-#include "ocudu/support/compiler.h"
 #include "ocudu/support/ocudu_assert.h"
 
 namespace ocudu {

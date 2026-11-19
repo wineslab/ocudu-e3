@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
+#include "ocudu_test_requirements.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi/p7/builders/dl_prs_pdu_builder.h"
 #include <gtest/gtest.h>
 
@@ -9,6 +11,8 @@ using namespace fapi;
 
 TEST(dl_prs_pdu_builder, valid_basic_parameters_passes)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-POS-16-2");
+
   dl_prs_pdu         pdu;
   dl_prs_pdu_builder builder(pdu);
 
@@ -22,6 +26,8 @@ TEST(dl_prs_pdu_builder, valid_basic_parameters_passes)
 
 TEST(dl_prs_pdu_builder, valid_n_id_parameter_passes)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-POS-16-2");
+
   dl_prs_pdu         pdu;
   dl_prs_pdu_builder builder(pdu);
 
@@ -33,6 +39,8 @@ TEST(dl_prs_pdu_builder, valid_n_id_parameter_passes)
 
 TEST(dl_prs_pdu_builder, valid_symbol_parameters_passes)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-POS-16-2");
+
   dl_prs_pdu         pdu;
   dl_prs_pdu_builder builder(pdu);
 
@@ -46,6 +54,8 @@ TEST(dl_prs_pdu_builder, valid_symbol_parameters_passes)
 
 TEST(dl_prs_pdu_builder, valid_rb_parameters_passes)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-POS-16-2");
+
   dl_prs_pdu         pdu;
   dl_prs_pdu_builder builder(pdu);
 
@@ -57,6 +67,8 @@ TEST(dl_prs_pdu_builder, valid_rb_parameters_passes)
 
 TEST(dl_prs_pdu_builder, valid_power_offset_parameter_passes)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-POS-16-2");
+
   dl_prs_pdu         pdu;
   dl_prs_pdu_builder builder(pdu);
 
@@ -68,6 +80,8 @@ TEST(dl_prs_pdu_builder, valid_power_offset_parameter_passes)
 
 TEST(dl_prs_pdu_builder, valid_comb_parameters_passes)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-POS-16-2");
+
   dl_prs_pdu         pdu;
   dl_prs_pdu_builder builder(pdu);
 

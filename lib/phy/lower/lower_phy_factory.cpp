@@ -106,7 +106,7 @@ public:
                                                        .rate                    = config.srate,
                                                        .bandwidth_prb           = config.bandwidth_rb,
                                                        .center_frequency_Hz     = config.dl_freq_hz,
-                                                       .nof_tx_ports            = config.nof_tx_ports,
+                                                       .tx_ant_topology         = config.tx_ant_topology,
                                                        .nof_slot_tti_in_advance = config.max_processing_delay_slots};
 
     // Create downlink processor.
@@ -131,10 +131,10 @@ public:
     lower_phy_baseband_processor_configuration proc_bb_adaptor_config = {
         .srate                  = config.srate,
         .scs                    = config.scs,
-        .nof_tx_ports           = config.nof_tx_ports,
+        .nof_tx_ports           = get_total_nof_ports(config.tx_ant_topology),
         .nof_rx_ports           = config.nof_rx_ports,
         .tx_time_offset         = static_cast<baseband_gateway_timestamp>(tx_time_offset),
-        .rx_to_tx_max_delay     = config.srate.to_kHz() + proc_bb_adaptor_config.tx_time_offset,
+        .rx_to_tx_max_delay     = rx_to_tx_max_delay,
         .rx_buffer_size         = rx_buffer_size,
         .nof_rx_buffers         = std::max(4U, rx_to_tx_max_delay / rx_buffer_size),
         .system_time_throttling = config.system_time_throttling,

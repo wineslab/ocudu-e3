@@ -4,6 +4,7 @@
 
 #include "conditional_handover_reconfiguration_routine.h"
 #include "mobility_helpers.h"
+#include "ocudu/adt/format.h"
 #include <algorithm>
 
 using namespace ocudu;

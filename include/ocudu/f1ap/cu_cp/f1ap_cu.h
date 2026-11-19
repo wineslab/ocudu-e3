@@ -7,12 +7,14 @@
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/adt/expected.h"
 #include "ocudu/cu_cp/cu_cp_ue_messages.h"
+#include "ocudu/f1ap/common/f1ap_ref_time_info.h"
 #include "ocudu/f1ap/cu_cp/du_setup_notifier.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_configuration_update.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_ue_context_update.h"
 #include "ocudu/f1ap/cu_cp/f1ap_du_context.h"
 #include "ocudu/f1ap/cu_cp/f1ap_nrppa_msg_handling.h"
 #include "ocudu/f1ap/cu_cp/f1ap_rrc_msg_transfer_handling.h"
+#include "ocudu/f1ap/cu_cp/f1ap_warning.h"
 #include "ocudu/f1ap/f1ap_message_handler.h"
 #include "ocudu/ran/cu_cp_paging.h"
 #include "ocudu/ran/cu_cp_types.h"
@@ -131,6 +133,9 @@ public:
   /// Called when an F1 removal or F1 Reset is received, or when the DU disconnects.
   /// \return Asynchronous task that handles the event
   virtual async_task<void> on_transaction_info_loss(const ue_transaction_info_loss_event& ev) = 0;
+
+  /// \brief Indicates reception of a Reference Time Information Report from the gNB-DU as per TS 38.473 section 8.12.2.
+  virtual void on_ref_time_info_report(const f1ap_time_ref_info& info) = 0;
 };
 
 /// Methods to get statistics of the F1AP.
@@ -167,6 +172,22 @@ public:
   /// 'true' in case of a successful outcome, 'false' otherwise.
   virtual async_task<f1ap_gnb_cu_configuration_update_response>
   handle_gnb_cu_configuration_update(const f1ap_gnb_cu_configuration_update& request) = 0;
+
+  /// \brief Sends a Reference Time Information Reporting Control message to the gNB-DU as per TS 38.473 section 8.12.1.
+  virtual void handle_ref_time_info_report_ctrl(const f1ap_ref_time_report_ctrl_request& request) = 0;
+};
+
+/// Handle F1AP Write-Replace Warning procedure as defined in TS 38.473 section 8.9.
+class f1ap_warning_manager
+{
+public:
+  virtual ~f1ap_warning_manager() = default;
+
+  /// \brief Initiates the Write-Replace Warning procedure as per TS 38.473 section 8.9.1.
+  /// \param[in] request The Write-Replace Warning Request message to transmit.
+  /// \return Returns an f1ap_write_replace_warning_response with success set to true on a valid response.
+  virtual async_task<f1ap_write_replace_warning_response>
+  handle_write_replace_warning_request(const f1ap_write_replace_warning_request& request) = 0;
 };
 
 /// Combined entry point for F1AP handling.
@@ -177,7 +198,8 @@ class f1ap_cu : public f1ap_message_handler,
                 public f1ap_paging_manager,
                 public f1ap_ue_context_removal_handler,
                 public f1ap_nrppa_message_handler,
-                public f1ap_interface_management_handler
+                public f1ap_interface_management_handler,
+                public f1ap_warning_manager
 {
 public:
   virtual ~f1ap_cu() = default;
@@ -194,6 +216,7 @@ public:
   virtual f1ap_ue_context_removal_handler&   get_f1ap_ue_context_removal_handler()   = 0;
   virtual f1ap_nrppa_message_handler&        get_f1ap_nrppa_message_handler()        = 0;
   virtual f1ap_interface_management_handler& get_f1ap_interface_management_handler() = 0;
+  virtual f1ap_warning_manager&              get_f1ap_warning_manager()              = 0;
 };
 
 } // namespace ocudu::ocucp

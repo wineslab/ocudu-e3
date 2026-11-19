@@ -20,6 +20,7 @@ class xn_setup_procedure
 public:
   xn_setup_procedure(
       const xnap_configuration&                                                                    xnap_cfg_,
+      span<const cu_cp_served_cell_info>                                                           served_cells_,
       std::optional<xnap_context>&                                                                 peer_ctxt_,
       xnap_tx_pdu_notifier_with_logging&                                                           tx_notifier_,
       protocol_transaction_event_source<asn1::xnap::xn_setup_resp_s, asn1::xnap::xn_setup_fail_s>& xn_setup_outcome_,
@@ -31,12 +32,13 @@ public:
   static const char* name() { return "XN Setup Procedure"; }
 
 private:
-  /// Checks whether the XNAP should attempt again to connect to XN-C peer.
+  /// Checks whether the XNAP should attempt again to connect to Xn-C peer.
   bool retry_required();
 
   static bool is_failure_misconfiguration(const asn1::xnap::cause_c& cause);
 
   const xnap_configuration&                                                                    xnap_cfg;
+  span<const cu_cp_served_cell_info>                                                           served_cells;
   std::optional<xnap_context>&                                                                 peer_ctxt;
   xnap_tx_pdu_notifier_with_logging&                                                           tx_notifier;
   protocol_transaction_event_source<asn1::xnap::xn_setup_resp_s, asn1::xnap::xn_setup_fail_s>& xn_setup_outcome;

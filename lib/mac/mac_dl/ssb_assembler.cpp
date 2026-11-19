@@ -23,14 +23,15 @@ ssb_assembler::ssb_assembler(const mac_cell_creation_request& cell_cfg) :
 
 void ssb_assembler::assemble_ssb(dl_ssb_pdu& ssb_pdu, const ssb_information& ssb_info)
 {
-  ssb_pdu.pci               = pci;
-  ssb_pdu.pss_to_sss_epre   = ssb_cfg.pss_to_sss_epre;
-  ssb_pdu.ssb_index         = ssb_info.ssb_index;
-  ssb_pdu.scs               = ssb_cfg.scs;
-  ssb_pdu.subcarrier_offset = ssb_cfg.k_ssb;
-  ssb_pdu.offset_to_pointA  = ssb_cfg.offset_to_point_A;
-  ssb_pdu.ssb_case          = ssb_case;
-  ssb_pdu.L_max             = L_max;
+  ssb_pdu.pci                       = pci;
+  ssb_pdu.pss_to_sss_epre           = ssb_cfg.pss_to_sss_epre;
+  ssb_pdu.ssb_index                 = ssb_info.ssb_index;
+  ssb_pdu.scs                       = ssb_cfg.scs;
+  ssb_pdu.subcarrier_offset         = ssb_cfg.k_ssb;
+  ssb_pdu.offset_to_pointA          = ssb_cfg.offset_to_point_A;
+  ssb_pdu.ssb_case                  = ssb_case;
+  ssb_pdu.L_max                     = L_max;
+  ssb_pdu.precoding_and_beamforming = make_single_beam_precoding(ssb_cfg.ssb_beams.get_beam(ssb_info.ssb_index));
 
   // Fields required for PBCH payload/MIB generation.
   ssb_pdu.mib_data.cell_barred            = cell_barred;

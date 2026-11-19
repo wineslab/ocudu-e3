@@ -24,7 +24,7 @@ install_docker_dependencies_debian_ubuntu() {
     local -a pkgs=()
 
     local -a build_pkgs=(git ca-certificates)
-    local -a run_pkgs=(curl tini)
+    local -a run_pkgs=(curl catatonit)
 
     case "$mode" in
         build)
@@ -79,7 +79,7 @@ install_docker_dependencies_fedora() {
     local -a pkgs=()
 
     local -a build_pkgs=(git ca-certificates make gcc gcc-c++ pkgconf-pkg-config which)
-    local -a run_pkgs=(curl chrony tini procps-ng)
+    local -a run_pkgs=(curl chrony catatonit procps-ng)
 
     case "$mode" in
         build)
@@ -94,7 +94,86 @@ install_docker_dependencies_fedora() {
             ;;
     esac
 
-    install_fedora_pkgs "${pkgs[@]}"
+    # Fedora ships catatonit under /usr/libexec; link Ubuntu's path for a common entrypoint.
+    if [[ "$mode" == "run" ]]; then
+        ln -sf /usr/libexec/catatonit/catatonit /usr/bin/catatonit
+    fi
+    update_rpm_pkgs
+    install_rpm_pkgs "${pkgs[@]}"
+}
+
+install_docker_dependencies_centos() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    local -a build_pkgs=(git ca-certificates make gcc gcc-c++ pkgconf-pkg-config which)
+    # tini is not packaged on CentOS Stream 10; use catatonit. chrony is in the base image.
+    local -a run_pkgs=(curl catatonit procps-ng findutils)
+
+    case "$mode" in
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    # Update with repos enabled even for run (--no-repos install) so security
+    # fixes from CentOS/EPEL/CRB are applied to the base image packages.
+    update_rpm_pkgs
+    if [[ "$mode" == "build" ]]; then
+        install_rpm_pkgs "${pkgs[@]}"
+    else
+        install_rpm_pkgs --no-repos "${pkgs[@]}"
+    fi
+
+    # CentOS ships catatonit under /usr/libexec; link Ubuntu's path for a common entrypoint.
+    if [[ "$mode" == "run" ]]; then
+        ln -sf /usr/libexec/catatonit/catatonit /usr/bin/catatonit
+    fi
+}
+
+install_docker_dependencies_ubi10() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    # tar/gzip are not in ubi-minimal; required by build_uhd.sh / build_dpdk.sh / build_rohc.sh.
+    local -a build_pkgs=(git ca-certificates make gcc gcc-c++ pkgconf-pkg-config which tar gzip)
+    local -a run_pkgs=(curl catatonit procps-ng findutils)
+
+    case "$mode" in
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    # Update with repos enabled even for run (--no-repos install) so security
+    # fixes from UBI/RHEL/EPEL/CRB are applied to the base image packages.
+    update_rpm_pkgs
+    if [[ "$mode" == "build" ]]; then
+        install_rpm_pkgs "${pkgs[@]}"
+    fi
+
+    if [[ "$mode" == "run" ]]; then
+        install_rpm_pkgs --no-repos "${pkgs[@]}"
+        # Install driver runtime deps while RHSM/AppStream are still active.
+        /usr/local/etc/install_uhd_dependencies.sh run
+        /usr/local/etc/install_dpdk_dependencies.sh run
+        # UBI ships catatonit under /usr/libexec; link Ubuntu's path for a common entrypoint.
+	ln -sf /usr/libexec/catatonit/catatonit /usr/bin/catatonit
+    fi
 }
 
 install_docker_dependencies_rhel() {
@@ -117,6 +196,7 @@ install_docker_dependencies_rhel() {
             ;;
     esac
 
+    update_rpm_pkgs
     install_rhel_pkgs "${pkgs[@]}"
 }
 
@@ -143,10 +223,17 @@ main() {
             install_docker_dependencies_arch "$mode"
             ;;
         rhel)
-            install_docker_dependencies_rhel "$mode"
+            if is_ubi10; then
+                install_docker_dependencies_ubi10 "$mode"
+            else
+                install_docker_dependencies_rhel "$mode"
+            fi
             ;;
         fedora)
             install_docker_dependencies_fedora "$mode"
+            ;;
+        centos)
+            install_docker_dependencies_centos "$mode"
             ;;
         *)
             echo "OS $ID not supported"

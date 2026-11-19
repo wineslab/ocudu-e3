@@ -9,11 +9,14 @@
 #include "lib/scheduler/uci_scheduling/uci_allocator_impl.h"
 #include "lib/scheduler/uci_scheduling/uci_scheduler_impl.h"
 #include "lib/scheduler/ue_context/ue.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
 #include "lib/scheduler/ue_context/ue_repository.h"
-#include "tests/test_doubles/scheduler/pucch_res_test_builder_helper.h"
 #include "ocudu/ran/csi_rs/csi_meas_config.h"
+#include "ocudu/ran/meas_gap_config.h"
 #include "ocudu/ran/pucch/pucch_configuration.h"
 #include "ocudu/scheduler/config/pucch_resource_builder_params.h"
+#include "ocudu/scheduler/rrm/pucch_resource_manager.h"
+#include "ocudu/scheduler/rrm/ue_capability_summary.h"
 
 namespace ocudu {
 
@@ -21,11 +24,14 @@ namespace test_helpers {
 
 pucch_info make_pucch_info(const cell_configuration& cell_cfg, const pucch_resource& res, pucch_uci_bits uci_bits);
 
+// Returns pointers to all PUCCH PDUs allocated to the given UE, in storage order.
+std::vector<const pucch_info*> find_ue_pucchs(span<const pucch_info> pucch_pdus, rnti_t rnti);
+
 } // namespace test_helpers
 
-// Wrapper for std::find_if() to find a PUCCH PDU in a vector of PUCCH PDUs.
+// Wrapper for std::find_if() to find a PUCCH PDU in a range of PUCCH PDUs.
 template <typename F>
-bool find_pucch_pdu(const static_vector<pucch_info, MAX_PUCCH_PDUS_PER_SLOT>& pucch_pdus, const F& func)
+bool find_pucch_pdu(const span<const pucch_info> pucch_pdus, const F& func)
 {
   return std::find_if(pucch_pdus.begin(), pucch_pdus.end(), func) != pucch_pdus.end();
 }
@@ -33,18 +39,27 @@ bool find_pucch_pdu(const static_vector<pucch_info, MAX_PUCCH_PDUS_PER_SLOT>& pu
 bool pucch_info_match(const pucch_info& expected, const pucch_info& test);
 
 struct test_bench_params {
-  pucch_resource_builder_params           pucch_ded_params{};
-  max_pucch_code_rate                     max_code_rate = max_pucch_code_rate::dot_25;
-  std::optional<unsigned>                 pucch_res_common;
-  unsigned                                n_cces                 = 0;
-  unsigned                                max_pucchs_per_slot    = 32U;
-  unsigned                                max_ul_grants_per_slot = 32U;
-  unsigned                                nof_ul_dl_ports        = 1U;
-  bool                                    tdd                    = false;
-  sr_periodicity                          sr_period              = sr_periodicity::sl_40;
-  unsigned                                sr_offset              = 0;
-  std::optional<csi_resource_periodicity> csi_period             = csi_resource_periodicity::slots320;
-  unsigned                                csi_offset             = 9;
+  pucch_resource_builder_params pucch_ded_params{};
+  max_pucch_code_rate           max_code_rate = max_pucch_code_rate::dot_25;
+  std::optional<unsigned>       pucch_res_common;
+  unsigned                      n_cces                 = 0;
+  unsigned                      max_pucchs_per_slot    = 32U;
+  unsigned                      max_ul_grants_per_slot = 32U;
+  unsigned                      nof_ul_dl_ports        = 1U;
+  bool                          tdd                    = false;
+  // Number of UL symbols of the TDD pattern's special slot. Only used if \c tdd is set; if 0, the special slot has no
+  // UL symbols at all and is therefore not UL-enabled.
+  unsigned                                tdd_nof_ul_symbols = 0;
+  sr_periodicity                          sr_period          = sr_periodicity::sl_40;
+  unsigned                                sr_offset          = 0;
+  std::optional<csi_resource_periodicity> csi_period         = csi_resource_periodicity::slots320;
+  unsigned                                csi_offset         = 9;
+  // If set, applied via pucch_resource_manager::update_resources() to every UE added, mirroring the point at which
+  // the DU learns the UE's reported capabilities in production (i.e. after the initial, capability-agnostic
+  // pucch_resource_manager::alloc_resources()).
+  std::optional<ue_capability_summary> ue_caps;
+  // If set, configures a measurement gap for every UE added, which disables the UE uplink inside the gap.
+  std::optional<meas_gap_config> meas_gap;
 };
 
 class test_bench
@@ -73,14 +88,14 @@ public:
   const scheduler_expert_config           expert_cfg;
   test_helpers::test_sched_config_manager cfg_mng;
   const cell_configuration&               cell_cfg;
+  ue_cell_repository                      cell_ues;
   ue_repository                           ues;
-  ue_cell_repository&                     cell_ues;
 
   // Other dependencies.
-  pucch_res_builder_test_helper pucch_builder;
-  cell_resource_allocator       res_grid;
-  ocudulog::basic_logger&       mac_logger  = ocudulog::fetch_basic_logger("SCHED", true);
-  ocudulog::basic_logger&       test_logger = ocudulog::fetch_basic_logger("TEST");
+  pucch_resource_manager  pucch_builder;
+  cell_resource_allocator res_grid;
+  ocudulog::basic_logger& mac_logger  = ocudulog::fetch_basic_logger("SCHED", true);
+  ocudulog::basic_logger& test_logger = ocudulog::fetch_basic_logger("TEST");
 
   // Constants.
   const unsigned                 k0;

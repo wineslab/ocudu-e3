@@ -86,6 +86,27 @@ bool ocudu::test_helpers::is_valid_ue_context_release(const xnap_message& msg)
   return true;
 }
 
+bool ocudu::test_helpers::is_valid_retrieve_ue_context_request(const xnap_message& msg)
+{
+  TRUE_OR_RETURN(msg.pdu.type() == asn1::xnap::xn_ap_pdu_c::types_opts::init_msg);
+  TRUE_OR_RETURN(msg.pdu.init_msg().proc_code == ASN1_XNAP_ID_RETRIEVE_UE_CONTEXT);
+  return true;
+}
+
+bool ocudu::test_helpers::is_valid_retrieve_ue_context_response(const xnap_message& msg)
+{
+  TRUE_OR_RETURN(msg.pdu.type() == asn1::xnap::xn_ap_pdu_c::types_opts::successful_outcome);
+  TRUE_OR_RETURN(msg.pdu.successful_outcome().proc_code == ASN1_XNAP_ID_RETRIEVE_UE_CONTEXT);
+  return true;
+}
+
+bool ocudu::test_helpers::is_valid_retrieve_ue_context_failure(const xnap_message& msg)
+{
+  TRUE_OR_RETURN(msg.pdu.type() == asn1::xnap::xn_ap_pdu_c::types_opts::unsuccessful_outcome);
+  TRUE_OR_RETURN(msg.pdu.unsuccessful_outcome().proc_code == ASN1_XNAP_ID_RETRIEVE_UE_CONTEXT);
+  return true;
+}
+
 byte_buffer ocudu::test_helpers::get_rrc_container(const xnap_message& msg)
 {
   if (msg.pdu.init_msg().proc_code == ASN1_XNAP_ID_HO_PREP) {

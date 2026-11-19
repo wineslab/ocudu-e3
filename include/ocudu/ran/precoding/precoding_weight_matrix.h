@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/complex.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/tensor.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ocuduvec/sc_prod.h"

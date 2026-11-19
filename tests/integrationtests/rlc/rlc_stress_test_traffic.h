@@ -6,12 +6,12 @@
 
 #include "lib/rlc/rlc_bearer_logger.h"
 #include "rlc_stress_test_args.h"
-#include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/pdcp/pdcp_rx.h"
-#include "ocudu/pdcp/pdcp_tx.h"
+#include "ocudu/ran/gnb_du_id.h"
 #include <random>
 
 namespace ocudu {
+class pdcp_tx_upper_data_interface;
 
 class stress_traffic_sink : public pdcp_rx_upper_data_notifier
 {

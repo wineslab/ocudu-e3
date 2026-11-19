@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "lib/scheduler/config/time_domain_mapper.h"
 #include "lib/scheduler/slicing/inter_slice_scheduler.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
+#include "tests/ocudu_test_requirements.h"
+#include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/unittests/scheduler/test_utils/config_generators.h"
 #include "tests/unittests/scheduler/test_utils/dummy_test_components.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/scheduler/config/logical_channel_config_factory.h"
-#include "ocudu/scheduler/config/pusch_td_resource_indices.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -40,15 +43,10 @@ protected:
     }()),
     ues(cell_cfg.expert_cfg.ue)
   {
-    pusch_td_list_per_slot =
-        get_pusch_td_resource_indices_per_slot(cell_cfg.scs_common(),
-                                               cell_cfg.params.tdd_cfg,
-                                               cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
-                                               cell_cfg.dl_data_to_ul_ack);
     logger.set_level(ocudulog::basic_levels::debug);
     ocudulog::init();
 
-    ues.add_cell(cell_cfg, nullptr);
+    ues.register_cell(cell_ues);
   }
 
   ~slice_scheduler_test() { ocudulog::flush(); }
@@ -63,7 +61,7 @@ protected:
   const ue_configuration* add_ue(const sched_ue_creation_request_message& req)
   {
     const ue_configuration* ue_cfg = test_cfg.add_ue(req);
-    ues.add_ue(*ue_cfg, req.starts_in_fallback, req.ul_ccch_slot_rx, req.cfra_enabled);
+    ues.add_ue(*ue_cfg, {sched_config_helper::to_ue_creation_mode(req), req.ul_ccch_slot_rx});
     slice_sched.add_ue(req.ue_index);
     return ue_cfg;
   }
@@ -72,11 +70,11 @@ protected:
   test_helpers::test_sched_config_manager test_cfg;
   const cell_configuration&               cell_cfg;
 
-  ue_repository ues;
+  ue_cell_repository cell_ues{cell_cfg, nullptr};
+  ue_repository      ues;
 
-  cell_resource_allocator                                                            dummy_alloc{cell_cfg};
-  inter_slice_scheduler                                                              slice_sched{cell_cfg, ues};
-  std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> pusch_td_list_per_slot;
+  cell_resource_allocator dummy_alloc{cell_cfg};
+  inter_slice_scheduler   slice_sched{cell_cfg, ues};
 
 public:
   slot_point next_slot{to_numerology_value(cell_cfg.params.dl_cfg_common.freq_info_dl.scs_carrier_list.back().scs), 0};
@@ -109,7 +107,7 @@ TEST_F(default_slice_scheduler_test, when_no_lcid_exists_then_default_slice_is_n
 
   // Progress with the slots until there are valid k2 values for UL scheduling. If not, the UL slice candidate list will
   // be trivially empty.
-  while (pusch_td_list_per_slot[(next_slot - 1).count() % pusch_td_list_per_slot.size()].empty()) {
+  while (cell_cfg.init_bwp.ul.td_mapper().common_pusch_td_res_indices((next_slot - 1).count()).empty()) {
     run_slot();
   }
 
@@ -123,7 +121,7 @@ TEST_F(default_slice_scheduler_test, when_lcid_is_part_of_default_slice_then_def
 
   for (unsigned count = 0, e = 10; count != e; ++count) {
     const bool is_dl_active = has_active_tdd_dl_symbols(cell_cfg.params.tdd_cfg.value(), next_slot.slot_index());
-    const bool dl_slot_has_k2_values = not pusch_td_list_per_slot[count].empty();
+    const bool dl_slot_has_k2_values = not cell_cfg.init_bwp.ul.td_mapper().common_pusch_td_res_indices(count).empty();
     run_slot();
 
     auto next_dl_slice = slice_sched.get_next_dl_candidate();
@@ -181,6 +179,27 @@ TEST_F(default_slice_scheduler_test, when_candidate_instance_goes_out_of_scope_t
   next_dl_slice = slice_sched.get_next_dl_candidate();
   ASSERT_TRUE(next_dl_slice.has_value());
   ASSERT_EQ(next_dl_slice->id(), SRB_RAN_SLICE_ID);
+}
+
+TEST_F(default_slice_scheduler_test, when_deactivated_ue_gets_config_applied_then_no_channels_are_re_added_to_slices)
+{
+  // Regression for issue #573: a stale config-applied on a UE that was already deactivated (bearers cleared) but not
+  // yet erased must not attempt to re-map its logical channels to slices.
+  const du_ue_index_t ue_idx = to_du_ue_index(0);
+  ASSERT_NE(this->add_ue(ue_idx), nullptr);
+  run_slot();
+  ASSERT_TRUE(slice_sched.get_next_dl_candidate().has_value());
+
+  // Deactivation clears the UE bearers in the logical channel system while leaving the UE (and its dedicated config)
+  // in the repository.
+  this->ues[ue_idx].deactivate();
+  ASSERT_TRUE(this->ues[ue_idx].logical_channels().cfg().logical_channels().empty());
+
+  // Re-driving the slice add path must be a no-op instead of asserting on an unconfigured LCID.
+  slice_sched.config_applied(ue_idx);
+
+  // Scheduler remains healthy on the following slots.
+  run_slot();
 }
 
 TEST_F(default_slice_scheduler_test, when_grant_gets_allocated_then_number_of_available_rbs_decreases)
@@ -281,6 +300,7 @@ protected:
         {{{plmn_identity::test_value(), s_nssai_t{slice_service_type{1}}}, {MIN_SLICE_RB, MAX_SLICE_RB}},
          {{plmn_identity::test_value(), s_nssai_t{slice_service_type{2}}}, {MIN_SLICE_RB, MAX_SLICE_RB}}})
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-17-3-e");
   }
 
   const ue_configuration* add_ue(du_ue_index_t                                        ue_idx,
@@ -514,6 +534,7 @@ protected:
         {{{plmn_identity::test_value(), s_nssai_t{slice_service_type{1}}}, {MIN_SLICE_RB, MAX_NOF_PRBS}, PRIORITY},
          {{plmn_identity::test_value(), s_nssai_t{slice_service_type{2}}}, {0, MAX_NOF_PRBS}, PRIORITY}})
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-17-3-e");
   }
 
   const ue_configuration* add_ue(du_ue_index_t ue_idx)
@@ -541,7 +562,7 @@ TEST_F(prioritised_slice_scheduler_test,
 
   for (unsigned count = 0, e = 10; count != e; ++count) {
     const bool is_pdcch_active = has_active_tdd_dl_symbols(cell_cfg.params.tdd_cfg.value(), next_slot.slot_index());
-    const bool dl_slot_has_k2_values = not pusch_td_list_per_slot[count].empty();
+    const bool dl_slot_has_k2_values = not cell_cfg.init_bwp.ul.td_mapper().common_pusch_td_res_indices(count).empty();
     run_slot();
 
     if (is_pdcch_active) {
@@ -596,6 +617,7 @@ protected:
           PRIORITY},
          {{plmn_identity::test_value(), s_nssai_t{slice_service_type{2}}}, {0, MAX_NOF_PRBS}, PRIORITY}})
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-17-3-e");
   }
 
   const ue_configuration* add_ue(du_ue_index_t ue_idx)
@@ -625,7 +647,7 @@ TEST_F(dedicated_slice_scheduler_test, when_dedicated_resources_not_filled_then_
 
   for (unsigned count = 0, e = 10; count != e; ++count) {
     const bool is_pdcch_active = has_active_tdd_dl_symbols(cell_cfg.params.tdd_cfg.value(), next_slot.slot_index());
-    const bool dl_slot_has_k2_values = not pusch_td_list_per_slot[count].empty();
+    const bool dl_slot_has_k2_values = not cell_cfg.init_bwp.ul.td_mapper().common_pusch_td_res_indices(count).empty();
     run_slot();
 
     if (is_pdcch_active) {
@@ -708,6 +730,7 @@ protected:
           {DED_SLICE_RB, MIN_SLICE_RB, MAX_NOF_PRBS},
           PRIORITY}})
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-17-3-e");
   }
 
   const ue_configuration* add_ue(du_ue_index_t ue_idx)
@@ -740,7 +763,7 @@ TEST_F(dedicated_slice_scheduler_test_2nd, with_candidates_with_min_lim_remainin
 
   for (unsigned count = 0, e = 10; count != e; ++count) {
     const bool is_pdcch_active = has_active_tdd_dl_symbols(cell_cfg.params.tdd_cfg.value(), next_slot.slot_index());
-    const bool dl_slot_has_k2_values = not pusch_td_list_per_slot[count].empty();
+    const bool dl_slot_has_k2_values = not cell_cfg.init_bwp.ul.td_mapper().common_pusch_td_res_indices(count).empty();
     run_slot();
 
     if (is_pdcch_active) {
@@ -818,6 +841,7 @@ protected:
           PRIORITY},
          {{plmn_identity::test_value(), s_nssai_t{slice_service_type{2}}}, {MIN_SLICE_RB, MAX_NOF_PRBS}, PRIORITY}})
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-17-3-e");
   }
 
   const ue_configuration* add_ue(du_ue_index_t ue_idx)
@@ -844,7 +868,7 @@ TEST_F(dedicated_empty_slice_scheduler_test, when_slice_has_no_ues_its_rbs_will_
 
   for (unsigned count = 0, e = 10; count != e; ++count) {
     const bool is_pdcch_active = has_active_tdd_dl_symbols(cell_cfg.params.tdd_cfg.value(), next_slot.slot_index());
-    const bool dl_slot_has_k2_values = not pusch_td_list_per_slot[count].empty();
+    const bool dl_slot_has_k2_values = not cell_cfg.init_bwp.ul.td_mapper().common_pusch_td_res_indices(count).empty();
     run_slot();
 
     if (is_pdcch_active) {

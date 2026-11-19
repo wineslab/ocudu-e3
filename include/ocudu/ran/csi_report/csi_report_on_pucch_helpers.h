@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "ocudu/ran/csi_report/csi_report_configuration.h"
 #include "ocudu/ran/csi_report/csi_report_data.h"
 #include "ocudu/ran/csi_report/csi_report_packed.h"
 #include "ocudu/ran/csi_report/csi_report_size.h"
 
 namespace ocudu {
+struct csi_report_configuration;
 
 /// \brief Gets the Channel State Information (CSI) report size when the CSI report is transmitted in PUCCH.
 ///

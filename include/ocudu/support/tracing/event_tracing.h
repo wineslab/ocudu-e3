@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/adt/span.h"
+#include "ocudu/ocudulog/log_channel.h"
 #include "ocudu/support/compiler.h"
 #include "ocudu/support/tracing/resource_usage.h"
 #include <chrono>
@@ -18,9 +19,7 @@ class log_channel;
 
 namespace ocudu {
 
-/// \brief Trace Event clock type.
-///
-/// \remark We use high_resolution_clock instead of steady_clock for time stamps to be aligned with logging.
+/// Trace Event clock type.
 using trace_clock    = std::chrono::steady_clock;
 using trace_point    = trace_clock::time_point;
 using trace_duration = std::chrono::microseconds;

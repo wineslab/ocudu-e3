@@ -6,7 +6,7 @@
 
 #include "../ue_context/xnap_ue_logger.h"
 #include "ocudu/asn1/xnap/xnap_pdu_contents.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/support/async/async_task.h"
 #include "ocudu/support/async/protocol_transaction_manager.h"
 
@@ -28,7 +28,9 @@ private:
 
   std::chrono::milliseconds                                            procedure_timeout;
   protocol_transaction_event_source<asn1::xnap::sn_status_transfer_s>& sn_status_transfer_outcome;
-  xnap_ue_logger&                                                      logger;
+  // Copy of the UE logger. The XNAP UE context can be removed while this procedure is suspended, so the procedure must
+  // not hold a reference into it.
+  xnap_ue_logger logger;
 
   cu_cp_ue_index_t      ue_index;
   cu_cp_status_transfer sn_status_transfer;

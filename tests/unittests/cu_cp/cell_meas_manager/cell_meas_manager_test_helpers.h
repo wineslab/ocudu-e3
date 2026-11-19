@@ -6,6 +6,7 @@
 
 #include "../test_helpers.h"
 #include "lib/cu_cp/cell_meas_manager/cell_meas_manager_impl.h"
+#include "ocudu/cu_cp/cu_cp_configuration.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include <gtest/gtest.h>
 #include <optional>
@@ -15,6 +16,9 @@ namespace ocudu::ocucp {
 class dummy_mobility_manager : public cell_meas_mobility_manager_notifier
 {
 public:
+  /// Number of times the notifier was called, so tests can assert a report was (not) acted upon.
+  size_t nof_notifications = 0;
+
   void on_neighbor_better_than_spcell(cu_cp_ue_index_t     ue_index,
                                       gnb_id_t             neighbor_gnb_id,
                                       nr_cell_identity     neighbor_nci,
@@ -22,6 +26,7 @@ public:
                                       plmn_identity        neighbor_plmn,
                                       std::optional<tac_t> neighbor_tac = std::nullopt) override
   {
+    ++nof_notifications;
     fmt::print("on_neighbor_better_than_spcell() called.\n");
   }
 };
@@ -64,8 +69,10 @@ protected:
   manual_task_worker                 ctrl_worker{128};
   timer_manager                      timers;
   cu_cp_configuration                cu_cp_cfg;
+  ue_manager_config                  ue_cfg;
+  ue_manager_dependencies            ue_dependencies;
 
-  ue_manager ue_mng{cu_cp_cfg};
+  ue_manager ue_mng{ue_cfg, ue_dependencies};
 };
 
 } // namespace ocudu::ocucp

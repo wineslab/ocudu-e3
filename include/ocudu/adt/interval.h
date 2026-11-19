@@ -4,8 +4,7 @@
 #pragma once
 
 #include "ocudu/support/ocudu_assert.h"
-#include "fmt/format.h"
-#include <cassert>
+#include <algorithm>
 #include <type_traits>
 
 namespace ocudu {
@@ -36,7 +35,7 @@ public:
   {
     static_assert(std::is_convertible_v<U, T>, "Invalid interval start point type");
     static_assert(std::is_convertible_v<V, T>, "Invalid interval stop point type");
-    ocudu_assert(start_ <= stop_, "Invalid interval [{}, {})", start_, stop_);
+    ocudu_assert(start_ <= stop_, "Invalid interval, start point must not exceed stop point");
   }
 
   template <typename U, typename V>
@@ -172,22 +171,3 @@ private:
 };
 
 } // namespace ocudu
-
-namespace fmt {
-
-/// Format intervals with the notation [start, stop)
-template <typename T, bool RightClosed, typename Tag>
-struct formatter<ocudu::interval<T, RightClosed, Tag>> : public formatter<T> {
-  template <typename FormatContext>
-  auto format(const ocudu::interval<T, RightClosed, Tag>& interv, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(),
-                     "[{}{}{}{}",
-                     interv.start(),
-                     ocudu::interval<T, RightClosed, Tag>::is_real::value ? ", " : "..",
-                     interv.stop(),
-                     RightClosed ? ']' : ')');
-  }
-};
-
-} // namespace fmt

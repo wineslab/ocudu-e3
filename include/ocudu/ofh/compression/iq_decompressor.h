@@ -25,10 +25,11 @@ public:
   /// Decompresses compressed PRBs from the input buffer according to received compression parameters and puts the
   /// results into an array of brain floating point IQ samples.
   ///
-  /// \param[out] iq_data  Resulting IQ samples after decompression.
+  /// \param[out] iq_data  Resulting IQ samples after decompression, unspecified when this returns false.
   /// \param[in]  compressed_data A span containing received compressed IQ data and compression parameters.
   /// \param[in]  params  Compression parameters.
-  virtual void
+  /// \return True on success, false if the IQ data could not be decompressed.
+  virtual bool
   decompress(span<cbf16_t> iq_data, span<const uint8_t> compressed_data, const ru_compression_params& params) = 0;
 };
 

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "mac_dl_ue_repository.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

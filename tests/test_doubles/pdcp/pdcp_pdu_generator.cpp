@@ -8,6 +8,7 @@
 #pragma once
 
 #include "pdcp_pdu_generator.h"
+#include "ocudu/ran/pdcp/pdcp_sn_size.h"
 #include "ocudu/support/bit_encoding.h"
 #include "ocudu/support/error_handling.h"
 

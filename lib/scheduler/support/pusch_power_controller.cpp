@@ -60,18 +60,27 @@ void pusch_power_controller::update_pusch_pw_ctrl_state(slot_point slot_rx, unsi
 {
   const int latest_f_cl_pw_control =
       latest_pusch_pw_control.has_value() ? latest_pusch_pw_control.value().f_cl_pw_control : 0;
-  const unsigned grid_idx      = slot_rx.to_uint();
+  const unsigned grid_idx      = slot_rx.count();
   pusch_pw_ctrl_grid[grid_idx] = {slot_rx, nof_prbs, latest_f_cl_pw_control};
 }
 
-void pusch_power_controller::handle_phr(const cell_ph_report& phr, slot_point slot_rx)
+void pusch_power_controller::handle_phr(const cell_ph_report& phr, slot_point slot_rx, rnti_t phr_rnti)
 {
   if (not pusch_pwr_ctrl.has_value()) {
     return;
   }
 
+  // PHR reported in Configured Grant PUSCH have a different RNTI from the C-RNTI used by the UE.
+  // We ignore these PHRs and only log the event when the reported PH is negative.
+  if (phr_rnti != rnti) {
+    if (phr.ph.stop() < 0) {
+      logger.info("cs-rnti={}: negative PHR reported by Configured Grant PUSCH at slot={}", phr_rnti, slot_rx);
+    }
+    return;
+  }
+
   // Find the entry in the grid that corresponds to the slot where the PHR was received.
-  const auto& pusch_pw_ctrl = pusch_pw_ctrl_grid[slot_rx.to_uint()];
+  const auto& pusch_pw_ctrl = pusch_pw_ctrl_grid[slot_rx.count()];
   if (pusch_pw_ctrl.slot_rx != slot_rx) {
     const bool first_phr_reporting =
         std::all_of(pusch_pw_ctrl_grid.begin(), pusch_pw_ctrl_grid.end(), [](const pusch_pw_ctrl_data& data) {
@@ -82,7 +91,7 @@ void pusch_power_controller::handle_phr(const cell_ph_report& phr, slot_point sl
                   "increasing the grid size",
                   rnti,
                   slot_rx,
-                  slot_rx.to_uint() % pusch_pw_ctrl_grid.size());
+                  slot_rx.count() % pusch_pw_ctrl_grid.size());
     }
     latest_phr.emplace(ue_phr_report{phr, std::nullopt});
     return;
@@ -152,7 +161,8 @@ uint8_t pusch_power_controller::compute_tpc_command(slot_point pusch_slot)
     static constexpr int default_f_cl_pw_control = 0;
     latest_pusch_pw_control.emplace(pusch_pw_control{default_f_cl_pw_control, pusch_slot});
     return default_tpc;
-  } else if (pusch_slot <= latest_pusch_pw_control.value().latest_tpc_slot + tpc_adjust_prohibit_time_sl) {
+  }
+  if (pusch_slot <= latest_pusch_pw_control.value().latest_tpc_slot + tpc_adjust_prohibit_time_sl) {
     return default_tpc;
   }
 

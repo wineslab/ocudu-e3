@@ -14,9 +14,8 @@ namespace rlm_helper {
 struct rlm_builder_params {
   /// Parameters that are needed only when the RLM uses SSB as detection resources.
   struct rlm_ssb_params {
-    /// SSB bitmap and beam IDs, used to define which SSB ID should be used for RLM.
-    ssb_bitmap_t                       ssb_bitmap;
-    std::array<uint8_t, NOF_SSB_BEAMS> ssb_beam_ids;
+    /// Transmitted SSB candidates, from which the SSB indexes used for RLM are taken.
+    ssb_bitmap_t ssb_bitmap;
   };
 
   rlm_builder_params() = default;
@@ -24,17 +23,14 @@ struct rlm_builder_params {
   {
     // Meant for rlm_resource_type::csi_rs only.
   }
-  rlm_builder_params(rlm_resource_type                         resource_type_,
-                     uint8_t                                   L_max_,
-                     const ssb_bitmap_t&                       ssb_bitmap,
-                     const std::array<uint8_t, NOF_SSB_BEAMS>& ssb_beam_ids) :
-    resource_type(resource_type_), L_max(L_max_), ssb_params(rlm_ssb_params{ssb_bitmap, ssb_beam_ids})
+  rlm_builder_params(rlm_resource_type resource_type_, uint8_t L_max_, const ssb_bitmap_t& ssb_bitmap) :
+    resource_type(resource_type_), L_max(L_max_), ssb_params(rlm_ssb_params{ssb_bitmap})
   {
   }
 
   /// Defines which resources (e.g, default, SSB, CSI-RS, SSB and CSI-RS) the UE should use for RLM.
   rlm_resource_type resource_type = rlm_resource_type::default_type;
-  /// Max number of SSB occasions per SSB period. Possible values are {4, 8, 64}.
+  /// Max number of SSB candidates per SSB period. Possible values are {4, 8, 64}.
   /// \remark Even though L_max can be inferred from the SSB bitmap, we report it as a separate parameter, as it is
   /// needed also when no SSB resources are used (meaning there is no SSB parameters given).
   uint8_t                       L_max;

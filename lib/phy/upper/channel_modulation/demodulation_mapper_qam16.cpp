@@ -4,6 +4,7 @@
 
 #include "demodulation_mapper_qam16.h"
 #include "ocudu/phy/upper/log_likelihood_ratio.h"
+#include "ocudu/support/math/complex_math_utils.h"
 
 #ifdef __AVX2__
 #include "avx2_helpers.h"

@@ -19,10 +19,10 @@ public:
     xnc_index     = xnc_index_;
   }
 
-  async_task<bool> on_new_rrc_handover_command(cu_cp_ue_index_t ue_index, byte_buffer command) override
+  async_task<bool> on_new_rrc_handover_command(cu_cp_rrc_handover_command command) override
   {
     ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");
-    return cu_cp_handler->handle_new_rrc_handover_command(ue_index, std::move(command), xnc_index);
+    return cu_cp_handler->handle_new_rrc_handover_command(std::move(command), xnc_index);
   }
 
   cu_cp_ue_index_t request_new_ue_index_allocation(const nr_cell_global_id_t& cgi, const plmn_identity& plmn) override
@@ -65,16 +65,35 @@ public:
     cu_cp_handler->handle_handover_cancel_received(ue_index);
   }
 
-  void on_handover_success_received(cu_cp_ue_index_t source_ue_index, peer_xnap_ue_id_t winner_peer_xnap_ue_id) override
+  void on_handover_success_received(cu_cp_ue_index_t source_ue_index, const nr_cell_global_id_t& winner_cgi) override
   {
     ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");
-    cu_cp_handler->handle_xnap_handover_success_received(source_ue_index, winner_peer_xnap_ue_id);
+    cu_cp_handler->handle_xnap_handover_success_received(source_ue_index, winner_cgi);
   }
 
   void on_ue_context_release_received(cu_cp_ue_index_t ue_index) override
   {
     ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");
     cu_cp_handler->handle_xnap_ue_context_release_received(ue_index);
+  }
+
+  std::vector<cu_cp_served_cell_info> on_served_cells_required() override
+  {
+    ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");
+    return cu_cp_handler->handle_served_cells_required();
+  }
+
+  cu_cp_ue_index_t on_xnap_ue_context_id_lookup(const xnap_ue_context_id& ue_context_id) override
+  {
+    ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");
+    return cu_cp_handler->handle_xnap_ue_context_id_lookup(ue_context_id);
+  }
+
+  async_task<xnap_retrieve_ue_context_response>
+  on_xnap_retrieve_ue_context_request(const xnap_retrieve_ue_context_request& request) override
+  {
+    ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");
+    return cu_cp_handler->handle_xnap_retrieve_ue_context_request(request);
   }
 
 private:

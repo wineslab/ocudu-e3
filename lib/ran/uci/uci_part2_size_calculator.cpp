@@ -3,7 +3,6 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/uci/uci_part2_size_calculator.h"
-#include "ocudu/support/math/math_utils.h"
 
 using namespace ocudu;
 
@@ -33,7 +32,7 @@ static unsigned extract_parameter(unsigned offset, unsigned width, const uci_pay
   return static_cast<unsigned>(param);
 }
 
-unsigned ocudu::uci_part2_get_size(const uci_payload_type& part1, const uci_part2_size_description& descr)
+units::bits ocudu::uci_part2_get_size(const uci_payload_type& part1, const uci_part2_size_description& descr)
 {
   unsigned result = 0;
 
@@ -67,5 +66,5 @@ unsigned ocudu::uci_part2_get_size(const uci_payload_type& part1, const uci_part
     result += entry.map[index];
   }
 
-  return result;
+  return units::bits(result);
 }

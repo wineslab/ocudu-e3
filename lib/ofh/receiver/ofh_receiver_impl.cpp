@@ -3,6 +3,7 @@
 
 #include "ofh_receiver_impl.h"
 #include "ofh_message_receiver_task_dispatcher.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ofh/ethernet/ethernet_properties.h"
 
 using namespace ocudu;
@@ -12,15 +13,14 @@ static message_receiver_config get_message_receiver_configuration(const receiver
 {
   message_receiver_config config;
 
-  config.sector                        = rx_config.sector;
-  config.nof_symbols                   = get_nsymb_per_slot(rx_config.cp);
-  config.scs                           = rx_config.scs;
-  config.vlan_params.mac_src_address   = rx_config.mac_src_address;
-  config.vlan_params.mac_dst_address   = rx_config.mac_dst_address;
-  config.vlan_params.eth_type          = ether::ECPRI_ETH_TYPE;
-  config.warn_unreceived_frames        = rx_config.log_unreceived_ru_frames;
-  config.are_metrics_enabled           = rx_config.are_metrics_enabled;
-  config.enable_log_warnings_for_lates = rx_config.enable_log_warnings_for_lates;
+  config.sector                      = rx_config.sector;
+  config.nof_symbols                 = get_nsymb_per_slot(rx_config.cp);
+  config.scs                         = rx_config.scs;
+  config.vlan_params.mac_src_address = rx_config.mac_src_address;
+  config.vlan_params.mac_dst_address = rx_config.mac_dst_address;
+  config.vlan_params.eth_type        = ether::ECPRI_ETH_TYPE;
+  config.warn_unreceived_frames      = rx_config.log_unreceived_ru_frames;
+  config.are_metrics_enabled         = rx_config.are_metrics_enabled;
 
   config.prach_eaxc = rx_config.prach_eaxc;
   config.ul_eaxc    = rx_config.ul_eaxc;

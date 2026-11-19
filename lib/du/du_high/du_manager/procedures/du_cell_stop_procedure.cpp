@@ -6,8 +6,10 @@
 #include "../du_cell_manager.h"
 #include "../du_ue/du_ue_manager.h"
 #include "du_ue_reset_procedure.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/async_no_op_task.h"
 #include "ocudu/support/async/async_timer.h"
+#include "ocudu/support/async/when_all.h"
 
 using namespace ocudu;
 using namespace odu;
@@ -38,8 +40,17 @@ void du_cell_stop_procedure::operator()(coro_context<async_task<void>>& ctx)
     CORO_EARLY_RETURN();
   }
 
-  // Check if there are still UEs attached to this cell that need to be released.
-  CORO_AWAIT(rem_ues_with_matching_pcell());
+  if (mode == ue_removal_mode::trigger_f1_ue_release_request) {
+    // Graceful drain: bar the cell and drain its UEs concurrently. Barring makes the live MIB advertise
+    // cellBarred=true (TS 38.304) so idle UEs reselect away and released UEs do not re-camp here. Running the
+    // bar-and-settle alongside the drain lets the barred MIB reach the air without adding latency to the stop;
+    // the settling window is held before the cell is torn down, so the bar is transmitted before SSB stops.
+    CORO_AWAIT(when_all(create_bar_and_drain_tasks()));
+  } else {
+    // F1 Reset and silent removal modes are reserved for fault and shutdown paths where graceful UE-side
+    // handling is not required, so the cell is not barred.
+    CORO_AWAIT(rem_ues_with_matching_pcell());
+  }
 
   // Stop cell.
   CORO_AWAIT(cell_mng.stop(cell_index));
@@ -52,6 +63,16 @@ void du_cell_stop_procedure::operator()(coro_context<async_task<void>>& ctx)
   proc_logger.log_proc_completed();
 
   CORO_RETURN();
+}
+
+std::vector<async_task<void>> du_cell_stop_procedure::create_bar_and_drain_tasks()
+{
+  std::vector<async_task<void>> tasks;
+  // Two concurrent tasks: the bar-and-settle and the UE drain.
+  tasks.reserve(2);
+  tasks.push_back(cell_mng.set_cell_barred_and_wait(cell_index));
+  tasks.push_back(rem_ues_with_matching_pcell());
+  return tasks;
 }
 
 static void fill_ues_to_rem(std::vector<du_ue_index_t>& ues_to_rem, du_ue_manager& ue_mng, du_cell_index_t cell_index)
@@ -97,8 +118,7 @@ async_task<void> du_cell_stop_procedure::rem_ues_with_matching_pcell()
 async_task<void> du_cell_stop_procedure::await_cu_to_release_ues()
 {
   // Implementation-defined timeout for graceful UE removal. After which, we will force UE removal.
-  static constexpr std::chrono::milliseconds periodic_check_timeout{10};
-  static constexpr unsigned                  nof_checks = std::chrono::milliseconds{500} / periodic_check_timeout;
+  static constexpr unsigned nof_checks = cu_release_timeout / cu_release_check_period;
 
   return launch_async([this, count = 0U](coro_context<async_task<void>>& ctx) mutable {
     CORO_BEGIN(ctx);
@@ -115,7 +135,7 @@ async_task<void> du_cell_stop_procedure::await_cu_to_release_ues()
 
       // > Wait for all UEs to be released.
       for (; count != nof_checks; ++count) {
-        CORO_AWAIT(async_wait_for(timer, periodic_check_timeout));
+        CORO_AWAIT(async_wait_for(timer, cu_release_check_period));
 
         bool ues_exist = false;
         for (du_ue_index_t ue_idx : ues_to_rem) {

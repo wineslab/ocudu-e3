@@ -6,6 +6,7 @@
 #include "pusch_decoder_buffer_dummy.h"
 #include "pusch_processor_notifier_adaptor.h"
 #include "pusch_processor_validator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/phy/upper/channel_coding/ldpc/ldpc.h"
 #include "ocudu/phy/upper/channel_processors/pusch/formatters.h"
@@ -14,7 +15,6 @@
 #include "ocudu/phy/upper/unique_rx_buffer.h"
 #include "ocudu/ran/pusch/ulsch_info.h"
 #include "ocudu/ran/sch/sch_dmrs_power.h"
-#include "ocudu/ran/uci/uci_formatters.h"
 #include "ocudu/ran/uci/uci_part2_size_calculator.h"
 
 using namespace ocudu;
@@ -56,7 +56,7 @@ public:
   {
     ocudu_assert(notifier != nullptr, "Notifier not connected.");
 
-    unsigned nof_csi_part_2_bits = uci_part2_get_size(part1, csi_part2_size);
+    unsigned nof_csi_part_2_bits = uci_part2_get_size(part1, csi_part2_size).value();
 
     // Skip if the number of CSI Part 2 bits is zero.
     if (nof_csi_part_2_bits == 0) {
@@ -168,7 +168,7 @@ void pusch_processor_impl::process(span<uint8_t>                    data,
 
   // Configure the channel estimator.
   dmrs_pusch_estimator::configuration ch_est_config;
-  ch_est_config.slot = pdu.slot;
+  ch_est_config.slot = pdu.slot - pdu.slot_offset;
   if (enable_transform_precoding) {
     ch_est_config.sequence_config = dmrs_pusch_estimator::low_papr_sequence_configuration{.n_rs_id = n_rs_id};
   } else {
@@ -293,6 +293,7 @@ void pusch_processor_impl::process_data(span<uint8_t>                          d
     decoder_config.nof_ldpc_iterations = dec_nof_iterations;
     decoder_config.use_early_stop      = dec_enable_early_stop;
     decoder_config.new_data            = pdu.codeword->new_data;
+    decoder_config.last_repetition     = pdu.codeword->last_repetition;
 
     // Setup decoder.
     decoder_buffer =

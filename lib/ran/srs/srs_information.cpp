@@ -3,11 +3,11 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/srs/srs_information.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/resource_block.h"
 #include "ocudu/ran/srs/srs_bandwidth_configuration.h"
 #include "ocudu/ran/srs/srs_resource_configuration.h"
 #include "ocudu/support/ocudu_assert.h"
-#include <cmath>
 
 using namespace ocudu;
 

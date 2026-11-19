@@ -20,26 +20,53 @@ namespace ocudu::ocucp {
 struct cu_cp_tx_bw {
   subcarrier_spacing nr_scs;
   uint16_t           nr_nrb;
+
+  bool operator==(const cu_cp_tx_bw& rhs) const { return nr_scs == rhs.nr_scs and nr_nrb == rhs.nr_nrb; }
+  bool operator!=(const cu_cp_tx_bw& rhs) const { return !(rhs == *this); }
 };
 
 struct cu_cp_sul_info {
   uint32_t    sul_nr_arfcn;
   cu_cp_tx_bw sul_tx_bw;
+
+  bool operator==(const cu_cp_sul_info& rhs) const
+  {
+    return sul_nr_arfcn == rhs.sul_nr_arfcn and sul_tx_bw == rhs.sul_tx_bw;
+  }
+  bool operator!=(const cu_cp_sul_info& rhs) const { return !(rhs == *this); }
 };
 
 struct cu_cp_supported_sul_freq_band_item {
   uint16_t freq_band_ind_nr;
+
+  bool operator==(const cu_cp_supported_sul_freq_band_item& rhs) const
+  {
+    return freq_band_ind_nr == rhs.freq_band_ind_nr;
+  }
+  bool operator!=(const cu_cp_supported_sul_freq_band_item& rhs) const { return !(rhs == *this); }
 };
 
 struct cu_cp_freq_band_nr_item {
   uint16_t                                        freq_band_ind_nr;
   std::vector<cu_cp_supported_sul_freq_band_item> supported_sul_band_list;
+
+  bool operator==(const cu_cp_freq_band_nr_item& rhs) const
+  {
+    return freq_band_ind_nr == rhs.freq_band_ind_nr and supported_sul_band_list == rhs.supported_sul_band_list;
+  }
+  bool operator!=(const cu_cp_freq_band_nr_item& rhs) const { return !(rhs == *this); }
 };
 
 struct cu_cp_nr_freq_info {
   uint32_t                             nr_arfcn;
   std::optional<cu_cp_sul_info>        sul_info;
   std::vector<cu_cp_freq_band_nr_item> freq_band_list_nr;
+
+  bool operator==(const cu_cp_nr_freq_info& rhs) const
+  {
+    return nr_arfcn == rhs.nr_arfcn and sul_info == rhs.sul_info and freq_band_list_nr == rhs.freq_band_list_nr;
+  }
+  bool operator!=(const cu_cp_nr_freq_info& rhs) const { return !(rhs == *this); }
 };
 
 struct cu_cp_fdd_info {
@@ -47,11 +74,21 @@ struct cu_cp_fdd_info {
   cu_cp_nr_freq_info dl_nr_freq_info;
   cu_cp_tx_bw        ul_tx_bw;
   cu_cp_tx_bw        dl_tx_bw;
+
+  bool operator==(const cu_cp_fdd_info& rhs) const
+  {
+    return ul_nr_freq_info == rhs.ul_nr_freq_info and dl_nr_freq_info == rhs.dl_nr_freq_info and
+           ul_tx_bw == rhs.ul_tx_bw and dl_tx_bw == rhs.dl_tx_bw;
+  }
+  bool operator!=(const cu_cp_fdd_info& rhs) const { return !(rhs == *this); }
 };
 
 struct cu_cp_tdd_info {
   cu_cp_nr_freq_info nr_freq_info;
   cu_cp_tx_bw        tx_bw;
+
+  bool operator==(const cu_cp_tdd_info& rhs) const { return nr_freq_info == rhs.nr_freq_info and tx_bw == rhs.tx_bw; }
+  bool operator!=(const cu_cp_tdd_info& rhs) const { return !(rhs == *this); }
 };
 
 using cu_cp_nr_mode_info = std::variant<cu_cp_fdd_info, cu_cp_tdd_info>;
@@ -72,7 +109,8 @@ struct cu_cp_served_cell_info {
     five_gs_tac(other.five_gs_tac),
     served_plmns(other.served_plmns),
     nr_mode_info(other.nr_mode_info),
-    meas_timing_cfg(other.meas_timing_cfg.copy())
+    meas_timing_cfg(other.meas_timing_cfg.copy()),
+    ranac(other.ranac)
   {
   }
   cu_cp_served_cell_info& operator=(const cu_cp_served_cell_info& other)
@@ -84,9 +122,18 @@ struct cu_cp_served_cell_info {
       served_plmns    = other.served_plmns;
       nr_mode_info    = other.nr_mode_info;
       meas_timing_cfg = other.meas_timing_cfg.copy();
+      ranac           = other.ranac;
     }
     return *this;
   }
+
+  bool operator==(const cu_cp_served_cell_info& rhs) const
+  {
+    return nr_cgi == rhs.nr_cgi and nr_pci == rhs.nr_pci and five_gs_tac == rhs.five_gs_tac and
+           served_plmns == rhs.served_plmns and nr_mode_info == rhs.nr_mode_info and
+           meas_timing_cfg == rhs.meas_timing_cfg and ranac == rhs.ranac;
+  }
+  bool operator!=(const cu_cp_served_cell_info& rhs) const { return !(rhs == *this); }
 };
 
 struct cu_cp_gnb_du_sys_info {

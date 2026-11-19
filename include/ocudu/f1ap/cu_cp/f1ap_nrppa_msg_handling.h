@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/ran/positioning/e_cid_measurement.h"
 #include "ocudu/ran/positioning/positioning_messages.h"
 #include "ocudu/support/async/async_task.h"
 
@@ -30,6 +31,10 @@ public:
   /// Handles the given positioning measurement request message.
   virtual async_task<expected<measurement_response_t, measurement_failure_t>>
   handle_positioning_measurement_request(const measurement_request_t& request) = 0;
+
+  /// Handles the given E-CID measurement initiation request message.
+  virtual async_task<expected<e_cid_measurement_response_t, e_cid_measurement_failure_t>>
+  handle_e_cid_measurement_request(const e_cid_measurement_request_t& request) = 0;
 };
 
 } // namespace ocudu::ocucp

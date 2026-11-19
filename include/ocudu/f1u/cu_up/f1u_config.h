@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ocudu/support/timers.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 #include <chrono>
 
 namespace ocudu {

@@ -4,13 +4,13 @@
 
 #include "dci_builder.h"
 #include "../cell/cell_harq_manager.h"
-#include "pucch/pucch_k1_helper.h"
-#include "rb_helper.h"
+#include "../config/time_domain_mapper.h"
 #include "ocudu/ran/pdcch/dci_packing.h"
 #include "ocudu/ran/pdcch/search_space.h"
 #include "ocudu/ran/pdsch/pdsch_antenna_ports_mapping.h"
 #include "ocudu/ran/pusch/pusch_antenna_ports_mapping.h"
 #include "ocudu/scheduler/config/bwp_configuration.h"
+#include "ocudu/scheduler/support/rb_helper.h"
 #include <algorithm>
 
 using namespace ocudu;
@@ -88,11 +88,13 @@ void ocudu::build_dci_f1_0_p_rnti(dci_dl_info& dci, const bwp_downlink_common& i
   p_dci.short_messages           = short_messages;
 }
 
-void ocudu::build_dci_f1_0_ra_rnti(dci_dl_info&               dci,
-                                   const bwp_downlink_common& init_dl_bwp,
-                                   crb_interval               crbs,
-                                   unsigned                   time_resource,
-                                   sch_mcs_index              mcs_index)
+/// Builds DCI f1_0 shared by RA-RNTI and MsgB-RNTI, as per TS38.212, clause 7.3.1.2.1.
+static void build_dci_f1_0_ra_or_msgb_rnti(dci_dl_info&               dci,
+                                           const bwp_downlink_common& init_dl_bwp,
+                                           crb_interval               crbs,
+                                           unsigned                   time_resource,
+                                           sch_mcs_index              mcs_index,
+                                           unsigned                   lsb_sfn)
 {
   dci_1_0_ra_rnti_configuration& ra_dci = dci.set_ra_rnti_f1_0();
   // as per TS38.212, clause 7.3.1.2.1 - N^{DL,BWP}_RB.
@@ -107,6 +109,30 @@ void ocudu::build_dci_f1_0_ra_rnti(dci_dl_info&               dci,
   ra_dci.time_resource               = time_resource;
   ra_dci.modulation_coding_scheme    = mcs_index.value();
   ra_dci.tb_scaling                  = 0; // TODO.
+  ra_dci.lsb_sfn                     = lsb_sfn;
+}
+
+void ocudu::build_dci_f1_0_ra_rnti(dci_dl_info&               dci,
+                                   const bwp_downlink_common& init_dl_bwp,
+                                   crb_interval               crbs,
+                                   unsigned                   time_resource,
+                                   sch_mcs_index              mcs_index)
+{
+  build_dci_f1_0_ra_or_msgb_rnti(dci, init_dl_bwp, crbs, time_resource, mcs_index, 0);
+}
+
+void ocudu::build_dci_f1_0_msgb_rnti(dci_dl_info&               dci,
+                                     const bwp_downlink_common& init_dl_bwp,
+                                     crb_interval               crbs,
+                                     unsigned                   time_resource,
+                                     sch_mcs_index              mcs_index,
+                                     unsigned                   msgb_resp_window_ms,
+                                     unsigned                   prach_sfn)
+{
+  // TS38.213, Section 8.2A: the LSBs of SFN field is only present if msgB-ResponseWindow is configured larger than
+  // 10 msec; otherwise these bits are reserved.
+  const unsigned lsb_sfn = msgb_resp_window_ms > 10 ? prach_sfn & 0b11U : 0U;
+  build_dci_f1_0_ra_or_msgb_rnti(dci, init_dl_bwp, crbs, time_resource, mcs_index, lsb_sfn);
 }
 
 void ocudu::build_dci_f1_0_tc_rnti(dci_dl_info&                  dci,
@@ -211,28 +237,30 @@ void ocudu::build_dci_f1_1_c_rnti(dci_dl_info&                  dci,
 {
   const search_space_info& ss_info = ue_cell_cfg.search_space(ss_id);
   ocudu_assert(not ss_info.cfg->is_common_search_space(), "SearchSpace must be of type UE-Specific SearchSpace");
+  ocudu_sanity_check(ss_info.get_dl_dci_format() == dci_dl_format::f1_1, "Invalid DCI format");
 
-  // TODO: Update the value based on nof. CWs enabled.
-  static constexpr bool are_both_cws_enabled = false;
+  // Two codewords require maxLength=2 for nof_layers > 4 per 3GPP TS 38.212 Table 7.3.1.2.2; the two-codeword table
+  // does not exist otherwise.
+  const auto&           dmrs_cfg             = ss_info.bwp->dl.pdsch().ded()->pdsch_mapping_type_a_dmrs.value();
+  const bool            has_len2             = dmrs_cfg.is_max_length_len2;
+  const bool            are_both_cws_enabled = (nof_layers > 4) && has_len2;
+  const dmrs_max_length max_len              = has_len2 ? dmrs_max_length::len2 : dmrs_max_length::len1;
 
   const bwp_configuration& active_dl_bwp = ss_info.bwp->dl.cfg();
-  const auto               k1_candidates =
-      get_k1_candidates(ss_info.get_dl_dci_format(), ue_cell_cfg.cell_cfg_common.dl_data_to_ul_ack);
+  const auto               k1_candidates = ss_info.bwp->ul.td_mapper().dedicated_k1_candidates();
 
   dci_1_1_configuration& f1_1 = dci.set_c_rnti_f1_1();
 
   f1_1.tpc_command             = static_cast<unsigned>(tpc);
   f1_1.srs_request             = srs_request;
   f1_1.dmrs_seq_initialization = 0;
-  ocudu_assert(ss_info.bwp->dl.pdsch().ded()->pdsch_mapping_type_a_dmrs.has_value(),
-               "No DMRS configured in PDSCH configuration");
-  const auto& dmrs_cfg = ss_info.bwp->dl.pdsch().ded()->pdsch_mapping_type_a_dmrs.value();
-  f1_1.antenna_ports   = get_pdsch_antenna_port_mapping_row_index(
-      nof_layers,
-      ue_cell_cfg.cell_cfg_common.params.dl_carrier.nof_ant,
-      dmrs_cfg.is_dmrs_type2 ? dmrs_config_type::type2 : dmrs_config_type::type1,
-      dmrs_cfg.is_max_length_len2 ? dmrs_max_length::len2 : dmrs_max_length::len1,
-      are_both_cws_enabled);
+
+  f1_1.antenna_ports = get_pdsch_antenna_port_mapping_row_index(nof_layers,
+                                                                ue_cell_cfg.cell_cfg_common.params.dl_carrier.nof_ant,
+                                                                dmrs_cfg.is_dmrs_type2 ? dmrs_config_type::type2
+                                                                                       : dmrs_config_type::type1,
+                                                                max_len,
+                                                                are_both_cws_enabled);
 
   // See 38.212, clause 7.3.1.2.2 - N^{DL,BWP}_RB for C-RNTI.
   f1_1.frequency_resource = ra_frequency_type1_get_riv(

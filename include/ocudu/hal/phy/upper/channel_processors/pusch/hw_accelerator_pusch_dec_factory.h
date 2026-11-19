@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/hal/phy/upper/channel_processors/pusch/hw_accelerator_pusch_dec.h"
+#include <memory>
 
 namespace ocudu {
 namespace hal {

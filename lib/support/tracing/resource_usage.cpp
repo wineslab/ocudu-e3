@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ocudu/support/tracing/resource_usage.h"
+#include <cerrno>
 #include <sys/resource.h>
 
 using namespace ocudu;

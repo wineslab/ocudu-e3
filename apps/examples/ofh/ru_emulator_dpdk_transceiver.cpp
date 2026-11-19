@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ru_emulator_transceiver.h"
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/ofh/ethernet/dpdk/dpdk_ethernet_rx_buffer.h"
 #include <chrono>
 #include <future>

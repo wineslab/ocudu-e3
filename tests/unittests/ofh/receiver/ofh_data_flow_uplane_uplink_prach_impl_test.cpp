@@ -4,6 +4,8 @@
 #include "../../../../lib/ofh/receiver/ofh_data_flow_uplane_uplink_prach_impl.h"
 #include "../ofh_uplane_rx_symbol_notifier_test_doubles.h"
 #include "helpers.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ofh/serdes/ofh_message_decoder_properties.h"
 #include "ocudu/ofh/serdes/ofh_uplane_message_decoder.h"
 #include <gtest/gtest.h>
@@ -162,7 +164,7 @@ TEST_P(data_flow_uplane_uplink_prach_impl_fixture, valid_message_containing_all_
     deco_results.params.symbol_id               = i;
     uplane_decoder->set_results(deco_results);
 
-    data_flow.decode_type1_message(eaxc, {});
+    data_flow.decode_type1_message(eaxc, {}, true);
   }
 
   ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
@@ -174,7 +176,7 @@ TEST_P(data_flow_uplane_uplink_prach_impl_fixture, invalid_filter_index_does_not
   uplane_message_decoder_results deco_results = build_valid_decoder_results();
   deco_results.params.filter_index            = ocudu::ofh::filter_index_type::standard_channel_filter;
   uplane_decoder->set_results(deco_results);
-  data_flow.decode_type1_message(eaxc, {});
+  data_flow.decode_type1_message(eaxc, {}, true);
 
   ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
   ASSERT_FALSE(notifier->has_new_prach_function_been_called());
@@ -189,7 +191,7 @@ TEST_P(data_flow_uplane_uplink_prach_impl_fixture, prbs_outside_prach_range_does
     deco_results.sections.front().nof_prbs      = 1;
     uplane_decoder->set_results(deco_results);
 
-    data_flow.decode_type1_message(eaxc, {});
+    data_flow.decode_type1_message(eaxc, {}, true);
   }
 
   ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());

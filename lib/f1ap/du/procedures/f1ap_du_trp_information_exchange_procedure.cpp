@@ -4,6 +4,7 @@
 
 #include "f1ap_du_trp_information_exchange_procedure.h"
 #include "../../asn1_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/f1ap/du/f1ap_du.h"

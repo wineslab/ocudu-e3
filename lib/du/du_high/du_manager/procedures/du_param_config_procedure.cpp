@@ -4,11 +4,41 @@
 
 #include "du_param_config_procedure.h"
 #include "../converters/f1ap_configuration_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/async/async_no_op_task.h"
 
 using namespace ocudu;
 using namespace odu;
+
+/// Validates that a SIB update, if present, does not exceed the ASN.1 cardinality limits of its lists, so that
+/// invalid content is rejected here rather than being committed to the live cell config and only failing later
+/// during ASN.1 encoding.
+static error_type<std::string> validate_new_sys_info(const sib_info& new_sys_info)
+{
+  if (const auto* sib3 = std::get_if<sib3_info>(&new_sys_info)) {
+    if (sib3->intra_freq_neigh_cell_list.size() > MAX_NOF_SIB3_INTRA_FREQ_CELLS) {
+      return make_unexpected(
+          fmt::format("SIB3 'intra_freq_neigh_cell_list' contains {} entries, exceeding the maximum of {}",
+                      sib3->intra_freq_neigh_cell_list.size(),
+                      MAX_NOF_SIB3_INTRA_FREQ_CELLS));
+    }
+    if (sib3->intra_freq_excluded_cell_list.size() > MAX_NOF_SIB3_INTRA_FREQ_CELLS) {
+      return make_unexpected(
+          fmt::format("SIB3 'intra_freq_excluded_cell_list' contains {} entries, exceeding the maximum of {}",
+                      sib3->intra_freq_excluded_cell_list.size(),
+                      MAX_NOF_SIB3_INTRA_FREQ_CELLS));
+    }
+  } else if (const auto* sib4 = std::get_if<sib4_info>(&new_sys_info)) {
+    if (sib4->inter_freq_carrier_freq_list.size() > MAX_NOF_SIB4_INTER_FREQ_CARRIERS) {
+      return make_unexpected(
+          fmt::format("SIB4 'inter_freq_carrier_freq_list' contains {} entries, exceeding the maximum of {}",
+                      sib4->inter_freq_carrier_freq_list.size(),
+                      MAX_NOF_SIB4_INTER_FREQ_CARRIERS));
+    }
+  }
+  return {};
+}
 
 static error_type<std::string> validate_du_param_config_request(const du_param_config_request& req)
 {
@@ -21,6 +51,11 @@ static error_type<std::string> validate_du_param_config_request(const du_param_c
     if (not cell.ssb_pwr_mod.has_value() and cell.rrm_policy_ratio_list.empty() and not cell.new_sys_info.has_value()) {
       return make_unexpected(
           "Cell config requests must specify either SSB power mod or rrm_policy_ratio_list or new_sys_info.");
+    }
+    if (cell.new_sys_info.has_value()) {
+      if (auto outcome = validate_new_sys_info(cell.new_sys_info.value()); not outcome.has_value()) {
+        return make_unexpected(outcome.error());
+      }
     }
   }
 

@@ -7,6 +7,7 @@
 #include "../ue_context/f1ap_du_ue.h"
 #include "../ue_context/f1ap_du_ue_manager.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
+#include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 
 namespace ocudu {
 namespace odu {
@@ -22,6 +23,17 @@ public:
                                        timer_factory                               timers_);
 
   void operator()(coro_context<async_task<void>>& ctx);
+
+  /// Wait period for RRC container in UE CONTEXT RELEASE COMMAND to be delivered in the lower layers, before giving
+  /// up and proceeding with the UE context release regardless.
+  /// Note: This timeout should account for the delay for the UE to receive the RRC container, which is
+  /// non-deterministic, and the timeout of 60msec specified in TS 38.331, 5.3.8.3 for the UE to ACK the RRC
+  /// container.
+  static constexpr std::chrono::milliseconds rrc_container_delivery_timeout{120};
+
+  /// Time between successful RRC container delivery and actual UE deletion, to avoid removing the UE RAN
+  /// resources while the UE may still be using them (which could cause collisions in PUCCH).
+  static constexpr std::chrono::milliseconds ue_full_release_timeout{60};
 
 private:
   const char* name() const { return "UE Context Release"; }

@@ -9,12 +9,24 @@
 #include "ocudu/ran/csi_rs/csi_report_config.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/pdsch/pdsch_mcs.h"
+#include "ocudu/ran/precoding/precoding_codebook_properties.h"
 #include "ocudu/ran/ssb/ssb_properties.h"
 #include "ocudu/ran/tdd/tdd_ul_dl_config.h"
 #include <array>
 #include <optional>
+#include <vector>
 
 namespace ocudu {
+
+/// \brief Configurable Type-II codebook parameters in a given DU cell.
+///
+/// The Type-II codebook is described in TS38.214 Section 5.2.2.2.3.
+struct du_type2_codebook_params {
+  /// Number of beams \f$L\f$ used for the linear combination, given by \e numberOfBeams. Values: {2, 3, 4}.
+  unsigned nof_beams = 2;
+  /// Phase alphabet size \f$N_{PSK}\f$, given by \e phaseAlphabetSize.
+  pmi_codebook_typeII_phase_size phase_alphabet_size = pmi_codebook_typeII_phase_size::qpsk;
+};
 
 /// Configurable CSI parameters in a given DU cell.
 struct du_csi_params {
@@ -55,9 +67,17 @@ struct du_csi_params {
   bool enable_aperiodic_report = false;
   /// Power offset of PDSCH RE to NZP CSI-RS RE. Value in dB {-8,...,15}.
   int8_t pwr_ctrl_offset = 0;
+  /// \brief Type-II codebook parameters. If empty, the Type-I single-panel codebook is configured.
+  ///
+  /// The Type-II codebook requires four or more CSI-RS ports and aperiodic CSI reporting, as its PMI is carried in
+  /// CSI Part 2.
+  std::optional<du_type2_codebook_params> type2_codebook;
 };
 
 namespace csi_helper {
+
+/// The current CSI report helper functions only support up to 2, 4 and 8 transmit antenna ports in the downlink.
+constexpr unsigned MAX_NOF_ANTENNA_PORTS = 8;
 
 /// Extension of \c du_csi_params with other cell parameters involved in the CSI Meas Config generation.
 struct csi_meas_config_builder_params {
@@ -75,6 +95,16 @@ struct csi_meas_config_builder_params {
   /// DU-level CSI parameters.
   du_csi_params csi_params;
 };
+
+/// \brief Creates the Type-I single-panel codebook configuration for the given cell parameters.
+///
+/// Every UE supports this codebook, hence it does not depend on the UE capabilities.
+codebook_config::type1 make_type1_codebook_config(const csi_meas_config_builder_params& params);
+
+/// \brief Creates the Type-II codebook configuration for the given cell parameters.
+///
+/// \remark The cell parameters must enable the Type-II codebook, i.e. \c du_csi_params::type2_codebook must be set.
+codebook_config::type2 make_type2_codebook_config(const csi_meas_config_builder_params& params);
 
 /// \brief Compute default CSI-RS signalling period to use, while constrained by TS38.214, 5.1.6.1.1.
 csi_resource_periodicity get_max_csi_rs_period(subcarrier_spacing pdsch_scs);

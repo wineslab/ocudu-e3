@@ -3,20 +3,18 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "paging_scheduler.h"
+#include "../config/time_domain_mapper.h"
 #include "../support/dci_builder.h"
 #include "../support/dmrs_helpers.h"
 #include "../support/pdsch/pdsch_default_time_allocation.h"
 #include "../support/prbs_calculator.h"
-#include "../support/rb_helper.h"
 #include "../support/sch_pdu_builder.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/slot_point_extended.h"
+#include "ocudu/scheduler/support/rb_helper.h"
 #include "ocudu/support/math/mod_math_utils.h"
 
 using namespace ocudu;
-
-// (Implementation-defined) limit for maximum number of pending paging indications.
-static constexpr size_t PAGING_INFO_QUEUE_SIZE = 128;
 
 paging_scheduler::paging_scheduler(const cell_configuration& cell_cfg_,
                                    pdcch_resource_allocator& pdcch_sch_,
@@ -30,7 +28,6 @@ paging_scheduler::paging_scheduler(const cell_configuration& cell_cfg_,
   paging_frame_offset(cell_cfg.params.dl_cfg_common.pcch_cfg.paging_frame_offset),
   nof_po_per_pf(static_cast<unsigned>(cell_cfg.params.dl_cfg_common.pcch_cfg.ns)),
   slot_helper(cell_cfg_),
-  new_paging_notifications(PAGING_INFO_QUEUE_SIZE),
   logger(ocudulog::fetch_basic_logger("SCHED"))
 {
   ocudu_assert(cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.paging_search_space_id.has_value(),
@@ -61,9 +58,8 @@ paging_scheduler::paging_scheduler(const cell_configuration& cell_cfg_,
 
   // See TS 38.214, Table 5.1.2.1.1-1.
   // TODO: Select PDSCH time domain resource allocation to apply based on SS/PBCH and CORESET mux. pattern.
-  pdsch_td_alloc_list = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list.empty()
-                            ? pdsch_default_time_allocations_default_A_table(bwp_cfg.cp, cell_cfg.params.dmrs_typeA_pos)
-                            : cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list;
+  // Paging always relies on DCI format 1_0, so only the common PDSCH TD resource list applies.
+  pdsch_td_alloc_list = cell_cfg.init_bwp.dl.td_mapper().common_pdsch_td_resources();
 
   // Generate an empty vector for each element of pdsch_time_res_idx_to_scheduled_ues_lookup; only then we can reserve
   // the capacity.
@@ -75,9 +71,6 @@ paging_scheduler::paging_scheduler(const cell_configuration& cell_cfg_,
 
 void paging_scheduler::run_slot(cell_resource_allocator& res_grid, uint32_t hyper_sfn_tx)
 {
-  // Pop pending Paging notification and process them.
-  handle_pending_paging_requests();
-
   // NOTE:
   // - [Implementation defined] The pagingSearchSpace (in PDCCH-Common IE) value in UE's active BWP must be taken into
   //   consideration while paging a UE. However, for simplification we consider the value of pagingSearchSpace in UE's
@@ -130,26 +123,6 @@ void paging_scheduler::run_slot(cell_resource_allocator& res_grid, uint32_t hype
   // Clear all the computed candidates.
   for (auto& sched_paging_ues : pdsch_time_res_idx_to_scheduled_ues_lookup) {
     sched_paging_ues.clear();
-  }
-}
-
-void paging_scheduler::handle_pending_paging_requests()
-{
-  sched_paging_information new_pg_info;
-  while (new_paging_notifications.try_pop(new_pg_info)) {
-    // Check whether Paging information is already present or not. i.e. tackle repeated Paging attempt from upper
-    // layers.
-    if (paging_pending_ues.find(new_pg_info.paging_identity) != paging_pending_ues.end()) {
-      logger.info("Paging information for id={} discarded. Cause: It is already being handled.",
-                  new_pg_info.paging_identity);
-      continue;
-    }
-    if (paging_pending_ues.size() >= MAX_NOF_PENDING_PAGINGS) {
-      logger.warning("Paging information for id={} discarded. Cause: Map of paging pending UEs is full.\n",
-                     new_pg_info.paging_identity);
-      return;
-    }
-    paging_pending_ues.emplace(new_pg_info.paging_identity, ue_paging_info{.request = new_pg_info, .retry_count = 0});
   }
 }
 
@@ -269,16 +242,22 @@ unsigned paging_scheduler::get_accumulated_paging_msg_size(const std::vector<ue_
 
 void paging_scheduler::handle_paging_information(const sched_paging_information& paging_info)
 {
-  if (not new_paging_notifications.try_push(paging_info)) {
-    logger.warning("Discarding paging information for UE ID={}. Cause: Event queue is full", paging_info.ue_identity);
+  // Check whether Paging information is already present or not. i.e. tackle repeated Paging attempt from upper layers.
+  if (paging_pending_ues.find(paging_info.paging_identity) != paging_pending_ues.end()) {
+    logger.info("Paging information for id={} discarded. Cause: It is already being handled.",
+                paging_info.paging_identity);
+    return;
   }
+  if (paging_pending_ues.size() >= MAX_NOF_PENDING_PAGINGS) {
+    logger.warning("Paging information for id={} discarded. Cause: Map of paging pending UEs is full.",
+                   paging_info.paging_identity);
+    return;
+  }
+  paging_pending_ues.emplace(paging_info.paging_identity, ue_paging_info{.request = paging_info, .retry_count = 0});
 }
 
 void paging_scheduler::stop()
 {
-  sched_paging_information paging_info;
-  while (new_paging_notifications.try_pop(paging_info)) {
-  }
   paging_pending_ues.clear();
 }
 
@@ -433,8 +412,8 @@ bool paging_scheduler::allocate_paging(cell_resource_allocator&         res_grid
   }
 
   // > Allocate DCI_1_0 for Paging on PDCCH.
-  pdcch_dl_information* pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(pdcch_alloc, rnti_t::P_RNTI, ss_id, expert_cfg.pg.paging_dci_aggr_lev);
+  pdcch_dl_information* pdcch = pdcch_sch.alloc_dl_pdcch_common(
+      pdcch_alloc, rnti_t::P_RNTI, ss_id, expert_cfg.pg.paging_dci_aggr_lev, std::nullopt);
   if (pdcch == nullptr) {
     logger.warning("Skipping Paging opportunity for id={}. Cause: Could not allocate PDCCH in slot={}",
                    ue_paging_ids.front(),

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_suspend_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ngap/ngap_rrc_inactive_transition.h"
 #include "ocudu/ran/cause/ngap_cause.h"
 #include "ocudu/support/async/coroutine.h"

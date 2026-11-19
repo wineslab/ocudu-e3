@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/ran/gtpu/gtpu_logical_interface.h"
 #include "ocudu/ran/gtpu/gtpu_teid.h"
 #include "ocudu/support/format/fmt_to_c_str.h"
 #include "ocudu/support/format/prefixed_logger.h"
@@ -15,13 +16,16 @@ namespace ocudu {
 class gtpu_tunnel_log_prefix
 {
 public:
-  gtpu_tunnel_log_prefix(std::optional<uint32_t> ue_index, gtpu_teid_t teid, const char* dir)
+  gtpu_tunnel_log_prefix(gtpu_logical_interface  lif,
+                         std::optional<uint32_t> ue_index,
+                         gtpu_teid_t             teid,
+                         const char*             dir)
   {
     fmt::memory_buffer buffer;
     if (ue_index.has_value()) {
-      fmt::format_to(std::back_inserter(buffer), "ue={} {} teid={}: ", *ue_index, dir, teid);
+      fmt::format_to(std::back_inserter(buffer), "lif={} ue={} {} teid={}: ", lif, *ue_index, dir, teid);
     } else {
-      fmt::format_to(std::back_inserter(buffer), "{} teid={}: ", dir, teid);
+      fmt::format_to(std::back_inserter(buffer), "lif={} {} teid={}: ", lif, dir, teid);
     }
     prefix = ocudu::to_c_str(buffer);
   }
@@ -31,25 +35,11 @@ private:
   std::string prefix;
 };
 
+inline const char* format_as(const gtpu_tunnel_log_prefix& o)
+{
+  return o.to_c_str();
+}
+
 using gtpu_tunnel_logger = prefixed_logger<gtpu_tunnel_log_prefix>;
 
 } // namespace ocudu
-
-namespace fmt {
-
-// associated formatter
-template <>
-struct formatter<ocudu::gtpu_tunnel_log_prefix> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::gtpu_tunnel_log_prefix o, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", o.to_c_str());
-  }
-};
-} // namespace fmt

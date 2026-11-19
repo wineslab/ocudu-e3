@@ -4,220 +4,134 @@
 
 #include "cu_cp_config_translators.h"
 #include "apps/helpers/network/sctp_config_translators.h"
+#include "apps/helpers/ntn/ntn_config_translators.h"
 #include "apps/services/worker_manager/worker_manager_config.h"
 #include "cu_cp_unit_config.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/cu_cp/cu_cp_configuration_helpers.h"
 #include "ocudu/ran/plmn_identity.h"
-#include <sstream>
 
 using namespace ocudu;
 
-static std::map<five_qi_t, ocucp::cu_cp_qos_config> generate_cu_cp_qos_config(const cu_cp_unit_config& config)
+/// Translates the given RLC mode into a PDCP RLC mode.
+static pdcp_rlc_mode rlc_mode_to_pdcp_rlc_mode(rlc_mode mode)
 {
-  std::map<five_qi_t, ocucp::cu_cp_qos_config> out_cfg = {};
-  if (config.qos_cfg.empty()) {
-    out_cfg = config_helpers::make_default_cu_cp_qos_config_list();
-    return out_cfg;
+  if (mode == rlc_mode::um_bidir || mode == rlc_mode::um_unidir_ul || mode == rlc_mode::um_unidir_dl) {
+    return pdcp_rlc_mode::um;
+  }
+  if (mode == rlc_mode::am) {
+    return pdcp_rlc_mode::am;
   }
 
-  for (const auto& qos : config.qos_cfg) {
+  report_error("Invalid RLC mode: {}\n", format_as(mode));
+}
+
+/// Gets the ROHC profile from the given type and configuration.
+static rohc_profile_config get_rohc_profile(cu_cp_unit_pdcp_rohc_type          rohc_type,
+                                            const cu_cp_unit_pdcp_rohc_config& rohc_cfg)
+{
+  if (rohc_type == cu_cp_unit_pdcp_rohc_type::rohc) {
+    rohc_profile_config profiles;
+
+    profiles.set_profile(rohc_profile::profile0x0001, rohc_cfg.profile0x0001)
+        .set_profile(rohc_profile::profile0x0002, rohc_cfg.profile0x0002)
+        .set_profile(rohc_profile::profile0x0003, rohc_cfg.profile0x0003)
+        .set_profile(rohc_profile::profile0x0004, rohc_cfg.profile0x0004)
+        .set_profile(rohc_profile::profile0x0006, rohc_cfg.profile0x0006)
+        .set_profile(rohc_profile::profile0x0101, rohc_cfg.profile0x0101)
+        .set_profile(rohc_profile::profile0x0102, rohc_cfg.profile0x0102)
+        .set_profile(rohc_profile::profile0x0103, rohc_cfg.profile0x0103)
+        .set_profile(rohc_profile::profile0x0104, rohc_cfg.profile0x0104);
+
+    return profiles;
+  }
+
+  if (rohc_type == cu_cp_unit_pdcp_rohc_type::uplink_only_rohc) {
+    rohc_profile_config profiles;
+
+    profiles.set_profile(rohc_profile::profile0x0006, rohc_cfg.profile0x0006);
+
+    return profiles;
+  }
+
+  report_error("Invalid ROHC type: {}\n", to_string(rohc_type));
+  return rohc_profile_config{};
+}
+
+/// Gets the given header compression for the given ROHC type and configuration.
+static std::optional<rohc_config> get_header_compression(const cu_cp_unit_pdcp_rohc_config& rohc_cfg)
+{
+  if (rohc_cfg.rohc_type == cu_cp_unit_pdcp_rohc_type::none) {
+    return std::nullopt;
+  }
+
+  return rohc_config{
+      .rohc_type =
+          (rohc_cfg.rohc_type == cu_cp_unit_pdcp_rohc_type::rohc ? rohc_type_t::rohc : rohc_type_t::uplink_only_rohc),
+      .max_cid  = rohc_cfg.max_cid,
+      .profiles = get_rohc_profile(rohc_cfg.rohc_type, rohc_cfg)};
+}
+
+/// Generates the CU-CP QoS configuration.
+static std::map<five_qi_t, ocucp::cu_cp_qos_config> generate_cu_cp_qos_config(span<const cu_cp_unit_qos_config> qos_cfg)
+{
+  if (qos_cfg.empty()) {
+    return config_helpers::make_default_cu_cp_qos_config_list();
+  }
+
+  std::map<five_qi_t, ocucp::cu_cp_qos_config> out_cfg;
+
+  for (const auto& qos : qos_cfg) {
     if (out_cfg.find(qos.five_qi) != out_cfg.end()) {
       report_error("Duplicate 5QI configuration: {}\n", qos.five_qi);
     }
+
     // Convert PDCP config
-    pdcp_config& out_pdcp = out_cfg[qos.five_qi].pdcp;
-
-    // RB type
-    out_pdcp.rb_type = pdcp_rb_type::drb;
-
-    // RLC mode
-    rlc_mode mode = {};
-    if (!from_string(mode, qos.rlc.mode)) {
-      report_error("Invalid RLC mode: {}, mode={}\n", qos.five_qi, qos.rlc.mode);
-    }
-    if (mode == rlc_mode::um_bidir || mode == rlc_mode::um_unidir_ul || mode == rlc_mode::um_unidir_dl) {
-      out_pdcp.rlc_mode = pdcp_rlc_mode::um;
-    } else if (mode == rlc_mode::am) {
-      out_pdcp.rlc_mode = pdcp_rlc_mode::am;
-    } else {
-      report_error("Invalid RLC mode: {}, mode={}\n", qos.five_qi, qos.rlc.mode);
-    }
-
-    // Header compression
-    if (qos.pdcp.rohc.rohc_type != cu_cp_unit_pdcp_rohc_type::none) {
-      out_pdcp.header_compression.emplace(rohc_config{});
-      auto& rohc_cfg   = *out_pdcp.header_compression;
-      rohc_cfg.max_cid = qos.pdcp.rohc.max_cid;
-      if (qos.pdcp.rohc.rohc_type == cu_cp_unit_pdcp_rohc_type::rohc) {
-        rohc_cfg.rohc_type = rohc_type_t::rohc;
-        rohc_cfg.profiles.set_profile(rohc_profile::profile0x0001, qos.pdcp.rohc.profile0x0001)
-            .set_profile(rohc_profile::profile0x0002, qos.pdcp.rohc.profile0x0002)
-            .set_profile(rohc_profile::profile0x0003, qos.pdcp.rohc.profile0x0003)
-            .set_profile(rohc_profile::profile0x0004, qos.pdcp.rohc.profile0x0004)
-            .set_profile(rohc_profile::profile0x0006, qos.pdcp.rohc.profile0x0006)
-            .set_profile(rohc_profile::profile0x0101, qos.pdcp.rohc.profile0x0101)
-            .set_profile(rohc_profile::profile0x0102, qos.pdcp.rohc.profile0x0102)
-            .set_profile(rohc_profile::profile0x0103, qos.pdcp.rohc.profile0x0103)
-            .set_profile(rohc_profile::profile0x0104, qos.pdcp.rohc.profile0x0104);
-      } else if (qos.pdcp.rohc.rohc_type == cu_cp_unit_pdcp_rohc_type::uplink_only_rohc) {
-        rohc_cfg.rohc_type = rohc_type_t::uplink_only_rohc;
-        rohc_cfg.profiles.set_profile(rohc_profile::profile0x0006, qos.pdcp.rohc.profile0x0006);
-      } else {
-        report_error("Invalid ROHC type: {}, type={}\n", qos.five_qi, to_string(qos.pdcp.rohc.rohc_type));
-      }
-    }
-
-    out_pdcp.integrity_protection_required = false;
-    out_pdcp.ciphering_required            = true;
-
-    // > Tx
-    // >> SN size
-    if (!pdcp_sn_size_from_uint(out_pdcp.tx.sn_size, qos.pdcp.tx.sn_field_length)) {
-      report_error("Invalid PDCP TX SN: {}, SN={}\n", qos.five_qi, qos.pdcp.tx.sn_field_length);
-    }
-
-    // >> discard timer
-    out_pdcp.tx.discard_timer = pdcp_discard_timer{};
-    if (!pdcp_discard_timer_from_int(out_pdcp.tx.discard_timer.value(), qos.pdcp.tx.discard_timer)) {
-      report_error("Invalid PDCP discard timer. 5QI {} discard_timer {}\n", qos.five_qi, qos.pdcp.tx.discard_timer);
-    }
-
-    // >> status report required
-    out_pdcp.tx.status_report_required = qos.pdcp.tx.status_report_required;
-
-    // > Rx
-    // >> SN size
-    if (!pdcp_sn_size_from_uint(out_pdcp.rx.sn_size, qos.pdcp.rx.sn_field_length)) {
-      report_error("Invalid PDCP RX SN: {}, SN={}\n", qos.five_qi, qos.pdcp.rx.sn_field_length);
-    }
-
-    // >> out of order delivery
-    out_pdcp.rx.out_of_order_delivery = qos.pdcp.rx.out_of_order_delivery;
-
-    // >> t-Reordering
-    if (!pdcp_t_reordering_from_int(out_pdcp.rx.t_reordering, qos.pdcp.rx.t_reordering)) {
-      report_error("Invalid PDCP t-Reordering. {} t-Reordering {}\n", qos.five_qi, qos.pdcp.rx.t_reordering);
-    }
+    out_cfg[qos.five_qi].pdcp =
+        pdcp_config{.rb_type                       = pdcp_rb_type::drb,
+                    .rlc_mode                      = rlc_mode_to_pdcp_rlc_mode(qos.rlc.mode),
+                    .header_compression            = get_header_compression(qos.pdcp.rohc),
+                    .integrity_protection_required = false,
+                    .ciphering_required            = true,
+                    .tx                            = pdcp_config::tx_config{.sn_size                = qos.pdcp.tx.sn_field_length,
+                                                                            .direction              = pdcp_security_direction::uplink,
+                                                                            .discard_timer          = qos.pdcp.tx.discard_timer,
+                                                                            .status_report_required = qos.pdcp.tx.status_report_required},
+                    .rx                            = pdcp_config::rx_config{.sn_size               = qos.pdcp.rx.sn_field_length,
+                                                                            .direction             = pdcp_security_direction::downlink,
+                                                                            .out_of_order_delivery = qos.pdcp.rx.out_of_order_delivery,
+                                                                            .t_reordering          = qos.pdcp.rx.t_reordering}};
   }
   return out_cfg;
 }
 
-static security::preferred_integrity_algorithms
-generate_preferred_integrity_algorithms_list(const cu_cp_unit_config& config)
-{
-  // String splitter helper
-  auto split = [](const std::string& s, char delim) -> std::vector<std::string> {
-    std::vector<std::string> result;
-    std::stringstream        ss(s);
-    for (std::string item; getline(ss, item, delim);) {
-      result.push_back(item);
-    }
-    return result;
-  };
-
-  // > Remove spaces, convert to lower case and split on comma
-  std::string nia_preference_list = config.security_config.nia_preference_list;
-  nia_preference_list.erase(std::remove_if(nia_preference_list.begin(), nia_preference_list.end(), ::isspace),
-                            nia_preference_list.end());
-  std::transform(nia_preference_list.begin(),
-                 nia_preference_list.end(),
-                 nia_preference_list.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  std::vector<std::string> nea_v = split(nia_preference_list, ',');
-
-  security::preferred_integrity_algorithms algo_list = {};
-  int                                      idx       = 0;
-  for (const std::string& nea : nea_v) {
-    if (nea == "nia0") {
-      algo_list[idx] = security::integrity_algorithm::nia0;
-    } else if (nea == "nia1") {
-      algo_list[idx] = security::integrity_algorithm::nia1;
-    } else if (nea == "nia2") {
-      algo_list[idx] = security::integrity_algorithm::nia2;
-    } else if (nea == "nia3") {
-      algo_list[idx] = security::integrity_algorithm::nia3;
-    }
-    idx++;
-  }
-  return algo_list;
-}
-
-static security::preferred_ciphering_algorithms
-generate_preferred_ciphering_algorithms_list(const cu_cp_unit_config& config)
-{
-  // String splitter helper
-  auto split = [](const std::string& s, char delim) -> std::vector<std::string> {
-    std::vector<std::string> result;
-    std::stringstream        ss(s);
-    for (std::string item; getline(ss, item, delim);) {
-      result.push_back(item);
-    }
-    return result;
-  };
-
-  // > Remove spaces, convert to lower case and split on comma
-  std::string nea_preference_list = config.security_config.nea_preference_list;
-  nea_preference_list.erase(std::remove_if(nea_preference_list.begin(), nea_preference_list.end(), ::isspace),
-                            nea_preference_list.end());
-  std::transform(nea_preference_list.begin(),
-                 nea_preference_list.end(),
-                 nea_preference_list.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  std::vector<std::string> nea_v = split(nea_preference_list, ',');
-
-  security::preferred_ciphering_algorithms algo_list = {};
-  int                                      idx       = 0;
-  for (const std::string& nea : nea_v) {
-    if (nea == "nea0") {
-      algo_list[idx] = security::ciphering_algorithm::nea0;
-    } else if (nea == "nea1") {
-      algo_list[idx] = security::ciphering_algorithm::nea1;
-    } else if (nea == "nea2") {
-      algo_list[idx] = security::ciphering_algorithm::nea2;
-    } else if (nea == "nea3") {
-      algo_list[idx] = security::ciphering_algorithm::nea3;
-    }
-    idx++;
-  }
-  return algo_list;
-}
-
+/// Generates the RRC SSB MTC.
 static ocucp::rrc_ssb_mtc generate_rrc_ssb_mtc(unsigned period, unsigned offset, unsigned duration)
 {
-  ocucp::rrc_ssb_mtc ssb_mtc;
-  ssb_mtc.periodicity_and_offset.periodicity = (ocucp::rrc_periodicity_and_offset::periodicity_t)period;
-  ssb_mtc.periodicity_and_offset.offset      = offset;
-  ssb_mtc.dur                                = duration;
-
-  return ssb_mtc;
+  return ocucp::rrc_ssb_mtc{
+      .periodicity_and_offset =
+          ocucp::rrc_periodicity_and_offset{.periodicity =
+                                                static_cast<ocucp::rrc_periodicity_and_offset::periodicity_t>(period),
+                                            .offset = static_cast<uint8_t>(offset)},
+      .dur = static_cast<uint8_t>(duration)};
 }
 
+/// Generates the CU-CP periodical report configuration.
 static ocucp::rrc_periodical_report_cfg
 generate_cu_cp_periodical_report_config(const cu_cp_unit_report_config& report_cfg_item)
 {
-  ocucp::rrc_periodical_report_cfg periodical;
-
-  periodical.rs_type                = ocucp::rrc_nr_rs_type::ssb;
-  periodical.report_interv          = report_cfg_item.report_interval_ms;
-  periodical.report_amount          = -1;
-  periodical.report_quant_cell.rsrp = true;
-  periodical.report_quant_cell.rsrq = true;
-  periodical.report_quant_cell.sinr = true;
-  periodical.max_report_cells       = 4;
-
-  ocucp::rrc_meas_report_quant report_quant_rs_idxes;
-  report_quant_rs_idxes.rsrp       = true;
-  report_quant_rs_idxes.rsrq       = true;
-  report_quant_rs_idxes.sinr       = true;
-  periodical.report_quant_rs_idxes = report_quant_rs_idxes;
-
-  periodical.max_nrof_rs_idxes_to_report = 4;
-  periodical.include_beam_meass          = true;
-  periodical.use_allowed_cell_list       = false;
-
-  periodical.periodic_ho_rsrp_offset = report_cfg_item.periodic_ho_rsrp_offset;
-
-  return periodical;
+  return ocucp::rrc_periodical_report_cfg{
+      .rs_type                     = ocucp::rrc_nr_rs_type::ssb,
+      .report_interv               = report_cfg_item.report_interval_ms,
+      .report_amount               = -1,
+      .report_quant_cell           = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
+      .max_report_cells            = 4,
+      .report_quant_rs_idxes       = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
+      .max_nrof_rs_idxes_to_report = 4,
+      .include_beam_meass          = true,
+      .use_allowed_cell_list       = false,
+      .periodic_ho_rsrp_offset     = static_cast<int8_t>(report_cfg_item.periodic_ho_rsrp_offset),
+      .coarse_location_request     = report_cfg_item.coarse_location_request};
 }
 
 /// Build a measurement trigger quantity for absolute thresholds (A1, A2, A4, A5).
@@ -225,301 +139,449 @@ generate_cu_cp_periodical_report_config(const cu_cp_unit_report_config& report_c
 ///   RSRP [dBm]:  ASN.1 = value + 156      (range [-156..-31] -> [0..125])
 ///   RSRQ [dB]:   ASN.1 = (value + 43) x 2 (range [-43..20]   -> [0..126])
 ///   SINR [dB]:   ASN.1 = (value + 23) x 2 (range [-23..40]   -> [0..126])
-static ocucp::rrc_meas_trigger_quant build_meas_trigger_threshold(const std::string& qty, int db_val)
+static ocucp::rrc_meas_trigger_quant build_meas_trigger_threshold(std::string_view qty, int db_val)
 {
-  ocucp::rrc_meas_trigger_quant q;
   if (qty == "rsrp") {
-    q.rsrp = static_cast<uint8_t>(db_val + 156);
-  } else if (qty == "rsrq") {
-    q.rsrq = static_cast<uint8_t>((db_val + 43) * 2);
-  } else if (qty == "sinr") {
-    q.sinr = static_cast<uint8_t>((db_val + 23) * 2);
-  } else {
-    report_error("Invalid measurement trigger quantity: {}\n", qty);
+    return ocucp::rrc_meas_trigger_quant{
+        .rsrp = static_cast<uint8_t>(db_val + 156), .rsrq = std::nullopt, .sinr = std::nullopt};
   }
-  return q;
+
+  if (qty == "rsrq") {
+    return ocucp::rrc_meas_trigger_quant{
+        .rsrp = std::nullopt, .rsrq = static_cast<uint8_t>((db_val + 43) * 2), .sinr = std::nullopt};
+  }
+
+  if (qty == "sinr") {
+    return ocucp::rrc_meas_trigger_quant{
+        .rsrp = std::nullopt, .rsrq = std::nullopt, .sinr = static_cast<uint8_t>((db_val + 23) * 2)};
+  }
+
+  report_error("Invalid measurement trigger quantity: {}\n", qty);
+  return {};
 }
 
 /// Build a measurement trigger quantity for relative offsets (A3, A6).
 /// Applies 3GPP TS 38.331 encoding: ASN.1 = value x 2 (dB -> 0.5 dB steps).
-static ocucp::rrc_meas_trigger_quant build_meas_trigger_offset(const std::string& qty, int db_val)
+static ocucp::rrc_meas_trigger_quant build_meas_trigger_offset(std::string_view qty, int db_val)
 {
-  ocucp::rrc_meas_trigger_quant q;
   if (qty == "rsrp") {
-    q.rsrp = static_cast<uint8_t>(db_val * 2);
-  } else if (qty == "rsrq") {
-    q.rsrq = static_cast<uint8_t>(db_val * 2);
-  } else if (qty == "sinr") {
-    q.sinr = static_cast<uint8_t>(db_val * 2);
-  } else {
-    report_error("Invalid measurement trigger quantity: {}\n", qty);
+    return ocucp::rrc_meas_trigger_quant{
+        .rsrp = static_cast<uint8_t>(db_val * 2), .rsrq = std::nullopt, .sinr = std::nullopt};
   }
-  return q;
+
+  if (qty == "rsrq") {
+    return ocucp::rrc_meas_trigger_quant{
+        .rsrp = std::nullopt, .rsrq = static_cast<uint8_t>(db_val * 2), .sinr = std::nullopt};
+  }
+  if (qty == "sinr") {
+    return ocucp::rrc_meas_trigger_quant{
+        .rsrp = std::nullopt, .rsrq = std::nullopt, .sinr = static_cast<uint8_t>(db_val * 2)};
+  }
+
+  report_error("Invalid measurement trigger quantity: {}\n", qty);
+  return {};
 }
 
+/// Creates an event for a distance or time based identifier and returns it.
+static ocucp::rrc_event_id
+create_event_id_for_distance_or_time_based_id(const cu_cp_unit_report_config& report_cfg_item)
+{
+  report_error_if_not(report_cfg_item.event_triggered_report_type, "Invalid event triggered report type");
+
+  const bool is_distance = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d1 ||
+                            report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d2);
+  const bool is_d1       = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d1);
+  const bool is_time     = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::t1);
+
+  // Each event carries its own parameters and no others, so only those are required. TS 38.331: D1 and D2 take the
+  // distance thresholds and the location hysteresis, D1 alone the two reference locations, T1 the threshold and
+  // duration.
+  if (is_distance) {
+    report_error_if_not(report_cfg_item.time_to_trigger_ms, "Invalid time to trigger");
+    report_error_if_not(report_cfg_item.distance_thresh_from_ref1_km, "Invalid distance threshold from reference one");
+    report_error_if_not(report_cfg_item.distance_thresh_from_ref2_km, "Invalid distance threshold from reference two");
+    report_error_if_not(report_cfg_item.hysteresis_location_km, "Invalid hysteresis location");
+  }
+  if (is_d1) {
+    report_error_if_not(report_cfg_item.ref_location1, "Invalid reference location one");
+    report_error_if_not(report_cfg_item.ref_location2, "Invalid reference location two");
+  }
+  if (is_time) {
+    report_error_if_not(report_cfg_item.t1_thres, "Invalid T1 threshold");
+    report_error_if_not(report_cfg_item.duration, "Invalid duration");
+  }
+
+  return ocucp::rrc_event_id{
+      .id              = *report_cfg_item.event_triggered_report_type,
+      .report_on_leave = false,
+      .hysteresis      = 0,
+      .time_to_trigger =
+          is_distance ? static_cast<uint16_t>(*report_cfg_item.time_to_trigger_ms) : static_cast<uint16_t>(0U),
+      .meas_trigger_quant_thres_or_offset = std::nullopt,
+      .meas_trigger_quant_thres_2         = std::nullopt,
+      .use_allowed_cell_list              = std::nullopt,
+      .distance_thresh_from_ref1          = is_distance ? std::make_optional<uint32_t>(static_cast<uint32_t>(
+                                                     *report_cfg_item.distance_thresh_from_ref1_km * 1000.0))
+                                                        : std::nullopt,
+      .distance_thresh_from_ref2          = is_distance ? std::make_optional<uint32_t>(static_cast<uint32_t>(
+                                                     *report_cfg_item.distance_thresh_from_ref2_km * 1000.0))
+                                                        : std::nullopt,
+      .ref_location1 = is_d1 ? std::make_optional<reference_location>(*report_cfg_item.ref_location1) : std::nullopt,
+      .ref_location2 = is_d1 ? std::make_optional<reference_location>(*report_cfg_item.ref_location2) : std::nullopt,
+      .hysteresis_location = is_distance ? std::make_optional<uint32_t>(
+                                               static_cast<uint32_t>(*report_cfg_item.hysteresis_location_km * 1000.0))
+                                         : std::nullopt,
+      .t1_thres =
+          is_time ? std::make_optional<std::chrono::system_clock::time_point>(*report_cfg_item.t1_thres) : std::nullopt,
+      .duration = is_time
+                      ? std::make_optional<unsigned>(static_cast<unsigned>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(*report_cfg_item.duration).count()))
+                      : std::nullopt
+
+  };
+}
+
+/// \brief Creates the event of a signal-level trigger and returns it.
+///
+/// TS 38.331 gives useAllowedCellList to eventA3 through eventA6 alone, and to no event of CondTriggerConfig, so it
+/// is set only for a measurement report triggered by one of those four. Everything else the builder fills is the same.
+static ocucp::rrc_event_id create_event_id_for_signal_level(const cu_cp_unit_report_config& report_cfg_item,
+                                                            bool                            is_cond_trigger)
+{
+  report_error_if_not(report_cfg_item.event_triggered_report_type, "Invalid event triggered report");
+  report_error_if_not(report_cfg_item.hysteresis_db, "Invalid hysteresis");
+  report_error_if_not(report_cfg_item.time_to_trigger_ms, "Invalid time to trigger");
+  report_error_if_not(report_cfg_item.meas_trigger_quantity, "Invalid MEAS trigger quantity");
+
+  const bool is_a3_or_a6       = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a3 ||
+                            report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a6);
+  const bool is_a5             = report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a5;
+  const bool is_a3_a4_a5_or_a6 = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a3 ||
+                                  report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a4 ||
+                                  report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a5 ||
+                                  report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a6);
+
+  // TS 38.331 EventTriggerConfig: a3-Offset/a6-Offset are only present for A3/A6; a1/a2/a4-Threshold and
+  // a5-Threshold1 are only present for A1/A2/A4/A5; a5-Threshold2 is only present for A5.
+  if (is_a3_or_a6) {
+    report_error_if_not(report_cfg_item.meas_trigger_quantity_offset_db, "Invalid MEAS trigger quantity offset");
+  } else {
+    report_error_if_not(report_cfg_item.meas_trigger_quantity_threshold_db, "Invalid MEAS trigger threshold");
+  }
+
+  if (is_a5) {
+    report_error_if_not(report_cfg_item.meas_trigger_quantity_threshold_2_db, "Invalid MEAS trigger threshold two");
+  }
+
+  return ocucp::rrc_event_id{
+      .id              = *report_cfg_item.event_triggered_report_type,
+      .report_on_leave = false,
+      // Hysteresis: convert dB to 0.5 dB ASN.1 units.
+      .hysteresis      = static_cast<uint8_t>(*report_cfg_item.hysteresis_db * 2),
+      .time_to_trigger = static_cast<uint16_t>(*report_cfg_item.time_to_trigger_ms),
+      .meas_trigger_quant_thres_or_offset =
+          is_a3_or_a6
+              ? std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_offset(
+                    *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_offset_db))
+              : std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_threshold(
+                    *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_threshold_db)),
+      .meas_trigger_quant_thres_2 =
+          is_a5 ? std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_threshold(
+                      *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_threshold_2_db))
+                : std::nullopt,
+      .use_allowed_cell_list = (!is_cond_trigger && is_a3_a4_a5_or_a6) ? std::make_optional<bool>(false) : std::nullopt,
+      .distance_thresh_from_ref1 = std::nullopt,
+      .distance_thresh_from_ref2 = std::nullopt,
+      .ref_location1             = std::nullopt,
+      .ref_location2             = std::nullopt,
+      .hysteresis_location       = std::nullopt,
+      .t1_thres                  = std::nullopt,
+      .duration                  = std::nullopt};
+}
+
+/// Creates an event trigger configuration carrying \c event_id and returns it.
+static ocucp::rrc_event_trigger_cfg create_event_trigger_cfg(const cu_cp_unit_report_config& report_cfg_item,
+                                                             const ocucp::rrc_event_id&      event_id)
+{
+  return ocucp::rrc_event_trigger_cfg{
+      .report_add_neigh_meas_present = true,
+      .event_id                      = event_id,
+      .rs_type                       = ocucp::rrc_nr_rs_type::ssb,
+      .report_interv                 = static_cast<uint16_t>(report_cfg_item.report_interval_ms),
+      .report_amount                 = -1,
+      .report_quant_cell             = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
+      .max_report_cells              = 4,
+      .report_quant_rs_idxes         = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
+      .max_nrof_rs_idxes_to_report   = std::nullopt,
+      .include_beam_meass            = true,
+      .t312                          = report_cfg_item.t312_ms,
+      .coarse_location_request       = report_cfg_item.coarse_location_request};
+}
+
+/// Generates the CU-CP trigger report configuration and returns it.
 static ocucp::rrc_report_cfg_nr generate_cu_cp_trigger_report_config(const cu_cp_unit_report_config& report_cfg_item)
 {
-  const std::string& ev = report_cfg_item.event_triggered_report_type.value();
+  ocudu_assert(report_cfg_item.event_triggered_report_type, "Invalid event triggered report");
 
-  // Distance-based and time-based events are only valid for cond_trigger.
-  if (ev == "d1" or ev == "t1" or ev == "d2") {
-    ocucp::rrc_event_id event_id;
-    if (ev == "d1" or ev == "d2") {
-      event_id.id = (ev == "d1") ? ocucp::rrc_event_id::event_id_t::d1 : ocucp::rrc_event_id::event_id_t::d2;
-      event_id.distance_thresh_from_ref1 =
-          static_cast<uint32_t>(report_cfg_item.distance_thresh_from_ref1_km.value() * 1000.0);
-      event_id.distance_thresh_from_ref2 =
-          static_cast<uint32_t>(report_cfg_item.distance_thresh_from_ref2_km.value() * 1000.0);
-      event_id.hysteresis_location = static_cast<uint32_t>(report_cfg_item.hysteresis_location_km.value() * 1000.0);
-      event_id.time_to_trigger     = report_cfg_item.time_to_trigger_ms.value();
-      // D1-only: reference locations.
-      if (ev == "d1") {
-        event_id.ref_location1 = report_cfg_item.ref_location1.value();
-        event_id.ref_location2 = report_cfg_item.ref_location2.value();
-      }
-    } else if (ev == "t1") {
-      event_id.id       = ocucp::rrc_event_id::event_id_t::t1;
-      event_id.t1_thres = report_cfg_item.t1_thres.value();
-      event_id.duration = static_cast<unsigned>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(report_cfg_item.duration.value()).count());
-    }
-    ocucp::rrc_cond_trigger_cfg cond_trigger_cfg;
-    cond_trigger_cfg.cond_event_id = event_id;
-    cond_trigger_cfg.rs_type       = ocucp::rrc_nr_rs_type::ssb;
-    return cond_trigger_cfg;
+  const bool is_distance_or_time_based =
+      (*report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d1 ||
+       *report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::t1 ||
+       *report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d2);
+
+  const bool is_cond_trigger = report_cfg_item.report_type == "cond_trigger";
+
+  // The event decides which parameters it carries, and the report type decides what it drives: a conditional
+  // reconfiguration or a measurement report. TS 38.331 sec. 5.5.4.15 gives event D1 the same definition in both, so
+  // it is built the same way for either.
+  const ocucp::rrc_event_id event_id = is_distance_or_time_based
+                                           ? create_event_id_for_distance_or_time_based_id(report_cfg_item)
+                                           : create_event_id_for_signal_level(report_cfg_item, is_cond_trigger);
+
+  // A conditional trigger carries no report interval or amount.
+  if (is_cond_trigger) {
+    return ocucp::rrc_cond_trigger_cfg{.cond_event_id = event_id, .rs_type = ocucp::rrc_nr_rs_type::ssb};
   }
-
-  // A-family events (a1-a6).
-  const std::string& qty = report_cfg_item.meas_trigger_quantity.value();
-
-  // Build rrc_event_id (common to both event-triggered and conditional-trigger).
-  ocucp::rrc_event_id event_id;
-
-  if (ev == "a1") {
-    event_id.id = ocucp::rrc_event_id::event_id_t::a1;
-  } else if (ev == "a2") {
-    event_id.id = ocucp::rrc_event_id::event_id_t::a2;
-  } else if (ev == "a3") {
-    event_id.id = ocucp::rrc_event_id::event_id_t::a3;
-  } else if (ev == "a4") {
-    event_id.id = ocucp::rrc_event_id::event_id_t::a4;
-  } else if (ev == "a5") {
-    event_id.id = ocucp::rrc_event_id::event_id_t::a5;
-  } else {
-    event_id.id = ocucp::rrc_event_id::event_id_t::a6;
-  }
-
-  // Hysteresis: convert dB to 0.5 dB ASN.1 units.
-  event_id.hysteresis      = static_cast<uint8_t>(report_cfg_item.hysteresis_db.value() * 2);
-  event_id.time_to_trigger = report_cfg_item.time_to_trigger_ms.value();
-
-  // A3, A6: relative offset (neighbour - serving).
-  if (ev == "a3" or ev == "a6") {
-    event_id.meas_trigger_quant_thres_or_offset =
-        build_meas_trigger_offset(qty, report_cfg_item.meas_trigger_quantity_offset_db.value());
-  } else {
-    // A1, A2, A4, A5: absolute threshold.
-    event_id.meas_trigger_quant_thres_or_offset =
-        build_meas_trigger_threshold(qty, report_cfg_item.meas_trigger_quantity_threshold_db.value());
-    if (ev == "a5") {
-      event_id.meas_trigger_quant_thres_2 =
-          build_meas_trigger_threshold(qty, report_cfg_item.meas_trigger_quantity_threshold_2_db.value());
-    }
-  }
-
-  // Conditional-trigger: wrap in rrc_cond_trigger_cfg (no report interval/amount fields).
-  if (report_cfg_item.report_type == "cond_trigger") {
-    ocucp::rrc_cond_trigger_cfg cond_trigger_cfg;
-    cond_trigger_cfg.cond_event_id = event_id;
-    cond_trigger_cfg.rs_type       = ocucp::rrc_nr_rs_type::ssb;
-    return cond_trigger_cfg;
-  }
-
-  // Event-triggered specific parameters.
-  event_id.report_on_leave = false;
-  if (ev == "a3" or ev == "a4" or ev == "a5" or ev == "a6") {
-    event_id.use_allowed_cell_list = false;
-  }
-
-  ocucp::rrc_event_trigger_cfg event_trigger_cfg;
-  event_trigger_cfg.event_id               = event_id;
-  event_trigger_cfg.rs_type                = ocucp::rrc_nr_rs_type::ssb;
-  event_trigger_cfg.report_interv          = report_cfg_item.report_interval_ms;
-  event_trigger_cfg.report_amount          = -1;
-  event_trigger_cfg.report_quant_cell.rsrp = true;
-  event_trigger_cfg.report_quant_cell.rsrq = true;
-  event_trigger_cfg.report_quant_cell.sinr = true;
-  event_trigger_cfg.max_report_cells       = 4;
-  event_trigger_cfg.t312                   = report_cfg_item.t312_ms;
-
-  ocucp::rrc_meas_report_quant report_quant_rs_idxes;
-  report_quant_rs_idxes.rsrp              = true;
-  report_quant_rs_idxes.rsrq              = true;
-  report_quant_rs_idxes.sinr              = true;
-  event_trigger_cfg.report_quant_rs_idxes = report_quant_rs_idxes;
-
-  return event_trigger_cfg;
+  return create_event_trigger_cfg(report_cfg_item, event_id);
 }
 
-ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config& cu_cfg)
+/// Generates the admission configuration and returns it.
+static ocucp::cu_cp_configuration::admission_params generate_admission_conf(const cu_cp_unit_config& cu_cfg)
 {
-  ocucp::cu_cp_configuration out_cfg    = config_helpers::make_default_cu_cp_config();
-  out_cfg.admission.max_nof_dus         = cu_cfg.max_nof_dus;
-  out_cfg.admission.max_nof_cu_ups      = cu_cfg.max_nof_cu_ups;
-  out_cfg.admission.max_nof_ues         = cu_cfg.max_nof_ues;
-  out_cfg.admission.max_nof_drbs_per_ue = cu_cfg.max_nof_drbs_per_ue;
+  return ocucp::cu_cp_configuration::admission_params{.max_nof_dus         = cu_cfg.max_nof_dus,
+                                                      .max_nof_cu_ups      = cu_cfg.max_nof_cu_ups,
+                                                      .max_nof_ues         = cu_cfg.max_nof_ues,
+                                                      .max_nof_drbs_per_ue = cu_cfg.max_nof_drbs_per_ue};
+}
 
-  out_cfg.node.gnb_id        = cu_cfg.gnb_id;
-  out_cfg.node.ran_node_name = cu_cfg.ran_node_name;
+/// Generates the node configuration and returns it.
+static ocucp::ran_node_configuration generate_node_conf(const cu_cp_unit_config& cu_cfg)
+{
+  return ocucp::ran_node_configuration{.gnb_id = cu_cfg.gnb_id, .ran_node_name = cu_cfg.ran_node_name};
+}
 
-  out_cfg.ngap.procedure_timeout           = std::chrono::milliseconds{cu_cfg.amf_config.procedure_timeout};
-  out_cfg.ngap.amf_reconnection_retry_time = std::chrono::milliseconds{cu_cfg.amf_config.amf_reconnection_retry_time};
-  out_cfg.ngap.no_core                     = cu_cfg.amf_config.no_core;
-
-  {
-    std::vector<ocucp::supported_tracking_area> supported_tas;
-    for (const auto& supported_ta : cu_cfg.amf_config.amf.supported_tas) {
-      std::vector<ocucp::plmn_item> plmn_list;
-      for (const auto& plmn_item : supported_ta.plmn_list) {
-        expected<plmn_identity> plmn = plmn_identity::parse(plmn_item.plmn_id);
-        if (!plmn.has_value()) {
-          report_error("Invalid PLMN: {}\n", plmn_item.plmn_id);
-        }
-        plmn_list.push_back({plmn.value(), {}});
-        for (const auto& elem : plmn_item.tai_slice_support_list) {
-          plmn_list.back().slice_support_list.push_back(
-              s_nssai_t{slice_service_type{elem.sst}, slice_differentiator::create(elem.sd).value()});
-        }
+/// Gets the supported Tracking Areas for the given items.
+static std::vector<ocucp::supported_tracking_area> get_supported_tas(span<const cu_cp_unit_supported_ta_item> items)
+{
+  std::vector<ocucp::supported_tracking_area> supported_tas;
+  for (const auto& supported_ta : items) {
+    std::vector<ocucp::plmn_item> plmn_list;
+    for (const auto& plmn_item : supported_ta.plmn_list) {
+      expected<plmn_identity> plmn = plmn_identity::parse(plmn_item.plmn_id);
+      if (!plmn.has_value()) {
+        report_error("Invalid PLMN: {}\n", plmn_item.plmn_id);
       }
-      supported_tas.push_back({supported_ta.tac, plmn_list});
+      auto& slice = plmn_list.emplace_back(ocucp::plmn_item{plmn.value(), {}});
+      for (const auto& elem : plmn_item.tai_slice_support_list) {
+        slice.slice_support_list.push_back(
+            s_nssai_t{slice_service_type{elem.sst}, slice_differentiator::create(elem.sd).value()});
+      }
     }
-    out_cfg.ngap.ngaps.push_back(ocucp::cu_cp_configuration::ngap_config{nullptr, supported_tas});
+    std::optional<ocucp::satellite_rat_type> satellite_rat;
+    if (supported_ta.satellite_rat.has_value()) {
+      satellite_rat = ocucp::satellite_rat_type_from_string(*supported_ta.satellite_rat);
+      report_error_if_not(satellite_rat, "Invalid satellite RAT type: {}", *supported_ta.satellite_rat);
+    }
+    supported_tas.push_back({supported_ta.tac, plmn_list, satellite_rat});
   }
+  return supported_tas;
+}
+
+/// Gets the address of the SCTP association with the given AMF.
+static transport_layer_address get_amf_address(const cu_cp_unit_amf_config_item& amf_cfg)
+{
+  if (amf_cfg.ip_addrs.empty()) {
+    report_error("No address configured for the AMF.\n");
+  }
+
+  // TODO: Take the address the SCTP association actually established, which the gateway resolves with
+  // sctp_getpaddrs() but does not expose. The remaining configured addresses are multihoming alternatives of the same
+  // association, so an AMF whose primary path is not the first of them is reported wrongly.
+  transport_layer_address amf_addr = transport_layer_address::create_from_string(amf_cfg.ip_addrs.front());
+  amf_addr.set_port(amf_cfg.port);
+
+  return amf_addr;
+}
+
+/// Generates the NGAP configuration and returns it.
+static ocucp::cu_cp_configuration::ngap_params generate_ngap_conf(const cu_cp_unit_config& cu_cfg)
+{
+  const std::vector<ocucp::supported_tracking_area> amf_supported_tas =
+      get_supported_tas(cu_cfg.amf_config.amf.supported_tas);
+
+  std::vector<ocucp::cu_cp_configuration::ngap_config> ngaps{
+      ocucp::cu_cp_configuration::ngap_config{amf_supported_tas, get_amf_address(cu_cfg.amf_config.amf)}};
 
   for (const auto& cfg : cu_cfg.extra_amfs) {
-    std::vector<ocucp::supported_tracking_area> supported_tas;
-    for (const auto& supported_ta : cfg.supported_tas) {
-      std::vector<ocucp::plmn_item> plmn_list;
-      for (const auto& plmn_item : supported_ta.plmn_list) {
-        expected<plmn_identity> plmn = plmn_identity::parse(plmn_item.plmn_id);
-        if (!plmn.has_value()) {
-          report_error("Invalid PLMN: {}\n", plmn_item.plmn_id);
-        }
-        plmn_list.push_back({plmn.value(), {}});
-        for (const auto& elem : plmn_item.tai_slice_support_list) {
-          plmn_list.back().slice_support_list.push_back(
-              s_nssai_t{slice_service_type{elem.sst}, slice_differentiator::create(elem.sd).value()});
-        }
-      }
-      supported_tas.push_back({supported_ta.tac, plmn_list});
-    }
-    out_cfg.ngap.ngaps.push_back(ocucp::cu_cp_configuration::ngap_config{nullptr, supported_tas});
+    ngaps.push_back(
+        ocucp::cu_cp_configuration::ngap_config{get_supported_tas(cfg.supported_tas), get_amf_address(cfg)});
   }
 
-  // XNAP.
-  out_cfg.xnap.procedure_timeout  = std::chrono::milliseconds{cu_cfg.xnap_config.procedure_timeout};
-  out_cfg.xnap.reconnect_timer    = std::chrono::milliseconds{cu_cfg.xnap_config.reconnect_timer};
-  out_cfg.xnap.no_connection_init = cu_cfg.xnap_config.no_connection_init;
-  uint32_t peer_idx               = 0;
-  uint16_t gw_idx                 = 0;
-  for (const auto& gw_cfg : cu_cfg.xnap_config.gateways) {
-    for (const auto& peer : gw_cfg.connections) {
-      ocucp::cu_cp_configuration::xnap_config xn_config{};
-      for (const auto& addr_str : peer.peer_addrs) {
+  return ocucp::cu_cp_configuration::ngap_params{
+      .ngaps                       = std::move(ngaps),
+      .amf_reconnection_retry_time = std::chrono::milliseconds{cu_cfg.amf_config.amf_reconnection_retry_time},
+      .procedure_timeout           = std::chrono::milliseconds{cu_cfg.amf_config.procedure_timeout},
+      .no_core                     = cu_cfg.amf_config.no_core,
+      .ng_setup_notifier           = nullptr};
+}
+
+/// Generates the XNAP configuration and returns it.
+static ocucp::cu_cp_configuration::xnap_params generate_xnap_conf(const cu_cp_unit_xnap_config& xnap_cfg)
+{
+  std::vector<ocucp::cu_cp_configuration::xnap_config> xnaps;
+  std::map<xnc_peer_index_t, xnc_gateway_index_t>      peer_to_gateway;
+
+  unsigned peer_idx = 0;
+  for (unsigned gw_idx = 0, gw_e = xnap_cfg.gateways.size(); gw_idx != gw_e; ++gw_idx) {
+    for (const auto& conn : xnap_cfg.gateways[gw_idx].connections) {
+      ocucp::cu_cp_configuration::xnap_config xn_config;
+      for (const auto& addr_str : conn.peer_addrs) {
         transport_layer_address addr = transport_layer_address::create_from_string(addr_str);
         addr.set_port(XNAP_PORT);
         xn_config.peer_addrs.push_back(addr);
       }
-      out_cfg.xnap.xnaps.push_back(xn_config);
-      out_cfg.xnap.peer_to_gateway[uint_to_xnc_peer_index(peer_idx)] = uint_to_xnc_gateway_index(gw_idx);
+      xnaps.push_back(xn_config);
+      peer_to_gateway[uint_to_xnc_peer_index(peer_idx)] = uint_to_xnc_gateway_index(gw_idx);
       ++peer_idx;
     }
-    ++gw_idx;
   }
 
-  out_cfg.rrc.force_reestablishment_fallback = cu_cfg.rrc_config.force_reestablishment_fallback;
-  out_cfg.rrc.force_resume_fallback          = cu_cfg.rrc_config.force_resume_fallback;
-  out_cfg.rrc.rrc_procedure_guard_time_ms    = std::chrono::milliseconds{cu_cfg.rrc_config.rrc_procedure_guard_time_ms};
+  return ocucp::cu_cp_configuration::xnap_params{.procedure_timeout =
+                                                     std::chrono::milliseconds{xnap_cfg.procedure_timeout},
+                                                 .reconnect_timer = std::chrono::milliseconds{xnap_cfg.reconnect_timer},
+                                                 .no_connection_init = xnap_cfg.no_connection_init,
+                                                 .xnaps              = xnaps,
+                                                 .xnc_gws            = {},
+                                                 .peer_to_gateway    = peer_to_gateway};
+}
 
-  out_cfg.bearers.drb_config = generate_cu_cp_qos_config(cu_cfg);
+/// Generates the RRC configuration and returns it.
+static ocucp::cu_cp_configuration::rrc_params generate_rrc_conf(const cu_cp_unit_rrc_config& rrc_cfg)
+{
+  return ocucp::cu_cp_configuration::rrc_params{
+      .force_reestablishment_fallback = rrc_cfg.force_reestablishment_fallback,
+      .force_resume_fallback          = rrc_cfg.force_resume_fallback,
+      .rrc_procedure_guard_time_ms    = std::chrono::milliseconds{rrc_cfg.rrc_procedure_guard_time_ms},
+      .rrc_version                    = ocucp::RRC_VERSION,
+      .rrc_reject_wait_time           = rrc_cfg.rrc_reject_wait_time_s.has_value()
+                                            ? std::optional<std::chrono::seconds>(*rrc_cfg.rrc_reject_wait_time_s)
+                                            : std::nullopt};
+}
 
-  out_cfg.security.int_algo_pref_list = generate_preferred_integrity_algorithms_list(cu_cfg);
-  out_cfg.security.enc_algo_pref_list = generate_preferred_ciphering_algorithms_list(cu_cfg);
-  if (!from_string(out_cfg.security.default_security_indication.integrity_protection_ind,
-                   cu_cfg.security_config.integrity_protection)) {
-    report_error("Invalid value for integrity_protection={}.\n", cu_cfg.security_config.integrity_protection);
+/// Generates the bearers configuration and returns it.
+static ocucp::cu_cp_configuration::bearer_params generate_bearers_conf(span<const cu_cp_unit_qos_config> qos_cfg)
+{
+  return ocucp::cu_cp_configuration::bearer_params{
+      .srb2_cfg   = ocucp::srb_pdcp_config{.t_reordering = pdcp_t_reordering::infinity},
+      .drb_config = generate_cu_cp_qos_config(qos_cfg)};
+}
+
+/// Generates the security configuration and returns it.
+static ocucp::cu_cp_configuration::security_params
+generate_security_conf(const cu_cp_unit_security_config& security_config)
+{
+  return ocucp::cu_cp_configuration::security_params{
+      .int_algo_pref_list = security_config.nia_preference_list,
+      .enc_algo_pref_list = security_config.nea_preference_list,
+      .default_security_indication =
+          security_indication_t{.integrity_protection_ind       = security_config.integrity_protection,
+                                .confidentiality_protection_ind = security_config.confidentiality_protection}};
+}
+
+/// Generates the UE configuration and returns it.
+static ocucp::ue_configuration generate_ue_conf(const cu_cp_unit_config& cu_cfg)
+{
+  ocucp::ue_configuration ue_cfg{.inactivity_timer = std::chrono::seconds{cu_cfg.inactivity_timer},
+                                 .request_pdu_session_timeout =
+                                     std::chrono::seconds{cu_cfg.request_pdu_session_timeout},
+                                 .enable_rrc_inactive = cu_cfg.enable_rrc_inactive,
+                                 .ran_paging_cycle    = cu_cfg.ran_paging_cycle,
+                                 .t380                = std::chrono::minutes{cu_cfg.t380}};
+
+  if (!from_string(ue_cfg.full_i_rnti_prof, cu_cfg.full_i_rnti_profile)) {
+    report_error("Invalid value for full_i_rnti_profile={}.\n", cu_cfg.full_i_rnti_profile);
   }
-  if (!from_string(out_cfg.security.default_security_indication.confidentiality_protection_ind,
-                   cu_cfg.security_config.confidentiality_protection)) {
-    report_error("Invalid value for confidentiality_protection={}.\n",
-                 cu_cfg.security_config.confidentiality_protection);
+  if (!from_string(ue_cfg.short_i_rnti_prof, cu_cfg.short_i_rnti_profile)) {
+    report_error("Invalid value for short_i_rnti_profile={}.\n", cu_cfg.short_i_rnti_profile);
   }
 
-  // Timers.
-  out_cfg.ue.inactivity_timer              = std::chrono::seconds{cu_cfg.inactivity_timer};
-  out_cfg.ue.request_pdu_session_timeout   = std::chrono::seconds{cu_cfg.request_pdu_session_timeout};
-  out_cfg.metrics.statistics_report_period = std::chrono::seconds{cu_cfg.metrics.cu_cp_report_period};
-  out_cfg.ue.t380                          = std::chrono::minutes{cu_cfg.t380};
+  return ue_cfg;
+}
 
-  // RRC inactive.
-  out_cfg.ue.enable_rrc_inactive = cu_cfg.enable_rrc_inactive;
-  out_cfg.ue.ran_paging_cycle    = cu_cfg.ran_paging_cycle;
-  out_cfg.ue.nof_i_rnti_ue_bits  = cu_cfg.nof_i_rnti_ue_bits;
+/// Generates the metrics configuration and returns it.
+static ocucp::cu_cp_configuration::metrics_params generate_metrics_conf(const cu_cp_unit_metrics_config& metrics_cfg)
+{
+  return ocucp::cu_cp_configuration::metrics_params{
+      .statistics_report_period = std::chrono::seconds{metrics_cfg.cu_cp_report_period},
+      .metrics_report_period    = std::chrono::milliseconds(metrics_cfg.cu_cp_report_period),
+      .layers_cfg               = ocucp::cu_cp_configuration::metrics_layers_config{
+                        .enable_ngap_metrics = metrics_cfg.layers_cfg.enable_ngap_metrics,
+                        .enable_rrc_metrics  = metrics_cfg.layers_cfg.enable_rrc_metrics}};
+}
 
-  // Metrics.
-  out_cfg.metrics.layers_cfg.enable_ngap = cu_cfg.metrics.layers_cfg.enable_ngap;
-  out_cfg.metrics.layers_cfg.enable_rrc  = cu_cfg.metrics.layers_cfg.enable_rrc;
+/// Generates the F1AP configuration.
+static ocucp::f1ap_configuration generate_f1ap_conf(const cu_cp_unit_config& cu_cfg)
+{
+  return ocucp::f1ap_configuration{.proc_timeout     = std::chrono::milliseconds{cu_cfg.f1ap_config.procedure_timeout},
+                                   .json_log_enabled = cu_cfg.loggers.f1ap_json_enabled};
+}
 
-  // Mobility.
-  out_cfg.mobility.mobility_manager_config.trigger_handover_from_measurements =
-      cu_cfg.mobility_config.trigger_handover_from_measurements;
-  out_cfg.mobility.mobility_manager_config.enable_ngap_metrics     = cu_cfg.metrics.layers_cfg.enable_ngap;
-  out_cfg.mobility.mobility_manager_config.enable_rrc_metrics      = cu_cfg.metrics.layers_cfg.enable_rrc;
-  out_cfg.mobility.mobility_manager_config.trigger_cho_on_ue_setup = cu_cfg.mobility_config.trigger_cho_on_ue_setup;
-  out_cfg.mobility.mobility_manager_config.cho_timeout =
-      std::chrono::milliseconds{cu_cfg.mobility_config.cho_timeout_ms};
+/// Generates the E1AP configuration.
+static ocucp::e1ap_configuration generate_e1ap_conf(const cu_cp_unit_config& cu_cfg)
+{
+  return ocucp::e1ap_configuration{.proc_timeout     = std::chrono::milliseconds{cu_cfg.e1ap_config.procedure_timeout},
+                                   .json_log_enabled = cu_cfg.loggers.e1ap_json_enabled};
+}
 
-  // F1AP-CU config.
-  out_cfg.f1ap.proc_timeout     = std::chrono::milliseconds{cu_cfg.f1ap_config.procedure_timeout};
-  out_cfg.f1ap.json_log_enabled = cu_cfg.loggers.f1ap_json_enabled;
+/// Generates the RRC SSB MTC.
+static std::optional<ocucp::rrc_ssb_mtc> generate_rrc_ssb_mtc(const cu_cp_unit_cell_config_item& app_cfg_item)
+{
+  if (!app_cfg_item.ssb_duration.has_value() || !app_cfg_item.ssb_offset.has_value() ||
+      !app_cfg_item.ssb_period.has_value()) {
+    return std::nullopt;
+  }
 
-  // E1AP-CU-CP config.
-  out_cfg.e1ap.proc_timeout     = std::chrono::milliseconds{cu_cfg.e1ap_config.procedure_timeout};
-  out_cfg.e1ap.json_log_enabled = cu_cfg.loggers.e1ap_json_enabled;
+  return generate_rrc_ssb_mtc(
+      app_cfg_item.ssb_period.value(), app_cfg_item.ssb_offset.value(), app_cfg_item.ssb_duration.value());
+}
+
+/// Generates the SSB subcarrier spacing.
+static std::optional<subcarrier_spacing>
+generate_ssb_subcarrier_spacing(const cu_cp_unit_cell_config_item& app_cfg_item)
+{
+  if (!app_cfg_item.ssb_scs.has_value()) {
+    return std::nullopt;
+  }
+
+  return to_subcarrier_spacing(std::to_string(app_cfg_item.ssb_scs.value()));
+}
+
+/// Generates the SSB report config id.
+static std::optional<ocucp::report_cfg_id_t> generate_ssb_report_cfg_id(const cu_cp_unit_cell_config_item& app_cfg_item)
+{
+  if (!app_cfg_item.periodic_report_cfg_id.has_value()) {
+    return std::nullopt;
+  }
+
+  return ocucp::uint_to_report_cfg_id(app_cfg_item.periodic_report_cfg_id.value());
+}
+
+/// Generates the cell MEAS configuration.
+static std::map<nr_cell_identity, ocucp::cell_meas_config> ge_cell_meas_config(const cu_cp_unit_config& cu_cfg)
+{
+  std::map<nr_cell_identity, ocucp::cell_meas_config> cells;
 
   // Convert appconfig's cell list into cell manager type.
   for (const auto& app_cfg_item : cu_cfg.mobility_config.cells) {
-    nr_cell_identity        nci = nr_cell_identity::create(app_cfg_item.nr_cell_id).value();
-    ocucp::cell_meas_config meas_cfg_item;
-    meas_cfg_item.serving_cell_cfg.nci = nci;
-    if (app_cfg_item.periodic_report_cfg_id.has_value()) {
-      meas_cfg_item.periodic_report_cfg_id = ocucp::uint_to_report_cfg_id(app_cfg_item.periodic_report_cfg_id.value());
-    }
+    nr_cell_identity nci = nr_cell_identity::create(app_cfg_item.nr_cell_id).value();
 
-    meas_cfg_item.serving_cell_cfg.gnb_id_bit_length = app_cfg_item.gnb_id_bit_length.value();
-    meas_cfg_item.serving_cell_cfg.pci               = app_cfg_item.pci;
     if (app_cfg_item.plmn_id.has_value()) {
       expected<plmn_identity> plmn = plmn_identity::parse(app_cfg_item.plmn_id.value());
       if (!plmn.has_value()) {
         report_error("External cell (nci={:#x}) has invalid PLMN: {}\n", nci, app_cfg_item.plmn_id.value());
       }
-      meas_cfg_item.serving_cell_cfg.plmn = plmn.value();
     }
 
-    meas_cfg_item.serving_cell_cfg.tac       = app_cfg_item.tac;
-    meas_cfg_item.serving_cell_cfg.band      = app_cfg_item.band;
-    meas_cfg_item.serving_cell_cfg.ssb_arfcn = app_cfg_item.ssb_arfcn;
-    if (app_cfg_item.ssb_scs.has_value()) {
-      meas_cfg_item.serving_cell_cfg.ssb_scs.emplace() =
-          to_subcarrier_spacing(std::to_string(app_cfg_item.ssb_scs.value()));
-    }
-    if (app_cfg_item.ssb_duration.has_value() && app_cfg_item.ssb_offset.has_value() &&
-        app_cfg_item.ssb_period.has_value()) {
-      // Add MTC config.
-      meas_cfg_item.serving_cell_cfg.ssb_mtc.emplace() = generate_rrc_ssb_mtc(
-          app_cfg_item.ssb_period.value(), app_cfg_item.ssb_offset.value(), app_cfg_item.ssb_duration.value());
-    }
-
+    std::vector<ocucp::neighbor_cell_meas_config> ncells;
     for (const auto& ncell : app_cfg_item.ncells) {
       ocucp::neighbor_cell_meas_config ncell_meas_cfg;
       ncell_meas_cfg.nci = nr_cell_identity::create(ncell.nr_cell_id).value();
@@ -527,30 +589,134 @@ ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config&
         ncell_meas_cfg.report_cfg_ids.push_back(ocucp::uint_to_report_cfg_id(report_id));
       }
 
-      meas_cfg_item.ncells.push_back(ncell_meas_cfg);
+      ncells.push_back(ncell_meas_cfg);
     }
 
-    // Store config.
-    out_cfg.mobility.meas_manager_config.cells[meas_cfg_item.serving_cell_cfg.nci] = meas_cfg_item;
+    cells[nci] = ocucp::cell_meas_config{
+        .serving_cell_cfg =
+            ocucp::serving_cell_meas_config{
+                .nci               = nci,
+                .gnb_id_bit_length = app_cfg_item.gnb_id_bit_length.value(),
+                .plmn              = app_cfg_item.plmn_id.has_value()
+                                         ? plmn_identity::parse(app_cfg_item.plmn_id.value()).value_or(plmn_identity::test_value())
+                                         : plmn_identity::test_value(),
+                .tac               = app_cfg_item.tac,
+                .pci               = app_cfg_item.pci,
+                .band              = app_cfg_item.band,
+                .ssb_mtc           = generate_rrc_ssb_mtc(app_cfg_item),
+                .ssb_arfcn         = app_cfg_item.ssb_arfcn,
+                .ssb_scs           = generate_ssb_subcarrier_spacing(app_cfg_item)},
+        .periodic_report_cfg_id = generate_ssb_report_cfg_id(app_cfg_item),
+        .ncells                 = ncells};
   }
+
+  return cells;
+}
+
+/// Gets the RRC report configuration NR.
+ocucp::rrc_report_cfg_nr ocudu::generate_cu_cp_report_config(const cu_cp_unit_report_config& report_cfg_item)
+{
+  if (report_cfg_item.report_type == "periodical") {
+    return generate_cu_cp_periodical_report_config(report_cfg_item);
+  }
+  return generate_cu_cp_trigger_report_config(report_cfg_item);
+}
+
+static std::map<ocucp::report_cfg_id_t, ocucp::rrc_report_cfg_nr>
+get_rrc_report_config_nr(const cu_cp_unit_config& cu_cfg)
+{
+  std::map<ocucp::report_cfg_id_t, ocucp::rrc_report_cfg_nr> report_config_ids;
 
   // Convert report config.
   for (const auto& report_cfg_item : cu_cfg.mobility_config.report_configs) {
-    ocucp::rrc_report_cfg_nr report_cfg;
-
-    if (report_cfg_item.report_type == "periodical") {
-      report_cfg = generate_cu_cp_periodical_report_config(report_cfg_item);
-    } else {
-      report_cfg = generate_cu_cp_trigger_report_config(report_cfg_item);
-    }
-
-    // Store config.
-    out_cfg.mobility.meas_manager_config
-        .report_config_ids[ocucp::uint_to_report_cfg_id(report_cfg_item.report_cfg_id)] = report_cfg;
+    report_config_ids[ocucp::uint_to_report_cfg_id(report_cfg_item.report_cfg_id)] =
+        generate_cu_cp_report_config(report_cfg_item);
   }
+  return report_config_ids;
+}
+
+/// Generates the mobility configuration and returns it.
+static ocucp::mobility_configuration generate_mobility_conf(const cu_cp_unit_config& cu_cfg)
+{
+  return ocucp::mobility_configuration{
+      .meas_mgr_config     = ocucp::cell_meas_manager_config{.cells             = ge_cell_meas_config(cu_cfg),
+                                                             .report_config_ids = get_rrc_report_config_nr(cu_cfg)},
+      .mobility_mgr_config = ocucp::mobility_manager_config{
+          .trigger_handover_from_measurements = cu_cfg.mobility_config.trigger_handover_from_measurements,
+          .enable_ngap_metrics                = cu_cfg.metrics.layers_cfg.enable_ngap_metrics,
+          .enable_rrc_metrics                 = cu_cfg.metrics.layers_cfg.enable_rrc_metrics,
+          .trigger_cho_on_ue_setup            = cu_cfg.mobility_config.trigger_cho_on_ue_setup,
+          .cho_timeout                        = std::chrono::milliseconds{cu_cfg.mobility_config.cho_timeout_ms}}};
+}
+
+/// Generates the coarse UE location to TAC mappings and returns them.
+static std::vector<ntn_cell_location_mapping> generate_ntn_location_mappings(const cu_cp_unit_config& cu_cfg)
+{
+  std::vector<ntn_cell_location_mapping> mappings;
+  for (const auto& cell_cfg : cu_cfg.ntn_location_mapping) {
+    ntn_cell_location_mapping mapping;
+    mapping.nci = nr_cell_identity::create(cell_cfg.nr_cell_id).value();
+    for (const auto& area : cell_cfg.location_areas) {
+      ntn_location_area location_area;
+      location_area.tac     = area.tac;
+      location_area.lat_min = area.lat_min;
+      location_area.lat_max = area.lat_max;
+      location_area.lon_min = area.lon_min;
+      location_area.lon_max = area.lon_max;
+      if (area.mapped_nr_cell_id.has_value()) {
+        location_area.mapped_nci = nr_cell_identity::create(area.mapped_nr_cell_id.value()).value();
+      }
+      mapping.mapping.location_areas.push_back(location_area);
+    }
+    mappings.push_back(std::move(mapping));
+  }
+  return mappings;
+}
+
+/// Generates the services configuration and returns it.
+static ocucp::cu_cp_configuration::service_params generate_services_conf()
+{
+  return ocucp::cu_cp_configuration::service_params{
+      .cu_cp_executor = nullptr, .cu_cp_e2_exec = nullptr, .timers = nullptr};
+}
+
+ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config& cu_cfg)
+{
+  auto out_cfg = ocucp::cu_cp_configuration{.node             = generate_node_conf(cu_cfg),
+                                            .admission        = generate_admission_conf(cu_cfg),
+                                            .ngap             = generate_ngap_conf(cu_cfg),
+                                            .xnap             = generate_xnap_conf(cu_cfg.xnap_config),
+                                            .rrc              = generate_rrc_conf(cu_cfg.rrc_config),
+                                            .f1ap             = generate_f1ap_conf(cu_cfg),
+                                            .e1ap             = generate_e1ap_conf(cu_cfg),
+                                            .security         = generate_security_conf(cu_cfg.security_config),
+                                            .bearers          = generate_bearers_conf(cu_cfg.qos_cfg),
+                                            .ue               = generate_ue_conf(cu_cfg),
+                                            .mobility         = generate_mobility_conf(cu_cfg),
+                                            .metrics          = generate_metrics_conf(cu_cfg.metrics),
+                                            .services         = generate_services_conf(),
+                                            .metrics_notifier = nullptr};
+
+  // Logical cells: derive the NCI from the gNB Id and the sector ID, matching the DU's NCI derivation, so
+  // the entry addresses the DU cell with the same sector ID.
+  for (const cu_cp_unit_logical_cell_config& cell : cu_cfg.cells_cfg) {
+    ocucp::cu_cp_logical_cell_config out_cell;
+    out_cell.nci         = nr_cell_identity::create(cu_cfg.gnb_id, cell.sector_id).value();
+    out_cell.admin_state = cell.admin_state;
+    out_cell.barred      = cell.cell_barred;
+    out_cfg.cells.push_back(out_cell);
+  }
+
+  out_cfg.ntn_location_mappings = generate_ntn_location_mappings(cu_cfg);
 
   if (!config_helpers::is_valid_configuration(out_cfg)) {
     report_error("Invalid CU-CP configuration.\n");
+  }
+
+  // Populate the NTN configuration manager config only when at least one neighbour cell configures NTN, so that the
+  // optional reflects whether NTN is actually configured.
+  if (auto ntn_cfg = generate_cu_cp_ntn_configuration_manager_config(cu_cfg); !ntn_cfg.cells.empty()) {
+    out_cfg.ntn = std::move(ntn_cfg);
   }
 
   return out_cfg;
@@ -601,4 +767,66 @@ void ocudu::fill_cu_cp_worker_manager_config(worker_manager_config& config, cons
   if (unit_cfg.pcap_cfg.xnap.enabled) {
     pcap_cfg.is_xnap_enabled = true;
   }
+}
+
+ocudu_ntn::ntn_configuration_manager_config
+ocudu::generate_cu_cp_ntn_configuration_manager_config(const cu_cp_unit_config& cu_cfg)
+{
+  ocudu_ntn::ntn_configuration_manager_config out_cfg;
+
+  // Add globally-defined satellites first. Use user-defined satellite_idx as internal satellite_index.
+  unsigned next_satellite_idx = add_global_ntn_satellites(cu_cfg.ntn_satellites, out_cfg.satellites);
+
+  // Look up a cell definition by its NR cell id. The NTN configuration lives on the cell itself, so a neighbour's
+  // NTN info is taken from that neighbour's own cell entry.
+  auto find_cell = [&cu_cfg](uint64_t nr_cell_id) -> const cu_cp_unit_cell_config_item* {
+    for (const cu_cp_unit_cell_config_item& c : cu_cfg.mobility_config.cells) {
+      if (c.nr_cell_id == nr_cell_id) {
+        return &c;
+      }
+    }
+    return nullptr;
+  };
+
+  for (const cu_cp_unit_cell_config_item& cell : cu_cfg.mobility_config.cells) {
+    ocudu_ntn::ntn_cell_config out_cell;
+
+    for (const cu_cp_unit_neighbor_cell_config_item& ncell : cell.ncells) {
+      const cu_cp_unit_cell_config_item* ncell_def = find_cell(ncell.nr_cell_id);
+      if (ncell_def == nullptr || !ncell_def->ntn_cfg.has_value()) {
+        continue;
+      }
+      // Work on a copy: the resolution sets satellite_idx for inline satellite definitions.
+      cu_cp_unit_cell_ntn_config ntn_cfg = *ncell_def->ntn_cfg;
+      resolve_ntn_satellite_ref(ntn_cfg.sat_ref,
+                                out_cfg.satellites,
+                                next_satellite_idx,
+                                ntn_cfg.sat_ref.ta_info,
+                                fmt::format("cells[nci={:#x}].ntn", ncell.nr_cell_id));
+
+      ocudu_ntn::ntn_neighbor_cell_config& nc = out_cell.ncells.emplace_back();
+      nc.satellite_index                      = *ntn_cfg.sat_ref.satellite_idx;
+      nc.nci                                  = nr_cell_identity::create(ncell.nr_cell_id).value();
+      nc.reference_location                   = ntn_cfg.reference_location;
+      nc.polarization                         = ntn_cfg.polarization;
+      nc.use_state_vector =
+          derive_use_state_vector(std::nullopt, ntn_cfg.sat_ref.ephemeris_info, nc.satellite_index, out_cfg.satellites);
+    }
+
+    // Skip cells whose neighbours carry no NTN configuration.
+    if (out_cell.ncells.empty()) {
+      continue;
+    }
+
+    out_cell.nr_cgi.nci    = nr_cell_identity::create(cell.nr_cell_id).value();
+    out_cell.update_period = std::chrono::milliseconds(cu_cfg.mobility_config.ntn_update_period_ms);
+    // Identity within the manager is by NCI alone; the serving PLMN is unused in the CU-CP path, so nr_cgi.plmn_id is
+    // left at its default. The manager keys its cell map by NCI, forwards updates by NCI, and DU reference-time
+    // reports are matched by NCI. The real PLMN that reaches RRC is resolved downstream by the cell measurement
+    // manager from the DU's F1 data, not from here.
+
+    out_cfg.cells.push_back(std::move(out_cell));
+  }
+
+  return out_cfg;
 }

@@ -5,6 +5,7 @@
 #include "ocudu/phy/upper/signal_processors/nzp_csi_rs/factories.h"
 #include "nzp_csi_rs_generator_impl.h"
 #include "nzp_csi_rs_generator_pool.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/support_formatters.h"
 #include "ocudu/phy/upper/signal_processors/nzp_csi_rs/nzp_csi_rs_formatter.h"
 

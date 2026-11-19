@@ -5,25 +5,26 @@
 #pragma once
 
 #include "du_ue_resource_config.h"
-#include "ue_capability_summary.h"
 #include "ocudu/f1ap/du/f1ap_du_ue_context_update.h"
+#include "ocudu/scheduler/rrm/ue_capability_summary.h"
 
 namespace ocudu {
 namespace odu {
 
-/// \brief Outcome report of an DU UE Resource allocation request.
+/// \brief Outcome report of a DU UE Resource allocation request.
 struct du_ue_resource_update_response {
   /// \brief Defines whether the UE resource allocation failed during the config update procedure.
   /// If \c procedure_error doesn't contain any error string, then the UE resource update was successful.
   error_type<std::string>        procedure_error;
   std::vector<drb_id_t>          failed_drbs;
   std::vector<serv_cell_index_t> failed_scells;
+  bool                           cs_rnti_requested = false;
 
   bool failed() const { return not procedure_error.has_value(); }
 };
 
 /// \brief This class manages the PHY (e.g. RB and symbols used for PUCCH), MAC (e.g. LCIDs) and RLC resources used
-/// by an UE. It provides an API to update the UE resources on arrival of new UE Context Update Requests, and
+/// by a UE. It provides an API to update the UE resources on arrival of new UE Context Update Requests, and
 /// returns resources back to the DU RAN Resource Manager when the UE is destroyed.
 class ue_ran_resource_configurator
 {
@@ -44,6 +45,12 @@ public:
 
     /// Called to fetch the UE resources.
     virtual const du_ue_resource_config& get() = 0;
+
+    /// Sets the CS-RNTI allocated by the MAC layer for configured grants.
+    virtual void set_cs_rnti(rnti_t cs_rnti) = 0;
+
+    /// Clears the CS-RNTI previously allocated for Configured Grants.
+    virtual void clear_cs_rnti() = 0;
 
     /// Called to fetch the UE capabilities.
     virtual const std::optional<ue_capability_summary>& ue_capabilities() const = 0;
@@ -80,6 +87,11 @@ public:
   /// \brief Handle the confirmation from that UE that the last RAN resource configuration is complete.
   void handle_ue_config_applied() { ue_res_impl->config_applied(); }
 
+  /// \brief Sets the CS-RNTI allocated by the MAC layer into the UE resource configuration.
+  void set_cs_rnti(rnti_t cs_rnti) const { ue_res_impl->set_cs_rnti(cs_rnti); }
+
+  void clear_cs_rnti() const { ue_res_impl->clear_cs_rnti(); }
+
   /// \brief Returns the configurator error, which non-empty string only if the procedure failed.
   std::string get_error() const { return configurator_error; }
 
@@ -108,12 +120,13 @@ public:
   virtual expected<ue_ran_resource_configurator, std::string>
   create_ue_resource_configurator(du_ue_index_t ue_index, du_cell_index_t pcell_index, bool has_tc_rnti) = 0;
 
-  /// \brief Returns the upper-bound on the number of UEs that the given cell can support without RRC Rejecting them,
+  /// \brief Returns the upper-bound on the number of UEs that the given cell can support with dedicated resources,
   /// based on the available SR, CSI and SRS resources.
   /// \note The actual number of supported UEs might be lower than this.
-  /// \note There might be more UE contexts in a given cell than the value returned by this function. The extra UE
-  /// contexts correspond to UEs for which a RRC Reject needs to be sent.
-  virtual unsigned get_max_nof_setup_ues(du_cell_index_t cell_index) const = 0;
+  virtual unsigned get_max_nof_established_ue_contexts(du_cell_index_t cell_index) const = 0;
+
+  /// Returns the number of extra UE contexts that the given cell can hold for UEs pending an RRC Reject.
+  virtual unsigned get_max_nof_rejected_ue_contexts(du_cell_index_t cell_index) const = 0;
 };
 
 } // namespace odu

@@ -7,6 +7,7 @@
 #include "../converters/rlc_config_helpers.h"
 #include "../converters/scheduler_configuration_helpers.h"
 #include "../metrics/du_procedure_metrics_collector.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
 #include "ocudu/rlc/rlc_factory.h"
 #include "ocudu/rlc/rlc_srb_config_factory.h"
@@ -17,11 +18,13 @@ using namespace odu;
 ue_creation_procedure::ue_creation_procedure(const du_ue_creation_request&   req_,
                                              du_ue_manager_repository&       ue_mng_,
                                              const du_manager_params&        du_params_,
+                                             const du_manager_mem_resources& du_mem_resources_,
                                              du_ran_resource_manager&        cell_res_alloc_,
                                              du_procedure_metrics_collector& metrics_) :
   req(req_),
   ue_mng(ue_mng_),
   du_params(du_params_),
+  du_mem_resources(du_mem_resources_),
   du_res_alloc(cell_res_alloc_),
   metrics(metrics_),
   proc_logger(ocudulog::fetch_basic_logger("DU-MNG"), name(), req.ue_index, req.tc_rnti)
@@ -78,10 +81,13 @@ void ue_creation_procedure::operator()(coro_context<async_task<void>>& ctx)
   // > Assign C-RNTI allocated by MAC.
   ue_mng.update_crnti(req.ue_index, mac_resp.allocated_crnti);
 
-  // > Start Initial UL RRC Message Transfer by signalling MAC to notify CCCH to upper layers.
+  // > Start Initial UL RRC Message Transfer by signalling MAC to notify CCCH to upper layers, and to process the MAC
+  // CEs that came in the same Msg3, now that the UE context exists.
   if (not req.ul_ccch_msg.empty()) {
-    if (not du_params.mac.mgr.get_ue_configurator().handle_ul_ccch_msg(ue_ctx->ue_index, req.ul_ccch_msg.copy())) {
-      proc_logger.log_proc_failure("Failed to notify CCCH message to upper layers");
+    ocudu_assert(req.slot_rx.has_value(), "A Msg3 carrying a UL-CCCH SDU always has a reception slot");
+    if (not du_params.mac.mgr.get_ue_configurator().handle_ul_ccch_msg(
+            ue_ctx->ue_index, req.pcell_index, *req.slot_rx, req.ul_ccch_msg.copy(), req.msg3_mac_ces)) {
+      proc_logger.log_proc_failure("Failed to notify Msg3 content to upper layers");
       CORO_AWAIT(clear_ue());
       CORO_EARLY_RETURN();
     }
@@ -159,8 +165,8 @@ bool ue_creation_procedure::setup_du_ue_resources()
   f1ap_ue_context_update_request f1_req;
   f1_req.ue_index = ue_ctx->ue_index;
   f1_req.srbs_to_setup.resize(1);
-  f1_req.srbs_to_setup[0]             = srb_id_t::srb1;
-  du_ue_resource_update_response resp = ue_ctx->resources.update(req.pcell_index, f1_req);
+  f1_req.srbs_to_setup[0]                   = srb_id_t::srb1;
+  const du_ue_resource_update_response resp = ue_ctx->resources.update(req.pcell_index, f1_req);
   if (resp.failed()) {
     proc_logger.log_proc_failure("Unable to setup DU UE PCell and SRB resources. Cause: {}",
                                  resp.procedure_error.error().data());
@@ -184,7 +190,8 @@ void ue_creation_procedure::create_rlc_srbs()
                                                                        make_default_srb0_rlc_config(),
                                                                        du_params.services,
                                                                        ue_ctx->get_rlc_rlf_notifier(),
-                                                                       du_params.rlc.pcap_writer));
+                                                                       du_params.rlc,
+                                                                       du_mem_resources.rlc));
 
   // Create SRB1 RLC entity.
   if (ue_ctx->bearers.srbs().contains(srb_id_t::srb1)) {
@@ -197,7 +204,8 @@ void ue_creation_procedure::create_rlc_srbs()
                                                            ue_ctx->resources->srbs[srb_id_t::srb1].rlc_cfg,
                                                            du_params.services,
                                                            ue_ctx->get_rlc_rlf_notifier(),
-                                                           du_params.rlc.pcap_writer));
+                                                           du_params.rlc,
+                                                           du_mem_resources.rlc));
   }
 }
 
@@ -240,7 +248,7 @@ async_task<mac_ue_create_response> ue_creation_procedure::create_mac_ue()
     // the scheduler HARQ entity is extended up to max_harq_procs (e.g. 32). The MAC buffer must
     // already be large enough at that point to avoid an out-of-bounds assertion.
     mac_ue_create_msg.pdsch_harqs_per_cell =
-        cell_ran.ntn_params.has_value()
+        cell_ran.ntn_params.has_value() and cell_ran.ntn_params->is_enabled()
             ? cell_ran.init_bwp.pdsch.max_harq_procs
             : static_cast<unsigned>(ue_pcell.serv_cell_cfg.pdsch_serv_cell_cfg->nof_harq_proc);
   } else {

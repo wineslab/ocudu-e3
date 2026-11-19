@@ -136,8 +136,10 @@ struct scheduler_cell_metrics {
   unsigned nof_dl_slots = 0;
   /// Number of uplink slots (only full uplink slots counted for now).
   unsigned nof_ul_slots = 0;
-  /// Number of PRACH preambles detected.
-  unsigned nof_prach_preambles = 0;
+  /// Total number of PRACH preambles detected.
+  unsigned total_prach_preambles = 0;
+  /// Number of detected PRACH preambles for 2-step RACH (MsgA). Subset of \c total_prach_preambles.
+  unsigned two_step_prachs_detected = 0;
   /// Counter of UE PDSCH grants (RARs, SIBs and Paging are not considered).
   unsigned dl_grants_count = 0;
   /// Counter of UE PUSCH grants.
@@ -152,12 +154,16 @@ struct scheduler_cell_metrics {
   unsigned failed_common_ul_pdcch = 0;
   /// Number of failed UCI allocation attempts.
   unsigned nof_failed_uci_allocs = 0;
+  /// Number of fallback DL grants dropped because the common HARQ-ACK PUCCH collided on every candidate k1.
+  unsigned failed_fallback_uci_allocs = 0;
   /// Number of MSG3s.
   unsigned nof_msg3_ok = 0;
   /// Number of MSG3 KOs.
   unsigned nof_msg3_nok = 0;
   /// Number of ra-ContentionResolutionTimer expiries that occurred before the ConRes CE could be scheduled.
   unsigned nof_conres_timer_expired = 0;
+  /// Number of ra-ContentionResolutionTimer expiries where the ConRes CE was scheduled but never positively ACKed.
+  unsigned nof_conres_ce_never_acked = 0;
   /// Average PRACH delay in slots.
   std::optional<float> avg_prach_delay_slots;
   /// Number of failed PDSCH allocations due to late HARQs.
@@ -179,6 +185,8 @@ struct scheduler_cell_metrics {
   std::vector<unsigned>             pdsch_prbs_used_per_tdd_slot_idx;
   std::vector<scheduler_cell_event> events;
   std::vector<scheduler_ue_metrics> ue_metrics;
+  /// Whether the per-UE metrics in this report should be consumed/printed by consumers.
+  bool report_ue_metrics = true;
 };
 
 /// Scheduler metrics report for all active cells of the DU.

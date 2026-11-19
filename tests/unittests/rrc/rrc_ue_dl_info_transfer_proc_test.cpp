@@ -5,6 +5,7 @@
 #include "rrc_ue_test_helpers.h"
 #include "rrc_ue_test_messages.h"
 #include "ocudu/adt/byte_buffer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/fifo_async_task_scheduler.h"
 #include "ocudu/support/test_utils.h"
 #include <gtest/gtest.h>

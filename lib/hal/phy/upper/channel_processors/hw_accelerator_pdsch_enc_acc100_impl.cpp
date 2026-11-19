@@ -5,6 +5,7 @@
 #include "hw_accelerator_pdsch_enc_acc100_impl.h"
 #include "ocudu/hal/dpdk/bbdev/bbdev_op_pool_factory.h"
 #include "ocudu/hal/dpdk/mbuf_pool_factory.h"
+#include "fmt/format.h"
 
 using namespace ocudu;
 using namespace hal;

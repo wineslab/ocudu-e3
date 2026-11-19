@@ -6,6 +6,7 @@
 #include "../f1ap_asn1_converters.h"
 #include "asn1_helpers.h"
 #include "f1ap_asn1_utils.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/f1ap/f1ap_message.h"
 
@@ -61,7 +62,7 @@ void ue_context_setup_procedure::operator()(coro_context<async_task<f1ap_ue_cont
 {
   CORO_BEGIN(ctx);
 
-  logger.debug("ue={} proc=\"{}\": started...", request.ue_index, name());
+  logger.info("ue={}: \"{}\" started...", request.ue_index, name());
 
   // Create F1AP UE context if it doesn't exist.
   if (not find_or_create_f1ap_ue_context()) {
@@ -172,7 +173,7 @@ f1ap_ue_context_setup_response ue_context_setup_procedure::handle_procedure_resu
   resp.success  = false;
 
   if (ue_ctxt == nullptr) {
-    logger.warning("ue={} proc=\"{}\" failed", request.ue_index, name());
+    logger.warning("ue={}: \"{}\" failed", request.ue_index, name());
     return resp;
   }
 
@@ -192,7 +193,7 @@ f1ap_ue_context_setup_response ue_context_setup_procedure::handle_procedure_resu
     // Create UE RRC context in CU-CP, if required.
     resp.success = create_ue_rrc_context(resp);
 
-    logger.debug("ue={} proc=\"{}\": finished successfully", request.ue_index, name());
+    logger.info("ue={}: \"{}\" finished successfully", request.ue_index, name());
 
     return resp;
   }
@@ -200,15 +201,22 @@ f1ap_ue_context_setup_response ue_context_setup_procedure::handle_procedure_resu
   // Procedure failed.
 
   if (transaction_sink.failed()) {
-    logger.warning("{}: Procedure failed. Cause: {}",
+    logger.warning("{} failed. Cause: {}",
                    f1ap_ue_log_prefix{ue_ctxt->ue_ids, name()},
                    get_cause_str(transaction_sink.failure()->cause));
 
     // Fill response to the UE context setup procedure.
     fill_f1ap_ue_context_setup_response(resp, request.ue_index, transaction_sink.failure());
 
+  } else if (transaction_sink.cancelled()) {
+    // The transaction was cancelled because the F1AP UE context is being torn down (e.g. F1AP/DU stop). The
+    // standard UE removal path already owns cleaning up this UE context; removing it here too would erase the
+    // very object whose transaction manager is still unwinding its own cancel_all() call.
+    logger.warning("{} cancelled. Cause: F1AP UE context is being torn down",
+                   f1ap_ue_log_prefix{ue_ctxt->ue_ids, name()});
+    return resp;
   } else {
-    logger.warning("{}: Procedure failed. Cause: Timeout reached while waiting for DU response, timeout={}ms",
+    logger.warning("{} failed. Cause: Timeout reached while waiting for DU response, timeout={}ms",
                    f1ap_ue_log_prefix{ue_ctxt->ue_ids, name()},
                    f1ap_cfg.proc_timeout.count());
   }
@@ -223,12 +231,12 @@ static void fill_asn1_ue_context_setup_request(asn1::f1ap::ue_context_setup_requ
                                                const f1ap_ue_context_setup_request&    request,
                                                const f1ap_ue_ids&                      ue_ids)
 {
-  asn1_request->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(ue_ids.cu_ue_f1ap_id);
+  asn1_request->gnb_cu_ue_f1ap_id = to_underlying(ue_ids.cu_ue_f1ap_id);
 
   asn1_request->gnb_du_ue_f1ap_id_present =
       ue_ids.du_ue_f1ap_id && ue_ids.du_ue_f1ap_id != gnb_du_ue_f1ap_id_t::invalid;
   if (asn1_request->gnb_du_ue_f1ap_id_present) {
-    asn1_request->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(*ue_ids.du_ue_f1ap_id);
+    asn1_request->gnb_du_ue_f1ap_id = to_underlying(*ue_ids.du_ue_f1ap_id);
   }
 
   asn1_request->sp_cell_id    = cgi_to_asn1(request.sp_cell_id);
@@ -369,13 +377,13 @@ static void fill_asn1_ue_context_setup_request(asn1::f1ap::ue_context_setup_requ
   // new gnb cu ue f1ap id
   if (request.new_gnb_cu_ue_f1ap_id.has_value()) {
     asn1_request->new_gnb_cu_ue_f1ap_id_present = true;
-    asn1_request->new_gnb_cu_ue_f1ap_id         = gnb_cu_ue_f1ap_id_to_uint(request.new_gnb_cu_ue_f1ap_id.value());
+    asn1_request->new_gnb_cu_ue_f1ap_id         = to_underlying(request.new_gnb_cu_ue_f1ap_id.value());
   }
 
   // ran ue id
   if (request.ran_ue_id.has_value()) {
     asn1_request->ran_ue_id_present = true;
-    asn1_request->ran_ue_id.from_number(ran_ue_id_to_uint(request.ran_ue_id.value()));
+    asn1_request->ran_ue_id.from_number(to_underlying(request.ran_ue_id.value()));
   }
 
   // Conditional inter DU mobility info.
@@ -387,7 +395,7 @@ static void fill_asn1_ue_context_setup_request(asn1::f1ap::ue_context_setup_requ
     if (cho_info.cho_trigger == f1ap_cho_trigger::cho_replace and cho_info.target_gnb_du_ue_f1ap_id.has_value()) {
       asn1_request->conditional_inter_du_mob_info.target_gnb_du_ue_f1ap_id_present = true;
       asn1_request->conditional_inter_du_mob_info.target_gnb_du_ue_f1ap_id =
-          gnb_du_ue_f1ap_id_to_uint(cho_info.target_gnb_du_ue_f1ap_id.value());
+          to_underlying(cho_info.target_gnb_du_ue_f1ap_id.value());
     }
   }
 }

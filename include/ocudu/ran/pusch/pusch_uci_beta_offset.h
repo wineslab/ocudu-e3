@@ -6,6 +6,12 @@
 
 namespace ocudu {
 
+/// \brief Maximum CSI payload size, in bits, that selects the first beta offset index.
+///
+/// As per Section 9.3, TS 38.213, a CSI Part 1 or CSI Part 2 payload larger than this value selects the second beta
+/// offset index, i.e. \e betaOffsetCSI-Part1-Index2 or \e betaOffsetCSI-Part2-Index2.
+constexpr unsigned MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1 = 11;
+
 /// \brief Maps the integer \c beta_offset value for HARQ-ACK reporting into the corresponding float value.
 ///
 /// The integer \c beta_offset value is passed by the \c PUSCH-Config, TS 38.331, and the mapping into the corresponding

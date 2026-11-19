@@ -7,7 +7,7 @@
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/rlc/rlc_config.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 #include <cstdint>
 
 namespace ocudu {

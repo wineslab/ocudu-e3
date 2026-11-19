@@ -165,20 +165,25 @@ protected:
     e2sm_packer      = std::make_unique<e2sm_kpm_asn1_packer>(*du_meas_provider);
     e2sm_iface       = std::make_unique<e2sm_kpm_impl>(test_logger, *e2sm_packer, *du_meas_provider);
     e2sm_mngr        = std::make_unique<e2sm_manager>(test_logger);
-    e2sm_mngr->add_e2sm_service("1.3.6.1.4.1.53148.1.2.2.2", std::move(e2sm_iface));
+    e2sm_mngr->add_e2sm_service(e2sm_kpm_asn1_packer::oid, std::move(e2sm_iface));
     e2_subscription_mngr = std::make_unique<e2_subscription_manager_impl>(*e2sm_mngr);
     factory              = timer_factory{timers, ctrl_worker};
     e2_client            = std::make_unique<dummy_e2_con_client>(*adapter);
     e2agent_notifier     = std::make_unique<dummy_e2_agent_mng>();
-    e2ap                 = std::make_unique<e2_impl>(
-        test_logger, *e2agent_notifier, factory, *e2_client, *e2_subscription_mngr, *e2sm_mngr, ctrl_worker);
-    pcap = std::make_unique<dummy_e2ap_pcap>();
+    e2ap                 = std::make_unique<e2_impl>(e2_impl_dependencies{.logger            = test_logger,
+                                                                          .agent_notifier    = *e2agent_notifier,
+                                                                          .timers            = factory,
+                                                                          .e2_client         = *e2_client,
+                                                                          .subscription_mngr = *e2_subscription_mngr,
+                                                                          .e2sm_mngr         = *e2sm_mngr,
+                                                                          .task_exec         = ctrl_worker});
+    pcap                 = std::make_unique<dummy_e2ap_pcap>();
     adapter->connect_e2ap(e2ap.get());
   }
 
   void TearDown() override { ocudulog::flush(); }
 
-  e2ap_configuration                          cfg = {};
+  e2ap_config                                 cfg = {};
   timer_factory                               factory;
   timer_manager                               timers;
   std::unique_ptr<e2ap_e2agent_notifier>      e2agent_notifier;
@@ -277,19 +282,21 @@ protected:
     du_param_configurator           = std::make_unique<dummy_du_configurator>();
     node_component_config_collector = std::make_unique<e2_node_component_config_collector>(ctrl_worker, 1);
     collector_raw                   = node_component_config_collector.get();
-    e2agent                         = create_e2_du_agent(cfg,
-                                 *e2_client,
-                                 &(*du_metrics),
-                                 &(*f1ap_ue_id_mapper),
-                                 &(*du_param_configurator),
-                                 factory,
-                                 ctrl_worker,
-                                 std::move(node_component_config_collector));
+    e2agent                         = create_e2_du_agent(
+        cfg,
+        e2ap_dependencies{.e2_client                      = *e2_client,
+                                                  .e2_metrics_var                 = &(*du_metrics),
+                                                  .f1ap_ue_id_translator          = &(*f1ap_ue_id_mapper),
+                                                  .du_configurator                = &(*du_param_configurator),
+                                                  .timers                         = factory,
+                                                  .e2_exec                        = ctrl_worker,
+                                                  .node_component_config_provider = std::move(node_component_config_collector),
+                                                  .logger                         = ocudulog::fetch_basic_logger("TEST")});
   }
 
   void TearDown() override { ocudulog::flush(); }
 
-  e2ap_configuration                                  cfg = {};
+  e2ap_config                                         cfg = {};
   inline_task_executor                                rx_executor;
   std::unique_ptr<io_broker>                          epoll_broker;
   timer_manager                                       timers;

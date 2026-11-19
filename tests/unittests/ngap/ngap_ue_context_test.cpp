@@ -4,6 +4,7 @@
 
 #include "lib/ngap/ue_context/ngap_ue_context.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include <cstdint>
 #include <gtest/gtest.h>
@@ -38,14 +39,14 @@ protected:
 
   cu_cp_ue_index_t generate_random_ue_index()
   {
-    return uint_to_ue_index(test_rng::uniform_int<uint64_t>(cu_cp_ue_index_to_uint(cu_cp_ue_index_t::min),
-                                                            cu_cp_ue_index_to_uint(cu_cp_ue_index_t::max) - 1));
+    return uint_to_ue_index(test_rng::uniform_int<uint64_t>(to_underlying(cu_cp_ue_index_t::min),
+                                                            to_underlying(cu_cp_ue_index_t::max) - 1));
   }
 
   ran_ue_id_t generate_random_ran_ue_id()
   {
     return uint_to_ran_ue_id(
-        test_rng::uniform_int<uint64_t>(ran_ue_id_to_uint(ran_ue_id_t::min), ran_ue_id_to_uint(ran_ue_id_t::max) - 1));
+        test_rng::uniform_int<uint64_t>(to_underlying(ran_ue_id_t::min), to_underlying(ran_ue_id_t::max) - 1));
   }
 
   ocudulog::basic_logger&      ngap_logger = ocudulog::fetch_basic_logger("NGAP");

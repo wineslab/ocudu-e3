@@ -22,20 +22,11 @@ namespace ocudu {
 /// \brief Index used to identify the E1 interface in the CU-UP.
 constexpr uint16_t MAX_NOF_E1S = std::numeric_limits<uint16_t>::max();
 enum class cu_up_e1_index_t : uint16_t { min = 0, max = MAX_NOF_E1S - 1, invalid = MAX_NOF_E1S };
-constexpr uint16_t cu_up_e1_index_to_uint(cu_up_e1_index_t index)
-{
-  return static_cast<uint16_t>(index);
-}
 
 /// \brief GNB-CU-CP-UE-E1AP-ID used to identify the UE in the CU-CP E1AP.
 /// \remark See TS 38.463 Section 9.3.1.4: GNB-CU-UE-E1AP-ID valid values: (0..2^32-1).
 constexpr uint64_t MAX_NOF_CU_CP_E1AP_UES = ((uint64_t)1 << 32);
 enum class gnb_cu_cp_ue_e1ap_id_t : uint64_t { min = 0, max = MAX_NOF_CU_CP_E1AP_UES - 1, invalid = 0x1ffffffff };
-
-constexpr uint64_t gnb_cu_cp_ue_e1ap_id_to_uint(gnb_cu_cp_ue_e1ap_id_t id)
-{
-  return static_cast<uint64_t>(id);
-}
 
 /// Convert integer to GNB-CU-CP-UE-E1AP-ID type.
 constexpr gnb_cu_cp_ue_e1ap_id_t int_to_gnb_cu_cp_ue_e1ap_id(uint64_t idx)
@@ -47,11 +38,6 @@ constexpr gnb_cu_cp_ue_e1ap_id_t int_to_gnb_cu_cp_ue_e1ap_id(uint64_t idx)
 /// \remark See TS 38.473 Section 9.3.1.5: GNB-CU-UP-UE-E1AP-ID valid values: (0..2^32-1).
 constexpr uint64_t MAX_NOF_CU_UP_E1AP_UES = ((uint64_t)1 << 32);
 enum class gnb_cu_up_ue_e1ap_id_t : uint64_t { min = 0, max = MAX_NOF_CU_CP_E1AP_UES - 1, invalid = 0x1ffffffff };
-
-constexpr uint64_t gnb_cu_up_ue_e1ap_id_to_uint(gnb_cu_up_ue_e1ap_id_t id)
-{
-  return static_cast<uint64_t>(id);
-}
 
 /// Convert integer to GNB-DU-UE-E1AP-ID type.
 constexpr gnb_cu_up_ue_e1ap_id_t int_to_gnb_cu_up_ue_e1ap_id(uint64_t idx)
@@ -95,8 +81,11 @@ struct e1ap_qos_flow_map_item {
   std::optional<e1ap_qos_flow_map_ind> qos_flow_map_ind;
 };
 
+/// Direction of the data forwarding tunnels requested from the gNB-CU-UP (TS 37.483 section 9.3.2.5).
+enum class e1ap_data_forwarding_request { ul = 0, dl, both };
+
 struct e1ap_data_forwarding_info_request {
-  std::string                                              data_forwarding_request;
+  e1ap_data_forwarding_request                             data_forwarding_request = e1ap_data_forwarding_request::dl;
   slotted_id_vector<qos_flow_id_t, e1ap_qos_flow_map_item> qos_flows_forwarded_on_fwd_tunnels;
 };
 
@@ -215,6 +204,7 @@ struct e1ap_qos_flow_failed_item {
 struct e1ap_data_forwarding_info {
   std::optional<up_transport_layer_info> ul_data_forwarding;
   std::optional<up_transport_layer_info> dl_data_forwarding;
+  std::vector<qos_flow_id_t>             data_forwarding_to_ng_ran_qos_flow_info_list;
 };
 
 struct e1ap_drb_setup_item_ng_ran {

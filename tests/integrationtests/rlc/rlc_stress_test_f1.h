@@ -77,8 +77,8 @@ public:
   }
 
   // RLC -> F1 -> RRC
-  void on_protocol_failure() final {}
-  void on_max_retx() final {}
+  void on_protocol_failure(rb_id_t rb_id) final {}
+  void on_max_retx(rb_id_t rb_id) final {}
 
   void set_rlc_tx_upper_data(rlc_tx_upper_layer_data_interface* rlc_tx_upper_) { this->rlc_tx_upper = rlc_tx_upper_; }
 

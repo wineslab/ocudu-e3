@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "ocudu/adt/bounded_bitset.h"
+#include "ocudu/phy/upper/signal_processors/srs/doa_estimator_result.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator_configuration.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator_result.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
@@ -12,6 +14,7 @@
 #include "ocudu/ran/srs/srs_context_formatter.h"
 #include "ocudu/ran/srs/srs_information.h"
 #include "ocudu/ran/srs/srs_resource_formatter.h"
+#include "ocudu/support/math/math_utils.h"
 #include <limits>
 
 namespace fmt {
@@ -38,6 +41,10 @@ struct formatter<ocudu::srs_estimator_configuration> {
       helper.format_always(ctx, "{}", *config.context);
     }
     helper.format_if_verbose(ctx, "slot={}", config.slot);
+    if (config.slot_offset != 0) {
+      helper.format_always(ctx, "ue_ul_slot={}", config.slot - config.slot_offset);
+      helper.format_if_verbose(ctx, "slot_offset={}", config.slot_offset);
+    }
 
     // Format CRBs and REs only if the resource is supported.
     if (config.resource.is_valid() && !config.resource.has_frequency_hopping() &&
@@ -67,8 +74,42 @@ struct formatter<ocudu::srs_estimator_configuration> {
       helper.format_always(ctx, "re=invalid");
     }
 
-    helper.format_if_verbose(ctx, "ports=[{}]", ocudu::span<const uint8_t>(config.ports));
+    helper.format_if_verbose(ctx, "ports={}", ocudu::span<const uint8_t>(config.ports));
 
+    return ctx.out();
+  }
+};
+
+template <>
+struct formatter<ocudu::doa_estimator_result::doa_component_type> {
+  template <typename ParseContext>
+  auto parse(ParseContext& ctx)
+  {
+    return ctx.begin();
+  }
+
+  template <typename FormatContext>
+  auto format(const ocudu::doa_estimator_result::doa_component_type& component, FormatContext& ctx) const
+  {
+    format_to(ctx.out(), "{{angle={}º strength={}}}", component.broadside_angle_degrees, component.spectrum_strength);
+    return ctx.out();
+  }
+};
+
+/// \brief Custom formatter for \c ocudu::doa_estimator_result.
+template <>
+struct formatter<ocudu::doa_estimator_result> {
+  template <typename ParseContext>
+  auto parse(ParseContext& ctx)
+  {
+    return ctx.begin();
+  }
+
+  template <typename FormatContext>
+  auto format(const ocudu::doa_estimator_result& result, FormatContext& ctx) const
+  {
+    format_to(
+        ctx.out(), "{}", ocudu::span<const ocudu::doa_estimator_result::doa_component_type>(result.doa_components));
     return ctx.out();
   }
 };
@@ -89,22 +130,22 @@ struct formatter<ocudu::srs_estimator_result> {
   }
 
   template <typename FormatContext>
-  auto format(const ocudu::srs_estimator_result& config, FormatContext& ctx) const
+  auto format(const ocudu::srs_estimator_result& result, FormatContext& ctx) const
   {
-    helper.format_always(ctx, "t_align={:+.1f}ns", config.time_alignment.time_alignment * 1e9);
-    helper.format_always(ctx, "epre={:+.1f}dB", config.epre_dB.value_or(std::numeric_limits<float>::quiet_NaN()));
-    helper.format_always(ctx, "rsrp={:+.1f}dB", config.rsrp_dB.value_or(std::numeric_limits<float>::quiet_NaN()));
+    helper.format_always(ctx, "t_align={:+.1f}ns", result.time_alignment.time_alignment * 1e9);
+    helper.format_always(ctx, "epre={:+.1f}dB", result.epre_dB.value_or(std::numeric_limits<float>::quiet_NaN()));
+    helper.format_always(ctx, "rsrp={:+.1f}dB", result.rsrp_dB.value_or(std::numeric_limits<float>::quiet_NaN()));
     helper.format_always(
         ctx,
         "noise_var={:+.1f}dB",
-        ocudu::convert_power_to_dB(config.noise_variance.value_or(std::numeric_limits<float>::quiet_NaN())));
+        ocudu::convert_power_to_dB(result.noise_variance.value_or(std::numeric_limits<float>::quiet_NaN())));
 
     // Get matrix Frobenius norm.
-    float frobenius_norm = config.channel_matrix.frobenius_norm();
+    float frobenius_norm = result.channel_matrix.frobenius_norm();
 
     if (std::isnormal(frobenius_norm)) {
       // Normalize matrix.
-      ocudu::srs_channel_matrix norm_matrix = config.channel_matrix;
+      ocudu::srs_channel_matrix norm_matrix = result.channel_matrix;
       norm_matrix *= 1.0F / frobenius_norm;
 
       // Print norm and matrix.
@@ -112,6 +153,11 @@ struct formatter<ocudu::srs_estimator_result> {
     } else {
       // Do not print anything if there are no coefficients.
       helper.format_if_verbose(ctx, "H=[]");
+    }
+    if (result.doa_result.has_value()) {
+      helper.format_always(ctx, "doa={}", *result.doa_result);
+    } else {
+      helper.format_always(ctx, "doa=NA");
     }
 
     return ctx.out();

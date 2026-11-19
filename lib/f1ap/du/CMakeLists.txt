@@ -13,7 +13,6 @@ add_library(ocudu_f1ap_du
         f1ap_du_factory.cpp
         f1ap_du_connection_handler.cpp
         f1ap_du_metrics_collector_impl.cpp
-        ue_context/f1ap_du_ue.cpp
         ue_context/ue_bearer_manager.cpp
         ue_context/f1c_du_bearer_impl.cpp
         ue_context/f1ap_du_ue_config_update.cpp)

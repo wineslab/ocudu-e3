@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ntn_assistance_info_generator.h"
+#include "ntn_orbital_compute_module.h"
 #include "ocudu/ntn/ntn_configuration_manager.h"
 #include "ocudu/ntn/ntn_configuration_manager_config.h"
 #include "ocudu/ntn/ntn_configuration_manager_dependencies.h"
@@ -25,6 +25,7 @@ namespace ocudu_ntn {
 
 class ntn_sib19_update_handler;
 class ntn_doppler_compensation_handler;
+class ntn_meas_info_update_handler;
 class ntn_time_provider;
 
 /// Class that updates NTN Configuration based on the information provided by O&M.
@@ -44,6 +45,12 @@ public:
   /// \return Result containing lists of successfully updated and failed cells.
   ntn_config_update_result handle_ntn_config_update(const ntn_config_update_info& req) override;
 
+  // See interface for documentation.
+  void start() override;
+
+  // See interface for documentation.
+  void stop() override;
+
 private:
   /// \brief Handle NTN configuration update for a single cell.
   ///
@@ -51,39 +58,71 @@ private:
   /// \return True if the update was successfully handled; false otherwise.
   bool handle_ntn_cell_config_update(const ntn_cell_config_update_info& cell_req);
 
-  /// Per-cell context holding cell-specific NTN assistance info.
-  struct per_cell_context {
-    explicit per_cell_context(orbit_propagator_type type = orbit_propagator_type::rk4) :
-      ntn_info_generator(type), sat_switch_info_generator(type)
-    {
-    }
+  /// Per-satellite context holding the orbital compute module for one satellite.
+  struct per_satellite_context {
+    explicit per_satellite_context(orbit_propagator_type type) : ocm(type) {}
 
-    ntn_cell_config               cell_cfg;
-    ntn_assistance_info_generator ntn_info_generator;
-    bool                          sat_switch_enabled = false;
-    ntn_assistance_info_generator sat_switch_info_generator;
-    unique_timer                  timer;
-    std::optional<sib19_info>     last_sib19;
-    /// Deferred cell-config updates waiting for SIB19_Tx_time >= epoch_time.
-    static_ring_buffer<ntn_cell_config_update_info, 8> deferred_cell_cfg_queue;
+    ntn_orbital_compute_module ocm;
+
+    /// Cached result of the last OCM computation.
+    struct cached_result {
+      time_point        epoch_time;
+      slot_point        epoch_slot;
+      unsigned          ntn_ul_sync_validity_dur;
+      bool              use_state_vector;
+      ntn_orbital_state state;
+    };
+    std::optional<cached_result> last_result;
   };
 
-  /// \brief Apply a previously deferred cell config update to the per-cell context.
+  /// Full cell config snapshot at a specific epoch time.
+  struct cell_config_snapshot {
+    time_point      epoch_time;
+    ntn_cell_config config;
+  };
+
+  /// Per-cell context holding cell-specific NTN assistance info.
+  struct per_cell_context {
+    unique_timer timer;
+    /// Common subcarrier spacing of the cell, used to resolve the mapping on the node timeline.
+    subcarrier_spacing        common_scs = subcarrier_spacing::kHz15;
+    std::optional<sib19_info> last_sib19;
+    /// Queue of full cell config snapshots ordered by epoch_time. Always non-empty (seeded at construction).
+    static_ring_buffer<cell_config_snapshot, 8> cell_cfg_queue;
+  };
+
+  /// \brief Returns the cell config applicable for the given epoch time.
   ///
-  /// Performs the field assignments that are deferred until SIB19_Tx_time >= entry.epoch_time.
-  /// \param ctx    Per-cell context to update.
-  /// \param update The deferred config update to apply.
-  void apply_deferred_cell_config_update(per_cell_context& ctx, const ntn_cell_config_update_info& update);
+  /// Pops snapshots superseded by a newer applicable entry and returns a reference to the
+  /// most recent snapshot whose epoch_time <= t.
+  /// \param ctx Per-cell context.
+  /// \param t   SIB19 epoch time.
+  const ntn_cell_config& get_cell_config(per_cell_context& ctx, time_point t) const;
+
+  /// \brief Runs one update for the given cell, if the node timeline already provides a slot mapping.
+  void run_cell_update(const nr_cell_global_id_t& nr_cgi, per_cell_context& ctx);
+
+  /// \brief Looks up the per-satellite context for a given satellite index.
+  /// \return Pointer to the context, or nullptr if no satellite with this index is configured.
+  per_satellite_context* find_satellite_context(unsigned satellite_index);
+
+  /// \brief Computes the orbital state for the given epoch time, reusing the cached result if the epoch slot and time
+  /// match within a 5 ms tolerance to avoid redundant OCM propagations within the same SI window tick.
+  ntn_orbital_state compute_orbital_state(per_satellite_context& sat,
+                                          time_point             epoch_time,
+                                          slot_point             epoch_slot,
+                                          unsigned               ntn_ul_sync_validity_dur,
+                                          bool                   use_state_vector) const;
 
   /// \brief Computes and sends a request to apply CFO compensation for the feeder link Doppler shift.
   ///
-  /// \param ctx Per-cell context containing cell configuration
+  /// \param cell_cfg Cell configuration containing feeder link parameters and sector ID.
   /// \param doppler_update_time The time point at which the Doppler compensation should be updated.
   /// \param ta_info TA-Info used to compute Doppler shift frequencies.
-  /// \return True if the request was successfully sent;
-  /// false otherwise.
-  bool
-  send_cfo_compensation_request(const per_cell_context& ctx, time_point doppler_update_time, const ta_info_t& ta_info);
+  /// \return True if the request was successfully sent; false otherwise.
+  bool send_cfo_compensation_request(const ntn_cell_config& cell_cfg,
+                                     time_point             doppler_update_time,
+                                     const ta_info_t&       ta_info);
 
   /// \brief Periodic task to generate and update NTN configuration for a specific cell.
   ///
@@ -95,14 +134,19 @@ private:
   /// \param sl Current slot
   void periodic_ntn_config_update_task(const nr_cell_global_id_t& nr_cgi, time_point tp, slot_point sl);
 
-  ocudulog::basic_logger&                           logger;
-  ntn_configuration_manager_config                  cfg;
-  std::unique_ptr<ntn_sib19_update_handler>         sib19_pdu_update_handler;
-  std::unique_ptr<ntn_time_provider>                time_provider;
-  std::unique_ptr<ntn_doppler_compensation_handler> doppler_handler;
-  timer_manager&                                    timers;
-  task_executor&                                    executor;
-  std::map<nr_cell_global_id_t, per_cell_context>   cells;
+  ocudulog::basic_logger&                       logger;
+  std::unique_ptr<ntn_sib19_update_handler>     sib19_pdu_update_handler;
+  std::unique_ptr<ntn_time_provider>            time_provider;
+  std::unique_ptr<ntn_meas_info_update_handler> meas_info_update_handler;
+  /// Handler applying the feeder link Doppler compensation, owned above this manager. May be null.
+  ntn_doppler_compensation_handler*               doppler_handler;
+  timer_manager&                                  timers;
+  task_executor&                                  executor;
+  std::map<unsigned, per_satellite_context>       satellite_contexts;
+  std::map<nr_cell_global_id_t, per_cell_context> cells;
+  /// Whether the periodic updates are currently armed. Makes \c start() and \c stop() idempotent and lets the manager
+  /// be restarted. Only touched from the thread driving the manager lifecycle.
+  bool running = false;
 };
 
 } // namespace ocudu_ntn

@@ -31,16 +31,14 @@ using crb_index_list = static_vector<uint16_t, pdcch_constants::MAX_NOF_RB_PDCCH
 
 /// \brief Grouping of common and UE-dedicated information associated with a given search space.
 struct search_space_info {
-  const search_space_configuration*                 cfg     = nullptr;
-  const sched_coreset_config*                       coreset = nullptr;
-  const sched_bwp_config*                           bwp     = nullptr;
-  crb_interval                                      dl_crb_lims;
-  crb_interval                                      ul_crb_lims;
-  span<const pdsch_time_domain_resource_allocation> pdsch_time_domain_list;
-  span<const pusch_time_domain_resource_allocation> pusch_time_domain_list;
-  std::optional<vrb_to_prb::interleaved_mapping>    interleaved_mapping;
-  dci_size_config                                   dci_sz_cfg;
-  dci_sizes                                         dci_sz;
+  const search_space_configuration*              cfg     = nullptr;
+  const sched_coreset_config*                    coreset = nullptr;
+  const sched_bwp_config*                        bwp     = nullptr;
+  crb_interval                                   dl_crb_lims;
+  crb_interval                                   ul_crb_lims;
+  std::optional<vrb_to_prb::interleaved_mapping> interleaved_mapping;
+  dci_size_config                                dci_sz_cfg;
+  dci_sizes                                      dci_sz;
 
   /// \brief Gets DL DCI format type to use based on SearchSpace configuration.
   /// \return DL DCI format.
@@ -53,14 +51,23 @@ struct search_space_info {
   /// \brief Retrieve all the PDCCH candidates for a given aggregation level and slot for this SearchSpace.
   span<const uint8_t> get_pdcch_candidates(aggregation_level aggr_lvl, slot_point pdcch_slot) const
   {
-    return ss_pdcch_candidates[pdcch_slot.to_uint() % ss_pdcch_candidates.size()][to_aggregation_level_index(aggr_lvl)];
+    return ss_pdcch_candidates[pdcch_slot.count() % ss_pdcch_candidates.size()][to_aggregation_level_index(aggr_lvl)];
   }
 
   /// \brief Retrieve all the CRBs for a given aggregation level and searchSpace candidate.
   span<const crb_index_list_span> get_crb_list_of_pdcch_candidates(aggregation_level aggr_lvl,
                                                                    slot_point        pdcch_slot) const
   {
-    return crbs_of_candidates[pdcch_slot.to_uint() % crbs_of_candidates.size()][to_aggregation_level_index(aggr_lvl)];
+    return crbs_of_candidates[pdcch_slot.count() % crbs_of_candidates.size()][to_aggregation_level_index(aggr_lvl)];
+  }
+
+  /// \brief Returns the maximum number of DL layers for which a PDSCH config exists for the given time-domain resource.
+  /// \c pdsch_cfg_list holds one \ref pdsch_config_params per number of layers, so this is also the valid upper bound
+  /// for the \c nof_layers argument of \ref get_pdsch_config.
+  unsigned get_nof_pdsch_layer_configs(unsigned pdsch_td_res_index) const
+  {
+    ocudu_assert(pdsch_cfg_list.size() > pdsch_td_res_index, "nof_pdsch_layer_configs: invalid time-domain index");
+    return pdsch_cfg_list[pdsch_td_res_index].size();
   }
 
   const pdsch_config_params& get_pdsch_config(unsigned pdsch_td_res_index, unsigned nof_layers) const
@@ -164,8 +171,13 @@ public:
     return true;
   }
 
-  /// Determines whether UL allocations are possible in the provided slot.
-  bool is_ul_enabled(slot_point ul_slot) const;
+  /// \brief Determines whether UL allocations are possible in the provided slot.
+  ///
+  /// \param ul_slot Slot for which the UE uplink is being tested.
+  /// \param reported_ul_ta T_TA last reported by the UE, if any. Tracked outside the configuration, in
+  /// \c ue_ta_report_tracker, and used to place the uplink measurement gap window when the cell has no estimate of its
+  /// own. Callers holding a \c ue_cell should use \c ue_cell::is_ul_enabled, which supplies it.
+  bool is_ul_enabled(slot_point ul_slot, std::optional<std::chrono::microseconds> reported_ul_ta) const;
 
   /// Get CSI-MeasConfig for the UE.
   const csi_meas_config* csi_meas_cfg() const
@@ -208,6 +220,9 @@ public:
 
   /// \brief Gets the SRS transmit number of ports.
   const auto& get_srs_nof_ports() const { return init_bwp().ul.ue_cfg()->srs.nof_ports; }
+
+  /// \brief Test whether the given slot is a Configured Grant opportunity for this UE.
+  bool is_cg_slot(slot_point slot) const;
 
 private:
   void configure_bwp_cfg(bwp_id_t bwpid, const sched_bwp_config& bwp);
@@ -253,10 +268,12 @@ public:
   /// Number of configured cells in the UE cell group config.
   size_t nof_cells() const { return ue_cell_to_du_cell_index.size(); }
 
+  std::optional<rnti_t> get_cs_rnti() const { return cs_rnti; }
+
   /// Get the configuration of a cell that is common to all UEs.
   const cell_configuration& common_cell_cfg(du_cell_index_t cell_index) const
   {
-    ocudu_assert(du_cells.contains(cell_index), "Invalid cell_index={}", fmt::underlying(cell_index));
+    ocudu_assert(du_cells.contains(cell_index), "Invalid cell_index={}", cell_index);
     return du_cells[cell_index]->cell_cfg_common;
   }
   const cell_configuration& pcell_common_cfg() const
@@ -267,13 +284,12 @@ public:
   /// Get the configuration of a cell that is dedicated to the UE.
   const ue_cell_configuration& ue_cell_cfg(du_cell_index_t cell_index) const
   {
-    ocudu_assert(du_cells.contains(cell_index), "Invalid cell_index={}", fmt::underlying(cell_index));
+    ocudu_assert(du_cells.contains(cell_index), "Invalid cell_index={}", cell_index);
     return *du_cells[cell_index];
   }
   const ue_cell_configuration& ue_cell_cfg(serv_cell_index_t serv_cell_index) const
   {
-    ocudu_assert(
-        serv_cell_index < ue_cell_to_du_cell_index.size(), "Invalid cell_index={}", fmt::underlying(serv_cell_index));
+    ocudu_assert(serv_cell_index < ue_cell_to_du_cell_index.size(), "Invalid cell_index={}", serv_cell_index);
     return ue_cell_cfg(ue_cell_to_du_cell_index[serv_cell_index]);
   }
   const ue_cell_configuration& pcell_cfg() const { return ue_cell_cfg(SERVING_PCELL_IDX); }
@@ -303,6 +319,9 @@ private:
 
   // DRX config for the UE cell group.
   std::optional<drx_config> ue_drx_cfg;
+
+  // CS-RNTI for Configured Grants
+  std::optional<rnti_t> cs_rnti;
 };
 
 } // namespace ocudu

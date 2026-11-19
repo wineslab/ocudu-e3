@@ -6,7 +6,6 @@
 
 #include "nrppa_du_logger.h"
 #include "ocudu/nrppa/nrppa.h"
-#include "ocudu/ran/positioning/measurement_information.h"
 #include <unordered_map>
 
 namespace ocudu::ocucp {
@@ -14,10 +13,6 @@ namespace ocudu::ocucp {
 struct nrppa_du_context {
   cu_cp_du_index_t     du_index;
   nrppa_f1ap_notifier* f1ap = nullptr;
-
-  std::vector<trp_meas_request_item_t>         trp_meas_request_list;
-  std::vector<trp_meas_quantities_list_item_t> trp_meas_quantities;
-  std::optional<std::chrono::milliseconds>     meas_periodicity_ms;
 
   nrppa_du_logger logger;
 

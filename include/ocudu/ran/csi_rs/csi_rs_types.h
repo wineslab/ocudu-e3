@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "ocudu/adt/static_vector.h"
-#include "ocudu/ran/csi_rs/csi_rs_constants.h"
+#include <cstdint>
 
 namespace ocudu {
 

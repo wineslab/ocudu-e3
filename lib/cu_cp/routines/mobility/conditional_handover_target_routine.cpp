@@ -5,6 +5,7 @@
 #include "conditional_handover_target_routine.h"
 #include "../../cu_up_processor/cu_up_processor_repository.h"
 #include "../../du_processor/du_processor_repository.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ocudu::ocucp;

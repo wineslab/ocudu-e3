@@ -28,7 +28,7 @@ public:
   async_task<void> handle_tnl_association_removal();
 
 private:
-  void handle_connection_loss();
+  void handle_connection_loss(unsigned session);
   void handle_connection_loss_impl();
 
   cu_up_e1_index_t e1_index;
@@ -43,6 +43,9 @@ private:
 
   bool              connected_flag{false};
   manual_event_flag rx_path_disconnected;
+
+  /// Identifier of the current E1 TNL association attempt. Only accessed from the CU-UP executor.
+  unsigned e1_session_epoch{0};
 };
 
 } // namespace ocuup

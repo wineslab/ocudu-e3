@@ -43,11 +43,21 @@ static bool contains_drb(const up_pdu_session_context_update& new_session_contex
   return (new_session_context.drb_to_add.find(new_drb_id) != new_session_context.drb_to_add.end());
 }
 
+static bool is_drb_id_free(const up_context&                    context,
+                           const up_config_update&              config_update,
+                           const up_pdu_session_context_update& new_session_context,
+                           drb_id_t                             drb_id)
+{
+  return !contains_drb(context, drb_id) && !contains_drb(config_update, drb_id) &&
+         !contains_drb(new_session_context, drb_id) && !context.used_drb_ids[get_used_drb_index(drb_id)];
+}
+
 drb_id_t ocudu::ocucp::allocate_drb_id(const up_pdu_session_context_update& new_session_context,
                                        const up_context&                    context,
                                        const up_config_update&              config_update,
                                        uint8_t                              max_nof_drbs_per_ue,
-                                       const ocudulog::basic_logger&        logger)
+                                       const ocudulog::basic_logger&        logger,
+                                       std::optional<drb_id_t>              preferred_drb_id)
 {
   if (context.drb_map.size() >= max_nof_drbs_per_ue) {
     logger.warning("DRB creation failed. Cause: Maximum number of DRBs per UE already created ({}). To increase the "
@@ -56,12 +66,19 @@ drb_id_t ocudu::ocucp::allocate_drb_id(const up_pdu_session_context_update& new_
     return drb_id_t::invalid;
   }
 
+  // Prefer reusing the DRB ID the source RAN node used for this QoS flow, if it's still free here. This keeps DRB
+  // numbering consistent with the source whenever admission allows it, which downstream DRB-ID-keyed procedures
+  // (e.g. SN/RAN Status Transfer, TS 38.300 Section 9.2.3.2.3) rely on to correlate the right bearer.
+  if (preferred_drb_id.has_value() && preferred_drb_id.value() != drb_id_t::invalid &&
+      is_drb_id_free(context, config_update, new_session_context, preferred_drb_id.value())) {
+    return preferred_drb_id.value();
+  }
+
   drb_id_t new_drb_id = drb_id_t::drb1;
   // The new DRB ID must not be allocated already.
-  while (contains_drb(context, new_drb_id) || contains_drb(config_update, new_drb_id) ||
-         contains_drb(new_session_context, new_drb_id) || context.used_drb_ids[get_used_drb_index(new_drb_id)]) {
+  while (!is_drb_id_free(context, config_update, new_session_context, new_drb_id)) {
     // Try next.
-    new_drb_id = uint_to_drb_id(drb_id_to_uint(new_drb_id) + 1);
+    new_drb_id = uint_to_drb_id(to_underlying(new_drb_id) + 1);
 
     // Scanned all DRB IDs, none is available.
     if (new_drb_id == drb_id_t::invalid) {
@@ -191,7 +208,8 @@ static drb_id_t allocate_qos_flow(up_pdu_session_context_update&     new_session
                                   const up_config_update&            config_update,
                                   const up_context&                  full_context,
                                   const up_resource_manager_cfg&     cfg,
-                                  const ocudulog::basic_logger&      logger)
+                                  const ocudulog::basic_logger&      logger,
+                                  std::optional<drb_id_t>            preferred_drb_id = std::nullopt)
 {
   five_qi_t five_qi = get_five_qi(qos_flow, cfg, logger);
   ocudu_assert(five_qi != five_qi_t::invalid, "5QI cannot be invalid.");
@@ -205,16 +223,18 @@ static drb_id_t allocate_qos_flow(up_pdu_session_context_update&     new_session
     return drb_id_t::invalid;
   }
 
-  drb_id_t drb_id = allocate_drb_id(new_session_context, full_context, config_update, cfg.max_nof_drbs_per_ue, logger);
+  drb_id_t drb_id = allocate_drb_id(
+      new_session_context, full_context, config_update, cfg.max_nof_drbs_per_ue, logger, preferred_drb_id);
   if (drb_id == drb_id_t::invalid) {
     logger.warning("No more DRBs available");
     return drb_id;
   }
 
   up_drb_context drb_ctx;
-  drb_ctx.drb_id         = drb_id;
-  drb_ctx.pdu_session_id = new_session_context.id;
-  drb_ctx.default_drb    = full_context.drb_map.empty(); // make first DRB the default
+  drb_ctx.drb_id                  = drb_id;
+  drb_ctx.pdu_session_id          = new_session_context.id;
+  drb_ctx.default_drb             = full_context.drb_map.empty(); // make first DRB the default
+  drb_ctx.source_drb_id_confirmed = preferred_drb_id.has_value() && drb_id == preferred_drb_id.value();
 
   // Fill QoS (TODO: derive QoS params correctly).
   // As we currently map QoS flows to DRBs in a 1:1 manner, we can use the same values for both.
@@ -286,7 +306,8 @@ up_config_update
 ocudu::ocucp::calculate_update(const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_items,
                                const up_context&                                                            context,
                                const up_resource_manager_cfg&                                               cfg,
-                               const ocudulog::basic_logger&                                                logger)
+                               const ocudulog::basic_logger&                                                logger,
+                               const up_old_drb_association& old_drb_association)
 {
   up_config_update config;
 
@@ -299,8 +320,21 @@ ocudu::ocucp::calculate_update(const slotted_id_vector<pdu_session_id_t, cu_cp_p
     // Create new PDU session context.
     up_pdu_session_context_update new_ctxt(
         pdu_session.pdu_session_id, pdu_session.pdu_session_type, pdu_session.ul_ngu_up_tnl_info);
+
+    auto old_drb_association_it = old_drb_association.find(pdu_session.pdu_session_id);
+    const std::map<qos_flow_id_t, drb_id_t>* old_flow_to_drb_id =
+        old_drb_association_it != old_drb_association.end() ? &old_drb_association_it->second : nullptr;
+
     for (const auto& flow_item : pdu_session.qos_flow_setup_request_items) {
-      auto drb_id = allocate_qos_flow(new_ctxt, flow_item, config, context, cfg, logger);
+      std::optional<drb_id_t> preferred_drb_id;
+      if (old_flow_to_drb_id != nullptr) {
+        auto old_drb_id_it = old_flow_to_drb_id->find(flow_item.qos_flow_id);
+        if (old_drb_id_it != old_flow_to_drb_id->end()) {
+          preferred_drb_id = old_drb_id_it->second;
+        }
+      }
+
+      auto drb_id = allocate_qos_flow(new_ctxt, flow_item, config, context, cfg, logger, preferred_drb_id);
       if (drb_id == drb_id_t::invalid) {
         logger.warning("Couldn't allocate {}", flow_item.qos_flow_id);
         continue;
@@ -485,7 +519,7 @@ up_config_update ocudu::ocucp::to_config_update(const up_context& old_context)
 
 unsigned ocudu::ocucp::get_used_drb_index(drb_id_t drb_id)
 {
-  unsigned index = drb_id_to_uint(drb_id) - 1;
+  unsigned index = to_underlying(drb_id) - 1;
   ocudu_assert(index < MAX_NOF_DRBS, "Invalid DRB ID when checking if DRB ID was already used");
   return index;
 }

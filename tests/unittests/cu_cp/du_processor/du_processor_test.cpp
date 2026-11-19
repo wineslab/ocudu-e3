@@ -6,6 +6,7 @@
 #include "du_processor_test_helpers.h"
 #include "lib/cu_cp/du_processor/du_processor.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include <gtest/gtest.h>
@@ -121,4 +122,135 @@ TEST_F(du_processor_ue_creation_test, when_init_ul_rrc_message_is_invalid_then_u
   du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(release_cmplt);
 
   ASSERT_EQ(ue_mng.get_nof_ues(), 0);
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+/* gNB-DU configuration update                                                      */
+//////////////////////////////////////////////////////////////////////////////////////
+
+/// Runs the F1 setup so the DU processor holds a DU configuration to update.
+static void run_f1_setup(du_processor& du_proc, const std::vector<test_helpers::served_cell_item_info>& cells)
+{
+  du_proc.get_f1ap_handler().get_f1ap_message_handler().handle_message(
+      test_helpers::generate_f1_setup_request(int_to_gnb_du_id(0x11), cells));
+}
+
+TEST_F(du_processor_test, when_du_adds_a_cell_then_config_update_is_acknowledged_and_the_cell_is_activated)
+{
+  test_helpers::served_cell_item_info cell_a;
+  run_f1_setup(*du_processor_obj, {cell_a});
+
+  test_helpers::served_cell_item_info cell_b;
+  cell_b.nci = nr_cell_identity::create(gnb_id_t{411, 22}, 1).value();
+  cell_b.pci = 7;
+  du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(
+      test_helpers::generate_gnb_du_configuration_update(int_to_gnb_du_id(0x11), {cell_b}));
+
+  ASSERT_EQ(f1ap_pdu_notifier.last_f1ap_msg.pdu.type(), f1ap_pdu_c::types_opts::options::successful_outcome);
+  ASSERT_EQ(f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.type(),
+            f1ap_elem_procs_o::successful_outcome_c::types_opts::options::gnb_du_cfg_upd_ack);
+
+  const auto& ack = f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.gnb_du_cfg_upd_ack();
+  ASSERT_TRUE(ack->cells_to_be_activ_list_present) << "the added cell must be activated";
+  ASSERT_EQ(ack->cells_to_be_activ_list.size(), 1);
+  ASSERT_EQ(ack->cells_to_be_activ_list[0]->cells_to_be_activ_list_item().nr_cgi.nr_cell_id.to_number(),
+            cell_b.nci.value());
+
+  ASSERT_EQ(du_processor_obj->get_context()->served_cells.size(), 2);
+}
+
+TEST_F(du_processor_test, when_du_deletes_a_cell_then_the_cu_cp_stops_serving_it)
+{
+  test_helpers::served_cell_item_info cell_a;
+  test_helpers::served_cell_item_info cell_b;
+  cell_b.nci = nr_cell_identity::create(gnb_id_t{411, 22}, 1).value();
+  cell_b.pci = 7;
+  run_f1_setup(*du_processor_obj, {cell_a, cell_b});
+  ASSERT_EQ(du_processor_obj->get_context()->served_cells.size(), 2);
+
+  du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(
+      test_helpers::generate_gnb_du_configuration_update(
+          int_to_gnb_du_id(0x11), {}, {}, {nr_cell_global_id_t{cell_b.plmn_id, cell_b.nci}}));
+
+  ASSERT_EQ(f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.type(),
+            f1ap_elem_procs_o::successful_outcome_c::types_opts::options::gnb_du_cfg_upd_ack);
+  ASSERT_EQ(du_processor_obj->get_context()->served_cells.size(), 1);
+  ASSERT_EQ(du_processor_obj->get_context()->served_cells[0].cgi.nci, cell_a.nci);
+}
+
+TEST_F(du_processor_test, when_du_modifies_a_cell_then_the_new_configuration_is_stored)
+{
+  test_helpers::served_cell_item_info cell_a;
+  run_f1_setup(*du_processor_obj, {cell_a});
+
+  test_helpers::served_cell_item_info modified = cell_a;
+  modified.pci                                 = 11;
+  du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(
+      test_helpers::generate_gnb_du_configuration_update(
+          int_to_gnb_du_id(0x11), {}, {{nr_cell_global_id_t{cell_a.plmn_id, cell_a.nci}, modified}}));
+
+  ASSERT_EQ(f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.type(),
+            f1ap_elem_procs_o::successful_outcome_c::types_opts::options::gnb_du_cfg_upd_ack);
+  ASSERT_EQ(du_processor_obj->get_context()->served_cells.size(), 1);
+  ASSERT_EQ(du_processor_obj->get_context()->served_cells[0].pci, 11);
+}
+
+TEST_F(du_processor_test, when_a_modified_cell_can_no_longer_be_served_then_the_du_is_asked_to_deactivate_it)
+{
+  test_helpers::served_cell_item_info cell_a;
+  run_f1_setup(*du_processor_obj, {cell_a});
+
+  // The DU reconfigures the cell onto a PLMN the CU-CP does not serve.
+  test_helpers::served_cell_item_info modified = cell_a;
+  modified.plmn_id                             = plmn_identity::parse("00102").value();
+  modified.sib1_str                            = test_helpers::create_sib1_hex_string(modified.plmn_id);
+  du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(
+      test_helpers::generate_gnb_du_configuration_update(
+          int_to_gnb_du_id(0x11), {}, {{nr_cell_global_id_t{cell_a.plmn_id, cell_a.nci}, modified}}));
+
+  ASSERT_EQ(f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.type(),
+            f1ap_elem_procs_o::successful_outcome_c::types_opts::options::gnb_du_cfg_upd_ack);
+  const auto& ack = f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.gnb_du_cfg_upd_ack();
+  ASSERT_TRUE(ack->cells_to_be_deactiv_list_present) << "a cell the CU-CP stops serving must not stay on air";
+  ASSERT_EQ(ack->cells_to_be_deactiv_list.size(), 1);
+  ASSERT_EQ(ack->cells_to_be_deactiv_list[0]->cells_to_be_deactiv_list_item().nr_cgi.nr_cell_id.to_number(),
+            cell_a.nci.value());
+  ASSERT_TRUE(du_processor_obj->get_context()->served_cells.empty());
+}
+
+TEST_F(du_processor_test, when_the_du_deletes_a_cell_then_it_is_not_asked_to_deactivate_it)
+{
+  test_helpers::served_cell_item_info cell_a;
+  test_helpers::served_cell_item_info cell_b;
+  cell_b.nci = nr_cell_identity::create(gnb_id_t{411, 22}, 1).value();
+  cell_b.pci = 7;
+  run_f1_setup(*du_processor_obj, {cell_a, cell_b});
+
+  du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(
+      test_helpers::generate_gnb_du_configuration_update(
+          int_to_gnb_du_id(0x11), {}, {}, {nr_cell_global_id_t{cell_b.plmn_id, cell_b.nci}}));
+
+  const auto& ack = f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.gnb_du_cfg_upd_ack();
+  ASSERT_FALSE(ack->cells_to_be_deactiv_list_present) << "the DU already stopped serving the cell";
+}
+
+TEST_F(du_processor_test, when_the_added_cell_has_an_unsupported_plmn_then_it_is_left_out)
+{
+  test_helpers::served_cell_item_info cell_a;
+  run_f1_setup(*du_processor_obj, {cell_a});
+
+  test_helpers::served_cell_item_info foreign_cell;
+  foreign_cell.plmn_id  = plmn_identity::parse("00102").value();
+  foreign_cell.nci      = nr_cell_identity::create(gnb_id_t{411, 22}, 1).value();
+  foreign_cell.pci      = 7;
+  foreign_cell.sib1_str = test_helpers::create_sib1_hex_string(foreign_cell.plmn_id);
+  du_processor_obj->get_f1ap_handler().get_f1ap_message_handler().handle_message(
+      test_helpers::generate_gnb_du_configuration_update(int_to_gnb_du_id(0x11), {foreign_cell}));
+
+  ASSERT_EQ(f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.type(),
+            f1ap_elem_procs_o::successful_outcome_c::types_opts::options::gnb_du_cfg_upd_ack)
+      << "one cell the CU-CP cannot serve must not fail the whole update";
+  const auto& ack = f1ap_pdu_notifier.last_f1ap_msg.pdu.successful_outcome().value.gnb_du_cfg_upd_ack();
+  ASSERT_FALSE(ack->cells_to_be_activ_list_present);
+  ASSERT_EQ(du_processor_obj->get_context()->served_cells.size(), 1);
 }

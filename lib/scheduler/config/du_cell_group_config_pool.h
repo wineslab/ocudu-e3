@@ -8,12 +8,14 @@
 #include "logical_channel_config_pool.h"
 #include "pdcch_config_pool.h"
 #include "sched_config_params.h"
+#include "time_domain_mapper.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/scheduler/config/bwp_configuration.h"
 #include "ocudu/scheduler/config/serving_cell_config.h"
 #include "ocudu/scheduler/config/ue_bwp_config.h"
 #include "ocudu/scheduler/scheduler_configurator.h"
 #include <deque>
+#include <memory>
 
 namespace ocudu {
 
@@ -26,11 +28,7 @@ struct serving_cell_config;
 class bwp_config_pool
 {
 public:
-  bwp_config_pool(pci_t                      pci,
-                  bwp_id_t                   bwpid,
-                  const bwp_downlink_common& bwp_dl,
-                  const bwp_uplink_common&   bwp_ul,
-                  const cell_bwp_res_config& bwp_ded_res);
+  bwp_config_pool(const ran_cell_config& cell_ran_cfg, bwp_id_t bwpid, const cell_bwp_res_config& bwp_ded_res);
   bwp_config_pool(const bwp_config_pool&)            = delete;
   bwp_config_pool& operator=(const bwp_config_pool&) = delete;
 
@@ -44,12 +42,27 @@ public:
   const sched_bwp_config& cell_cfg() const { return common_bwp_cfg; }
 
 private:
-  const bwp_id_t                             bwp_id;
-  const bwp_downlink_common                  bwp_dl_cmn;
-  const bwp_uplink_common                    bwp_ul_cmn;
-  pdcch_config_pool                          pdcch_pool;
-  sched_bwp_config                           common_bwp_cfg;
-  config_object_pool<bwp_downlink_dedicated> dl_ded_config_pool;
+  /// \brief Retrieve the DL TD resource mapper to use for a UE with the given dedicated DL BWP config (or \c nullptr
+  /// for the cell-wide common config). Builds a new mapper and interns it in \c dl_td_mapper_pool, unless an equal
+  /// one already exists in the pool (flyweight pattern). The dedicated list may carry repetition rows (TS 38.214,
+  /// Table 5.1.2.1.1-1).
+  const dl_time_domain_mapper& get_dl_td_mapper(const bwp_downlink_dedicated* dl_ded);
+
+  /// \brief Retrieve the UL TD resource mapper for a UE with the given dedicated UL BWP config (or \c nullptr for
+  /// the cell-wide common config). Builds and interns a new mapper in \c ul_td_mapper_pool unless an equal one is
+  /// already there (flyweight). The dedicated list may carry repetition rows (TS 38.214, Table 6.1.2.1.1-1).
+  const ul_time_domain_mapper& get_ul_td_mapper(const bwp_uplink_dedicated* ul_ded);
+
+  const bwp_id_t                               bwp_id;
+  const bwp_downlink_common                    bwp_dl_cmn;
+  const bwp_uplink_common                      bwp_ul_cmn;
+  const std::optional<tdd_ul_dl_config_common> tdd_cfg;
+  const uint8_t                                pucch_min_k1;
+  pdcch_config_pool                            pdcch_pool;
+  config_object_pool<dl_time_domain_mapper>    dl_td_mapper_pool;
+  config_object_pool<ul_time_domain_mapper>    ul_td_mapper_pool;
+  sched_bwp_config                             common_bwp_cfg;
+  config_object_pool<bwp_downlink_dedicated>   dl_ded_config_pool;
 };
 
 class du_cell_config_pool

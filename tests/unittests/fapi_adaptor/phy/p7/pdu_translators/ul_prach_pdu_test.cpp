@@ -4,6 +4,7 @@
 
 #include "../message_builder_helpers.h"
 #include "prach.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/prach_buffer_context.h"
 #include "ocudu/ran/prach/rach_config_common.h"
 #include <gtest/gtest.h>

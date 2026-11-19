@@ -30,6 +30,12 @@ target_link_libraries(e2_setup_procedure_test ocudu_e2 ocudu_support ocudulog e2
 target_include_directories(e2_setup_procedure_test PRIVATE ${CMAKE_SOURCE_DIR})
 gtest_discover_tests(e2_setup_procedure_test)
 
+add_executable(e2_entity_stop_test e2_entity_stop_test.cpp)
+target_link_libraries(e2_entity_stop_test ocudu_e2 ocudu_support ocudulog e2ap_asn1 e2_test_helpers GTest::gtest GTest::gtest_main
+)
+target_include_directories(e2_entity_stop_test PRIVATE ${CMAKE_SOURCE_DIR})
+gtest_discover_tests(e2_entity_stop_test)
+
 add_executable(e2_setup_routine_test e2_setup_routine_test.cpp)
 target_link_libraries(e2_setup_routine_test ocudu_e2 ocudu_support ocudulog e2ap_asn1 e2_test_helpers GTest::gtest GTest::gtest_main
 )
@@ -88,17 +94,10 @@ add_executable(e2sm_kpm_meas_provider_metrics_test e2sm_kpm_meas_provider_metric
 target_link_libraries(e2sm_kpm_meas_provider_metrics_test ocudulog ocudu_e2 e2ap_asn1 ocudu_pcap ocudu_gateway ocudu_support e2_test_helpers GTest::gtest GTest::gtest_main
 )
 target_include_directories(e2sm_kpm_meas_provider_metrics_test PRIVATE ${CMAKE_SOURCE_DIR})
-gtest_discover_tests(e2sm_kpm_meas_provider_metrics_test
-    TEST_FILTER "-e2sm_kpm_cu_cp_meas_provider_metrics_test.e2sm_kpm_cu_cp_returns_expected_rrc_metrics")
-add_test(NAME e2sm_kpm_cu_cp_meas_provider_metrics_test.e2sm_kpm_cu_cp_returns_expected_rrc_metrics
-         COMMAND e2sm_kpm_meas_provider_metrics_test
-                 "--gtest_filter=e2sm_kpm_cu_cp_meas_provider_metrics_test.e2sm_kpm_cu_cp_returns_expected_rrc_metrics")
-set_tests_properties(
-    e2sm_kpm_cu_cp_meas_provider_metrics_test.e2sm_kpm_cu_cp_returns_expected_rrc_metrics
-    PROPERTIES LABELS "MVP-GOV-E2-15.1;MVP-GOV-E2-15.2;MVP-GOV-E2-15.3;MVP-GOV-E2-16.1;MVP-GOV-E2-16.2;MVP-GOV-E2-17.1;MVP-GOV-E2-17.2;MVP-GOV-E2-4.1;MVP-GOV-E2-4.2")
+gtest_discover_tests(e2sm_kpm_meas_provider_metrics_test)
 
 add_executable(e2sm_kpm_test e2sm_kpm_test.cpp)
-target_link_libraries(e2sm_kpm_test ocudulog ocudu_e2 e2ap_asn1 ocudu_pcap ocudu_gateway ocudu_support e2_test_helpers GTest::gtest GTest::gtest_main
+target_link_libraries(e2sm_kpm_test ocudulog ocudu_e2 e2ap_asn1 ocudu_pcap ocudu_gateway ocudu_support e2_test_helpers f1ap_test_doubles GTest::gtest GTest::gtest_main
 )
 target_include_directories(e2sm_kpm_test PRIVATE ${CMAKE_SOURCE_DIR})
 gtest_discover_tests(e2sm_kpm_test)

@@ -8,6 +8,7 @@
 #include <cstdint>
 
 namespace ocudu {
+class ssb_subcarrier_offset;
 
 /// \brief Packs the PBCH timing parameters in 8 bits.
 ///

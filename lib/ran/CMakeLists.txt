@@ -3,6 +3,8 @@
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 add_library(ocudu_ran
+        beamforming/beam_identifier_helpers.cpp
+        beamforming/beam_weights_codebook_generator.cpp
         cause/ngap_cause_converters.cpp
         cause/f1ap_cause_converters.cpp
         cause/e1ap_cause_converters.cpp
@@ -21,20 +23,29 @@ add_library(ocudu_ran
         pdcch/pdcch_type0_css_occasions.cpp
         pdcch/search_space.cpp
         pdsch/dlsch_info.cpp
+        pdsch/pdsch_dmrs_symbol_mask.cpp
         pdsch/pdsch_mcs.cpp
         pdsch/pdsch_antenna_port_mapping.cpp
+        prs/prs.cpp
         prach/prach_configuration.cpp
         prach/prach_cyclic_shifts.cpp
         prach/prach_frequency_mapping.cpp
         prach/prach_preamble_information.cpp
         prach/prach_helper.cpp
         prach/prach_time_mapping.cpp
+        prach/prach_occasion_mapping.cpp
+        prach/ssb_to_ro_mapping.cpp
         precoding/precoding_codebook_configuration.cpp
-        precoding/precoding_codebook_helpers.cpp
         precoding/precoding_codebooks.cpp
+        precoding/two_port/precoding_codebooks.cpp
+        precoding/type1_sp/precoding_codebook_helpers.cpp
+        precoding/type1_sp/precoding_codebooks.cpp
+        precoding/type2/precoding_codebook_helpers.cpp
+        precoding/type2/precoding_codebooks.cpp
         ptrs/ptrs_pattern.cpp
         pucch/pucch_info.cpp
         pusch/pusch_antenna_port_mapping.cpp
+        pusch/pusch_dmrs_symbol_mask.cpp
         pusch/pusch_mcs.cpp
         pusch/pusch_tpmi_select.cpp
         pusch/pusch_uci_beta_offset.cpp
@@ -48,6 +59,7 @@ add_library(ocudu_ran
         sch/sch_segmentation.cpp
         sib/sib_helper.cpp
         srs/srs_bandwidth_configuration.cpp
+        srs/srs_configuration_helpers.cpp
         srs/srs_information.cpp
         ssb/pbch_mib_pack.cpp
         ssb/ssb_freq_position_generator.cpp
@@ -55,7 +67,8 @@ add_library(ocudu_ran
         ssb/ssb_helper.cpp
         ssb/ssb_mapping.cpp
         tdd_ul_dl_config.cpp
-        drx_config.cpp)
+        drx_config.cpp
+        ntn_location_mapping.cpp)
 target_link_libraries(ocudu_ran ocudulog ocuduvec)
 
 add_to_exported_libs(ocudu_ran)

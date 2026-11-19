@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-
 set_directory_properties(PROPERTIES LABELS "du_manager;du_high")
 
 include_directories(../../..)
@@ -60,7 +59,10 @@ target_link_libraries(du_ue_config_test du_manager_test_helpers rrc_test_doubles
 gtest_discover_tests(du_ue_config_test)
 
 add_executable(du_manager_procedure_test
+        procedures/await_all_ues_test.cpp
         procedures/du_param_config_procedure_test.cpp
+        procedures/du_pws_broadcast_procedure_test.cpp
+        procedures/du_cell_stop_procedure_test.cpp
 )
 target_include_directories(du_manager_procedure_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(du_manager_procedure_test du_manager_test_helpers gtest ocudu_gtest_main)
@@ -69,26 +71,14 @@ gtest_discover_tests(du_manager_procedure_test)
 add_executable(du_ran_resource_manager_test
         du_ran_resource_manager_test.cpp
         du_drx_resource_manager_test.cpp
+        du_tar_config_test.cpp
+        du_csi_codebook_config_test.cpp
         decode_ue_nr_cap_container_test.cpp
-        du_meas_config_manager_test.cpp)
+        du_meas_config_manager_test.cpp
+        du_pxsch_repetition_resource_manager_test.cpp)
 target_include_directories(du_ran_resource_manager_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(du_ran_resource_manager_test du_manager_test_helpers sched_test_doubles gtest ocudu_gtest_main)
 gtest_discover_tests(du_ran_resource_manager_test)
-
-add_executable(srs_resource_generator_test srs_resource_generator_test.cpp)
-target_include_directories(srs_resource_generator_test PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(srs_resource_generator_test du_manager_test_helpers gtest ocudu_gtest_main)
-gtest_discover_tests(srs_resource_generator_test)
-
-add_executable(du_periodic_srs_res_mng_test du_periodic_srs_res_mng_test.cpp)
-target_include_directories(du_periodic_srs_res_mng_test PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(du_periodic_srs_res_mng_test du_manager_test_helpers sched_test_doubles gtest ocudu_gtest_main)
-gtest_discover_tests(du_periodic_srs_res_mng_test)
-
-add_executable(du_aperiodic_srs_res_mng_test du_aperiodic_srs_res_mng_test.cpp)
-target_include_directories(du_aperiodic_srs_res_mng_test PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(du_aperiodic_srs_res_mng_test du_manager_test_helpers sched_test_doubles gtest ocudu_gtest_main)
-gtest_discover_tests(du_aperiodic_srs_res_mng_test)
 
 add_executable(cbs_encoder_test cbs/cbs_encoder_test.cpp)
 target_include_directories(cbs_encoder_test PRIVATE ${CMAKE_SOURCE_DIR})
@@ -104,3 +94,23 @@ add_executable(sib19_value_tag_test sib19_value_tag_test.cpp)
 target_include_directories(sib19_value_tag_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(sib19_value_tag_test ocudu_du_high du_manager_converters ocudu_du_manager ocudu_support ocudulog gtest gtest_main)
 gtest_discover_tests(sib19_value_tag_test)
+
+add_executable(du_ntn_sib19_update_test du_ntn_sib19_update_test.cpp)
+target_include_directories(du_ntn_sib19_update_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(du_ntn_sib19_update_test du_manager_test_helpers ocudu_du_high du_manager_converters ocudu_du_manager ocudu_support ocudulog gtest gtest_main)
+gtest_discover_tests(du_ntn_sib19_update_test)
+
+add_executable(asn1_sib1_sched_info_test asn1_sib1_sched_info_test.cpp)
+target_include_directories(asn1_sib1_sched_info_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(asn1_sib1_sched_info_test du_manager_converters ocudu_du_manager ocudu_support ocudulog gtest gtest_main)
+gtest_discover_tests(asn1_sib1_sched_info_test)
+
+add_executable(du_cell_config_ssb_validation_test du_cell_config_ssb_validation_test.cpp)
+target_include_directories(du_cell_config_ssb_validation_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(du_cell_config_ssb_validation_test ocudu_du_manager ocudu_support ocudulog gtest gtest_main)
+gtest_discover_tests(du_cell_config_ssb_validation_test)
+
+add_executable(asn1_sib1_tac_list_test asn1_sib1_tac_list_test.cpp)
+target_include_directories(asn1_sib1_tac_list_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(asn1_sib1_tac_list_test du_manager_converters ocudu_du_manager ocudu_support ocudulog gtest gtest_main)
+gtest_discover_tests(asn1_sib1_tac_list_test)

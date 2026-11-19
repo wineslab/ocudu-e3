@@ -438,7 +438,7 @@ public:
     T*       old_data = head;
     uint32_t newcap   = new_size + 5;
     head              = new T[newcap];
-    std::copy(&small_buffer.data[0], &small_buffer.data[size_], head);
+    std::copy(old_data, old_data + size_, head);
     size_ = new_size;
     if (old_data != &small_buffer.data[0]) {
       delete[] old_data;
@@ -489,7 +489,9 @@ template <typename EnumType>
 OCUDUASN_CODE unpack_enum(EnumType& e, cbit_ref& bref)
 {
   ValOrError ret = unpack_enum(EnumType::nof_types, EnumType::nof_exts, EnumType::has_ext, bref);
-  e              = (typename EnumType::options)ret.val;
+  if (ret.code == OCUDUASN_SUCCESS) {
+    e = (typename EnumType::options)ret.val;
+  }
   return ret.code;
 }
 
@@ -610,7 +612,7 @@ OCUDUASN_CODE unpack_norm_small_non_neg_whole_number(UintType& n, cbit_ref& bref
 template <typename IntType>
 OCUDUASN_CODE pack_unconstrained_whole_number(bit_ref& bref, IntType n, bool aligned);
 template <typename IntType>
-OCUDUASN_CODE unpack_unconstrained_whole_number(IntType& n, cbit_ref& bref, bool aligned);
+OCUDUASN_CODE unpack_unconstrained_whole_number(IntType& n, cbit_ref& bref, uint32_t len, bool aligned);
 
 /************************
    length determinant

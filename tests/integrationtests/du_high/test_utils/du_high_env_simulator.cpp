@@ -6,15 +6,15 @@
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/mac/mac_test_messages.h"
+#include "tests/test_doubles/scheduler/scheduler_result_finder.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/f1ap/du/f1ap_du_test_helpers.h"
-#include "tests/unittests/scheduler/test_utils/result_test_helpers.h"
-#include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/du/du_high/du_high_clock_controller.h"
 #include "ocudu/du/du_high/du_high_factory.h"
 #include "ocudu/du/du_high/du_qos_config_helpers.h"
+#include "ocudu/du/du_update_config_helpers.h"
 #include "ocudu/mac/mac_cell_timing_context.h"
 #include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
 #include "ocudu/support/error_handling.h"
@@ -63,8 +63,12 @@ du_high_configuration odu::create_du_high_configuration(const du_high_env_sim_pa
     }
     cfg.ran.mac_cfg.configs.push_back({10000, 10000, 10000});
     if (params.srs_period.has_value()) {
-      cfg.ran.cells.back().ran.init_bwp.srs_cfg.srs_type_enabled       = srs_type::periodic;
-      cfg.ran.cells.back().ran.init_bwp.srs_cfg.srs_period_prohib_time = params.srs_period.value();
+      auto& cell_ran_cfg                                   = cfg.ran.cells.back().ran;
+      cell_ran_cfg.init_bwp.srs_cfg.srs_type_enabled       = srs_type::periodic;
+      cell_ran_cfg.init_bwp.srs_cfg.srs_period_prohib_time = params.srs_period.value();
+      pucch_helper::cap_pucch_symbols(
+          cell_ran_cfg.init_bwp.pucch.resources,
+          config_helpers::compute_max_nof_pucch_symbols(cell_ran_cfg.init_bwp.srs_cfg).value());
     }
   }
 
@@ -73,6 +77,8 @@ du_high_configuration odu::create_du_high_configuration(const du_high_env_sim_pa
   if (params.sched_ue_expert_cfg.has_value()) {
     cfg.ran.sched_cfg.ue = params.sched_ue_expert_cfg.value();
   }
+
+  cfg.f1ap.retry_tnl_connection = params.retry_f1c_connection;
 
   cfg.metrics.enable_f1ap    = true;
   cfg.metrics.enable_mac     = true;
@@ -194,7 +200,7 @@ bool du_high_env_simulator::add_ue(rnti_t rnti, du_cell_index_t cell_index)
     }
     phy_cell_test_dummy& phy_cell = phy.cells[cell_index];
     if (phy_cell.last_dl_res.has_value()) {
-      auto& dl_res = *phy_cell.last_dl_res.value().dl_res;
+      const auto& dl_res = *phy_cell.last_dl_res.value().dl_res;
       if (find_ue_pdsch(rnti, dl_res.ue_grants) != nullptr) {
         report_fatal_error_if_not(find_ue_pdsch_with_lcid(rnti, lcid_dl_sch_t::UE_CON_RES_ID, dl_res.ue_grants) !=
                                       nullptr,
@@ -304,7 +310,7 @@ bool du_high_env_simulator::await_dl_msg_sched(const ue_sim_context&   u,
   bool ret = run_until(
       [&]() {
         if (phy_cell.last_dl_res.has_value() and phy_cell.last_dl_res.value().dl_res != nullptr) {
-          auto& dl_res = *phy_cell.last_dl_res.value().dl_res;
+          const auto& dl_res = *phy_cell.last_dl_res.value().dl_res;
           return find_ue_pdsch_with_lcid(u.rnti, lcid, dl_res.ue_grants) != nullptr;
         }
         return false;
@@ -382,10 +388,10 @@ bool du_high_env_simulator::run_ue_context_setup(rnti_t rnti)
   this->du_hi->get_f1ap_pdu_handler().handle_message(msg);
 
   // Wait until DU sends UE Context Setup Response and the whole RRC container is scheduled.
-  const unsigned MAX_SLOT_COUNT   = 1000;
-  const unsigned srb1_pdu_size    = cmd->rrc_container.size();
-  unsigned       srb1_bytes_sched = 0;
-  for (unsigned i = 0; i != MAX_SLOT_COUNT and (srb1_bytes_sched < srb1_pdu_size or cu_notifier.f1ap_ul_msgs.empty());
+  constexpr unsigned max_slot_count   = 1000;
+  const unsigned     srb1_pdu_size    = cmd->rrc_container.size();
+  unsigned           srb1_bytes_sched = 0;
+  for (unsigned i = 0; i != max_slot_count and (srb1_bytes_sched < srb1_pdu_size or cu_notifier.f1ap_ul_msgs.empty());
        ++i) {
     run_slot();
 
@@ -483,8 +489,8 @@ void du_high_env_simulator::run_slot()
   // Wait for slot indication to be processed and the l2 results to be sent back to the l1 (join cell results, in this
   // case, with the join point being the test main thread).
   for (unsigned i = 0; i != du_high_cfg.ran.cells.size(); ++i) {
-    const unsigned MAX_COUNT = 100000;
-    for (unsigned count = 0; count < MAX_COUNT and phy.cells[i].last_slot_res != next_slot.without_hyper_sfn();
+    constexpr unsigned max_count = 100000;
+    for (unsigned count = 0; count < max_count and phy.cells[i].last_slot_res != next_slot.without_hyper_sfn();
          ++count) {
       // Process tasks dispatched to the test main thread (e.g. L2 slot result)
       workers.test_worker.run_pending_tasks();
@@ -534,7 +540,7 @@ void du_high_env_simulator::handle_slot_results(du_cell_index_t cell_index)
     slot_point             sl_rx  = phy_cell.last_ul_res->slot;
 
     if (not ul_res.pucchs.empty()) {
-      mac_uci_indication_message uci_ind = test_helpers::create_uci_indication(sl_rx, ul_res.pucchs, false);
+      mac_uci_indication_message uci_ind = test_helpers::create_uci_indication(sl_rx, ul_res.pucchs.unsorted(), false);
       this->du_hi->get_control_info_handler(cell_index).handle_uci(uci_ind);
     }
 
@@ -666,7 +672,7 @@ du_high_env_simulator::launch_ue_creation_task(rnti_t rnti, du_cell_index_t cell
       if (not conres_sent) {
         phy_cell_test_dummy& phy_cell = phy.cells[cell_index];
         if (phy_cell.last_dl_res.has_value()) {
-          auto& dl_res = *phy_cell.last_dl_res.value().dl_res;
+          const auto& dl_res = *phy_cell.last_dl_res.value().dl_res;
           if (find_ue_pdsch(rnti, dl_res.ue_grants) != nullptr) {
             report_fatal_error_if_not(find_ue_pdsch_with_lcid(rnti, lcid_dl_sch_t::UE_CON_RES_ID, dl_res.ue_grants) !=
                                           nullptr,
@@ -818,7 +824,7 @@ async_task<bool> du_high_env_simulator::launch_await_dl_msg_sched_task(const ue_
         for (count = 0U; count < max_count; ++count) {
           // Check LCID was scheduled for the given UE.
           if (phy_cell->last_dl_res.has_value() and phy_cell->last_dl_res->dl_res != nullptr) {
-            auto& dl_res = *phy_cell->last_dl_res.value().dl_res;
+            const auto& dl_res = *phy_cell->last_dl_res.value().dl_res;
             if (find_ue_pdsch_with_lcid(u.rnti, lcid, dl_res.ue_grants) != nullptr) {
               CORO_EARLY_RETURN(true);
             }

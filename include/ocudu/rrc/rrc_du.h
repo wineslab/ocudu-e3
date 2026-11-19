@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include "ocudu/ran/arfcn.h"
 #include "ocudu/ran/cause/common.h"
 #include "ocudu/ran/cu_cp_cell_configuration.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/rrc/rrc_cell_context.h"
 #include "ocudu/rrc/rrc_metrics.h"
 #include "ocudu/rrc/rrc_ue.h"
+#include <chrono>
+#include <optional>
 
 namespace ocudu::ocucp {
 
@@ -38,6 +41,28 @@ public:
   virtual std::vector<rrc_plmn_ran_area_cell_t> get_ran_area_cells() = 0;
 
   virtual void store_cell_info_db(const std::map<nr_cell_global_id_t, rrc_cell_info>& cell_infos) = 0;
+
+  /// Removes the stored information of a cell.
+  virtual void remove_cell_info(const nr_cell_global_id_t& cgi) = 0;
+
+  /// \brief Decodes a PER-encoded ReferenceTime-r16 octet string (TS 38.331 section 6.3.2) into a UTC time point,
+  /// as carried opaquely in the ref_time field of the F1AP TimeReferenceInformation IE (TS 38.473 section 9.3.1.148).
+  ///
+  /// \param encoded The ref_time field of the F1AP TimeReferenceInformation IE.
+  /// \param is_local_clock When true, the counter is relative to the Unix epoch (TS 38.331 leaves the localClock
+  ///        epoch unspecified); otherwise it is relative to the GPS epoch (00:00:00 UTC 6 January 1980).
+  /// \return The decoded time point, or \c std::nullopt if \c encoded is not a valid ReferenceTime-r16 encoding.
+  virtual std::optional<std::chrono::system_clock::time_point> get_ref_time_r16(const byte_buffer& encoded,
+                                                                                bool               is_local_clock) = 0;
+
+  /// \brief Decodes the SSB ARFCN of a cell from a PER-encoded MeasurementTimingConfiguration (TS 38.331 section
+  /// 6.2.2), as carried opaquely in the Measurement Timing Configuration IE of the XnAP Served Cell Information
+  /// (TS 38.423 section 9.2.2.11).
+  ///
+  /// \param[in] encoded The packed MeasurementTimingConfiguration advertised by an Xn-C peer for one of its cells.
+  /// \return The SSB ARFCN, or \c std::nullopt if \c encoded is not a valid MeasurementTimingConfiguration or carries
+  /// no frequency and timing information.
+  virtual std::optional<arfcn_t> get_ssb_arfcn(const byte_buffer& encoded) = 0;
 };
 
 struct rrc_resume_context_t {
@@ -55,8 +80,12 @@ struct rrc_ue_creation_message {
   rrc_ue_context_update_notifier*        rrc_ue_cu_cp_notifier;
   rrc_ue_measurement_notifier*           measurement_notifier;
   rrc_ue_cu_cp_ue_notifier*              cu_cp_ue_notifier;
+  rrc_ue_srb_pdcp_manager*               pdcp_manager;
   byte_buffer                            du_to_cu_container;
   std::optional<rrc_ue_transfer_context> rrc_context;
+  /// Resume identity the UE presented, when the UL CCCH message was an RRCResumeRequest whose I-RNTI matched no local
+  /// UE. The RRC UE asks the peer that allocated the I-RNTI for the context.
+  std::optional<rrc_resume_context_t> remote_resume_context;
 };
 
 /// \brief Interface class to the main RRC DU object to manage RRC UEs.
@@ -78,11 +107,9 @@ public:
 
   /// \brief Get the RRC Resume context containing the resume ID and resume cause from a RRC container.
   /// \param[in] rrc_container The RRC container from the DU.
-  /// \param[in] nof_i_rnti_ue_bits Number of bits used for the I-RNTI UE.
   /// \returns The RRC Resume context if the container contains a valid UL CCCH Message, std::nullopt if an error
   /// occured e.g. during unpacking.
-  virtual std::optional<rrc_resume_context_t> get_rrc_resume_context(byte_buffer rrc_container,
-                                                                     uint8_t     nof_i_rnti_ue_bits) = 0;
+  virtual std::optional<rrc_resume_context_t> get_rrc_resume_context(byte_buffer rrc_container) = 0;
 
   /// Creates a new RRC UE object and returns a handle to it.
   virtual rrc_ue_interface* add_ue(const rrc_ue_creation_message& msg) = 0;
@@ -117,10 +144,6 @@ public:
   /// \param[in] cause The establishment cause of the RRC connection. If this is given the connection establishment
   /// metrics are increased. Otherwise the connection metrics are increased.
   virtual void handle_successful_rrc_setup(std::optional<establishment_cause_t> cause = std::nullopt) = 0;
-
-  /// \brief Add the successful RRC release to the metrics.
-  /// \param[in] is_inactive True if the released RRC connection was in inactive state, false otherwise.
-  virtual void handle_successful_rrc_release(bool is_inactive = false) = 0;
 
   /// \brief Add the RRC inactive transition to the metrics.
   virtual void handle_rrc_inactive() = 0;

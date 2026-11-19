@@ -11,6 +11,7 @@
 #include <utility>
 
 namespace ocudu {
+class task_executor;
 
 /// \brief Implementation of an IO broker using epoll.
 class io_broker_epoll final : public io_broker

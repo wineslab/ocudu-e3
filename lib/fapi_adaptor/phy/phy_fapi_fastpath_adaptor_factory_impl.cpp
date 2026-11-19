@@ -7,6 +7,7 @@
 #include "p7/phy_fapi_p7_sector_fastpath_adaptor_impl.h"
 #include "phy_fapi_fastpath_adaptor_impl.h"
 #include "phy_fapi_sector_fastpath_adaptor_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace fapi_adaptor;

@@ -4,6 +4,7 @@
 
 #include "../message_builder_helpers.h"
 #include "pusch.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi_adaptor/uci_part2_correspondence_generator.h"
 #include <gtest/gtest.h>
 #include <random>
@@ -27,19 +28,22 @@ TEST(fapi_phy_ul_pusch_adaptor_test, valid_pdu_pass)
   std::uniform_int_distribution<unsigned> nof_antenna_ports_dist(1, 4);
   unsigned                                nof_antenna_ports = nof_antenna_ports_dist(rgen);
   auto                                    uci_part2_tools   = fapi_adaptor::generate_uci_part2_correspondence(1);
+  unsigned                                ntn_k_mac_slots   = 4U;
 
   uplink_pdu_slot_repository::pusch_pdu pdu;
   convert_pusch_fapi_to_phy(pdu,
                             fapi_pdu,
                             slot,
                             nof_antenna_ports,
-                            *std::get<std::unique_ptr<uci_part2_correspondence_repository>>(uci_part2_tools));
+                            *std::get<std::unique_ptr<uci_part2_correspondence_repository>>(uci_part2_tools),
+                            ntn_k_mac_slots);
 
   const pusch_processor::pdu_t& phy_pdu = pdu.pdu;
   ASSERT_EQ(slot, phy_pdu.slot);
+  ASSERT_EQ(ntn_k_mac_slots, phy_pdu.slot_offset);
   ASSERT_EQ(fapi_pdu.symbols.start(), phy_pdu.start_symbol_index);
   ASSERT_EQ(fapi_pdu.symbols.length(), phy_pdu.nof_symbols);
-  ASSERT_EQ(to_value(fapi_pdu.rnti), phy_pdu.rnti);
+  ASSERT_EQ(fapi_pdu.rnti, phy_pdu.rnti);
   ASSERT_EQ(fapi_pdu.bwp.start(), phy_pdu.bwp_start_rb);
   ASSERT_EQ(fapi_pdu.bwp.length(), phy_pdu.bwp_size_rb);
   ASSERT_EQ(fapi_pdu.cp, phy_pdu.cp);
@@ -83,5 +87,9 @@ TEST(fapi_phy_ul_pusch_adaptor_test, valid_pdu_pass)
   ASSERT_EQ(fapi_pdu.pusch_data->new_data, phy_pdu.codeword.value().new_data);
   ASSERT_EQ(fapi_pdu.ldpc_base_graph, phy_pdu.codeword.value().ldpc_base_graph);
   ASSERT_EQ(fapi_pdu.pusch_data->tb_size.value(), pdu.tb_size.value());
-  ASSERT_EQ(fapi_pdu.pusch_data->harq_process_id, pdu.harq_id);
+  ASSERT_EQ(fapi_pdu.pusch_data->harq_process_id, pdu.pdu.harq_id);
+  ASSERT_TRUE(phy_pdu.codeword.value().last_repetition);
+
+  // Rapid.
+  ASSERT_EQ(fapi_pdu.rapid, phy_pdu.n_rapid);
 }

@@ -13,11 +13,6 @@
 using namespace ocudu;
 using namespace odu;
 
-/// Wait period for RRC container in UE CONTEXT RELEASE REQUEST to be delivered in the lower layers.
-/// Note: This timeout should account for the delay for the UE to receive the RRC container, which is non-deterministic,
-/// and the timeout of 60msec specified in TS 38.331, 5.3.8.3 for the UE to ACK the RRC container.
-static constexpr std::chrono::milliseconds rrc_container_delivery_timeout{120};
-
 f1ap_du_ue_context_release_procedure::f1ap_du_ue_context_release_procedure(
     const asn1::f1ap::ue_context_release_cmd_s& msg_,
     f1ap_du_ue_manager&                         ues,
@@ -33,9 +28,6 @@ f1ap_du_ue_context_release_procedure::f1ap_du_ue_context_release_procedure(
 
 void f1ap_du_ue_context_release_procedure::operator()(coro_context<async_task<void>>& ctx)
 {
-  /// Time between RRC Release and actual UE deletion. See \c f1ap_ue_delete_request for more information.
-  static constexpr std::chrono::milliseconds ue_full_release_timeout{60};
-
   CORO_BEGIN(ctx);
 
   logger.debug("{}: Started.", f1ap_log_prefix{ue.context, name()});

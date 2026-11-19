@@ -14,12 +14,14 @@ using namespace asn1::xnap;
 
 xn_setup_procedure::xn_setup_procedure(
     const xnap_configuration&                                                                    xnap_cfg_,
+    span<const cu_cp_served_cell_info>                                                           served_cells_,
     std::optional<xnap_context>&                                                                 peer_ctxt_,
     xnap_tx_pdu_notifier_with_logging&                                                           tx_notifier_,
     protocol_transaction_event_source<asn1::xnap::xn_setup_resp_s, asn1::xnap::xn_setup_fail_s>& xn_setup_outcome_,
     timer_factory                                                                                timers_,
     ocudulog::basic_logger&                                                                      logger_) :
   xnap_cfg(xnap_cfg_),
+  served_cells(served_cells_),
   peer_ctxt(peer_ctxt_),
   tx_notifier(tx_notifier_),
   xn_setup_outcome(xn_setup_outcome_),
@@ -35,13 +37,13 @@ void xn_setup_procedure::operator()(coro_context<async_task<bool>>& ctx)
   logger.info("\"{}\" started...", name());
 
   // Prepare XN Setup message.
-  xn_setup_req = generate_asn1_xn_setup_request(xnap_cfg);
+  xn_setup_req = generate_asn1_xn_setup_request(xnap_cfg, served_cells);
 
   while (true) {
     // Subscribe to respective publisher to receive XN SETUP RESPONSE/FAILURE message.
     transaction_sink.subscribe_to(xn_setup_outcome, xnap_cfg.procedure_timeout);
 
-    // Forward message to XN-C.
+    // Forward message to Xn-C.
     if (!tx_notifier.on_new_message(xn_setup_req)) {
       logger.warning("Cannot send XNSetupRequest");
       CORO_EARLY_RETURN(false);
@@ -107,10 +109,10 @@ bool xn_setup_procedure::retry_required()
   const asn1::xnap::xn_setup_fail_s& xn_fail = transaction_sink.failure();
 
   if (not xn_fail->time_to_wait_present) {
-    // XN-C peer didn't command a waiting time.
-    logger.warning("\"{}\": Stopping procedure. Cause: XN-C peer did not set any retry waiting time", name());
-    logger.warning("\"{}\" failed. XN-C peer Cause: \"{}\"", name(), asn1_utils::get_cause_str(xn_fail->cause));
-    fmt::print("\"{}\" failed. XN-C peer Cause: \"{}\"\n", name(), asn1_utils::get_cause_str(xn_fail->cause));
+    // Xn-C peer didn't command a waiting time.
+    logger.warning("\"{}\": Stopping procedure. Cause: Xn-C peer did not set any retry waiting time", name());
+    logger.warning("\"{}\" failed. Xn-C peer Cause: \"{}\"", name(), asn1_utils::get_cause_str(xn_fail->cause));
+    fmt::print("\"{}\" failed. Xn-C peer Cause: \"{}\"\n", name(), asn1_utils::get_cause_str(xn_fail->cause));
     return false;
   }
 

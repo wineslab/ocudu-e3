@@ -13,7 +13,7 @@ namespace ocudu {
 
 struct cce_position {
   /// CCE start index. Values: (0..135).
-  unsigned ncce;
+  uint8_t ncce;
   /// Aggregation level of the DCI.
   aggregation_level aggr_lvl;
 };
@@ -84,7 +84,7 @@ struct dci_dl_info {
   dci_1_1_configuration&       as_c_rnti_f1_1() { return std::get<dci_1_1_configuration>(payload); }
   dci_1_1_configuration&       set_c_rnti_f1_1() { return payload.emplace<dci_1_1_configuration>(); }
 
-private:
+  /// \brief Unpacked DCI content, as the alternative selected by \ref type().
   payload_type payload;
 };
 
@@ -128,7 +128,7 @@ struct dci_ul_info {
   dci_0_1_configuration&       as_c_rnti_f0_1() { return std::get<dci_0_1_configuration>(payload); }
   dci_0_1_configuration&       set_c_rnti_f0_1() { return payload.emplace<dci_0_1_configuration>(); }
 
-private:
+  /// \brief Unpacked DCI content, as the alternative selected by \ref type().
   payload_type payload;
 };
 

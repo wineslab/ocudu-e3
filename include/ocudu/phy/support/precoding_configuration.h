@@ -5,12 +5,14 @@
 #pragma once
 
 #include "ocudu/adt/complex.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/adt/tensor.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ran/precoding/precoding_constants.h"
 #include "ocudu/ran/precoding/precoding_weight_matrix.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/resource_block.h"
 
 namespace ocudu {
@@ -22,6 +24,9 @@ namespace ocudu {
 ///
 /// Each PRG contains a matrix of weights per layer and port. The precoding matrix dimensions (i.e., number of layers
 /// and ports) is set at construction time.
+///
+/// \deprecated Use \c precoding_beamforming_configuration instead. \c precoding_configuration will be removed in a
+/// future release.
 class precoding_configuration
 {
 public:
@@ -297,6 +302,58 @@ public:
     return *this;
   }
 
+  /// \brief Returns the slice of the precoding configuration defined by the specified layer indices and port indices.
+  ///
+  /// \param[in] layers Interval indicating the layers to include in the slice, it must be contiguous from start to
+  /// stop.
+  /// \param[in] ports  Interval indicating the ports to include in the slice, it must be contiguous from start to
+  /// stop.
+  /// \return The slice of the precoding configuration.
+  /// \remarks An assertion is triggered if any input interval, layers or ports, is invalid, i.e., it is out of bounds
+  /// for the current precoding configuration.
+  precoding_configuration slice(interval<uint8_t> layers, interval<uint8_t> ports) const
+  {
+    ocudu_assert(layers.start() < nof_layers,
+                 "The layer start index (i.e., {}) must be smaller than the number of layers (i.e., {}).",
+                 layers.start(),
+                 nof_layers);
+    ocudu_assert(layers.stop() <= nof_layers,
+                 "The layer stop index (i.e., {}) must not be larger than the number of layers (i.e., {}).",
+                 layers.stop(),
+                 nof_layers);
+    ocudu_assert(ports.start() < nof_ports,
+                 "The port start index (i.e., {}) must be smaller than the number of ports (i.e., {}).",
+                 ports.start(),
+                 nof_ports);
+    ocudu_assert(ports.stop() <= nof_ports,
+                 "The port stop index (i.e., {}) must not be larger than the number of ports (i.e., {}).",
+                 ports.stop(),
+                 nof_ports);
+
+    // Slice of the precoding configuration.
+    precoding_configuration slice_precoding(layers.length(), ports.length(), nof_prg, prg_size);
+
+    // Iterate each PRG.
+    for (unsigned i_prg = 0; i_prg != nof_prg; ++i_prg) {
+      // Original PRG.
+      precoding_weight_matrix prg = get_prg_coefficients(i_prg);
+      // Slice PRG.
+      precoding_weight_matrix slice_prg = slice_precoding.get_prg_coefficients(i_prg);
+
+      // Iterate all ports specified in the slice, extract the layer coefficients and copy them to the slice
+      // precoding.
+      unsigned first_port = ports.start();
+      for (unsigned i_port = first_port, i_port_end = ports.stop(); i_port != i_port_end; ++i_port) {
+        ocuduvec::copy(slice_prg.get_port_coefficients(i_port - first_port),
+                       prg.get_port_coefficients(i_port).subspan(layers.start(), layers.length()));
+      }
+
+      slice_precoding.set_prg_coefficients(slice_prg, i_prg);
+    }
+
+    return slice_precoding;
+  }
+
 private:
   /// Number of physical resource blocks per PRG.
   unsigned prg_size = MAX_NOF_PRBS;
@@ -310,5 +367,25 @@ private:
   /// Internal data storage.
   static_vector<precoding_weight_matrix, precoding_constants::MAX_NOF_PRG> weights_list;
 };
+
+/// \brief Converts a precoding configuration into an equivalent precoding and beamforming configuration composite.
+///
+/// \param[in] precoding Precoding configuration.
+/// \return A precoding and beamforming configuration without beamforming.
+inline precoding_beamforming_configuration
+to_precoding_beamforming_configuration(const precoding_configuration& precoding)
+{
+  precoding_beamforming_configuration result(
+      precoding.get_nof_layers(), precoding.get_nof_ports(), precoding.get_nof_prg(), precoding.get_prg_size());
+
+  // Get the default beam list - no beamforming is applied.
+  precoding_beam_list beams = get_default_beam_list(precoding.get_nof_ports());
+
+  for (unsigned i_prg = 0, i_prg_end = precoding.get_nof_prg(); i_prg != i_prg_end; ++i_prg) {
+    result.set_prg({precoding.get_prg_coefficients(i_prg), beams}, i_prg);
+  }
+
+  return result;
+}
 
 } // namespace ocudu

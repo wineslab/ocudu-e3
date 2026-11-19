@@ -12,6 +12,8 @@
 #include "ocudu/ngap/ngap_message.h"
 #include "ocudu/ran/cu_cp_pdu_session.h"
 #include "ocudu/security/security.h"
+#include "ocudu/support/async/fifo_async_task_scheduler.h"
+#include "ocudu/support/async/manual_event.h"
 #include <gtest/gtest.h>
 #include <optional>
 
@@ -45,6 +47,7 @@ public:
         asn1::bit_ref bref(pack_buffer);
         if (msg.pdu.pack(bref) != asn1::OCUDUASN_SUCCESS) {
           parent.logger.error("Failed to pack message");
+          ++parent.nof_unpackable_ngap_msgs;
           return false;
         }
 
@@ -68,6 +71,9 @@ public:
   }
 
   std::vector<ngap_message> last_ngap_msgs;
+
+  /// Number of messages the CU-CP handed over for transmission that could not be packed.
+  unsigned nof_unpackable_ngap_msgs = 0;
 
 private:
   ocudulog::basic_logger& logger;
@@ -172,7 +178,7 @@ public:
     ocudu_assert(ue_mng.find_ue(ue_index) != nullptr, "UE must be present");
     logger.info("Received a handover request");
 
-    if (!ue_mng.find_ue(ue_index)->get_security_manager().init_security_context(sec_ctxt)) {
+    if (!ue_mng.find_ue(ue_index)->get_security_manager().init_handover_security_context(sec_ctxt)) {
       logger.info("Failed to initialize security context");
       return false;
     }
@@ -221,7 +227,7 @@ public:
                                           int_to_gtpu_teid(1)};
               response_item.pdu_session_resource_setup_response_transfer.dlqos_flow_per_tnl_info
                   .associated_qos_flow_list.emplace(uint_to_qos_flow_id(5),
-                                                    ngap_associated_qos_flow{uint_to_qos_flow_id(5)});
+                                                    cu_cp_associated_qos_flow{uint_to_qos_flow_id(5)});
               resp.pdu_session_res_setup_response_items.emplace(response_item.pdu_session_id, response_item);
             }
           }
@@ -295,6 +301,16 @@ public:
     release_command_outcome = outcome;
   }
 
+  /// Suspends the PDU Session Resource Release Command handling until \ref complete_pdu_session_resource_release is
+  /// called. Allows a test to run other events while the NGAP procedure is suspended.
+  void defer_pdu_session_resource_release() { release_command_gate.emplace(); }
+
+  void complete_pdu_session_resource_release()
+  {
+    ocudu_assert(release_command_gate.has_value(), "PDU Session Resource Release Command handling was not deferred");
+    release_command_gate->set();
+  }
+
   async_task<ngap_pdu_session_resource_release_response>
   on_new_pdu_session_resource_release_command(ngap_pdu_session_resource_release_command& command) override
   {
@@ -304,6 +320,10 @@ public:
 
     return launch_async([this](coro_context<async_task<ngap_pdu_session_resource_release_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
+
+      if (release_command_gate.has_value()) {
+        CORO_AWAIT(*release_command_gate);
+      }
 
       if (release_command_outcome.has_value()) {
         CORO_EARLY_RETURN(release_command_outcome.value());
@@ -337,7 +357,7 @@ public:
 
   void on_transmission_of_handover_required() override { logger.info("Received a new Handover Required"); }
 
-  async_task<bool> on_new_rrc_handover_command(cu_cp_ue_index_t ue_index, byte_buffer command) override
+  async_task<bool> on_new_rrc_handover_command(cu_cp_rrc_handover_command command) override
   {
     logger.info("Received a new RRC Handover Command");
 
@@ -353,13 +373,15 @@ public:
 
   void on_n2_disconnection(cu_cp_amf_index_t amf_index) override {}
 
+  bool schedule_async_task(async_task<void> task) override { return amf_task_sched.schedule(std::move(task)); }
+
   cu_cp_ue_context_release_command last_command;
-  byte_buffer                      last_handover_command;
+  cu_cp_rrc_handover_command       last_handover_command;
 
   cu_cp_ue_index_t allocate_ue_index()
   {
     cu_cp_ue_index_t ue_index = cu_cp_ue_index_t::invalid;
-    if (ue_id < cu_cp_ue_index_to_uint(cu_cp_ue_index_t::max)) {
+    if (ue_id < to_underlying(cu_cp_ue_index_t::max)) {
       ue_index              = uint_to_ue_index(ue_id);
       last_created_ue_index = ue_index;
       ue_id++;
@@ -372,6 +394,18 @@ public:
   {
     logger.info("Received a new Paging message");
     last_paging_msg = std::move(msg);
+  }
+
+  async_task<ngap_write_replace_warning_response>
+  on_write_replace_warning_request(const ngap_write_replace_warning_request& request) override
+  {
+    logger.info("Received a new Write-Replace Warning Request");
+    last_write_replace_warning_request = request;
+    return launch_async([resp = write_replace_warning_response](
+                            coro_context<async_task<ngap_write_replace_warning_response>>& ctx) mutable {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(resp);
+    });
   }
 
   cu_cp_ue_index_t request_new_ue_index_allocation(nr_cell_global_id_t /*cgi*/, const plmn_identity& /*plmn*/) override
@@ -417,14 +451,20 @@ public:
   cu_cp_paging_message                                      last_paging_msg;
   std::optional<cu_cp_ue_index_t>                           last_location_reporting_ctrl_ue_index;
   std::optional<location_report_request>                    last_location_reporting_ctrl;
+  std::optional<ngap_write_replace_warning_request>         last_write_replace_warning_request;
+  ngap_write_replace_warning_response                       write_replace_warning_response;
 
 private:
   ue_manager&             ue_mng;
   ocudulog::basic_logger& logger;
 
-  ngap_ue_context_removal_handler* ngap_handler = nullptr;
+  // Gate that holds the PDU Session Resource Release Command handling suspended, when set.
+  std::optional<manual_event_flag> release_command_gate;
 
-  uint64_t ue_id = cu_cp_ue_index_to_uint(cu_cp_ue_index_t::min);
+  ngap_ue_context_removal_handler* ngap_handler = nullptr;
+  fifo_async_task_scheduler        amf_task_sched{16};
+
+  uint64_t ue_id = to_underlying(cu_cp_ue_index_t::min);
 };
 
 class dummy_rrc_ngap_message_handler : public rrc_ngap_message_handler

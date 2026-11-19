@@ -25,8 +25,13 @@ struct mac_cell_sys_info_config {
   byte_buffer sib1;
   /// SI messages provided by the cell and which are part of the SIB1 SI-SchedConfig.
   static_vector<bcch_dl_sch_payload_type, MAX_SI_MESSAGES> si_messages;
+  /// \brief Content that each SI message carrying a warning broadcasts from the cell start, indexed as in
+  /// \c si_sched_cfg.pws_si_messages.
+  ///
+  /// An entry is empty if the cell waits for a Write-Replace Warning to provide the content.
+  static_vector<bcch_dl_sch_payload_type, MAX_PWS_SI_MESSAGES> pws_si_messages;
   /// SI scheduling configuration to provide to MAC scheduler.
-  si_scheduling_update_request si_sched_cfg;
+  si_scheduling_config si_sched_cfg;
   /// Whether HyperSFN is stored in SIB1 and needs to be updated periodically.
   bool sib1_contains_hypersfn = false;
 };
@@ -54,6 +59,9 @@ struct mac_cell_creation_request {
   /// (each using the configured number of DL HARQ processes) plus a margin for UEs that only need a single HARQ to be
   /// RRC Rejected.
   unsigned max_harq_buffers = MAX_NOF_HARQS * MAX_NOF_DU_UES_PER_CELL;
+
+  /// Number of UE contexts that the cell is expected to hold, including the UEs to be RRC Rejected.
+  unsigned max_nof_ue_contexts = MAX_NOF_DU_UES_PER_CELL;
 
   /// Embedded scheduler cell configuration request.
   sched_cell_configuration_request_message sched_req;

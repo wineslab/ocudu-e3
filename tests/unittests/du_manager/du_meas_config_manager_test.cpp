@@ -3,9 +3,12 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/du/du_high/du_manager/ran_resource_management/du_meas_config_manager.h"
+#include "tests/ocudu_test_requirements.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/sys_info.h"
 #include "ocudu/ran/ssb/ssb_properties.h"
 #include "fmt/format.h"
+#include "fmt/ranges.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -16,6 +19,16 @@ namespace {
 
 using smtc_duration = ssb_mtc_s::dur_opts::options;
 using offset_range  = std::pair<uint8_t, uint8_t>;
+
+// Builds a supported_meas_gap_patterns marking the given Gap Pattern Ids as supported (0 and 1 are always added).
+supported_meas_gap_patterns make_supported_gap_patterns(std::initializer_list<unsigned> pattern_ids)
+{
+  supported_meas_gap_patterns patterns;
+  for (unsigned pattern_id : pattern_ids) {
+    patterns.mark_supported(pattern_id);
+  }
+  return patterns;
+}
 
 struct meas_gap_test_params {
   subcarrier_spacing         pcell_scs;
@@ -29,7 +42,7 @@ struct meas_gap_test_params {
 void PrintTo(const meas_gap_test_params& p, std::ostream* os)
 {
   *os << "scs=" << scs_to_khz(p.pcell_scs) << "kHz period=" << static_cast<unsigned>(p.smtc_period)
-      << "sf off=" << +p.smtc_offsets.first << "_" << +p.smtc_offsets.second
+      << "ms off=" << +p.smtc_offsets.first << "_" << +p.smtc_offsets.second
       << " dur=" << (static_cast<unsigned>(p.smtc_dur) + 1) << "sf"
       << " mgl=" << meas_gap_length_to_msec(p.expected_mgl) << "ms mgrp=" << static_cast<unsigned>(p.expected_mgrp)
       << "ms";
@@ -65,7 +78,7 @@ ssb_mtc_s make_smtc(ssb_periodicity period, uint8_t offset, smtc_duration dur)
 std::string param_name(const ::testing::TestParamInfo<meas_gap_test_params>& info)
 {
   const auto& p = info.param;
-  return fmt::format("scs_{:_>3}kHz_period_{:_>3}sf_offsets_{:_>3}_to_{:_>3}_duration_{:01}sf",
+  return fmt::format("scs_{:_>3}kHz_period_{:_>3}ms_offsets_{:_>3}_to_{:_>3}_duration_{:01}sf",
                      scs_to_khz(p.pcell_scs),
                      fmt::underlying(p.smtc_period),
                      p.smtc_offsets.first,
@@ -78,11 +91,14 @@ class du_meas_config_manager_create_meas_gap_test : public ::testing::TestWithPa
 
 TEST_P(du_meas_config_manager_create_meas_gap_test, gap_matches_expected_mgl_mgrp_and_offset)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-GEN-9");
+
   const meas_gap_test_params& p = GetParam();
   for (uint8_t off = p.smtc_offsets.first; off < p.smtc_offsets.second; ++off) {
     SCOPED_TRACE(fmt::format("smtc_offset={}", off));
     const ssb_mtc_s       smtc = make_smtc(p.smtc_period, off, p.smtc_dur);
-    const meas_gap_config gap  = create_meas_gap(p.pcell_scs, smtc, {});
+    const meas_gap_config gap =
+        create_meas_gap(p.pcell_scs, smtc, {}, std::nullopt, supported_meas_gap_patterns::all());
 
     EXPECT_EQ(gap.offset, off);
     EXPECT_EQ(gap.mgl, p.expected_mgl);
@@ -201,7 +217,7 @@ struct collision_params {
 void PrintTo(const collision_params& p, std::ostream* os)
 {
   *os << p.tag << " scs=" << scs_to_khz(p.pcell_scs) << "kHz period=" << static_cast<unsigned>(p.smtc_period)
-      << "sf offset=" << +p.smtc_offset << " dur=" << (static_cast<unsigned>(p.smtc_dur) + 1)
+      << "ms offset=" << +p.smtc_offset << " dur=" << (static_cast<unsigned>(p.smtc_dur) + 1)
       << "sf expected={offset=" << p.expected.offset << " mgl=" << meas_gap_length_to_msec(p.expected.mgl)
       << "ms mgrp=" << static_cast<unsigned>(p.expected.mgrp) << "ms}";
 }
@@ -211,9 +227,12 @@ class du_meas_config_manager_collision_test : public ::testing::TestWithParam<co
 
 TEST_P(du_meas_config_manager_collision_test, gap_avoids_or_minimises_collisions)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-GEN-9");
+
   const auto&           p    = GetParam();
   const ssb_mtc_s       smtc = make_smtc(p.smtc_period, p.smtc_offset, p.smtc_dur);
-  const meas_gap_config gap  = create_meas_gap(p.pcell_scs, smtc, p.ul_occasions);
+  const meas_gap_config gap =
+      create_meas_gap(p.pcell_scs, smtc, p.ul_occasions, std::nullopt, supported_meas_gap_patterns::all());
 
   EXPECT_EQ(gap.offset, p.expected.offset);
   EXPECT_EQ(gap.mgl, p.expected.mgl);
@@ -351,5 +370,141 @@ INSTANTIATE_TEST_SUITE_P(
                          {{40, 11}},
                          meas_gap_config{19, meas_gap_length::ms6, meas_gap_repetition_period::ms20}}),
     [](const ::testing::TestParamInfo<collision_params>& test_info) { return std::string{test_info.param.tag}; });
+
+// ---------- UE supported gap pattern restriction ----------
+
+struct gap_pattern_params {
+  const char*                 tag;
+  subcarrier_spacing          pcell_scs;
+  ssb_periodicity             smtc_period;
+  uint8_t                     smtc_offset;
+  smtc_duration               smtc_dur;
+  supported_meas_gap_patterns supported_patterns;
+  meas_gap_config             expected;
+};
+
+void PrintTo(const gap_pattern_params& p, std::ostream* os)
+{
+  std::vector<unsigned> pattern_ids;
+  for (unsigned pattern_id = 0; pattern_id != nof_meas_gap_patterns; ++pattern_id) {
+    if (p.supported_patterns.is_supported(pattern_id)) {
+      pattern_ids.push_back(pattern_id);
+    }
+  }
+  *os << fmt::format("{} scs={}kHz period={}ms offset={} dur={}sf patterns=[{}] expected={{offset={} mgl={}ms "
+                     "mgrp={}ms}}",
+                     p.tag,
+                     scs_to_khz(p.pcell_scs),
+                     fmt::underlying(p.smtc_period),
+                     p.smtc_offset,
+                     static_cast<unsigned>(p.smtc_dur) + 1,
+                     fmt::join(pattern_ids, ","),
+                     p.expected.offset,
+                     meas_gap_length_to_msec(p.expected.mgl),
+                     static_cast<unsigned>(p.expected.mgrp));
+}
+
+class du_meas_config_manager_gap_pattern_test : public ::testing::TestWithParam<gap_pattern_params>
+{};
+
+TEST_P(du_meas_config_manager_gap_pattern_test, gap_respects_supported_patterns)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-GEN-9");
+
+  const auto&           p    = GetParam();
+  const ssb_mtc_s       smtc = make_smtc(p.smtc_period, p.smtc_offset, p.smtc_dur);
+  const meas_gap_config gap  = create_meas_gap(p.pcell_scs, smtc, {}, std::nullopt, p.supported_patterns);
+
+  EXPECT_EQ(gap.offset, p.expected.offset);
+  EXPECT_EQ(gap.mgl, p.expected.mgl);
+  EXPECT_EQ(gap.mgrp, p.expected.mgrp);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    supported_gap_patterns,
+    du_meas_config_manager_gap_pattern_test,
+    ::testing::Values(
+        // UE supports only the mandatory gap patterns 0 (MGL=6, MGRP=40) and 1 (MGL=6, MGRP=80). Although MGRP=20 would
+        // suffice for the SMTC period, pattern 4 (MGL=6, MGRP=20) is not supported, so the gap uses MGRP=40 instead.
+        gap_pattern_params{"unsupported_mgrp_is_skipped",
+                           subcarrier_spacing::kHz30,
+                           ssb_periodicity::ms20,
+                           0,
+                           smtc_duration::sf5,
+                           supported_meas_gap_patterns{}, // only the mandatory patterns 0 and 1
+                           meas_gap_config{0, meas_gap_length::ms6, meas_gap_repetition_period::ms40}},
+        // UE does not support the short MGL=1.5ms patterns (20, 21) that the SMTC duration would default to; only gap
+        // pattern 10 (MGL=3ms, MGRP=20ms) is supported, so the MGL is escalated from 1.5ms to 3ms.
+        gap_pattern_params{"mgl_escalated_when_default_unsupported",
+                           subcarrier_spacing::kHz30,
+                           ssb_periodicity::ms20,
+                           0,
+                           smtc_duration::sf1,
+                           make_supported_gap_patterns({10}), // pattern 10
+                           meas_gap_config{0, meas_gap_length::ms3, meas_gap_repetition_period::ms20}},
+        // Best-effort fallback: the SMTC period (160ms) requires MGRP>=160, but the UE supports no MGRP=160 pattern
+        // (only the mandatory patterns 0 and 1). The fallback returns the mandatory gap pattern 1 (MGL=6, MGRP=80),
+        // which is always supported and encloses the SMTC, even though its MGRP is shorter than the SMTC period.
+        gap_pattern_params{"fallback_to_mandatory_pattern",
+                           subcarrier_spacing::kHz30,
+                           ssb_periodicity::ms160,
+                           0,
+                           smtc_duration::sf5,
+                           supported_meas_gap_patterns{}, // only the mandatory patterns 0 and 1
+                           meas_gap_config{0, meas_gap_length::ms6, meas_gap_repetition_period::ms80}}),
+    [](const ::testing::TestParamInfo<gap_pattern_params>& test_info) { return std::string{test_info.param.tag}; });
+
+// ---------- NTN uplink timing advance ----------
+
+// 15kHz SCS, so one slot per ms. SMTC every 20ms, but a UL occasion every 80 slots forces MGRP=80, which leaves several
+// candidate gap offsets to choose from: 0, 79, 20, 19, 40, 39, 60, 59.
+constexpr subcarrier_spacing ntn_scs          = subcarrier_spacing::kHz15;
+constexpr unsigned           ul_occasion_slot = 8;
+
+meas_gap_config create_ntn_meas_gap(std::optional<std::chrono::microseconds> ul_ta)
+{
+  const std::vector<periodic_uci_config> ul_occasions = {periodic_uci_config{80, ul_occasion_slot}};
+  return create_meas_gap(ntn_scs,
+                         make_smtc(ssb_periodicity::ms20, 0, smtc_duration::sf5),
+                         ul_occasions,
+                         ul_ta,
+                         supported_meas_gap_patterns::all());
+}
+
+// In a terrestrial cell the uplink window sits at the gap offset, so the first candidate offset is already free.
+TEST(du_meas_config_manager_ntn_test, without_timing_advance_the_gap_is_placed_at_the_smtc_offset)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-MOB-1", "DU-GEN-9");
+
+  const meas_gap_config gap = create_ntn_meas_gap(std::nullopt);
+
+  EXPECT_EQ(0, gap.offset);
+  EXPECT_EQ(meas_gap_length::ms6, gap.mgl);
+  EXPECT_EQ(meas_gap_repetition_period::ms80, gap.mgrp);
+}
+
+// With a 7ms T_TA the uplink window moves 7 slots past the gap offset, onto the UL occasion, so the offset that was
+// good enough for a terrestrial cell now collides and another one must be picked.
+TEST(du_meas_config_manager_ntn_test, timing_advance_moves_the_gap_off_the_uplink_occasion)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-MOB-1", "DU-GEN-9");
+
+  constexpr std::chrono::microseconds ul_ta{7000};
+
+  const slot_point occasion_slot{ntn_scs, ul_occasion_slot};
+
+  // The offset chosen while ignoring T_TA would in fact have the UE drop the occasion.
+  const meas_gap_config unaware_gap = create_ntn_meas_gap(std::nullopt);
+  EXPECT_TRUE(is_inside_ul_meas_gap(unaware_gap, occasion_slot, ul_ta));
+
+  // Accounting for T_TA, a different offset is selected and the occasion survives.
+  const meas_gap_config gap = create_ntn_meas_gap(ul_ta);
+  EXPECT_NE(unaware_gap.offset, gap.offset);
+  EXPECT_FALSE(is_inside_ul_meas_gap(gap, occasion_slot, ul_ta));
+  // The gap must still enclose an SMTC window, which repeats every 20ms.
+  EXPECT_EQ(0, gap.offset % 20);
+  EXPECT_EQ(meas_gap_length::ms6, gap.mgl);
+  EXPECT_EQ(meas_gap_repetition_period::ms80, gap.mgrp);
+}
 
 } // namespace

@@ -111,9 +111,26 @@ public:
   ///
   /// \param[in] scs Subcarrier spacing.
   /// \remark Used to compute the Timing Advance Command to be sent in RAR (not in MAC CE).
+  /// \remark The time must not be negative. Use \ref to_Ta_signed for times that can be negative, such as measured
+  /// timing offsets.
   constexpr unsigned to_Ta(subcarrier_spacing scs) const
   {
     return divide_round(value * pow2(to_numerology_value(scs)), 16U * KAPPA);
+  }
+
+  /// \brief Gets the time expressed in signed units of \f$T_{\textup{A}}\f$.
+  ///
+  /// Same conversion as \ref to_Ta, extended to negative times. The magnitude is rounded to the nearest integer, so
+  /// negative times round away from zero.
+  ///
+  /// \param[in] scs Subcarrier spacing.
+  /// \remark Used to report measured timing offsets, which are signed, in the units of the Timing Advance Command.
+  constexpr int to_Ta_signed(subcarrier_spacing scs) const
+  {
+    value_type absolute_value = (value < 0) ? -value : value;
+    auto       magnitude      = static_cast<int>(phy_time_unit(absolute_value).to_Ta(scs));
+
+    return (value < 0) ? -magnitude : magnitude;
   }
 
   /// \brief Converts the time to an UL Relative Time of Arrival (UL-RTOA) measurement.

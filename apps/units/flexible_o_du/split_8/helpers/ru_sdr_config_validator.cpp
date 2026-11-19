@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ru_sdr_config_validator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include "ocudu/ran/phy_time_unit.h"
 
@@ -66,7 +67,7 @@ static bool validate_ru_sdr_appconfig(const ru_sdr_unit_config&                 
       }
 
       fmt::print("PRACH Format {} with subcarrier spacing of {} is not compatible with {:.2f}MHz sampling rate. "
-                 "Valid sampling rates are {:,} MHz.\n",
+                 "Valid sampling rates are {} MHz.\n",
                  to_string(cell.prach_format),
                  to_string(cell.common_scs),
                  config.srate_MHz,

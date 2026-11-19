@@ -30,7 +30,7 @@ print_help() {
 FOLDER=""
 BUILD_FOLDER="build"
 CACHE_FOLDER="ccache"
-CLEAN_BUILD="True"
+CLEAN_BUILD="False"
 MAKE_EXTRA="-j$(nproc)"
 COMPILER="gcc"
 UHD_VERSION=""
@@ -55,15 +55,8 @@ while (("$#")); do
         fi
         ;;
     -r | --clean-build)
-        if [ -n "$2" ]; then
-            CLEAN_BUILD="$2"
-            shift 2
-        else
-            echo "Error: Argument for $1 is missing" >&2
-            echo "" >&2
-            print_help
-            exit 1
-        fi
+        CLEAN_BUILD="True"
+        shift 1
         ;;
     -m | --make)
         if [ -n "$2" ]; then

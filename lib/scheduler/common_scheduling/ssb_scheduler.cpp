@@ -15,7 +15,7 @@ ssb_scheduler::ssb_scheduler(const cell_configuration& cfg_) :
   cell_cfg(cfg_),
   logger(ocudulog::fetch_basic_logger("SCHED"))
 {
-  ssb_period = to_value(cell_cfg.params.ssb_cfg.ssb_period);
+  ssb_period = to_underlying(cell_cfg.params.ssb_cfg.ssb_period);
 }
 
 void ssb_scheduler::run_slot(cell_resource_allocator& res_alloc, slot_point sl_point)
@@ -50,7 +50,7 @@ void ssb_scheduler::schedule_ssb(cell_slot_resource_allocator& res_grid) const
   // Perform mod operation of slot index by ssb_periodicity;
   // "ssb_periodicity * nof_slots_per_subframe" gives the number of slots in 1 ssb_periodicity time interval.
   const slot_point sl_point_mod(sl_point.numerology(),
-                                sl_point.to_uint() % (ssb_period * sl_point.nof_slots_per_subframe()));
+                                sl_point.count() % (ssb_period * sl_point.nof_slots_per_subframe()));
 
   // Select SSB case with reference to TS 38.213, Section 4.1.
   switch (ssb_case) {
@@ -86,7 +86,7 @@ void ssb_scheduler::ssb_alloc_case_A_C(ssb_information_list& ssb_list,
                                        arfcn_t               freq_arfcn_cut_off,
                                        slot_point            sl_point_mod) const
 {
-  const uint32_t slot_idx = sl_point_mod.to_uint();
+  const uint32_t slot_idx = sl_point_mod.count();
 
   // The OFDM symbols allocations for Case A and case C are identical; the only difference is the cutoff frequency,
   // which is 3GHz for case A and C paired, but 1.88GHz for case C unpaired.
@@ -103,8 +103,7 @@ void ssb_scheduler::ssb_alloc_case_A_C(ssb_information_list& ssb_list,
     constexpr std::array<uint8_t, 2U> ssb_burst_ofdm_symb = {2, 8};
     for (uint32_t n = 0, sz = ssb_burst_ofdm_symb.size(); n != sz; ++n) {
       const uint32_t ssb_idx = n + slot_idx * 2U;
-      ocudu_assert(ssb_idx < cell_cfg.params.ssb_cfg.ssb_bitmap.size(), "SSB index exceeds SSB bitmap size");
-      if (cell_cfg.params.ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+      if (cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
         fill_ssb_parameters(ssb_list,
                             cell_cfg.params.ssb_cfg.offset_to_point_A,
                             cell_cfg.params.ssb_cfg.k_ssb,
@@ -119,7 +118,7 @@ void ssb_scheduler::ssb_alloc_case_A_C(ssb_information_list& ssb_list,
 
 void ssb_scheduler::ssb_alloc_case_B(ssb_information_list& ssb_list, slot_point sl_point_mod) const
 {
-  const uint32_t slot_idx = sl_point_mod.to_uint();
+  const uint32_t slot_idx = sl_point_mod.count();
 
   // For frequency lower than cutoff, SSB occasions are on slot 0 and 1 only, while for frequencies higher than the
   // cutoff, the SSB occasions are on slot 0, 1, 2, and 3.
@@ -138,8 +137,7 @@ void ssb_scheduler::ssb_alloc_case_B(ssb_information_list& ssb_list, slot_point 
 
     for (uint32_t n = 0, sz = ssb_burst_ofdm_symb.size(); n != sz; ++n) {
       const uint32_t ssb_idx = n + slot_idx * 2U;
-      ocudu_assert(ssb_idx < cell_cfg.params.ssb_cfg.ssb_bitmap.size(), "SSB index exceeds SSB bitmap size");
-      if (cell_cfg.params.ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+      if (cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
         fill_ssb_parameters(ssb_list,
                             cell_cfg.params.ssb_cfg.offset_to_point_A,
                             cell_cfg.params.ssb_cfg.k_ssb,
@@ -157,8 +155,7 @@ void ssb_scheduler::ssb_alloc_case_B(ssb_information_list& ssb_list, slot_point 
 
     for (uint32_t n = 0, sz = ssb_burst_ofdm_symb.size(); n != sz; ++n) {
       const uint32_t ssb_idx = n + slot_idx * 2;
-      ocudu_assert(ssb_idx < cell_cfg.params.ssb_cfg.ssb_bitmap.size(), "SSB index exceeds SSB bitmap size");
-      if (cell_cfg.params.ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+      if (cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
         fill_ssb_parameters(ssb_list,
                             cell_cfg.params.ssb_cfg.offset_to_point_A,
                             cell_cfg.params.ssb_cfg.k_ssb,
@@ -181,7 +178,7 @@ void ssb_scheduler::ssb_alloc_case_D(ssb_information_list& ssb_list, slot_point 
   // Section 4.1.
   static constexpr std::array<unsigned, 16> slot_pairs = {0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17, 18};
 
-  const uint32_t slot_idx = sl_point_mod.to_uint();
+  const uint32_t slot_idx = sl_point_mod.count();
 
   // Skip if the slot index is out of the 5ms burst.
   if (slot_idx >= nof_slots_ssb_burst) {
@@ -202,7 +199,7 @@ void ssb_scheduler::ssb_alloc_case_D(ssb_information_list& ssb_list, slot_point 
 
   // The starting symbols for the first SSB position in the slot correspond to symbol 4 if the slot index is even,
   // otherwise to symbol 2.
-  if (cell_cfg.params.ssb_cfg.ssb_bitmap.test(first_ssb_idx)) {
+  if (cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(first_ssb_idx)) {
     const unsigned start_symbol_idx = (slot_idx % 2 == 0) ? 4 : 2;
     fill_ssb_parameters(ssb_list,
                         cell_cfg.params.ssb_cfg.offset_to_point_A,
@@ -215,7 +212,7 @@ void ssb_scheduler::ssb_alloc_case_D(ssb_information_list& ssb_list, slot_point 
 
   // The starting symbols for the first SSB position in the slot correspond to symbol 8 if the slot index is even,
   // otherwise to symbol 6.
-  if (cell_cfg.params.ssb_cfg.ssb_bitmap.test(first_ssb_idx + 1)) {
+  if (cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(first_ssb_idx + 1)) {
     const unsigned start_symbol_idx = (slot_idx % 2 == 0) ? 8 : 6;
     fill_ssb_parameters(ssb_list,
                         cell_cfg.params.ssb_cfg.offset_to_point_A,

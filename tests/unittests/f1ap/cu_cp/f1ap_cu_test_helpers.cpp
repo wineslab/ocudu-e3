@@ -5,6 +5,7 @@
 #include "f1ap_cu_test_helpers.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/rrc_nr/dl_ccch_msg.h"
 #include "ocudu/asn1/rrc_nr/dl_ccch_msg_ies.h"
@@ -20,8 +21,8 @@ using namespace ocucp;
 
 gnb_cu_ue_f1ap_id_t ocudu::ocucp::generate_random_gnb_cu_ue_f1ap_id()
 {
-  return int_to_gnb_cu_ue_f1ap_id(test_rng::uniform_int<uint64_t>(
-      gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id_t::min), gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id_t::max) - 1));
+  return int_to_gnb_cu_ue_f1ap_id(test_rng::uniform_int<uint64_t>(to_underlying(gnb_cu_ue_f1ap_id_t::min),
+                                                                  to_underlying(gnb_cu_ue_f1ap_id_t::max) - 1));
 }
 
 f1ap_cu_test::f1ap_cu_test(const f1ap_configuration& f1ap_cfg)

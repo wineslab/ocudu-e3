@@ -25,12 +25,12 @@ constexpr unsigned MAX_NRE_PER_RB = 156;
 /// As per TS38.214 Section 5.1.3.1 with \c mcs-Table set to \c qam256.
 constexpr unsigned MAX_MODULATION_ORDER = 8;
 
-/// \brief Maximum number of PDSCH transmission layers per codeword.
+/// \brief Maximum number of PDSCH transmission layers per single codeword.
 ///
 /// As per TS38.211 Table 7.3.1.3-1.
-constexpr unsigned CODEWORD_MAX_NOF_LAYERS = 4;
+constexpr unsigned MAX_NOF_LAYERS_PER_CODEWORD = 4;
 
-/// \brief Maximuym number of codewords that can be contained in a PDSCH transmission.
+/// \brief Maximum number of codewords that can be contained in a PDSCH transmission.
 ///
 /// As per TS38.211 Table 7.3.1.3-1.
 constexpr unsigned MAX_NOF_CODEWORDS = 2;
@@ -38,7 +38,7 @@ constexpr unsigned MAX_NOF_CODEWORDS = 2;
 /// \brief Maximum number of PDSCH transmission layers.
 ///
 /// As per TS38.211 Table 7.3.1.3-1.
-constexpr unsigned MAX_NOF_LAYERS = CODEWORD_MAX_NOF_LAYERS * MAX_NOF_CODEWORDS;
+constexpr unsigned MAX_NOF_LAYERS = MAX_NOF_LAYERS_PER_CODEWORD * MAX_NOF_CODEWORDS;
 
 /// \brief Maximum number of resource elements that can be mapped into a single codeword.
 ///
@@ -48,7 +48,7 @@ constexpr unsigned CODEWORD_MAX_NOF_RE = MAX_NRE_PER_RB * MAX_NOF_PRBS;
 /// \brief Maximum number of symbols that can be mapped into a single codeword.
 ///
 /// Calculated as the product of the maximum number of resource elements and the maximum layers
-constexpr unsigned CODEWORD_MAX_SYMBOLS = CODEWORD_MAX_NOF_RE * CODEWORD_MAX_NOF_LAYERS;
+constexpr unsigned CODEWORD_MAX_SYMBOLS = CODEWORD_MAX_NOF_RE * MAX_NOF_LAYERS_PER_CODEWORD;
 
 /// \brief Maximum number of bits that can be modulated into a single codeword.
 ///

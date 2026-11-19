@@ -4,7 +4,9 @@
 
 #include "lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.h"
 #include "lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/unittests/e2/common/e2_test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/du_types.h"
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -73,17 +75,18 @@ static rlc_metrics generate_non_zero_rlc_metrics(uint32_t ue_idx, uint32_t beare
 static scheduler_cell_metrics generate_non_zero_sched_metrics()
 {
   scheduler_cell_metrics sched_metric;
-  sched_metric.nof_prbs            = 52;
-  sched_metric.nof_dl_slots        = 14;
-  sched_metric.nof_ul_slots        = 14;
-  sched_metric.nof_prach_preambles = 10;
+  sched_metric.nof_prbs              = 52;
+  sched_metric.nof_dl_slots          = 14;
+  sched_metric.nof_ul_slots          = 14;
+  sched_metric.total_prach_preambles = 10;
 
   scheduler_ue_metrics ue_metrics;
-  ue_metrics.ue_index            = to_du_ue_index(0);
-  ue_metrics.pci                 = 1;
-  ue_metrics.rnti                = static_cast<rnti_t>(0x1000 + 1);
-  ue_metrics.tot_pdsch_prbs_used = 1200;
-  ue_metrics.tot_pusch_prbs_used = 1200;
+  ue_metrics.ue_index = to_du_ue_index(0);
+  ue_metrics.pci      = 1;
+  ue_metrics.rnti     = static_cast<rnti_t>(0x1000 + 1);
+  // Mean per-slot usage (total / nof_slots) must stay below nof_prbs, or RRU.PrbAvail* is legitimately 0.
+  ue_metrics.tot_pdsch_prbs_used = 20 * sched_metric.nof_dl_slots;
+  ue_metrics.tot_pusch_prbs_used = 20 * sched_metric.nof_ul_slots;
   ue_metrics.avg_crc_delay_ms    = 100;
   ue_metrics.pusch_snr_db        = 10;
   for (auto i = 0; i < 10; i++) {
@@ -116,7 +119,7 @@ public:
   void connect_e2_du_meas_provider(e2_du_metrics_notifier* meas_provider) { e2_meas_provider = meas_provider; }
 
 private:
-  e2_du_metrics_notifier* e2_meas_provider;
+  e2_du_metrics_notifier* e2_meas_provider = nullptr;
 };
 
 class dummy_e2_cu_metrics_notifier : public e2_cu_metrics_notifier, public e2_cu_metrics_interface
@@ -427,6 +430,81 @@ TEST_F(e2sm_kpm_meas_provider_metrics_test, e2sm_kpm_prb_perc_metrics_with_zero_
   ASSERT_EQ(meas_records[0].integer(), 0u);
 }
 
+TEST_F(e2sm_kpm_meas_provider_metrics_test, e2sm_kpm_prb_avail_metrics_without_ues_return_cell_prbs)
+{
+  // Regression test: PrbAvailDl/Ul reported 0 while no UE was attached, instead of the full cell PRB count.
+  scheduler_cell_metrics sched_metrics;
+  sched_metrics.nof_prbs     = 52;
+  sched_metrics.nof_dl_slots = 14;
+  sched_metrics.nof_ul_slots = 14;
+  metrics->report_metrics(sched_metrics);
+
+  label_info_list_l label_info_list;
+  label_info_item_s label_info_item           = {};
+  label_info_item.meas_label.no_label_present = true;
+  label_info_item.meas_label.no_label         = meas_label_s::no_label_e_::true_value;
+  label_info_list.push_back(label_info_item);
+
+  const std::optional<asn1::e2sm::cgi_c> cell_global_id = {};
+  meas_type_c                            meas_type;
+  std::vector<meas_record_item_c>        meas_records;
+
+  // The whole cell bandwidth is available when no UE consumes PRBs.
+  meas_type.set_meas_name().from_string("RRU.PrbAvailDl");
+  du_meas_provider->get_meas_data(meas_type, label_info_list, {}, cell_global_id, meas_records);
+  ASSERT_EQ(meas_records[0].integer(), 52u);
+  meas_records.clear();
+
+  meas_type.set_meas_name().from_string("RRU.PrbAvailUl");
+  du_meas_provider->get_meas_data(meas_type, label_info_list, {}, cell_global_id, meas_records);
+  ASSERT_EQ(meas_records[0].integer(), 52u);
+  meas_records.clear();
+
+  // Nothing is used, so the used/total counters stay at zero.
+  meas_type.set_meas_name().from_string("RRU.PrbUsedDl");
+  du_meas_provider->get_meas_data(meas_type, label_info_list, {}, cell_global_id, meas_records);
+  ASSERT_EQ(meas_records[0].integer(), 0u);
+  meas_records.clear();
+
+  meas_type.set_meas_name().from_string("RRU.PrbUsedUl");
+  du_meas_provider->get_meas_data(meas_type, label_info_list, {}, cell_global_id, meas_records);
+  ASSERT_EQ(meas_records[0].integer(), 0u);
+}
+
+TEST_F(e2sm_kpm_meas_provider_metrics_test, e2sm_kpm_prb_avail_metrics_do_not_underflow)
+{
+  // Regression test: a mean PRB usage above the cell PRB count wrapped around in unsigned arithmetic.
+  scheduler_cell_metrics sched_metrics;
+  sched_metrics.nof_prbs     = 52;
+  sched_metrics.nof_dl_slots = 1;
+  sched_metrics.nof_ul_slots = 1;
+  scheduler_ue_metrics ue_metrics;
+  ue_metrics.ue_index            = to_du_ue_index(0);
+  ue_metrics.tot_pdsch_prbs_used = 100;
+  ue_metrics.tot_pusch_prbs_used = 100;
+  sched_metrics.ue_metrics.push_back(ue_metrics);
+  metrics->report_metrics(sched_metrics);
+
+  label_info_list_l label_info_list;
+  label_info_item_s label_info_item           = {};
+  label_info_item.meas_label.no_label_present = true;
+  label_info_item.meas_label.no_label         = meas_label_s::no_label_e_::true_value;
+  label_info_list.push_back(label_info_item);
+
+  const std::optional<asn1::e2sm::cgi_c> cell_global_id = {};
+  meas_type_c                            meas_type;
+  std::vector<meas_record_item_c>        meas_records;
+
+  meas_type.set_meas_name().from_string("RRU.PrbAvailDl");
+  du_meas_provider->get_meas_data(meas_type, label_info_list, {}, cell_global_id, meas_records);
+  ASSERT_EQ(meas_records[0].integer(), 0);
+  meas_records.clear();
+
+  meas_type.set_meas_name().from_string("RRU.PrbAvailUl");
+  du_meas_provider->get_meas_data(meas_type, label_info_list, {}, cell_global_id, meas_records);
+  ASSERT_EQ(meas_records[0].integer(), 0);
+}
+
 TEST_F(e2sm_kpm_meas_provider_metrics_test, e2sm_kpm_drb_latency_with_zero_sdus_returns_no_value)
 {
   // Regression test: non-zero latency sum with zero SDU count produced NaN/Inf (bad guard).
@@ -464,6 +542,81 @@ TEST_F(e2sm_kpm_meas_provider_metrics_test, e2sm_kpm_drb_latency_with_zero_sdus_
   ASSERT_EQ(meas_records[0].type(), meas_record_item_c::types::no_value);
 }
 
+TEST_F(e2sm_kpm_meas_provider_metrics_test, e2sm_kpm_drb_throughput_preserves_fractional_values)
+{
+  rlc_metrics rlc_metric                             = generate_non_zero_rlc_metrics(0, 1);
+  rlc_metric.metrics_period                          = std::chrono::seconds(2);
+  rlc_metric.tx.tx_low.num_pdu_bytes_no_segmentation = 100;
+  std::get<rlc_am_tx_metrics_lower>(rlc_metric.tx.tx_low.mode_specific).num_pdu_bytes_with_segmentation = 0;
+  rlc_metric.rx.num_pdu_bytes                                                                           = 100;
+  metrics->report_metrics(rlc_metric);
+
+  label_info_list_l label_info_list;
+  label_info_item_s label_info_item           = {};
+  label_info_item.meas_label.no_label_present = true;
+  label_info_item.meas_label.no_label         = meas_label_s::no_label_e_::true_value;
+  label_info_list.push_back(label_info_item);
+
+  ue_id_c        ue_id;
+  ue_id_gnb_du_s ueid_gnb_du{};
+  ueid_gnb_du.gnb_cu_ue_f1ap_id = 0;
+  ueid_gnb_du.ran_ue_id_present = false;
+  ue_id.set_gnb_du_ue_id()      = ueid_gnb_du;
+
+  const std::optional<asn1::e2sm::cgi_c> cell_global_id = {};
+  meas_type_c                            meas_type;
+  std::vector<meas_record_item_c>        meas_records;
+
+  for (const char* metric_name : {"DRB.UEThpDl", "DRB.UEThpUl"}) {
+    meas_type.set_meas_name().from_string(metric_name);
+    for (const std::vector<ue_id_c>& ues : {std::vector<ue_id_c>{}, std::vector<ue_id_c>{ue_id}}) {
+      meas_records.clear();
+      ASSERT_TRUE(du_meas_provider->get_meas_data(meas_type, label_info_list, ues, cell_global_id, meas_records));
+      ASSERT_EQ(meas_records.size(), 1);
+      ASSERT_EQ(meas_records[0].type(), meas_record_item_c::types::real);
+      EXPECT_FLOAT_EQ(meas_records[0].real().value, 0.4F);
+    }
+  }
+}
+
+TEST_F(e2sm_kpm_meas_provider_metrics_test, e2sm_kpm_drb_latency_does_not_overflow_signed_integer)
+{
+  rlc_metrics rlc_metric                  = generate_non_zero_rlc_metrics(0, 1);
+  rlc_metric.tx.tx_low.sum_sdu_latency_us = 3000000000U;
+  rlc_metric.tx.tx_low.num_of_pulled_sdus = 3000000U;
+  rlc_metric.tx.tx_high.num_sdus          = 3000000U;
+  rlc_metric.rx.sdu_latency_us            = 3000000000U;
+  rlc_metric.rx.num_sdus                  = 3000000U;
+  metrics->report_metrics(rlc_metric);
+
+  label_info_list_l label_info_list;
+  label_info_item_s label_info_item           = {};
+  label_info_item.meas_label.no_label_present = true;
+  label_info_item.meas_label.no_label         = meas_label_s::no_label_e_::true_value;
+  label_info_list.push_back(label_info_item);
+
+  ue_id_c        ue_id;
+  ue_id_gnb_du_s ueid_gnb_du{};
+  ueid_gnb_du.gnb_cu_ue_f1ap_id = 0;
+  ueid_gnb_du.ran_ue_id_present = false;
+  ue_id.set_gnb_du_ue_id()      = ueid_gnb_du;
+
+  const std::optional<asn1::e2sm::cgi_c> cell_global_id = {};
+  meas_type_c                            meas_type;
+  std::vector<meas_record_item_c>        meas_records;
+
+  for (const char* metric_name : {"DRB.RlcSduDelayDl", "DRB.RlcDelayUl"}) {
+    meas_type.set_meas_name().from_string(metric_name);
+    for (const std::vector<ue_id_c>& ues : {std::vector<ue_id_c>{}, std::vector<ue_id_c>{ue_id}}) {
+      meas_records.clear();
+      ASSERT_TRUE(du_meas_provider->get_meas_data(meas_type, label_info_list, ues, cell_global_id, meas_records));
+      ASSERT_EQ(meas_records.size(), 1);
+      ASSERT_EQ(meas_records[0].type(), meas_record_item_c::types::real);
+      EXPECT_DOUBLE_EQ(meas_records[0].real().value, 10.0);
+    }
+  }
+}
+
 class e2sm_kpm_cu_cp_meas_provider_metrics_test : public ::testing::Test
 {
 protected:
@@ -488,6 +641,16 @@ protected:
 
 TEST_F(e2sm_kpm_cu_cp_meas_provider_metrics_test, e2sm_kpm_cu_cp_supported_metrics_are_present)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-E2-KPM-4.1",
+                          "CU-E2-KPM-4.2",
+                          "CU-E2-KPM-15.1",
+                          "CU-E2-KPM-15.2",
+                          "CU-E2-KPM-15.3",
+                          "CU-E2-KPM-16.1",
+                          "CU-E2-KPM-16.2",
+                          "CU-E2-KPM-17.1",
+                          "CU-E2-KPM-17.2");
+
   std::vector<std::string> expected_metrics = {"RRC.ConnEstabAtt",
                                                "RRC.ConnEstabSucc",
                                                "RRC.ConnEstabFailCause.NetworkReject",
@@ -531,6 +694,16 @@ TEST_F(e2sm_kpm_cu_cp_meas_provider_metrics_test, e2sm_kpm_cu_cp_returns_zero_wi
 
 TEST_F(e2sm_kpm_cu_cp_meas_provider_metrics_test, e2sm_kpm_cu_cp_returns_expected_rrc_metrics)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-E2-KPM-4.1",
+                          "CU-E2-KPM-4.2",
+                          "CU-E2-KPM-15.1",
+                          "CU-E2-KPM-15.2",
+                          "CU-E2-KPM-15.3",
+                          "CU-E2-KPM-16.1",
+                          "CU-E2-KPM-16.2",
+                          "CU-E2-KPM-17.1",
+                          "CU-E2-KPM-17.2");
+
   cu_cp_metrics_report report;
   report.dus.resize(2);
 

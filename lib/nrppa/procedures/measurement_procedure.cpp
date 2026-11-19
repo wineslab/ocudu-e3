@@ -5,6 +5,7 @@
 #include "measurement_procedure.h"
 #include "../nrppa_asn1_converters.h"
 #include "../nrppa_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/nrppa/common.h"
 #include "ocudu/asn1/nrppa/nrppa_pdu_contents.h"
 #include "ocudu/ran/positioning/measurement_information.h"
@@ -15,18 +16,18 @@
 using namespace ocudu;
 using namespace ocucp;
 
-measurement_procedure::measurement_procedure(cu_cp_amf_index_t                           amf_index_,
-                                             const measurement_request_t&                request_,
-                                             uint16_t                                    transaction_id_,
-                                             const std::map<trp_id_t, cu_cp_du_index_t>& trp_id_to_du_idx_,
-                                             nrppa_meas_context_list&                    meas_ctxt_list_,
-                                             nrppa_du_context_list&                      du_ctxt_list_,
-                                             nrppa_cu_cp_notifier&                       cu_cp_notifier_,
-                                             ocudulog::basic_logger&                     logger_) :
+measurement_procedure::measurement_procedure(cu_cp_amf_index_t            amf_index_,
+                                             const measurement_request_t& request_,
+                                             uint16_t                     transaction_id_,
+                                             const nrppa_trp_registry&    trp_registry_,
+                                             nrppa_meas_context_list&     meas_ctxt_list_,
+                                             nrppa_du_context_list&       du_ctxt_list_,
+                                             nrppa_cu_cp_notifier&        cu_cp_notifier_,
+                                             ocudulog::basic_logger&      logger_) :
   amf_index(amf_index_),
   meas_request(request_),
   transaction_id(transaction_id_),
-  trp_id_to_du_idx(trp_id_to_du_idx_),
+  trp_registry(trp_registry_),
   meas_ctxt_list(meas_ctxt_list_),
   du_ctxt_list(du_ctxt_list_),
   cu_cp_notifier(cu_cp_notifier_),
@@ -38,12 +39,19 @@ void measurement_procedure::operator()(coro_context<async_task<void>>& ctx)
 {
   CORO_BEGIN(ctx);
 
-  logger.debug("\"{}\" initialized", name());
+  logger.info("\"{}\" started...", name());
 
-  if (!prepare_du_measurement_information_requests() or !create_measurement_context()) {
-    logger.debug("\"{}\" failed", name());
+  // NOTE: create_measurement_context() must run first, as it allocates the RAN Meas ID that
+  // prepare_du_measurement_information_requests() stamps onto every per-DU request.
+  if (!create_measurement_context() or !prepare_du_measurement_information_requests()) {
+    logger.warning("\"{}\" failed", name());
     // Send failure to CU-CP.
-    send_ul_nrppa_pdu(create_measurement_failure(nrppa_cause_protocol_t::msg_not_compatible_with_receiver_state));
+    send_ul_nrppa_pdu(logger,
+                      cu_cp_notifier,
+                      create_measurement_failure(nrppa_cause_protocol_t::msg_not_compatible_with_receiver_state),
+                      "MeasResponse",
+                      "MeasFailure",
+                      amf_index);
     CORO_EARLY_RETURN();
   }
 
@@ -61,7 +69,7 @@ void measurement_procedure::operator()(coro_context<async_task<void>>& ctx)
 
   handle_procedure_outcome();
 
-  logger.debug("\"{}\" finished successfully", name());
+  logger.info("\"{}\" finished successfully", name());
 
   CORO_RETURN();
 }
@@ -93,15 +101,16 @@ bool measurement_procedure::create_measurement_context()
 
 bool measurement_procedure::prepare_du_measurement_information_requests()
 {
-  if (trp_id_to_du_idx.empty()) {
-    logger.warning("lmf_meas_id={}: TRP ID to DU index mapping empty", fmt::underlying(meas_request.lmf_meas_id));
+  // A TRP is addressed by its ID, which only the TRP Information Exchange procedure maps to a DU.
+  if (!trp_registry.has_trp_information()) {
+    logger.warning("lmf_meas_id={}: No TRP information available", fmt::underlying(meas_request.lmf_meas_id));
     return false;
   }
 
   for (const auto& trp_meas_req_item : meas_request.trp_meas_request_list) {
     trp_id_t trp_id = trp_meas_req_item.trp_id;
-    if (trp_id_to_du_idx.find(trp_id) != trp_id_to_du_idx.end()) {
-      cu_cp_du_index_t du_index = trp_id_to_du_idx.at(trp_id);
+    if (std::optional<cu_cp_du_index_t> du_idx = trp_registry.find_du(trp_id); du_idx.has_value()) {
+      cu_cp_du_index_t du_index = du_idx.value();
       // If the DU index is not found in the du_meas_requests map, create it.
       if (du_meas_requests.find(du_index) == du_meas_requests.end()) {
         measurement_request_t du_meas_request;
@@ -156,28 +165,18 @@ void measurement_procedure::handle_procedure_outcome()
 {
   if (!procedure_outcome.has_value()) {
     meas_outcome = create_measurement_failure(nrppa_cause_radio_network_t::requested_item_not_supported);
-    logger.debug("\"{}\" failed", name());
+    logger.warning("\"{}\" failed", name());
   } else {
     meas_outcome = create_measurement_response();
-    logger.debug("\"{}\" finished successfully", name());
+    logger.info("\"{}\" finished successfully", name());
   }
 
-  // Send response to CU-CP.
-  send_ul_nrppa_pdu(meas_outcome);
-}
-
-void measurement_procedure::send_ul_nrppa_pdu(const asn1::nrppa::nr_ppa_pdu_c& pdu)
-{
-  // Pack into PDU.
-  ul_nrppa_pdu = pack_into_pdu(
-      pdu,
-      pdu.type().value == asn1::nrppa::nr_ppa_pdu_c::types_opts::successful_outcome ? "MeasResponse" : "MeasFailure");
-
-  // Log Tx message.
-  log_nrppa_message(logger, Tx, ul_nrppa_pdu, pdu);
+  // The measurement context only exists to correlate the DU response(s) with this one-shot query; release it now
+  // that the procedure has completed, freeing up its RAN Meas ID for reuse.
+  meas_ctxt_list.remove_measurement_context(meas_request.lmf_meas_id);
 
   // Send response to CU-CP.
-  cu_cp_notifier.on_ul_nrppa_pdu(ul_nrppa_pdu, amf_index);
+  send_ul_nrppa_pdu(logger, cu_cp_notifier, meas_outcome, "MeasResponse", "MeasFailure", amf_index);
 }
 
 asn1::nrppa::nr_ppa_pdu_c measurement_procedure::create_measurement_failure(nrppa_cause_t cause) const
@@ -188,7 +187,7 @@ asn1::nrppa::nr_ppa_pdu_c measurement_procedure::create_measurement_failure(nrpp
   asn1_fail.unsuccessful_outcome().nrppatransaction_id = transaction_id;
   asn1::nrppa::meas_fail_s& meas_init_fail             = asn1_fail.unsuccessful_outcome().value.meas_fail();
 
-  meas_init_fail->lmf_meas_id = lmf_meas_id_to_uint(meas_request.lmf_meas_id);
+  meas_init_fail->lmf_meas_id = to_underlying(meas_request.lmf_meas_id);
   meas_init_fail->cause       = cause_to_asn1(cause);
 
   return asn1_fail;
@@ -351,15 +350,15 @@ asn1::nrppa::nr_ppa_pdu_c measurement_procedure::create_measurement_response()
 
   asn1::nrppa::meas_resp_s& asn1_meas_resp = asn1_resp.successful_outcome().value.meas_resp();
 
-  asn1_meas_resp->lmf_meas_id = lmf_meas_id_to_uint(procedure_outcome->lmf_meas_id);
-  asn1_meas_resp->ran_meas_id = ran_meas_id_to_uint(procedure_outcome->ran_meas_id);
+  asn1_meas_resp->lmf_meas_id = to_underlying(procedure_outcome->lmf_meas_id);
+  asn1_meas_resp->ran_meas_id = to_underlying(ran_meas_id);
 
   if (!procedure_outcome->trp_meas_resp_list.empty()) {
     asn1_meas_resp->trp_meas_resp_list_present = true;
 
     for (const auto& trp_measurement_response_item : procedure_outcome->trp_meas_resp_list) {
       asn1::nrppa::trp_meas_resp_item_s asn1_trp_meas_resp_item;
-      asn1_trp_meas_resp_item.trp_id = trp_id_to_uint(trp_measurement_response_item.trp_id);
+      asn1_trp_meas_resp_item.trp_id = to_underlying(trp_measurement_response_item.trp_id);
       for (const auto& trp_meas_result_item : trp_measurement_response_item.meas_result) {
         asn1::nrppa::trp_meas_result_item_s asn1_trp_meas_result_item;
 

@@ -3,13 +3,14 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
 #include "tests/test_doubles/rrc/rrc_test_message_validators.h"
 #include "tests/test_doubles/utils/test_rng.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/e1ap/common/e1ap_types.h"
@@ -22,6 +23,15 @@
 
 using namespace ocudu;
 using namespace ocucp;
+
+// Returns the single PDU session of an E1AP Bearer Context Setup Request.
+static const asn1::e1ap::pdu_session_res_to_setup_item_s& get_pdu_session_res_to_setup_item(const e1ap_message& msg)
+{
+  const auto& ng_ran_bearer_ctxt = msg.pdu.init_msg()
+                                       .value.bearer_context_setup_request()
+                                       ->sys_bearer_context_setup_request.ng_ran_bearer_context_setup_request();
+  return ng_ran_bearer_ctxt[0]->pdu_session_res_to_setup_list()[0];
+}
 
 class cu_cp_inter_cu_ng_handover_test : public cu_cp_test_environment, public ::testing::Test
 {
@@ -55,7 +65,8 @@ public:
     return ue_ctx != nullptr;
   }
 
-  [[nodiscard]] bool send_handover_request_and_await_bearer_context_setup_request()
+  [[nodiscard]] bool
+  send_handover_request_and_await_bearer_context_setup_request(const handover_request_params& ho_params = {})
   {
     report_fatal_error_if_not(not this->get_amf().try_pop_rx_pdu(ngap_pdu),
                               "there are still NGAP messages to pop from AMF");
@@ -65,7 +76,7 @@ public:
                               "there are still E1AP messages to pop from CU-UP");
 
     // Inject Handover Request and wait for Bearer Context Setup Request.
-    get_amf().push_tx_pdu(generate_valid_handover_request(amf_ue_id));
+    get_amf().push_tx_pdu(generate_valid_handover_request(amf_ue_id, ho_params));
     report_fatal_error_if_not(this->wait_for_e1ap_tx_pdu(cu_up_idx, e1ap_pdu),
                               "Failed to receive Bearer Context Setup Request");
     report_fatal_error_if_not(test_helpers::is_valid_bearer_context_setup_request(e1ap_pdu),
@@ -76,10 +87,16 @@ public:
     return true;
   }
 
-  [[nodiscard]] bool send_bearer_context_setup_response_and_await_ue_context_setup_request()
+  [[nodiscard]] bool
+  send_bearer_context_setup_response_and_await_ue_context_setup_request(bool with_data_forwarding_info = false)
   {
     // Inject Bearer Context Setup Response and wait for UE Context Setup Request.
-    get_cu_up(cu_up_idx).push_tx_pdu(generate_bearer_context_setup_response(cu_cp_e1ap_id, cu_up_e1ap_id));
+    get_cu_up(cu_up_idx).push_tx_pdu(generate_bearer_context_setup_response(
+        cu_cp_e1ap_id,
+        cu_up_e1ap_id,
+        {{uint_to_pdu_session_id(1), {{drb_id_t::drb1, uint_to_qos_flow_id(1)}}}},
+        {},
+        with_data_forwarding_info));
     report_fatal_error_if_not(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu),
                               "Failed to receive UE Context Setup Request");
     report_fatal_error_if_not(test_helpers::is_valid_ue_context_setup_request(f1ap_pdu),
@@ -136,9 +153,10 @@ public:
   }
 
   [[nodiscard]]
-  bool send_dl_ran_status_transfer_and_await_bearer_context_modification_request()
+  bool
+  send_dl_ran_status_transfer_and_await_bearer_context_modification_request(const std::vector<drb_id_t>& drb_ids = {})
   {
-    get_amf().push_tx_pdu(generate_valid_dl_ran_status_transfer(amf_ue_id, {}));
+    get_amf().push_tx_pdu(generate_valid_dl_ran_status_transfer(amf_ue_id, {}, drb_ids));
     report_fatal_error_if_not(this->wait_for_e1ap_tx_pdu(cu_up_idx, e1ap_pdu),
                               "Failed to receive Bearer Context Modification Request");
     report_fatal_error_if_not(test_helpers::is_valid_bearer_context_modification_request(e1ap_pdu),
@@ -238,11 +256,15 @@ public:
     return true;
   }
 
-  [[nodiscard]] bool send_handover_command_and_await_ue_context_modification_request(amf_ue_id_t ngap_amf_ue_id,
-                                                                                     ran_ue_id_t ngap_ran_ue_id)
+  [[nodiscard]] bool
+  send_handover_command_and_await_ue_context_modification_request(amf_ue_id_t ngap_amf_ue_id,
+                                                                  ran_ue_id_t ngap_ran_ue_id,
+                                                                  bool        with_data_forwarding_info = false,
+                                                                  bool        with_forwarding_tunnel    = true)
   {
     // Inject Handover Command and wait for UE Context Modification Request (containing RRC Reconfiguration).
-    get_amf().push_tx_pdu(generate_valid_handover_command(ngap_amf_ue_id, ngap_ran_ue_id));
+    get_amf().push_tx_pdu(generate_valid_handover_command(
+        ngap_amf_ue_id, ngap_ran_ue_id, with_data_forwarding_info, with_forwarding_tunnel));
 
     report_fatal_error_if_not(
         this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu),
@@ -384,7 +406,7 @@ public:
   gnb_cu_ue_f1ap_id_t cu_ue_id;
   rnti_t              crnti     = to_rnti(0x4601);
   amf_ue_id_t         amf_ue_id = uint_to_amf_ue_id(
-      test_rng::uniform_int<uint64_t>(amf_ue_id_to_uint(amf_ue_id_t::min), amf_ue_id_to_uint(amf_ue_id_t::max)));
+      test_rng::uniform_int<uint64_t>(to_underlying(amf_ue_id_t::min), to_underlying(amf_ue_id_t::max)));
   gnb_cu_up_ue_e1ap_id_t cu_up_e1ap_id = gnb_cu_up_ue_e1ap_id_t::min;
   gnb_cu_cp_ue_e1ap_id_t cu_cp_e1ap_id;
 
@@ -489,6 +511,90 @@ TEST_F(cu_cp_inter_cu_ng_handover_test, when_handover_succeeds_then_amf_releases
   // STATUS: UE should be removed at this stage
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ues.size(), 0) << "UE should be removed";
+}
+
+// The forwarding tunnels the Handover Command reports must be handed to the source CU-UP, so that it sends the data it
+// still holds for the UE to them (TS 38.413 section 9.3.4.10, TS 37.483 section 9.3.2.6). For indirect data forwarding
+// these endpoints are the ones the 5GC inserted, so they must be taken from the Handover Command and never from what
+// this node itself advertised.
+TEST_F(cu_cp_inter_cu_ng_handover_test, when_handover_command_reports_fwd_tunnels_then_source_up_is_pointed_at_them)
+{
+  ASSERT_TRUE(attach_ue());
+
+  ASSERT_TRUE(
+      send_rrc_measurement_report_and_await_handover_required(ue_ctx->cu_ue_id.value(), ue_ctx->du_ue_id.value()));
+
+  // Inject a Handover Command carrying a PDU session level forwarding tunnel.
+  ASSERT_TRUE(send_handover_command_and_await_ue_context_modification_request(
+      ue_ctx->amf_ue_id.value(), ue_ctx->ran_ue_id.value(), true));
+
+  ASSERT_TRUE(send_ue_context_modification_response_and_await_bearer_context_modification_request(
+      ue_ctx->cu_ue_id.value(), ue_ctx->du_ue_id.value()));
+
+  // The Bearer Context Modification Request points the CU-UP at the forwarding tunnel.
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& ng_ran_mod_req = bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request();
+  ASSERT_TRUE(ng_ran_mod_req.pdu_session_res_to_modify_list_present);
+  ASSERT_EQ(ng_ran_mod_req.pdu_session_res_to_modify_list.size(), 1U);
+  const asn1::e1ap::pdu_session_res_to_modify_item_s& pdu_session = ng_ran_mod_req.pdu_session_res_to_modify_list[0];
+
+  ASSERT_TRUE(pdu_session.pdu_session_data_forwarding_info_present);
+  ASSERT_TRUE(pdu_session.pdu_session_data_forwarding_info.dl_data_forwarding_present);
+  ASSERT_FALSE(pdu_session.pdu_session_data_forwarding_info.ul_data_forwarding_present);
+  ASSERT_TRUE(pdu_session.pdu_session_data_forwarding_info.ie_exts.data_forwardingto_ng_ran_qos_flow_info_list_present);
+  ASSERT_EQ(pdu_session.pdu_session_data_forwarding_info.ie_exts.data_forwardingto_ng_ran_qos_flow_info_list.size(),
+            1U);
+
+  // No DRB level tunnel is programmed. Per DRB forwarding tunnels arrive with the support for the direct
+  // forwarding path.
+  ASSERT_EQ(pdu_session.drb_to_modify_list_ng_ran.size(), 1U);
+  const auto& drb_to_modify = pdu_session.drb_to_modify_list_ng_ran[0];
+  ASSERT_FALSE(drb_to_modify.drb_data_forwarding_info_present);
+
+  // The PDCP SN status is still queried alongside the forwarding tunnel.
+  ASSERT_TRUE(drb_to_modify.pdcp_sn_status_request_present);
+
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_ul_status_transfer(ue_ctx->cu_cp_e1ap_id.value(),
+                                                                                     ue_ctx->cu_up_e1ap_id.value()));
+}
+
+// A 5GC may report QoS flows as accepted for data forwarding without providing an endpoint to send them to, which
+// Amarisoft LTEMME does when only DRB level tunnels are advertised. The source must not program a forwarding tunnel
+// for such a PDU session, and must still query the PDCP SN status of its DRBs.
+TEST_F(cu_cp_inter_cu_ng_handover_test,
+       when_handover_command_reports_no_fwd_tunnel_then_source_up_is_not_pointed_at_one)
+{
+  ASSERT_TRUE(attach_ue());
+
+  ASSERT_TRUE(
+      send_rrc_measurement_report_and_await_handover_required(ue_ctx->cu_ue_id.value(), ue_ctx->du_ue_id.value()));
+
+  // Inject a Handover Command listing the QoS flows to be forwarded but carrying no forwarding tunnel.
+  ASSERT_TRUE(send_handover_command_and_await_ue_context_modification_request(
+      ue_ctx->amf_ue_id.value(), ue_ctx->ran_ue_id.value(), true, false));
+
+  ASSERT_TRUE(send_ue_context_modification_response_and_await_bearer_context_modification_request(
+      ue_ctx->cu_ue_id.value(), ue_ctx->du_ue_id.value()));
+
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& ng_ran_mod_req = bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request();
+  ASSERT_TRUE(ng_ran_mod_req.pdu_session_res_to_modify_list_present);
+  ASSERT_EQ(ng_ran_mod_req.pdu_session_res_to_modify_list.size(), 1U);
+  const asn1::e1ap::pdu_session_res_to_modify_item_s& pdu_session = ng_ran_mod_req.pdu_session_res_to_modify_list[0];
+
+  // No forwarding tunnel is programmed at either level.
+  ASSERT_FALSE(pdu_session.pdu_session_data_forwarding_info_present);
+  ASSERT_EQ(pdu_session.drb_to_modify_list_ng_ran.size(), 1U);
+  const auto& drb_to_modify = pdu_session.drb_to_modify_list_ng_ran[0];
+  ASSERT_FALSE(drb_to_modify.drb_data_forwarding_info_present);
+
+  // The PDCP SN status is still queried, so the handover itself is unaffected.
+  ASSERT_TRUE(drb_to_modify.pdcp_sn_status_request_present);
+
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_ul_status_transfer(ue_ctx->cu_cp_e1ap_id.value(),
+                                                                                     ue_ctx->cu_up_e1ap_id.value()));
 }
 
 TEST_F(cu_cp_inter_cu_ng_handover_test,
@@ -619,6 +725,268 @@ TEST_F(cu_cp_inter_cu_ng_handover_test, when_handover_request_received_then_hand
   get_du(du_idx).push_ul_pdu(ul_rrc_msg_transfer);
   ASSERT_TRUE(this->wait_for_ngap_tx_pdu(ngap_pdu));
   ASSERT_TRUE(test_helpers::is_valid_ul_nas_transport_message(ngap_pdu));
+}
+
+// A UE that accesses this target through an inter-CU handover applies the AS security configuration signalled in the
+// HandoverCommand, so the security context is active once the handover completed. The AMF may set up further PDU
+// sessions right afterwards (TS 38.413 Section 8.2.1), which the target must admit.
+TEST_F(cu_cp_inter_cu_ng_handover_test, when_handover_completed_at_target_then_pdu_session_setup_request_is_admitted)
+{
+  // Inject Handover Request and await Bearer Context Setup Request.
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request());
+
+  // Inject Bearer Context Setup Response and await UE Context Setup Request.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+
+  // Inject UE Context Setup Response and await Bearer Context Modification Request.
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+
+  // Inject Bearer Context Modification Response and await Handover Request Ack.
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+  const ran_ue_id_t ran_ue_id =
+      uint_to_ran_ue_id(ngap_pdu.pdu.successful_outcome().value.ho_request_ack()->ran_ue_ngap_id);
+
+  // Inject NGAP DL RAN Status Transfer and Bearer Context Modification Response.
+  ASSERT_TRUE(send_dl_ran_status_transfer_and_await_bearer_context_modification_request());
+
+  // Inject Bearer Context Modification Response and ACK the PDCP state modification.
+  ASSERT_TRUE(send_bearer_context_modification_response());
+
+  // Inject RRC Reconfiguration Complete and await Handover Notify and UE Context Modification Request.
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_handover_notify_and_ue_context_modification_request());
+
+  // Inject UE Context Modification Response to ACK the RRC reconfiguration complete indicator.
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+
+  // Inject PDU Session Resource Setup Request for a new PDU session and await Bearer Context Modification Request.
+  const pdu_session_id_t psi2 = uint_to_pdu_session_id(2);
+  get_amf().push_tx_pdu(generate_valid_pdu_session_resource_setup_request_message(
+      amf_ue_id, ran_ue_id, {{psi2, {pdu_session_type_t::ipv4, {{uint_to_qos_flow_id(2), 9}}}}}));
+  ASSERT_TRUE(this->wait_for_e1ap_tx_pdu(cu_up_idx, e1ap_pdu));
+  ASSERT_TRUE(test_helpers::is_valid_bearer_context_modification_request(e1ap_pdu));
+
+  // The new PDU session must be requested at the CU-UP.
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& pdu_sessions_to_setup =
+      bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request()
+          .pdu_session_res_to_setup_mod_list;
+  ASSERT_EQ(pdu_sessions_to_setup.size(), 1U);
+  ASSERT_EQ(pdu_sessions_to_setup[0].pdu_session_id, to_underlying(psi2));
+
+  // Let the CU-UP reject the new PDU session to conclude the procedure.
+  get_cu_up(cu_up_idx).push_tx_pdu(generate_bearer_context_modification_failure(cu_cp_e1ap_id, cu_up_e1ap_id));
+  ASSERT_TRUE(this->wait_for_ngap_tx_pdu(ngap_pdu));
+  ASSERT_TRUE(test_helpers::is_valid_pdu_session_resource_setup_response(ngap_pdu));
+  ASSERT_TRUE(test_helpers::is_expected_pdu_session_resource_setup_response(ngap_pdu, {}, {psi2}));
+}
+
+// When the source proposes DL data forwarding for its QoS flows, the target asks its CU-UP for a PDU session level
+// forwarding tunnel carrying those flows (TS 38.413 section 9.3.1.33, TS 37.483 section 9.3.2.5).
+TEST_F(cu_cp_inter_cu_ng_handover_test, when_source_proposes_dl_data_forwarding_then_target_requests_fwd_tunnels)
+{
+  // Inject a Handover Request proposing DL data forwarding and await the Bearer Context Setup Request.
+  handover_request_params ho_params;
+  ho_params.propose_dl_data_forwarding = true;
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(ho_params));
+
+  const asn1::e1ap::pdu_session_res_to_setup_item_s& e1ap_pdu_session = get_pdu_session_res_to_setup_item(e1ap_pdu);
+
+  ASSERT_TRUE(e1ap_pdu_session.pdu_session_data_forwarding_info_request_present);
+  ASSERT_EQ(e1ap_pdu_session.pdu_session_data_forwarding_info_request.data_forwarding_request.value,
+            asn1::e1ap::data_forwarding_request_opts::dl);
+
+  // The proposed QoS flow is listed as forwarded over that tunnel.
+  const auto& flows_on_tunnel =
+      e1ap_pdu_session.pdu_session_data_forwarding_info_request.qos_flows_forwarded_on_fwd_tunnels;
+  ASSERT_EQ(flows_on_tunnel.size(), 1U);
+  ASSERT_EQ(flows_on_tunnel[0].qos_flow_id, to_underlying(qfi));
+
+  // No DRB level tunnel is requested. Per DRB forwarding tunnels arrive with the support for the direct
+  // forwarding path.
+  ASSERT_EQ(e1ap_pdu_session.drb_to_setup_list_ng_ran.size(), 1U);
+  ASSERT_FALSE(e1ap_pdu_session.drb_to_setup_list_ng_ran[0].drb_data_forwarding_info_request_present);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+  ASSERT_TRUE(send_dl_ran_status_transfer_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_handover_notify_and_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// The 5GC can rule out data forwarding for a PDU session, in which case the target must not ask its CU-UP for any
+// forwarding tunnel (TS 38.413 section 9.3.1.63).
+TEST_F(cu_cp_inter_cu_ng_handover_test, when_data_forwarding_is_not_possible_then_no_fwd_tunnels_are_requested)
+{
+  // Inject a Handover Request proposing DL data forwarding but ruling it out for the PDU session.
+  handover_request_params ho_params;
+  ho_params.propose_dl_data_forwarding   = true;
+  ho_params.data_forwarding_not_possible = true;
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(ho_params));
+
+  const asn1::e1ap::pdu_session_res_to_setup_item_s& e1ap_pdu_session = get_pdu_session_res_to_setup_item(e1ap_pdu);
+  ASSERT_FALSE(e1ap_pdu_session.pdu_session_data_forwarding_info_request_present);
+  ASSERT_EQ(e1ap_pdu_session.drb_to_setup_list_ng_ran.size(), 1U);
+  ASSERT_FALSE(e1ap_pdu_session.drb_to_setup_list_ng_ran[0].drb_data_forwarding_info_request_present);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+  ASSERT_TRUE(send_dl_ran_status_transfer_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_handover_notify_and_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// The forwarding tunnel endpoint the CU-UP allocated must reach the source node, so that it can send the data it still
+// holds for the UE to it. The QoS flows carried on that tunnel are marked as accepted for data forwarding
+// (TS 38.413 sections 9.3.4.11 and 9.3.2.13).
+TEST_F(cu_cp_inter_cu_ng_handover_test, when_target_allocated_fwd_tunnels_then_they_are_advertised_to_the_amf)
+{
+  handover_request_params ho_params;
+  ho_params.propose_dl_data_forwarding = true;
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(ho_params));
+
+  // Inject a Bearer Context Setup Response carrying the allocated forwarding endpoints.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request(true));
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+
+  const auto& ho_request_ack = ngap_pdu.pdu.successful_outcome().value.ho_request_ack();
+  ASSERT_EQ(ho_request_ack->pdu_session_res_admitted_list.size(), 1U);
+
+  asn1::ngap::ho_request_ack_transfer_s ack_transfer;
+  asn1::cbit_ref                        bref(ho_request_ack->pdu_session_res_admitted_list[0].ho_request_ack_transfer);
+  ASSERT_EQ(ack_transfer.unpack(bref), asn1::OCUDUASN_SUCCESS);
+
+  ASSERT_TRUE(ack_transfer.dl_forwarding_up_tnl_info_present);
+  ASSERT_FALSE(ack_transfer.ie_exts.ul_forwarding_up_tnl_info_present);
+
+  // No DRB item is reported. Per DRB forwarding tunnels arrive with the support for the direct forwarding path.
+  ASSERT_EQ(ack_transfer.data_forwarding_resp_drb_list.size(), 0U);
+
+  ASSERT_EQ(ack_transfer.qos_flow_setup_resp_list.size(), 1U);
+  ASSERT_TRUE(ack_transfer.qos_flow_setup_resp_list[0].data_forwarding_accepted_present);
+
+  // The DL forwarding endpoint differs from the DL NG-U endpoint of the PDU session.
+  ASSERT_NE(ack_transfer.dl_forwarding_up_tnl_info.gtp_tunnel().gtp_teid.to_number(),
+            ack_transfer.dl_ngu_up_tnl_info.gtp_tunnel().gtp_teid.to_number());
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_dl_ran_status_transfer_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_handover_notify_and_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// A PDU session the 5GC ruled out for data forwarding must be reported without any forwarding IE, rather than with an
+// empty Data Forwarding Response DRB Item that would tell the source forwarding was accepted (TS 38.413 section
+// 9.3.4.11).
+TEST_F(cu_cp_inter_cu_ng_handover_test, when_data_forwarding_is_not_possible_then_no_fwd_tunnels_are_advertised)
+{
+  handover_request_params ho_params;
+  ho_params.propose_dl_data_forwarding   = true;
+  ho_params.data_forwarding_not_possible = true;
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(ho_params));
+
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+
+  const auto&                           ho_request_ack = ngap_pdu.pdu.successful_outcome().value.ho_request_ack();
+  asn1::ngap::ho_request_ack_transfer_s ack_transfer;
+  asn1::cbit_ref                        bref(ho_request_ack->pdu_session_res_admitted_list[0].ho_request_ack_transfer);
+  ASSERT_EQ(ack_transfer.unpack(bref), asn1::OCUDUASN_SUCCESS);
+
+  ASSERT_EQ(ack_transfer.data_forwarding_resp_drb_list.size(), 0U);
+  ASSERT_FALSE(ack_transfer.dl_forwarding_up_tnl_info_present);
+  ASSERT_EQ(ack_transfer.qos_flow_setup_resp_list.size(), 1U);
+  ASSERT_FALSE(ack_transfer.qos_flow_setup_resp_list[0].data_forwarding_accepted_present);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_dl_ran_status_transfer_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_handover_notify_and_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// Per TS 38.413 Section 8.4.6 (Uplink RAN Status Transfer), the source includes its own DRB ID in the DRBs Subject to
+// Status Transfer List IE, which the AMF then relays unchanged to the target via the Downlink RAN Status Transfer
+// procedure (Section 8.4.7). A fresh target always starts allocating from DRB1, but the source may report a higher DRB
+// ID for its (only) active DRB, e.g. because an earlier DRB was released on the source and its ID was never reused. The
+// target must ignore such DRBs.
+TEST_F(cu_cp_inter_cu_ng_handover_test,
+       when_dl_ran_status_transfer_contains_drb_not_admitted_at_target_then_it_is_ignored)
+{
+  // Inject Handover Request and await Bearer Context Setup Request.
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request());
+
+  // Inject Bearer Context Setup Response and await UE Context Setup Request.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+
+  // Inject UE Context Setup Response and await Bearer Context Modification Request.
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+
+  // Inject Bearer Context Modification Response and await Handover Request Ack.
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+
+  // Inject NGAP DL RAN Status Transfer reporting only DRB2, which the source used for its (sole) active DRB
+  // but was never admitted at this target (the target only ever allocated DRB1 for this single-flow handover).
+  ASSERT_TRUE(send_dl_ran_status_transfer_and_await_bearer_context_modification_request({drb_id_t::drb2}));
+
+  // DRB2 must be skipped. Since it's the only DRB the source reported, the resulting Bearer
+  // Context Modification Request legitimately has nothing left to modify.
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& pdu_sessions = bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request()
+                                 .pdu_session_res_to_modify_list;
+  ASSERT_EQ(pdu_sessions.size(), 0U);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_handover_notify_and_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
+}
+
+// DRB IDs are allocated independently by each RAN node (TS 38.300 Section 9.2.3.2.3). A numeric ID match is
+// therefore only trustworthy when the source's DRB-to-QoS-flow mapping was actually signalled and confirmed during
+// admission (TS 38.413 Section 9.3.1.29); an unconfirmed match, even for a DRB that legitimately exists at the
+// target, must not be trusted with the source's PDCP state.
+TEST_F(cu_cp_inter_cu_ng_handover_test, when_dl_ran_status_transfer_reports_an_unconfirmed_drb_id_then_it_is_ignored)
+{
+  // Inject Handover Request (without the source's DRB-to-QoS-flow mapping) and await Bearer Context Setup Request.
+  handover_request_params ho_params;
+  ho_params.include_drb_to_qos_flow_mapping = false;
+  ASSERT_TRUE(send_handover_request_and_await_bearer_context_setup_request(ho_params));
+
+  // Inject Bearer Context Setup Response and await UE Context Setup Request.
+  ASSERT_TRUE(send_bearer_context_setup_response_and_await_ue_context_setup_request());
+
+  // Inject UE Context Setup Response and await Bearer Context Modification Request.
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_bearer_context_modification_request());
+
+  // Inject Bearer Context Modification Response and await Handover Request Ack.
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_handover_request_ack());
+
+  // Inject NGAP DL RAN Status Transfer reporting DRB1, which was admitted at this target (matching by pure
+  // numeric coincidence), but the source never confirmed that mapping during admission.
+  ASSERT_TRUE(send_dl_ran_status_transfer_and_await_bearer_context_modification_request({drb_id_t::drb1}));
+
+  // DRB1 must still be skipped: existing here is not enough, it must be confirmed. Nothing is left to modify.
+  const auto& bearer_ctxt_mod_req = e1ap_pdu.pdu.init_msg().value.bearer_context_mod_request();
+  ASSERT_TRUE(bearer_ctxt_mod_req->sys_bearer_context_mod_request_present);
+  const auto& pdu_sessions = bearer_ctxt_mod_req->sys_bearer_context_mod_request.ng_ran_bearer_context_mod_request()
+                                 .pdu_session_res_to_modify_list;
+  ASSERT_EQ(pdu_sessions.size(), 0U);
+
+  // The handover must still complete normally afterwards.
+  ASSERT_TRUE(send_bearer_context_modification_response());
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_handover_notify_and_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_empty(cu_ue_id, du_ue_id));
 }
 
 TEST_F(cu_cp_inter_cu_ng_handover_test,

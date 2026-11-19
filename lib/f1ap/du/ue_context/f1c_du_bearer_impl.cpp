@@ -54,10 +54,10 @@ void f1c_srb0_du_bearer::handle_sdu(byte_buffer_chain sdu)
     f1ap_message msg;
     msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_INIT_UL_RRC_MSG_TRANSFER);
     asn1::f1ap::init_ul_rrc_msg_transfer_s& init_msg = msg.pdu.init_msg().value.init_ul_rrc_msg_transfer();
-    init_msg->gnb_du_ue_f1ap_id                      = gnb_du_ue_f1ap_id_to_uint(ue_ctxt.gnb_du_ue_f1ap_id);
+    init_msg->gnb_du_ue_f1ap_id                      = to_underlying(ue_ctxt.gnb_du_ue_f1ap_id);
     init_msg->nr_cgi.plmn_id                         = nr_cgi.plmn_id.to_bytes();
     init_msg->nr_cgi.nr_cell_id.from_number(nr_cgi.nci.value());
-    init_msg->c_rnti                         = to_value(ue_ctxt.rnti);
+    init_msg->c_rnti                         = to_underlying(ue_ctxt.rnti);
     init_msg->rrc_container                  = std::move(pdu);
     init_msg->du_to_cu_rrc_container_present = not du_cu_rrc_container.empty();
     if (init_msg->du_to_cu_rrc_container_present) {
@@ -158,7 +158,7 @@ void f1c_other_srb_du_bearer::handle_sdu(byte_buffer_chain sdu)
                      ue_ctxt.ue_index,
                      ue_ctxt.rnti,
                      fmt::underlying(ue_ctxt.gnb_du_ue_f1ap_id),
-                     fmt::underlying(srb_id));
+                     srb_id);
       return;
     }
 
@@ -167,8 +167,8 @@ void f1c_other_srb_du_bearer::handle_sdu(byte_buffer_chain sdu)
     // Fill F1AP UL RRC Message Transfer.
     msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_UL_RRC_MSG_TRANSFER);
     asn1::f1ap::ul_rrc_msg_transfer_s& ul_msg = msg.pdu.init_msg().value.ul_rrc_msg_transfer();
-    ul_msg->gnb_du_ue_f1ap_id                 = gnb_du_ue_f1ap_id_to_uint(ue_ctxt.gnb_du_ue_f1ap_id);
-    ul_msg->gnb_cu_ue_f1ap_id                 = gnb_cu_ue_f1ap_id_to_uint(ue_ctxt.gnb_cu_ue_f1ap_id);
+    ul_msg->gnb_du_ue_f1ap_id                 = to_underlying(ue_ctxt.gnb_du_ue_f1ap_id);
+    ul_msg->gnb_cu_ue_f1ap_id                 = to_underlying(ue_ctxt.gnb_cu_ue_f1ap_id);
     ul_msg->srb_id                            = srb_id_to_uint(srb_id);
     ul_msg->rrc_container                     = std::move(pdu);
     ul_msg->sel_plmn_id_present               = false;
@@ -320,7 +320,7 @@ async_task<bool> f1c_other_srb_du_bearer::wait_for_notification(uint32_t        
   }
 
   // Allocate a slot in the event pool.
-  auto event_slot = event_pool.create(pdcp_sn, du_configurator.get_timer_factory(), time_to_wait);
+  auto event_slot = event_pool.get(pdcp_sn, du_configurator.get_timer_factory(), time_to_wait);
   if (event_slot == nullptr) {
     logger.warning("Rx PDU {}: Ignoring {} Rx PDU {} notification. Cause: Failed to allocate notification handler.",
                    ue_ctxt,
@@ -330,8 +330,9 @@ async_task<bool> f1c_other_srb_du_bearer::wait_for_notification(uint32_t        
   }
 
   // Allocation successful. Return awaitable event.
-  auto& ev = pending_events.emplace_back(std::move(event_slot));
-  return launch_async([&ev](coro_context<async_task<bool>>& ctx) {
+  // Note: We capture the raw pointer because its address won't change when other events are added/removed.
+  event_context* ev = pending_events.emplace_back(std::move(event_slot)).get();
+  return launch_async([ev](coro_context<async_task<bool>>& ctx) {
     CORO_BEGIN(ctx);
     CORO_AWAIT_VALUE(auto res, ev->observer);
     // True if there was no cancellation or timeout.
@@ -346,8 +347,8 @@ void f1c_other_srb_du_bearer::handle_rrc_delivery_report(uint32_t trigger_pdcp_s
   msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_RRC_DELIVERY_REPORT);
   asn1::f1ap::rrc_delivery_report_ies_container& report = *msg.pdu.init_msg().value.rrc_delivery_report();
 
-  report.gnb_cu_ue_f1ap_id                   = gnb_cu_ue_f1ap_id_to_uint(ue_ctxt.gnb_cu_ue_f1ap_id);
-  report.gnb_du_ue_f1ap_id                   = gnb_du_ue_f1ap_id_to_uint(ue_ctxt.gnb_du_ue_f1ap_id);
+  report.gnb_cu_ue_f1ap_id                   = to_underlying(ue_ctxt.gnb_cu_ue_f1ap_id);
+  report.gnb_du_ue_f1ap_id                   = to_underlying(ue_ctxt.gnb_du_ue_f1ap_id);
   report.srb_id                              = srb_id_to_uint(srb_id);
   report.rrc_delivery_status.trigger_msg     = trigger_pdcp_sn;
   report.rrc_delivery_status.delivery_status = highest_in_order_pdcp_sn;

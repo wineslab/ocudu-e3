@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "asn1_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
 #include "ocudu/ran/qos/five_qi_qos_mapping.h"
@@ -119,7 +120,7 @@ static pdcp_sn_len_e pdcp_sn_size_to_f1ap_asn1(pdcp_sn_size sn_size)
 template <typename ASN1Type>
 static void fill_drb_setup_mod_common(ASN1Type& asn1obj, const f1ap_drb_setupmod& drb)
 {
-  asn1obj.drb_id       = drb_id_to_uint(drb.drb_id);
+  asn1obj.drb_id       = to_underlying(drb.drb_id);
   asn1obj.lcid_present = drb.lcid.has_value();
   if (asn1obj.lcid_present) {
     asn1obj.lcid = drb.lcid.value();
@@ -218,12 +219,8 @@ static f1ap_drb_info drb_info_from_f1ap_asn1(const asn1::f1ap::qos_info_c& asn1_
     out.s_nssai.sd = slice_differentiator::create(asn1_drb_info.snssai.sd.to_number()).value();
   }
 
-  const auto* five_qi_params = get_5qi_to_qos_characteristics_mapping(nondyn_5qi.five_qi);
-  const bool  is_gbr         = five_qi_params && (five_qi_params->res_type == qos_flow_resource_type::gbr ||
-                                         five_qi_params->res_type == qos_flow_resource_type::delay_critical_gbr);
-
   // Note: As per TS 38.473, 9.3.1.45, "This IE shall be present for GBR QoS Flows only and is ignored otherwise."
-  if (is_gbr and asn1_drb_info.drb_qos.gbr_qos_flow_info_present) {
+  if (is_gbr_five_qi(nondyn_5qi.five_qi) and asn1_drb_info.drb_qos.gbr_qos_flow_info_present) {
     auto& gbr     = out.drb_qos.gbr_qos_info.emplace();
     gbr.max_br_dl = asn1_drb_info.drb_qos.gbr_qos_flow_info.max_flow_bit_rate_dl;
     gbr.max_br_ul = asn1_drb_info.drb_qos.gbr_qos_flow_info.max_flow_bit_rate_ul;
@@ -233,7 +230,7 @@ static f1ap_drb_info drb_info_from_f1ap_asn1(const asn1::f1ap::qos_info_c& asn1_
       gbr.max_packet_loss_rate_dl.emplace(asn1_drb_info.drb_qos.gbr_qos_flow_info.max_packet_loss_rate_dl);
     }
     if (asn1_drb_info.drb_qos.gbr_qos_flow_info.max_packet_loss_rate_ul_present) {
-      gbr.max_packet_loss_rate_dl.emplace(asn1_drb_info.drb_qos.gbr_qos_flow_info.max_packet_loss_rate_ul);
+      gbr.max_packet_loss_rate_ul.emplace(asn1_drb_info.drb_qos.gbr_qos_flow_info.max_packet_loss_rate_ul);
     }
   }
 
@@ -257,7 +254,7 @@ static asn1::f1ap::qos_characteristics_c qos_characteristics_to_f1ap_asn1(const 
 
     if (dyn_5qi.five_qi.has_value()) {
       asn1_dyn_5qi.five_qi_present = true;
-      asn1_dyn_5qi.five_qi         = five_qi_to_uint(dyn_5qi.five_qi.value());
+      asn1_dyn_5qi.five_qi         = to_underlying(dyn_5qi.five_qi.value());
     }
 
     if (dyn_5qi.is_delay_critical.has_value()) {
@@ -281,7 +278,7 @@ static asn1::f1ap::qos_characteristics_c qos_characteristics_to_f1ap_asn1(const 
     auto&                         asn1_non_dyn_5qi = asn1_qos_characteristics.set_non_dyn_5qi();
     const non_dyn_5qi_descriptor& non_dyn_5qi      = qos_desc.get_nondyn_5qi();
 
-    asn1_non_dyn_5qi.five_qi = five_qi_to_uint(non_dyn_5qi.five_qi);
+    asn1_non_dyn_5qi.five_qi = to_underlying(non_dyn_5qi.five_qi);
 
     if (non_dyn_5qi.qos_prio_level.has_value()) {
       asn1_non_dyn_5qi.qos_prio_level_present = true;
@@ -389,7 +386,7 @@ static qos_info_c qos_info_to_f1ap_asn1(const f1ap_drb_info& drb_info)
   // Fill flows mapped to DRB list.
   for (const auto& qos_flow : drb_info.flows_mapped_to_drb_list) {
     asn1::f1ap::flows_mapped_to_drb_item_s asn1_flow;
-    asn1_flow.qos_flow_id               = qos_flow_id_to_uint(qos_flow.qos_flow_id);
+    asn1_flow.qos_flow_id               = to_underlying(qos_flow.qos_flow_id);
     asn1_flow.qos_flow_level_qos_params = qos_flow_level_qos_params_to_f1ap_asn1(qos_flow.qos_flow_level_qos_params);
 
     asn1_drb_info.flows_mapped_to_drb_list.push_back(asn1_flow);
@@ -513,7 +510,7 @@ f1ap_drb_to_modify ocudu::make_drb_to_modify(const asn1::f1ap::drbs_to_be_modifi
 drbs_to_be_setup_item_s ocudu::make_drb_to_setup(const f1ap_drb_to_setup& drb_item)
 {
   drbs_to_be_setup_item_s asn1type;
-  asn1type.drb_id                          = drb_id_to_uint(drb_item.drb_id);
+  asn1type.drb_id                          = to_underlying(drb_item.drb_id);
   asn1type.qos_info                        = qos_info_to_f1ap_asn1(drb_item.qos_info);
   asn1type.ul_up_tnl_info_to_be_setup_list = make_asn1_ul_up_tnl_info_list(drb_item.uluptnl_info_list);
   asn1type.rlc_mode                        = rlc_mode_to_f1ap_asn1(drb_item.mode);
@@ -525,7 +522,7 @@ drbs_to_be_setup_item_s ocudu::make_drb_to_setup(const f1ap_drb_to_setup& drb_it
 drbs_to_be_setup_mod_item_s ocudu::make_drb_to_setupmod(const f1ap_drb_to_setup& drb_item)
 {
   drbs_to_be_setup_mod_item_s asn1type;
-  asn1type.drb_id                          = drb_id_to_uint(drb_item.drb_id);
+  asn1type.drb_id                          = to_underlying(drb_item.drb_id);
   asn1type.qos_info                        = qos_info_to_f1ap_asn1(drb_item.qos_info);
   asn1type.ul_up_tnl_info_to_be_setup_list = make_asn1_ul_up_tnl_info_list(drb_item.uluptnl_info_list);
   asn1type.rlc_mode                        = rlc_mode_to_f1ap_asn1(drb_item.mode);
@@ -538,7 +535,7 @@ drbs_to_be_setup_mod_item_s ocudu::make_drb_to_setupmod(const f1ap_drb_to_setup&
 drbs_to_be_modified_item_s ocudu::make_drb_to_mod(const f1ap_drb_to_modify& drb_item)
 {
   drbs_to_be_modified_item_s asn1type;
-  asn1type.drb_id                          = drb_id_to_uint(drb_item.drb_id);
+  asn1type.drb_id                          = to_underlying(drb_item.drb_id);
   asn1type.ul_up_tnl_info_to_be_setup_list = make_asn1_ul_up_tnl_info_list(drb_item.uluptnl_info_list);
   return asn1type;
 }
@@ -642,7 +639,7 @@ f1ap_drb_setupmod ocudu::make_drb_setupmod(const asn1::f1ap::drbs_modified_item_
 template <typename ASN1Type>
 void fill_drb_failed_item(ASN1Type& asn1obj, const f1ap_drb_failed_to_setupmod& drb_obj)
 {
-  asn1obj.drb_id        = drb_id_to_uint(drb_obj.drb_id);
+  asn1obj.drb_id        = to_underlying(drb_obj.drb_id);
   asn1obj.cause_present = drb_obj.cause.has_value();
   if (asn1obj.cause_present) {
     asn1obj.cause = cause_to_asn1(drb_obj.cause.value());
@@ -723,11 +720,157 @@ ocudu::make_drb_failed_to_setupmod(const asn1::f1ap::drbs_failed_to_be_modified_
   return drb_item;
 }
 
+static asn1::f1ap::access_point_position_s access_point_position_to_asn1(const ng_ran_access_point_position_t& position)
+{
+  asn1::f1ap::access_point_position_s asn1_position;
+
+  asn1_position.latitude_sign.value = position.latitude_sign == latitude_sign_t::north
+                                          ? asn1::f1ap::access_point_position_s::latitude_sign_opts::options::north
+                                          : asn1::f1ap::access_point_position_s::latitude_sign_opts::options::south;
+  asn1_position.latitude            = position.latitude;
+  asn1_position.longitude           = position.longitude;
+  asn1_position.direction_of_altitude.value =
+      position.direction_of_altitude == direction_of_altitude_t::height
+          ? asn1::f1ap::access_point_position_s::direction_of_altitude_opts::options::height
+          : asn1::f1ap::access_point_position_s::direction_of_altitude_opts::options::depth;
+  asn1_position.altitude                  = position.altitude;
+  asn1_position.uncertainty_semi_major    = position.uncertainty_semi_major;
+  asn1_position.uncertainty_semi_minor    = position.uncertainty_semi_minor;
+  asn1_position.orientation_of_major_axis = position.orientation_of_major_axis;
+  asn1_position.uncertainty_altitude      = position.uncertainty_altitude;
+  asn1_position.confidence                = position.confidence;
+
+  return asn1_position;
+}
+
+static asn1::f1ap::ngran_high_accuracy_access_point_position_s
+ha_access_point_position_to_asn1(const ng_ran_high_accuracy_access_point_position_t& position)
+{
+  asn1::f1ap::ngran_high_accuracy_access_point_position_s asn1_position;
+
+  asn1_position.latitude                  = position.latitude;
+  asn1_position.longitude                 = position.longitude;
+  asn1_position.altitude                  = position.altitude;
+  asn1_position.uncertainty_semi_major    = position.uncertainty_semi_major;
+  asn1_position.uncertainty_semi_minor    = position.uncertainty_semi_minor;
+  asn1_position.orientation_of_major_axis = position.orientation_of_major_axis;
+  asn1_position.horizontal_confidence     = position.horizontal_confidence;
+  asn1_position.uncertainty_altitude      = position.uncertainty_altitude;
+  asn1_position.vertical_confidence       = position.vertical_confidence;
+
+  return asn1_position;
+}
+
+static asn1::f1ap::dl_prs_muting_pattern_c muting_pattern_to_asn1(const dl_prs_muting_pattern_t& muting_pattern)
+{
+  asn1::f1ap::dl_prs_muting_pattern_c asn1_pattern;
+
+  switch (muting_pattern.length) {
+    case 2:
+      asn1_pattern.set_two().from_number(muting_pattern.value);
+      break;
+    case 4:
+      asn1_pattern.set_four().from_number(muting_pattern.value);
+      break;
+    case 6:
+      asn1_pattern.set_six().from_number(muting_pattern.value);
+      break;
+    case 8:
+      asn1_pattern.set_eight().from_number(muting_pattern.value);
+      break;
+    case 16:
+      asn1_pattern.set_sixteen().from_number(muting_pattern.value);
+      break;
+    default:
+      asn1_pattern.set_thirty_two().from_number(muting_pattern.value);
+      break;
+  }
+
+  return asn1_pattern;
+}
+
+static asn1::f1ap::prs_cfg_s prs_cfg_to_asn1(const prs_cfg_t& prs_cfg)
+{
+  asn1::f1ap::prs_cfg_s asn1_prs_cfg;
+
+  asn1_prs_cfg.prs_res_set_list.resize(prs_cfg.prs_res_set_list.size());
+  for (unsigned i = 0, e = prs_cfg.prs_res_set_list.size(); i != e; ++i) {
+    const prs_resource_set_item_t& res_set      = prs_cfg.prs_res_set_list[i];
+    prs_res_set_item_s&            asn1_res_set = asn1_prs_cfg.prs_res_set_list[i];
+
+    asn1_res_set.prs_res_set_id = res_set.prs_res_set_id;
+    asn1::number_to_enum(asn1_res_set.subcarrier_spacing, scs_to_khz(res_set.scs));
+    asn1_res_set.pr_sbw    = res_set.prs_bw;
+    asn1_res_set.start_prb = res_set.start_prb;
+    asn1_res_set.point_a   = res_set.point_a;
+    asn1::number_to_enum(asn1_res_set.comb_size, res_set.comb_size);
+    asn1_res_set.cp_type.value = res_set.cp_type == cyclic_prefix::NORMAL
+                                     ? prs_res_set_item_s::cp_type_opts::options::normal
+                                     : prs_res_set_item_s::cp_type_opts::options::extended;
+    asn1::number_to_enum(asn1_res_set.res_set_periodicity, res_set.res_set_periodicity);
+    asn1_res_set.res_set_slot_offset = res_set.res_set_slot_offset;
+    asn1::number_to_enum(asn1_res_set.res_repeat_factor, res_set.res_repeat_factor);
+    asn1::number_to_enum(asn1_res_set.res_time_gap, res_set.res_time_gap);
+    asn1::number_to_enum(asn1_res_set.res_numof_symbols, res_set.res_numof_symbols);
+
+    if (res_set.prs_muting.has_value()) {
+      asn1_res_set.prs_muting_present = true;
+      const prs_muting_t& muting      = res_set.prs_muting.value();
+      if (muting.prs_muting_option1.has_value()) {
+        asn1_res_set.prs_muting.prs_muting_option1_present = true;
+        asn1_res_set.prs_muting.prs_muting_option1.muting_pattern =
+            muting_pattern_to_asn1(muting.prs_muting_option1->muting_pattern);
+        asn1::number_to_enum(asn1_res_set.prs_muting.prs_muting_option1.muting_bit_repeat_factor,
+                             muting.prs_muting_option1->muting_bit_repeat_factor);
+      }
+      if (muting.prs_muting_option2.has_value()) {
+        asn1_res_set.prs_muting.prs_muting_option2_present = true;
+        asn1_res_set.prs_muting.prs_muting_option2.muting_pattern =
+            muting_pattern_to_asn1(muting.prs_muting_option2->muting_pattern);
+      }
+    }
+    asn1_res_set.prs_res_tx_pwr = res_set.prs_res_tx_pwr;
+
+    asn1_res_set.prs_res_list.resize(res_set.prs_res_list.size());
+    for (unsigned j = 0, nof_res = res_set.prs_res_list.size(); j != nof_res; ++j) {
+      const prs_res_item_t& res      = res_set.prs_res_list[j];
+      prs_res_item_s&       asn1_res = asn1_res_set.prs_res_list[j];
+
+      asn1_res.prs_res_id        = res.prs_res_id;
+      asn1_res.seq_id            = res.seq_id;
+      asn1_res.re_offset         = res.re_offset;
+      asn1_res.res_slot_offset   = res.res_slot_offset;
+      asn1_res.res_symbol_offset = res.res_symbol_offset;
+
+      if (res.qcl_info.has_value()) {
+        asn1_res.qcl_info_present = true;
+        if (std::holds_alternative<ssb_t>(res.qcl_info.value())) {
+          const ssb_t& qcl_ssb                          = std::get<ssb_t>(res.qcl_info.value());
+          asn1_res.qcl_info.set_qcl_source_ssb().pci_nr = qcl_ssb.pci_nr;
+          if (qcl_ssb.ssb_idx.has_value()) {
+            asn1_res.qcl_info.qcl_source_ssb().ssb_idx_present = true;
+            asn1_res.qcl_info.qcl_source_ssb().ssb_idx         = qcl_ssb.ssb_idx.value();
+          }
+        } else {
+          const prs_resource_qcl_source_prs_t& qcl_prs = std::get<prs_resource_qcl_source_prs_t>(res.qcl_info.value());
+          asn1_res.qcl_info.set_qcl_source_prs().qcl_source_prs_res_set_id = qcl_prs.qcl_source_prs_res_set_id;
+          if (qcl_prs.qcl_source_prs_res_id.has_value()) {
+            asn1_res.qcl_info.qcl_source_prs().qcl_source_prs_res_id_present = true;
+            asn1_res.qcl_info.qcl_source_prs().qcl_source_prs_res_id         = qcl_prs.qcl_source_prs_res_id.value();
+          }
+        }
+      }
+    }
+  }
+
+  return asn1_prs_cfg;
+}
+
 asn1::f1ap::trp_info_s ocudu::trp_info_to_asn1(const odu::du_trp_info& trp)
 {
   trp_info_s asn1out;
 
-  asn1out.trp_id = trp_id_to_uint(trp.trp_id);
+  asn1out.trp_id = to_underlying(trp.trp_id);
   if (trp.pci.has_value()) {
     trp_info_type_resp_item_c item;
     item.set_pci_nr() = trp.pci.value();
@@ -744,8 +887,25 @@ asn1::f1ap::trp_info_s ocudu::trp_info_to_asn1(const odu::du_trp_info& trp)
     item.set_nr_arfcn() = trp.arfcn.value().value();
     asn1out.trp_info_type_resp_list.push_back(item);
   }
+  if (trp.prs_cfg.has_value()) {
+    trp_info_type_resp_item_c item;
+    item.set_prs_cfg() = prs_cfg_to_asn1(trp.prs_cfg.value());
+    asn1out.trp_info_type_resp_list.push_back(item);
+  }
+  if (trp.geo_coords.has_value()) {
+    const auto& direct = std::get<trp_position_direct_t>(trp.geo_coords.value().trp_position_definition_type);
 
-  // TODO: Remaining
+    trp_info_type_resp_item_c item;
+    trp_position_direct_s& asn1_direct = item.set_geographical_coordinates().trp_position_definition_type.set_direct();
+    if (std::holds_alternative<ng_ran_access_point_position_t>(direct.accuracy)) {
+      asn1_direct.accuracy.set_trp_position() =
+          access_point_position_to_asn1(std::get<ng_ran_access_point_position_t>(direct.accuracy));
+    } else {
+      asn1_direct.accuracy.set_trph_aposition() =
+          ha_access_point_position_to_asn1(std::get<ng_ran_high_accuracy_access_point_position_t>(direct.accuracy));
+    }
+    asn1out.trp_info_type_resp_list.push_back(item);
+  }
 
   return asn1out;
 }

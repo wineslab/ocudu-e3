@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "lib/ran/precoding/two_port/precoding_codebooks.h"
+#include "lib/ran/precoding/type1_sp/precoding_codebooks.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/precoding/precoding_codebook_configuration.h"
 #include "ocudu/ran/precoding/precoding_codebooks.h"
 #include <gtest/gtest.h>
+#include <vector>
 
 using namespace ocudu;
 
@@ -149,7 +153,7 @@ TEST(precoding_codebooks_test, OneLayerTwoPorts)
                                               {cf_t(1.0f, 0.0f), cf_t(-1.0f, 0.0f)},
                                               {cf_t(1.0f, 0.0f), cf_t(0.0f, -1.0f)}};
 
-  static constexpr float norm_factor = M_SQRT1_2f;
+  static constexpr float norm_factor = M_SQRT1_2;
 
   for (unsigned i_codebook = 0; i_codebook != 4; ++i_codebook) {
     precoding_weight_matrix precoding = make_one_layer_two_ports(i_codebook);
@@ -210,11 +214,11 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_OneLayerFourPorts)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_ports));
 
   // Type I Single-Panel configuration based, corresponding to N1 = 2, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
 
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 1);
@@ -257,12 +261,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_TwoLayerFourPorts)
   static const float scaling                            = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration based, corresponding to N1 = 2, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = i_1_3, .i_2 = i_2};
 
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 2);
@@ -308,11 +312,11 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_ThreeLayerFourPorts)
   static const float        scaling = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration based, corresponding to N1 = 2, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
 
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 3);
@@ -357,11 +361,11 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_FourLayerFourPorts)
   static const float        scaling = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration based, corresponding to N1 = 2, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
 
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 4);
@@ -403,11 +407,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_OneLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 1);
 
@@ -444,12 +449,13 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_TwoLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = i_1_3, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 2);
 
@@ -493,12 +499,13 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_ThreeLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = i_1_3, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 3);
 
@@ -542,12 +549,13 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_FourLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = i_1_3, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 4);
 
@@ -590,11 +598,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_FiveLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 5);
 
@@ -635,11 +644,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_SixLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 6);
 
@@ -680,11 +690,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_SevenLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 7);
 
@@ -726,11 +737,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_EightLayer_4x1)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 4, N2 = 1.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::four_one;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::four_one,
+                                               pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+      pmi_typeI_single_panel pmi = {
           .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = std::nullopt, .i_1_3 = std::nullopt, .i_2 = i_2};
       precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 8);
 
@@ -769,12 +781,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_OneLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = std::nullopt, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 1);
 
@@ -810,13 +822,13 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_TwoLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
-        for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-          precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
+        for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+          pmi_typeI_single_panel pmi = {
               .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = i_1_3, .i_2 = i_2};
           precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 2);
 
@@ -861,13 +873,13 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_ThreeLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
-        for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-          precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
+        for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+          pmi_typeI_single_panel pmi = {
               .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = i_1_3, .i_2 = i_2};
           precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 3);
 
@@ -912,13 +924,13 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_FourLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
-        for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-          precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_1_3 = 0; i_1_3 != nof_offsets; ++i_1_3) {
+        for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+          pmi_typeI_single_panel pmi = {
               .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = i_1_3, .i_2 = i_2};
           precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 4);
 
@@ -962,12 +974,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_FiveLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = std::nullopt, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 5);
 
@@ -1008,12 +1020,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_SixLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = std::nullopt, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 6);
 
@@ -1054,12 +1066,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_SevenLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = std::nullopt, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 7);
 
@@ -1100,12 +1112,12 @@ TEST(precoding_codebooks_test, Type1SinglePanelMode1_EightLayer_2x2)
   static const float        scaling        = 1.0F / std::sqrt(static_cast<float>(nof_layers * nof_ports));
 
   // Type I Single-Panel configuration corresponding to N1 = 2, N2 = 2.
-  pmi_codebook_single_panel_config panel_config = pmi_codebook_single_panel_config::two_two;
+  pmi_codebook_typeI_single_panel panel_config{pmi_codebook_single_panel_config::two_two, pmi_codebook_typeI_mode::one};
 
-  for (unsigned i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
-    for (unsigned i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
-      for (unsigned i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
-        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+  for (uint8_t i_1_1 = 0; i_1_1 != nof_beams; ++i_1_1) {
+    for (uint8_t i_1_2 = 0; i_1_2 != nof_beams; ++i_1_2) {
+      for (uint8_t i_2 = 0; i_2 != nof_pol_shifts; ++i_2) {
+        pmi_typeI_single_panel pmi = {
             .panel_config = panel_config, .i_1_1 = i_1_1, .i_1_2 = i_1_2, .i_1_3 = std::nullopt, .i_2 = i_2};
         precoding_weight_matrix precoding = make_type1_sp_mode1(pmi, 8);
 
@@ -1140,7 +1152,8 @@ TEST(precoding_codebooks_test, TypeISinglePanelMode1_UnsupportedCases)
 
   // Create an example PMI with a Type I Single-Panel configuration corresponding to N1 = 4, N2 = 2, which is
   // unsupported.
-  ASSERT_DEATH(make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::four_two,
+  ASSERT_DEATH(make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = {pmi_codebook_single_panel_config::four_two,
+                                                                           pmi_codebook_typeI_mode::one},
                                                           .i_1_1        = 0,
                                                           .i_1_2        = 0,
                                                           .i_1_3        = std::nullopt,
@@ -1151,7 +1164,8 @@ TEST(precoding_codebooks_test, TypeISinglePanelMode1_UnsupportedCases)
   // Try to generate a precoding for a higher number of layers than ports. Check that an assert is triggered, and it is
   // actually the one expected.
   ASSERT_DEATH(
-      make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::two_one,
+      make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = {pmi_codebook_single_panel_config::two_one,
+                                                                  pmi_codebook_typeI_mode::one},
                                                  .i_1_1        = 0,
                                                  .i_1_2        = 0,
                                                  .i_1_3        = std::nullopt,
@@ -1161,7 +1175,8 @@ TEST(precoding_codebooks_test, TypeISinglePanelMode1_UnsupportedCases)
 
   // Try to generate a precoding for a 2D panel configuration (N1 = 2, N2 = 2) without the required i_1_2. Check that an
   // assert is triggered, and it is actually the one expected.
-  ASSERT_DEATH(make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::two_two,
+  ASSERT_DEATH(make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = {pmi_codebook_single_panel_config::two_two,
+                                                                           pmi_codebook_typeI_mode::one},
                                                           .i_1_1        = 0,
                                                           .i_1_2        = std::nullopt,
                                                           .i_1_3        = std::nullopt,
@@ -1172,7 +1187,8 @@ TEST(precoding_codebooks_test, TypeISinglePanelMode1_UnsupportedCases)
   // For a 3 or 4 layer transmission using 4 antenna ports (N1 = 2, N2 = 1), the beam offset selector can only take the
   // zero value. Check that an assert is triggered, and it is actually the one expected.
   ASSERT_DEATH(
-      make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::two_one,
+      make_type1_sp_mode1(pmi_typeI_single_panel{.panel_config = {pmi_codebook_single_panel_config::two_one,
+                                                                  pmi_codebook_typeI_mode::one},
                                                  .i_1_1        = 0,
                                                  .i_1_2        = std::nullopt,
                                                  .i_1_3        = 1,

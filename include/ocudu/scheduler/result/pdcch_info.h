@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/pdcch/search_space.h"
+#include "ocudu/ran/precoding/precoding_and_beamforming_info.h"
 #include "ocudu/ran/slot_pdu_capacity_constants.h"
 #include "ocudu/scheduler/result/dci_info.h"
 
@@ -12,9 +13,6 @@ namespace ocudu {
 
 struct bwp_configuration;
 struct coreset_configuration;
-
-/// The precoding information associated with PDCCH PDUs.
-struct pdcch_precoding_info {};
 
 /// Transmit power information associated with PDCCH PDU.
 struct tx_power_pdcch_information {
@@ -44,8 +42,8 @@ struct dci_context_information {
   cce_position cces;
   /// Starting symbol of the Search Space.
   unsigned starting_symbol;
-  /// Precoding info used for this DCI. This field is empty in case of 1 antenna port.
-  std::optional<pdcch_precoding_info> precoding_info;
+  /// Precoding and beamforming of this DCI.
+  precoding_and_beamforming_info precoding_and_beamforming;
   /// Transmission power information used for this DCI.
   tx_power_pdcch_information tx_pwr;
   /// Parameter \f$N_{ID}\f$ used for PDCCH DMRS scrambling as per TS38.211, 7.4.1.3.1. Values: {0, ..., 65535}.

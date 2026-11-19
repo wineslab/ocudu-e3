@@ -8,10 +8,12 @@
 #include "tests/test_doubles/scheduler/cell_config_builder_profiles.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/unittests/scheduler/test_utils/config_generators.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/tdd/tdd_ul_dl_config_formatters.h"
 #include "ocudu/scheduler/config/cell_config_builder_params.h"
 #include "ocudu/support/format/custom_formattable.h"
 #include "fmt/std.h"
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <ostream>
 
@@ -49,8 +51,8 @@ protected:
     pusch_td_res_indxes_list_per_slot =
         get_pusch_td_resource_indices_per_slot(cell_cfg->scs_common(),
                                                cell_cfg->params.tdd_cfg,
-                                               cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
-                                               cell_cfg->dl_data_to_ul_ack);
+                                               cell_cfg->init_bwp.ul.td_mapper().common_pusch_td_resources(),
+                                               cell_cfg->init_bwp.ul.td_mapper().min_k1());
 
     // Populate slot indexes.
     if (cell_cfg->is_tdd()) {
@@ -81,33 +83,26 @@ protected:
   std::vector<unsigned> ul_slot_indexes;
 
   // List circularly indexed by slot with the list of applicable PUSCH Time Domain resource indexes per slot.
-  std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> pusch_td_res_indxes_list_per_slot;
+  std::vector<static_vector<uint8_t, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> pusch_td_res_indxes_list_per_slot;
 };
 
-// This test is only for DL-heavy TDD pattern.
-TEST_P(pusch_td_resource_indices_test, in_dl_heavy_tdd_dl_to_ul_index_ordering_is_verified)
+/// Test suite for the DL-heavy TDD patterns, where each DL slot schedules at most one UL slot.
+class pusch_td_resource_indices_dl_heavy_tdd_test : public pusch_td_resource_indices_test
+{};
+
+TEST_P(pusch_td_resource_indices_dl_heavy_tdd_test, in_dl_heavy_tdd_dl_to_ul_index_ordering_is_verified)
 {
   // Fetch the relevant PUSCH time domain resource list.
   span<const pusch_time_domain_resource_allocation> pusch_time_domain_list =
       get_c_rnti_pusch_time_domain_list(true, to_coreset_id(1), cell_cfg->init_bwp);
 
-  if (not GetParam().tdd_cfg.has_value()) {
-    GTEST_SKIP();
-  }
-
-  const unsigned nof_dl_slots      = nof_dl_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
-  const unsigned nof_full_ul_slots = nof_full_ul_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
-  const unsigned nof_slots         = nof_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
+  const unsigned nof_slots = nof_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
 
   // Return the UL index given DL index and its corresponding k2.
   // NOTE: we don't apply any mod operation on purpose, as the mod is applied to by function caller.
   auto get_ul_slot_index = [&pusch_time_domain_list, this](unsigned dl_sl_idx) {
     return dl_sl_idx + pusch_time_domain_list[pusch_td_res_indxes_list_per_slot[dl_sl_idx].front()].k2;
   };
-
-  if (nof_dl_slots < nof_full_ul_slots) {
-    GTEST_SKIP();
-  }
 
   for (unsigned dl_idx_n = 0; dl_idx_n != nof_slots - 1; ++dl_idx_n) {
     const auto& dl_idx_n_list = pusch_td_res_indxes_list_per_slot[dl_idx_n];
@@ -150,7 +145,7 @@ TEST_P(pusch_td_resource_indices_test, all_ul_slots_have_one_pdcch_slot_to_sched
   while (ul_slot_idx_it != ul_slot_indexes.end()) {
     bool pdcch_slot_found = false;
     for (const auto dl_slot_idx : dl_slot_indexes) {
-      span<const unsigned> pusch_td_res_indxes_list = pusch_td_res_indxes_list_per_slot[dl_slot_idx];
+      span<const uint8_t> pusch_td_res_indxes_list = pusch_td_res_indxes_list_per_slot[dl_slot_idx];
       pdcch_slot_found =
           std::any_of(pusch_td_res_indxes_list.begin(),
                       pusch_td_res_indxes_list.end(),
@@ -194,20 +189,9 @@ TEST_P(pusch_td_resource_indices_test, pusch_td_resources_are_fairly_distributed
 // For DL-heavy TDD:
 // - each UL slot must be targeted by exactly 1 DL slot (via its assigned k2);
 // - each DL slot's resource list must use a single k2 value (entries may differ only in OFDM symbol range).
-TEST_P(pusch_td_resource_indices_test, dl_heavy_tdd_ul_slot_coverage_and_unique_k2_per_dl_slot)
+TEST_P(pusch_td_resource_indices_dl_heavy_tdd_test, dl_heavy_tdd_ul_slot_coverage_and_unique_k2_per_dl_slot)
 {
-  // Only runs for DL-heavy TDD.
-  if (not GetParam().tdd_cfg.has_value()) {
-    GTEST_SKIP();
-  }
-  const tdd_ul_dl_config_common& tdd_cfg           = GetParam().tdd_cfg.value();
-  const unsigned                 nof_dl_slots      = nof_dl_slots_per_tdd_period(tdd_cfg);
-  const unsigned                 nof_full_ul_slots = nof_full_ul_slots_per_tdd_period(tdd_cfg);
-  if (nof_dl_slots < nof_full_ul_slots) {
-    GTEST_SKIP();
-  }
-
-  const unsigned                                    nof_slots = nof_slots_per_tdd_period(tdd_cfg);
+  const unsigned                                    nof_slots = nof_slots_per_tdd_period(GetParam().tdd_cfg.value());
   span<const pusch_time_domain_resource_allocation> pusch_td_list =
       cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list;
 
@@ -251,13 +235,10 @@ void PrintTo(const test_params& value, ::std::ostream* os)
                      add_prefix_if_set(" pattern=", value.tdd_cfg));
 }
 
-} // namespace
-
-INSTANTIATE_TEST_SUITE_P(
-    pusch_td_resource_indices_test,
-    pusch_td_resource_indices_test,
-    testing::Values(
-        // clang-format off
+static std::vector<test_params> get_test_params()
+{
+  return {
+      // clang-format off
         // min_k, {ref_scs, pattern1={slot_period, DL_slots, DL_symbols, UL_slots, UL_symbols}, pattern2={...}}
          // FDD
         test_params{4, {}},
@@ -307,5 +288,28 @@ INSTANTIATE_TEST_SUITE_P(
         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6, 2, 10, 3, 0}, tdd_ul_dl_pattern{4, 1, 0, 3, 0}}}, // DDSUUUDUUU
         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {4, 1, 10, 2, 0}, tdd_ul_dl_pattern{6, 1, 10, 4, 0}}} // DSUUDSUUUU
 
-        // clang-format on
-        ));
+      // clang-format on
+  };
+}
+
+/// Keeps the DL-heavy TDD test cases, the only ones where a DL slot schedules at most one UL slot.
+static std::vector<test_params> get_dl_heavy_tdd_test_params()
+{
+  std::vector<test_params> params              = get_test_params();
+  const auto               is_not_dl_heavy_tdd = [](const test_params& p) {
+    return not p.tdd_cfg.has_value() or
+           nof_dl_slots_per_tdd_period(*p.tdd_cfg) < nof_full_ul_slots_per_tdd_period(*p.tdd_cfg);
+  };
+  params.erase(std::remove_if(params.begin(), params.end(), is_not_dl_heavy_tdd), params.end());
+  return params;
+}
+
+} // namespace
+
+INSTANTIATE_TEST_SUITE_P(pusch_td_resource_indices_test,
+                         pusch_td_resource_indices_test,
+                         testing::ValuesIn(get_test_params()));
+
+INSTANTIATE_TEST_SUITE_P(pusch_td_resource_indices_test,
+                         pusch_td_resource_indices_dl_heavy_tdd_test,
+                         testing::ValuesIn(get_dl_heavy_tdd_test_params()));

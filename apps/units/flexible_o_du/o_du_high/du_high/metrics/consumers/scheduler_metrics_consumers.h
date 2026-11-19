@@ -6,7 +6,6 @@
 
 #include "ocudu/ocudulog/log_channel.h"
 #include "ocudu/scheduler/scheduler_metrics.h"
-#include <optional>
 
 namespace ocudu {
 
@@ -19,7 +18,7 @@ class scheduler_cell_metrics_consumer_stdout
 
 public:
   /// Handle scheduler metrics.
-  void handle_metric(const std::optional<scheduler_metrics_report>& report);
+  void handle_metric(const scheduler_metrics_report& report);
 
   /// Prints the header in the next metric handle.
   void print_header() { nof_lines = MAX_NOF_STDOUT_METRIC_LINES_WITHOUT_HEADER; }
@@ -38,7 +37,7 @@ public:
   }
 
   /// Handle scheduler metrics.
-  void handle_metric(const std::optional<scheduler_metrics_report>& report);
+  void handle_metric(const scheduler_metrics_report& report);
 
 private:
   ocudulog::log_channel& log_chan;
@@ -51,7 +50,7 @@ public:
   explicit scheduler_cell_metrics_consumer_e2(scheduler_metrics_notifier& notifier_) : notifier(notifier_) {}
 
   /// Handle scheduler metrics.
-  void handle_metric(const std::optional<scheduler_metrics_report>& report);
+  void handle_metric(const scheduler_metrics_report& report);
 
 private:
   scheduler_metrics_notifier& notifier;

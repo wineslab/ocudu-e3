@@ -21,6 +21,8 @@ struct worker_manager_config {
     os_sched_affinity_bitmask ru_timing_cpu;
     /// Vector of affinities for the txrx workers.
     std::vector<os_sched_affinity_bitmask> txrx_affinities;
+    /// Downlink eAxC (RU DL port) identifiers configured for each cell.
+    std::vector<std::vector<unsigned>> dl_eaxc_per_sector;
   };
 
   /// RU SDR worker configuration.
@@ -40,6 +42,8 @@ struct worker_manager_config {
 
     lower_phy_thread_profile profile;
     unsigned                 nof_cells;
+    /// Enable task tracing.
+    bool executor_tracing_enable = false;
   };
 
   /// RU dummy worker configuration.
@@ -98,7 +102,7 @@ struct worker_manager_config {
     bool is_e1ap_enabled = false;
     bool is_xnap_enabled = false;
     bool is_e2ap_enabled = false;
-    bool is_n3_enabled   = false;
+    bool is_ngu_enabled  = false;
     bool is_f1u_enabled  = false;
     bool is_mac_enabled  = false;
     bool is_rlc_enabled  = false;

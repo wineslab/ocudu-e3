@@ -7,6 +7,7 @@
 #include "ocudu/ran/phy_time_unit.h"
 #include "ocudu/ran/prach/prach_format_type.h"
 #include "ocudu/ran/prach/prach_subcarrier_spacing.h"
+#include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 
 namespace ocudu {
 
@@ -93,5 +94,20 @@ struct prach_symbols_slots_duration {
 /// \return PRACH preamble duration information.
 prach_symbols_slots_duration get_prach_duration_info(const prach_configuration& prach_cfg,
                                                      subcarrier_spacing         pusch_scs);
+
+/// \brief Gets the OFDM symbols that a given slot of a PRACH burst occupies.
+///
+/// A short-preamble burst repeats the same symbols in every slot it spans (1 or 2 slots). A long-preamble burst
+/// runs continuously from its starting symbol in the first slot of the burst to the end of the preamble in the last
+/// one, filling every slot in between.
+///
+/// \param[in] duration_info  PRACH preamble duration info, as returned by \ref get_prach_duration_info.
+/// \param[in] long_preamble  Whether the PRACH format is long, as per \ref is_long_preamble(prach_format_type).
+/// \param[in] burst_slot_idx Index, within the burst, of the slot whose symbols are being queried. Values:
+///                           {0, ..., duration_info.prach_length_slots - 1}.
+/// \return The OFDM symbols the given slot occupies, as [start, stop), in the slot's own numerology.
+ofdm_symbol_range get_prach_burst_slot_symbols(const prach_symbols_slots_duration& duration_info,
+                                               bool                                long_preamble,
+                                               unsigned                            burst_slot_idx);
 
 } // namespace ocudu

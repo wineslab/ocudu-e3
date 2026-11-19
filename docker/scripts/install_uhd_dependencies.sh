@@ -23,6 +23,30 @@ install_uhd_dependencies_debian_ubuntu() {
         inetutils-tools libboost-all-dev libncurses5-dev libusb-1.0-0 libusb-1.0-0-dev
         libusb-dev python3-dev python3-requests
     )
+
+    # UHD binaries only link these Boost and USB runtime libraries. The image
+    # downloader needs Python and requests, not headers. Boost package names
+    # include the ABI version, which differs between Ubuntu releases.
+    case "${ID:-}:${VERSION_ID:-}" in
+        ubuntu:24.04)
+            run_pkgs=(
+                inetutils-tools
+                libboost-chrono1.83.0t64 libboost-filesystem1.83.0
+                libboost-program-options1.83.0 libboost-serialization1.83.0
+                libboost-thread1.83.0 libusb-1.0-0
+                python3 python3-requests
+            )
+            ;;
+        ubuntu:26.04)
+            run_pkgs=(
+                inetutils-tools
+                libboost-chrono1.90.0 libboost-filesystem1.90.0
+                libboost-program-options1.90.0 libboost-serialization1.90.0
+                libboost-thread1.90.0 libusb-1.0-0
+                python3 python3-requests
+            )
+            ;;
+    esac
     local -a extra_pkgs=(
         inetutils-tools libncurses5-dev libusb-1.0-0 libusb-1.0-0-dev
         libusb-dev python3-dev
@@ -103,12 +127,13 @@ install_uhd_dependencies_arch() {
     fi
 }
 
-install_uhd_dependencies_fedora() {
+# Shared package lists for Fedora, CentOS Stream, and UBI10.
+install_uhd_dependencies_rpm() {
     local mode="${1:?}"
     local -a pkgs=()
 
     local -a build_pkgs=(
-        curl ca-certificates xz cmake make boost-devel libusb1-devel
+        curl ca-certificates xz tar gzip cmake make boost-devel libusb1-devel
         python3-mako python3-numpy python3-setuptools python3-requests
     )
     local -a run_pkgs=(
@@ -136,10 +161,12 @@ install_uhd_dependencies_fedora() {
             ;;
     esac
 
-    install_fedora_pkgs "${pkgs[@]}"
+    install_rpm_pkgs "${pkgs[@]}"
 
     if [[ "$mode" == "all" || "$mode" == "run" ]]; then
-        uhd_images_downloader
+        if command -v uhd_images_downloader >/dev/null 2>&1; then
+            uhd_images_downloader
+        fi
     fi
 }
 
@@ -201,11 +228,15 @@ main() {
         debian|ubuntu)
             install_uhd_dependencies_debian_ubuntu "$mode"
             ;;
-        fedora)
-            install_uhd_dependencies_fedora "$mode"
+        fedora|centos)
+            install_uhd_dependencies_rpm "$mode"
             ;;
         rhel)
-            install_uhd_dependencies_rhel "$mode"
+            if is_ubi10; then
+                install_uhd_dependencies_rpm "$mode"
+            else
+                install_uhd_dependencies_rhel "$mode"
+            fi
             ;;
         arch)
             install_uhd_dependencies_arch "$mode"

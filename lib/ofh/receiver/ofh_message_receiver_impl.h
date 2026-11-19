@@ -43,8 +43,6 @@ struct message_receiver_config {
   warn_unreceived_ru_frames warn_unreceived_frames = warn_unreceived_ru_frames::after_traffic_detection;
   /// If set to true, metrics are enabled in the message receiver.
   bool are_metrics_enabled = false;
-  /// If set to true, logs late events as warnings, otherwise as info.
-  bool enable_log_warnings_for_lates;
 };
 
 /// Message receiver dependencies.
@@ -114,7 +112,6 @@ private:
   std::unique_ptr<data_flow_uplane_uplink_data>         data_flow_uplink;
   std::unique_ptr<data_flow_uplane_uplink_prach>        data_flow_prach;
   message_receiver_metrics_collector                    metrics_collector;
-  bool                                                  enable_log_warnings_for_lates;
   operation_controller_dummy                            controller;
 };
 

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "initial_context_setup_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cause/common.h"
 #include "ocudu/ran/cause/f1ap_cause_converters.h"
 #include "ocudu/ran/cause/ngap_cause.h"
@@ -173,9 +174,11 @@ void initial_context_setup_routine::operator()(
       const auto& cell_ctx = rrc_ue.get_cell_context();
 
       cu_cp_user_location_info_nr user_location_info;
-      user_location_info.nr_cgi = {request.guami.plmn, cell_ctx.cgi.nci};
-      user_location_info.tai    = {request.guami.plmn, cell_ctx.tac};
-      auto report               = loc_mng.get_direct_location_report(request.ue_index, user_location_info, loc_req);
+      user_location_info.nr_cgi   = {request.guami.plmn, cell_ctx.cgi.nci};
+      user_location_info.tai      = {request.guami.plmn, cell_ctx.tac};
+      user_location_info.tac_list = cell_ctx.tac_list;
+      rrc_ue.fill_ue_derived_location(user_location_info);
+      auto report = loc_mng.get_direct_location_report(request.ue_index, user_location_info, loc_req);
       ngap_ue_location_reporting_handler.handle_location_report_transmission(report);
     }
   }

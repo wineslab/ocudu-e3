@@ -34,7 +34,7 @@ void ngap_pdu_session_resource_modify_procedure::operator()(coro_context<async_t
 {
   CORO_BEGIN(ctx);
 
-  logger.log_debug("\"{}\" started...", name());
+  logger.log_info("\"{}\" started...", name());
 
   // Verify PDU Session Resource Modify Request.
   verification_outcome = verify_pdu_session_resource_modify_request(request, asn1_request, logger);
@@ -64,9 +64,9 @@ void ngap_pdu_session_resource_modify_procedure::operator()(coro_context<async_t
       CORO_AWAIT(ngap_ctrl_handler.handle_ue_context_release_request(ue_context_release_request));
     }
 
-    logger.log_debug("\"{}\" finished successfully", name());
+    logger.log_info("\"{}\" finished successfully", name());
   } else {
-    logger.log_debug("\"{}\" failed", name());
+    logger.log_warning("\"{}\" failed", name());
   }
 
   CORO_RETURN();
@@ -75,7 +75,15 @@ void ngap_pdu_session_resource_modify_procedure::operator()(coro_context<async_t
 void ngap_pdu_session_resource_modify_procedure::combine_pdu_session_resource_modify_response()
 {
   for (const auto& modify_item : verification_outcome.response.pdu_session_res_modify_list) {
-    response.pdu_session_res_modify_list.emplace(modify_item.pdu_session_id, modify_item);
+    if (not response.pdu_session_res_modify_list.contains(modify_item.pdu_session_id)) {
+      response.pdu_session_res_modify_list.emplace(modify_item.pdu_session_id, modify_item);
+      continue;
+    }
+    // Report the QoS flows that failed the verification next to the QoS flows that were added or modified.
+    auto& transfer = response.pdu_session_res_modify_list[modify_item.pdu_session_id].transfer;
+    for (const auto& failed_qos_flow : modify_item.transfer.qos_flow_failed_to_add_or_modify_list) {
+      transfer.qos_flow_failed_to_add_or_modify_list.emplace(failed_qos_flow.qos_flow_id, failed_qos_flow);
+    }
   }
   for (const auto& failed_item : verification_outcome.response.pdu_session_res_failed_to_modify_list) {
     response.pdu_session_res_failed_to_modify_list.emplace(failed_item.pdu_session_id, failed_item);
@@ -126,8 +134,8 @@ bool ngap_pdu_session_resource_modify_procedure::send_pdu_session_resource_modif
   ngap_msg.pdu.successful_outcome().load_info_obj(ASN1_NGAP_ID_PDU_SESSION_RES_MODIFY);
 
   auto& pdu_session_res_modify_resp           = ngap_msg.pdu.successful_outcome().value.pdu_session_res_modify_resp();
-  pdu_session_res_modify_resp->amf_ue_ngap_id = amf_ue_id_to_uint(ue_ids.amf_ue_id);
-  pdu_session_res_modify_resp->ran_ue_ngap_id = ran_ue_id_to_uint(ue_ids.ran_ue_id);
+  pdu_session_res_modify_resp->amf_ue_ngap_id = to_underlying(ue_ids.amf_ue_id);
+  pdu_session_res_modify_resp->ran_ue_ngap_id = to_underlying(ue_ids.ran_ue_id);
 
   // TODO: needs more handling in the coro above?
   if (not fill_asn1_pdu_session_res_modify_response(pdu_session_res_modify_resp, response)) {
@@ -137,7 +145,7 @@ bool ngap_pdu_session_resource_modify_procedure::send_pdu_session_resource_modif
 
   // Forward message to AMF.
   if (!amf_notifier.on_new_message(ngap_msg)) {
-    logger.log_warning("AMF notifier is not set. Cannot send PDUSessionResourceModifyResponse");
+    logger.log_warning("Cannot send PDUSessionResourceModifyResponse");
     return false;
   }
 

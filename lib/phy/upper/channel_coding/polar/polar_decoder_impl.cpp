@@ -5,6 +5,7 @@
 #include "polar_decoder_impl.h"
 #include "ocudu/ocuduvec/binary.h"
 #include "ocudu/ocuduvec/zero.h"
+#include "fmt/format.h"
 
 using namespace ocudu;
 

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "f1u_bearer_impl.h"
+#include "ocudu/support/executors/task_executor.h"
 
 using namespace ocudu;
 using namespace odu;
@@ -28,7 +29,7 @@ f1u_bearer_impl::f1u_bearer_impl(uint32_t                       ue_index,
   notif_desired_buffer_size_for_data_radio_bearer(
       0) // make sure that we send an initial buffer report, even if there is no data
 {
-  ul_notif_timer.set(cfg.ul_t_notif_timer, [this](timer_id_t tid) { on_expired_ul_notif_timer(); });
+  ul_notif_timer.set(cfg.ul_t_notif_timer, [this]() { on_expired_ul_notif_timer(); });
   ul_notif_timer.run();
 
   logger.log_info("F1-U bearer configured. {} {}", cfg, dl_tnl_info);
@@ -83,11 +84,6 @@ void f1u_bearer_impl::stop()
 void f1u_bearer_impl::handle_pdu_impl(nru_dl_message msg)
 {
   logger.log_debug("F1-U bearer received PDU");
-  // handle T-PDU
-  if (!msg.t_pdu.empty()) {
-    logger.log_debug("Delivering T-PDU. size={}", msg.t_pdu.length());
-    rx_sdu_notifier.on_new_sdu(std::move(msg.t_pdu), msg.dl_user_data.retransmission_flag);
-  }
   // handle polling of delivery status report
   if (msg.dl_user_data.report_polling) {
     if (send_data_delivery_status(/* force = */ true)) {
@@ -101,13 +97,15 @@ void f1u_bearer_impl::handle_pdu_impl(nru_dl_message msg)
     nru_pdcp_sn_discard_blocks& blocks     = msg.dl_user_data.discard_blocks.value();
     size_t                      nof_blocks = blocks.size();
     for (size_t block_idx = 0; block_idx < nof_blocks; block_idx++) {
-      const nru_pdcp_sn_discard_block& block       = blocks[block_idx];
-      uint32_t                         pdcp_sn_end = block.pdcp_sn_start + block.block_size;
-      for (uint32_t pdcp_sn = block.pdcp_sn_start; pdcp_sn < pdcp_sn_end; pdcp_sn++) {
-        logger.log_debug("Notifying PDU discard for pdcp_sn={}", pdcp_sn);
-        rx_sdu_notifier.on_discard_sdu(pdcp_sn);
-      }
+      const nru_pdcp_sn_discard_block& block = blocks[block_idx];
+      logger.log_debug("Notifying PDU discard for pdcp_sn={}..{}", block.pdcp_sn_start, block.block_size);
+      rx_sdu_notifier.on_discard_sdu(block.pdcp_sn_start, block.block_size);
     }
+  }
+  // handle T-PDU
+  if (!msg.t_pdu.empty()) {
+    logger.log_debug("Delivering T-PDU. size={}", msg.t_pdu.length());
+    rx_sdu_notifier.on_new_sdu(std::move(msg.t_pdu), msg.dl_user_data.retransmission_flag);
   }
 }
 

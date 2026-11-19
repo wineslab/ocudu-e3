@@ -52,7 +52,7 @@ void bearer_context_release_procedure::operator()(coro_context<async_task<void>>
 
   // send response
   logger.log_debug("ue={} cu_up_ue_e1ap_id={} cu_cp_ue_e1ap_id={}: Sending BearerContextReleaseComplete",
-                   fmt::underlying(bearer_context_release_cmd.ue_index),
+                   bearer_context_release_cmd.ue_index,
                    cmd->gnb_cu_up_ue_e1ap_id,
                    cmd->gnb_cu_cp_ue_e1ap_id);
   pdu_notifier.on_new_message(e1ap_msg);

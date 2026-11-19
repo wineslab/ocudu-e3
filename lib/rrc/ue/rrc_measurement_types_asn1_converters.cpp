@@ -3,41 +3,73 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "rrc_measurement_types_asn1_converters.h"
+#include "ocudu/lpp/reference_location.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/support/enum_utils.h"
 #include "ocudu/support/error_handling.h"
-#include <cmath>
 
 using namespace ocudu;
 using namespace ocucp;
 
-/// Pack a 3GPP TS 23.032 Ellipsoid-Point into a 6-byte buffer.
-/// Bit layout: [1-bit N/S | 23-bit latitude | 24-bit longitude]
-/// Encodes a geographic point into the 6-byte Ellipsoid-Point format required by TS 38.331, TS 37.355 sec. 5.1,
-/// TS 23.032 sec. 6.1. for the ReferenceLocation-r17 IE (condEventD1-r17 / condEventD2-r18).
-static ocudu::byte_buffer pack_ellipsoid_point(const rrc_geo_location& loc)
+static void fill_asn1_ephemeris_info(asn1::rrc_nr::ephemeris_info_r17_c& out, const ntn_ephemeris_info_t& ephemeris)
 {
-  constexpr uint32_t lat_max   = 8388607u;
-  constexpr int32_t  lon_min   = -8388608;
-  constexpr int32_t  lon_max   = 8388607;
-  constexpr uint32_t lon_shift = 8388608u;
-
-  const bool south = loc.latitude < 0.0;
-  const auto lat_enc =
-      std::clamp(static_cast<uint32_t>(std::floor(std::abs(loc.latitude) * lat_max / 90.0)), 0u, lat_max);
-  const auto lon_raw =
-      std::clamp(static_cast<int32_t>(std::floor(loc.longitude * 16777215.0 / 360.0)), lon_min, lon_max);
-
-  // Keep manual packing byte-for-byte compatible with ASN.1 constrained INTEGER encoding.
-  const auto lon_enc = static_cast<uint32_t>(lon_raw + static_cast<int32_t>(lon_shift));
-  uint64_t   bits    = (static_cast<uint64_t>(south) << 47u) | (static_cast<uint64_t>(lat_enc) << 24u) |
-                  static_cast<uint64_t>(lon_enc & 0xffffffu);
-
-  uint8_t raw[6];
-  for (int i = 5; i >= 0; --i) {
-    raw[i] = static_cast<uint8_t>(bits & 0xffu);
-    bits >>= 8u;
+  if (const auto* ecef = std::get_if<ecef_coordinates_t>(&ephemeris)) {
+    out.set_position_velocity_r17();
+    asn1::rrc_nr::position_velocity_r17_s& rv = out.position_velocity_r17();
+    rv.position_x_r17                         = static_cast<int32_t>(ecef->position_x / 1.3);
+    rv.position_y_r17                         = static_cast<int32_t>(ecef->position_y / 1.3);
+    rv.position_z_r17                         = static_cast<int32_t>(ecef->position_z / 1.3);
+    rv.velocity_vx_r17                        = static_cast<int32_t>(ecef->velocity_vx / 0.06);
+    rv.velocity_vy_r17                        = static_cast<int32_t>(ecef->velocity_vy / 0.06);
+    rv.velocity_vz_r17                        = static_cast<int32_t>(ecef->velocity_vz / 0.06);
+  } else {
+    const auto& orb = std::get<orbital_coordinates_t>(ephemeris);
+    out.set_orbital_r17();
+    asn1::rrc_nr::orbital_r17_s& orbit = out.orbital_r17();
+    orbit.semi_major_axis_r17          = static_cast<uint64_t>((orb.semi_major_axis - 6500000) / 0.004249);
+    orbit.eccentricity_r17             = static_cast<uint32_t>(orb.eccentricity / 0.00000001431);
+    // Per TS 38.331, inclination-r17 is signed: positive field maps to [0, pi/2], negative field maps to [pi/2, pi]
+    // via actual value = field value * step + pi.
+    const double incl      = (orb.inclination <= M_PI / 2) ? orb.inclination : orb.inclination - M_PI;
+    orbit.inclination_r17  = static_cast<int32_t>(incl / 0.00000002341);
+    orbit.longitude_r17    = static_cast<uint32_t>(orb.longitude / 0.00000002341);
+    orbit.periapsis_r17    = static_cast<uint32_t>(orb.periapsis / 0.00000002341);
+    orbit.mean_anomaly_r17 = static_cast<uint32_t>(orb.mean_anomaly / 0.00000002341);
   }
-  return byte_buffer::create(raw, raw + 6).value();
+}
+
+// Fills ntn-PolarizationDL/UL-r17 in a CellsToAddModExt-v1710 entry. Both directions are optional.
+static void fill_asn1_ntn_polarization(asn1::rrc_nr::cells_to_add_mod_ext_v1710_s& out, const ntn_polarization_t& pol)
+{
+  using ext_s = asn1::rrc_nr::cells_to_add_mod_ext_v1710_s;
+  if (pol.dl.has_value()) {
+    out.ntn_polarization_dl_r17_present = true;
+    switch (*pol.dl) {
+      case ntn_polarization_t::polarization_type::rhcp:
+        out.ntn_polarization_dl_r17 = ext_s::ntn_polarization_dl_r17_opts::rhcp;
+        break;
+      case ntn_polarization_t::polarization_type::lhcp:
+        out.ntn_polarization_dl_r17 = ext_s::ntn_polarization_dl_r17_opts::lhcp;
+        break;
+      case ntn_polarization_t::polarization_type::linear:
+        out.ntn_polarization_dl_r17 = ext_s::ntn_polarization_dl_r17_opts::linear;
+        break;
+    }
+  }
+  if (pol.ul.has_value()) {
+    out.ntn_polarization_ul_r17_present = true;
+    switch (*pol.ul) {
+      case ntn_polarization_t::polarization_type::rhcp:
+        out.ntn_polarization_ul_r17 = ext_s::ntn_polarization_ul_r17_opts::rhcp;
+        break;
+      case ntn_polarization_t::polarization_type::lhcp:
+        out.ntn_polarization_ul_r17 = ext_s::ntn_polarization_ul_r17_opts::lhcp;
+        break;
+      case ntn_polarization_t::polarization_type::linear:
+        out.ntn_polarization_ul_r17 = ext_s::ntn_polarization_ul_r17_opts::linear;
+        break;
+    }
+  }
 }
 
 rrc_ssb_mtc ocudu::ocucp::asn1_to_ssb_mtc(const asn1::rrc_nr::ssb_mtc_s& asn1_ssb_mtc)
@@ -570,6 +602,62 @@ asn1::rrc_nr::meas_obj_nr_s ocudu::ocucp::meas_obj_nr_to_rrc_asn1(const rrc_meas
     asn1::number_to_enum(asn1_meas_obj_nr.t312_r16->setup(), meas_obj_nr.t312.value());
   }
 
+  // Fill extension addition groups in release order (v1710 before v1800), matching the ASN.1 field layout.
+
+  // Fill cells_to_add_mod_list_ext_v1710 (ntn-PolarizationDL/UL-r17).
+  // The extension list must be parallel to cells_to_add_mod_list (one entry per cell).
+  // Cells without polarization contribute an empty entry.
+  const bool has_ntn_polarization =
+      std::any_of(meas_obj_nr.cells_to_add_mod_list.begin(),
+                  meas_obj_nr.cells_to_add_mod_list.end(),
+                  [](const rrc_cells_to_add_mod& c) { return c.ntn_polarization.has_value(); });
+  if (has_ntn_polarization) {
+    asn1_meas_obj_nr.ext = true;
+    asn1_meas_obj_nr.cells_to_add_mod_list_ext_v1710.set_present();
+    auto& ext_list_v1710 = *asn1_meas_obj_nr.cells_to_add_mod_list_ext_v1710;
+    for (const auto& cell : meas_obj_nr.cells_to_add_mod_list) {
+      asn1::rrc_nr::cells_to_add_mod_ext_v1710_s ext_cell;
+      if (cell.ntn_polarization.has_value()) {
+        fill_asn1_ntn_polarization(ext_cell, *cell.ntn_polarization);
+      }
+      ext_list_v1710.push_back(ext_cell);
+    }
+  }
+
+  // Fill cells_to_add_mod_list_ext_v1800 (ntn-NeighbourCellInfo-r18).
+  // Like the v1710 list, this extension must be parallel to cells_to_add_mod_list (one entry per cell).
+  // Cells that lack NTN info contribute an empty entry. Only epochTime and ephemerisInfo are mandatory in the IE;
+  // referenceLocation is OPTIONAL (Need R, TS 38.331), so the IE is emitted whenever NTN info is present and the
+  // reference location is filled in only when available.
+  const bool has_ntn_cells =
+      std::any_of(meas_obj_nr.cells_to_add_mod_list.begin(),
+                  meas_obj_nr.cells_to_add_mod_list.end(),
+                  [](const rrc_cells_to_add_mod& c) { return c.ntn_neighbour_info.has_value(); });
+  if (has_ntn_cells) {
+    asn1_meas_obj_nr.ext = true;
+    asn1_meas_obj_nr.cells_to_add_mod_list_ext_v1800.set_present();
+    auto& ext_list = *asn1_meas_obj_nr.cells_to_add_mod_list_ext_v1800;
+    for (const auto& cell : meas_obj_nr.cells_to_add_mod_list) {
+      asn1::rrc_nr::cells_to_add_mod_ext_v1800_s ext_cell;
+      if (cell.ntn_neighbour_info.has_value()) {
+        const auto& ntn                              = *cell.ntn_neighbour_info;
+        ext_cell.ntn_neighbour_cell_info_r18_present = true;
+        auto& ntn_asn1                               = ext_cell.ntn_neighbour_cell_info_r18;
+        ntn_asn1.epoch_time_r18.sfn_r17              = ntn.epoch_time.sfn;
+        ntn_asn1.epoch_time_r18.sub_frame_nr_r17     = ntn.epoch_time.subframe_number;
+        fill_asn1_ephemeris_info(ntn_asn1.ephemeris_info_r18, ntn.ephemeris);
+        // referenceLocation is optional: leave ref_location_r18 empty when absent (encoded as not present).
+        if (ntn.ref_location.has_value()) {
+          auto ref_buf = lpp::pack_reference_location(*ntn.ref_location);
+          if (ntn_asn1.ref_location_r18.resize(ref_buf.length())) {
+            std::copy(ref_buf.begin(), ref_buf.end(), ntn_asn1.ref_location_r18.begin());
+          }
+        }
+      }
+      ext_list.push_back(ext_cell);
+    }
+  }
+
   return asn1_meas_obj_nr;
 }
 
@@ -732,7 +820,7 @@ ocudu::ocucp::meas_obj_to_add_mod_to_rrc_asn1(const rrc_meas_obj_to_add_mod& mea
   asn1::rrc_nr::meas_obj_to_add_mod_s asn1_meas_obj_to_add_mod;
 
   // Fill meas obj ID.
-  asn1_meas_obj_to_add_mod.meas_obj_id = meas_obj_id_to_uint(meas_obj_to_add_mod.meas_obj_id);
+  asn1_meas_obj_to_add_mod.meas_obj_id = to_underlying(meas_obj_to_add_mod.meas_obj_id);
 
   // Fill meas obj.
   if (meas_obj_to_add_mod.meas_obj_nr.has_value()) {
@@ -814,6 +902,11 @@ ocudu::ocucp::periodical_report_cfg_to_rrc_asn1(const rrc_periodical_report_cfg&
   asn1_periodical_report_cfg.include_beam_meass = periodical_report_cfg.include_beam_meass;
   // Fill use allowed cell list.
   asn1_periodical_report_cfg.use_allowed_cell_list = periodical_report_cfg.use_allowed_cell_list;
+
+  if (periodical_report_cfg.coarse_location_request) {
+    asn1_periodical_report_cfg.ext                                 = true;
+    asn1_periodical_report_cfg.coarse_location_request_r17_present = true;
+  }
 
   return asn1_periodical_report_cfg;
 }
@@ -919,6 +1012,28 @@ ocudu::ocucp::event_triggered_report_cfg_to_rrc_asn1(const rrc_event_trigger_cfg
     }
   }
 
+  // Fill event D1. TS 38.331 sec. 5.5.4.15 defines it under EventTriggerConfig and notes the definition also applies
+  // to CondEvent D1, so the same distance pair triggers a measurement report and not only a conditional handover.
+  if (event_id.id == rrc_event_id::event_id_t::d1) {
+    auto& asn1_event_d1 = asn1_event_trigger_cfg.event_id.set_event_d1_r17();
+    // Convert meters with 50 m steps (round-down).
+    asn1_event_d1.distance_thresh_from_ref1_r17 =
+        static_cast<uint16_t>(event_id.distance_thresh_from_ref1.value() / 50);
+    asn1_event_d1.distance_thresh_from_ref2_r17 =
+        static_cast<uint16_t>(event_id.distance_thresh_from_ref2.value() / 50);
+    asn1_event_d1.ref_location1_r17   = lpp::pack_reference_location(event_id.ref_location1.value());
+    asn1_event_d1.ref_location2_r17   = lpp::pack_reference_location(event_id.ref_location2.value());
+    asn1_event_d1.report_on_leave_r17 = event_id.report_on_leave;
+    // Convert meters with 10 m steps (round-down).
+    asn1_event_d1.hysteresis_location_r17 = static_cast<uint16_t>(event_id.hysteresis_location.value() / 10);
+    asn1::number_to_enum(asn1_event_d1.time_to_trigger_r17, event_id.time_to_trigger);
+  }
+
+  // An event whose identifier reaches here unhandled would leave the choice unset and pack as another event.
+  report_error_if_not(asn1_event_trigger_cfg.event_id.type().value !=
+                          asn1::rrc_nr::event_trigger_cfg_s::event_id_c_::types_opts::nulltype,
+                      "Unhandled event-triggered report event id");
+
   // Fill rs type.
   asn1_event_trigger_cfg.rs_type = rrc_nr_rs_type_to_asn1(event_trigger_cfg.rs_type);
 
@@ -959,6 +1074,11 @@ ocudu::ocucp::event_triggered_report_cfg_to_rrc_asn1(const rrc_event_trigger_cfg
     asn1_event_trigger_cfg.ext                  = true;
     asn1_event_trigger_cfg.use_t312_r16_present = true;
     asn1_event_trigger_cfg.use_t312_r16         = true;
+  }
+
+  if (event_trigger_cfg.coarse_location_request) {
+    asn1_event_trigger_cfg.ext                                 = true;
+    asn1_event_trigger_cfg.coarse_location_request_r17_present = true;
   }
 
   return asn1_event_trigger_cfg;
@@ -1004,8 +1124,8 @@ ocudu::ocucp::cond_trigger_cfg_to_rrc_asn1(const rrc_cond_trigger_cfg& cond_trig
     // Convert meters with 50 m steps (round-down).
     ev.distance_thresh_from_ref1_r17 = static_cast<uint16_t>(cond_event.distance_thresh_from_ref1.value() / 50);
     ev.distance_thresh_from_ref2_r17 = static_cast<uint16_t>(cond_event.distance_thresh_from_ref2.value() / 50);
-    ev.ref_location1_r17             = pack_ellipsoid_point(cond_event.ref_location1.value());
-    ev.ref_location2_r17             = pack_ellipsoid_point(cond_event.ref_location2.value());
+    ev.ref_location1_r17             = lpp::pack_reference_location(cond_event.ref_location1.value());
+    ev.ref_location2_r17             = lpp::pack_reference_location(cond_event.ref_location2.value());
     // Convert meters with 10 m steps (round-down).
     ev.hysteresis_location_r17 = static_cast<uint16_t>(cond_event.hysteresis_location.value() / 10);
     asn1::number_to_enum(ev.time_to_trigger_r17, cond_event.time_to_trigger);
@@ -1033,6 +1153,11 @@ ocudu::ocucp::cond_trigger_cfg_to_rrc_asn1(const rrc_cond_trigger_cfg& cond_trig
     ev.hysteresis_location_r18 = static_cast<uint16_t>(cond_event.hysteresis_location.value() / 10);
     asn1::number_to_enum(ev.time_to_trigger_r18, cond_event.time_to_trigger);
   }
+
+  // An event whose identifier reaches here unhandled would leave the choice unset and pack as another event.
+  report_error_if_not(asn1_cond_trigger_cfg.cond_event_id.type().value !=
+                          asn1::rrc_nr::cond_trigger_cfg_r16_s::cond_event_id_c_::types_opts::nulltype,
+                      "Unhandled conditional trigger event id");
 
   // Set RS type.
   asn1_cond_trigger_cfg.rs_type_r16 = rrc_nr_rs_type_to_asn1(cond_trigger_cfg.rs_type);
@@ -1081,7 +1206,7 @@ ocudu::ocucp::report_cfg_to_add_mod_to_rrc_asn1(const rrc_report_cfg_to_add_mod&
   asn1::rrc_nr::report_cfg_to_add_mod_s asn1_report_cfg_to_add_mod;
 
   // Fill report cfg ID.
-  asn1_report_cfg_to_add_mod.report_cfg_id = report_cfg_id_to_uint(report_cfg_to_add_mod.report_cfg_id);
+  asn1_report_cfg_to_add_mod.report_cfg_id = to_underlying(report_cfg_to_add_mod.report_cfg_id);
 
   // Fill report cfg.
   asn1_report_cfg_to_add_mod.report_cfg.set_report_cfg_nr() =
@@ -1096,11 +1221,11 @@ ocudu::ocucp::meas_id_to_add_mod_to_rrc_asn1(const rrc_meas_id_to_add_mod& meas_
   asn1::rrc_nr::meas_id_to_add_mod_s asn1_meas_id_to_add_mod;
 
   // Fill meas ID.
-  asn1_meas_id_to_add_mod.meas_id = meas_id_to_uint(meas_id_to_add_mod.meas_id);
+  asn1_meas_id_to_add_mod.meas_id = to_underlying(meas_id_to_add_mod.meas_id);
   // Fill meas obj ID.
-  asn1_meas_id_to_add_mod.meas_obj_id = meas_obj_id_to_uint(meas_id_to_add_mod.meas_obj_id);
+  asn1_meas_id_to_add_mod.meas_obj_id = to_underlying(meas_id_to_add_mod.meas_obj_id);
   // Fill report cfg ID.
-  asn1_meas_id_to_add_mod.report_cfg_id = report_cfg_id_to_uint(meas_id_to_add_mod.report_cfg_id);
+  asn1_meas_id_to_add_mod.report_cfg_id = to_underlying(meas_id_to_add_mod.report_cfg_id);
 
   return asn1_meas_id_to_add_mod;
 }
@@ -1148,7 +1273,7 @@ asn1::rrc_nr::meas_cfg_s ocudu::ocucp::meas_config_to_rrc_asn1(const rrc_meas_cf
 
   // Fill meas obj to rem list.
   for (const auto& meas_obj_to_rem : meas_cfg.meas_obj_to_rem_list) {
-    asn1_meas_cfg.meas_obj_to_rem_list.push_back(meas_obj_id_to_uint(meas_obj_to_rem));
+    asn1_meas_cfg.meas_obj_to_rem_list.push_back(to_underlying(meas_obj_to_rem));
   }
 
   // Fill meas obj to add mod list.
@@ -1159,7 +1284,7 @@ asn1::rrc_nr::meas_cfg_s ocudu::ocucp::meas_config_to_rrc_asn1(const rrc_meas_cf
 
   // Fill report cfg to rem list.
   for (const auto& report_cfg_to_rem : meas_cfg.report_cfg_to_rem_list) {
-    asn1_meas_cfg.report_cfg_to_rem_list.push_back(report_cfg_id_to_uint(report_cfg_to_rem));
+    asn1_meas_cfg.report_cfg_to_rem_list.push_back(to_underlying(report_cfg_to_rem));
   }
 
   // Fill report cfg to add mod list.
@@ -1171,7 +1296,7 @@ asn1::rrc_nr::meas_cfg_s ocudu::ocucp::meas_config_to_rrc_asn1(const rrc_meas_cf
 
   // Fill meas ID to rem list.
   for (const auto& meas_id_to_rem : meas_cfg.meas_id_to_rem_list) {
-    asn1_meas_cfg.meas_id_to_rem_list.push_back(meas_id_to_uint(meas_id_to_rem));
+    asn1_meas_cfg.meas_id_to_rem_list.push_back(to_underlying(meas_id_to_rem));
   }
 
   // Fill meas ID to add mod list.

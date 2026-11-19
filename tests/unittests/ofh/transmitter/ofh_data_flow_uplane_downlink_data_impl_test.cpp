@@ -6,6 +6,7 @@
 #include "../compression/ofh_iq_compressor_test_doubles.h"
 #include "../ecpri/ecpri_packet_builder_test_doubles.h"
 #include "../ethernet/vlan_ethernet_frame_builder_test_doubles.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include "ocudu/ofh/ethernet/ethernet_frame_pool.h"
 #include "ocudu/phy/support/resource_grid_context.h"

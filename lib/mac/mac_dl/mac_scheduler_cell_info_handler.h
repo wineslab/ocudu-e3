@@ -4,22 +4,26 @@
 
 #pragma once
 
+#include "mac_scheduler_cell_configurator.h"
 #include "ocudu/mac/mac_cell_manager.h"
+#include "ocudu/mac/mac_cell_rach_handler.h"
 #include "ocudu/mac/mac_cell_slot_handler.h"
 #include "ocudu/mac/mac_ue_control_information_handler.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/slot_point_extended.h"
+#include "ocudu/support/units.h"
+#include <optional>
 
 namespace ocudu {
 
-struct si_scheduling_update_request;
 struct sched_result;
 
 /// \brief Interface used by MAC Cell Processor to interact with the MAC scheduler.
-class mac_scheduler_cell_info_handler : public mac_ue_control_information_handler
+class mac_scheduler_cell_info_handler : public mac_ue_control_information_handler,
+                                        public mac_scheduler_cell_configurator
 {
 public:
-  virtual ~mac_scheduler_cell_info_handler() override = default;
+  ~mac_scheduler_cell_info_handler() override = default;
 
   /// \brief Start scheduling for a given cell. If cell was already activated, this operation has no effect.
   /// \param cell_idx DU-specific index of the cell for which the slot is being processed.
@@ -44,14 +48,10 @@ public:
   virtual void
   handle_error_indication(slot_point slot_tx, du_cell_index_t cell_idx, mac_cell_slot_handler::error_event event) = 0;
 
-  /// \brief Update SIB1 and SI scheduling information in scheduler.
-  /// \param[in] request Request to change SI sched info and messages.
-  virtual void handle_si_change_indication(const si_scheduling_update_request& request) = 0;
-
-  /// \brief Handle request to update the slice configuration of a cell.
-  /// \param[in] cell_index Index of the cell for which the measurement is directed.
-  /// \param[in] req Request to update the RRM policies.
-  virtual void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& req) = 0;
+  /// \brief Gets the RACH handler for a given cell.
+  /// \param cell_index DU-specific index of the cell for which a RACH handler is being retrieved.
+  /// \return Cell-specific RACH handler.
+  virtual mac_cell_rach_handler& get_cell_rach_handler(du_cell_index_t cell_index) = 0;
 };
 
 } // namespace ocudu

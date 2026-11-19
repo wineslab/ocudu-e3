@@ -10,7 +10,6 @@
 #include "cu_cp_ue_impl.h"
 #include "ue_metrics_handler.h"
 #include "ue_task_scheduler_impl.h"
-#include "ocudu/cu_cp/cu_cp_configuration.h"
 #include "ocudu/cu_cp/security_manager_config.h"
 #include "ocudu/cu_cp/ue_configuration.h"
 #include "ocudu/ran/cu_cp_types.h"
@@ -22,10 +21,29 @@
 
 namespace ocudu::ocucp {
 
+/// Configuration of the UE manager.
+struct ue_manager_config {
+  gnb_id_t                                 gnb_id;
+  uint32_t                                 max_nof_ues;
+  std::map<five_qi_t, cu_cp_qos_config>    drb_config;
+  uint8_t                                  max_nof_drbs_per_ue;
+  security::preferred_integrity_algorithms int_algo_pref_list;
+  security::preferred_ciphering_algorithms enc_algo_pref_list;
+  bool                                     enable_rrc_metrics;
+  ue_configuration                         ue;
+};
+
+/// Dependencies of the UE manager.
+struct ue_manager_dependencies {
+  timer_manager&          timers;
+  task_executor&          cu_cp_executor;
+  ocudulog::basic_logger& logger;
+};
+
 class ue_manager : public ue_metrics_handler
 {
 public:
-  explicit ue_manager(const cu_cp_configuration& cu_cp_cfg);
+  ue_manager(const ue_manager_config& cfg, const ue_manager_dependencies& dependencies);
 
   /// Stop UE activity.
   void stop();
@@ -48,6 +66,12 @@ public:
   /// \param[in] plmn PLMN identity of the UEs to be found.
   /// \return Vector of pointers to the found UEs.
   std::vector<cu_cp_ue*> find_ues(plmn_identity plmn);
+
+  /// \brief Find the UEs whose primary cell is the given cell (identified by serving DU and PCI).
+  /// \param[in] du_index Index of the DU serving the cell.
+  /// \param[in] pci PCI of the cell.
+  /// \return Vector of pointers to the found UEs.
+  std::vector<cu_cp_ue*> find_ues(cu_cp_du_index_t du_index, pci_t pci);
 
   /// \brief Get the UE index of the UE.
   /// \param[in] pci The PCI of the cell the UE is/was connected to.
@@ -113,16 +137,19 @@ public:
 
   /// \brief Update the context of the UE.
   /// \param[in] ue_index Index of the UE.
-  /// \param[in] du_index Index of the DU the UE is connected to.
   /// \param[in] du_id The gNB-DU ID of the DU the UE is connected to.
   /// \param[in] pci The PCI of the cell the UE is connected to.
   /// \param[in] rnti The RNTI of the UE.
   /// \param[in] pcell_index The index of the PCell the UE is connected to.
   /// \return True if the update was successful, false otherwise.
-  bool
-  update_ue_context(cu_cp_ue_index_t ue_index, gnb_du_id_t du_id, pci_t pci, rnti_t rnti, du_cell_index_t pcell_index);
+  bool update_ue_context(cu_cp_ue_index_t                   ue_index,
+                         gnb_du_id_t                        du_id,
+                         pci_t                              pci,
+                         rnti_t                             rnti,
+                         du_cell_index_t                    pcell_index,
+                         std::optional<nr_cell_global_id_t> cgi = std::nullopt);
 
-  /// \brief Find the UE with the given UE index, thats DU context is set up.
+  /// \brief Find the UE with the given UE index, that DU context is set up.
   /// \param[in] ue_index Index of the UE to be found.
   /// \return Pointer to the DU UE if found, nullptr otherwise.
   cu_cp_ue* find_du_ue(cu_cp_ue_index_t ue_index);
@@ -143,6 +170,7 @@ public:
     return ues.at(ue_index).get_ngap_rrc_ue_adapter();
   }
 
+  /// Gets the RRC UE NGAP adapter for the given UE index.
   rrc_ue_ngap_adapter& get_rrc_ue_ngap_adapter(cu_cp_ue_index_t ue_index)
   {
     ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
@@ -151,6 +179,7 @@ public:
     return ues.at(ue_index).get_rrc_ue_ngap_adapter();
   }
 
+  /// Gets the RRC UE CU-CP adapter for the given UE index.
   rrc_ue_cu_cp_adapter& get_rrc_ue_cu_cp_adapter(cu_cp_ue_index_t ue_index)
   {
     ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
@@ -159,10 +188,13 @@ public:
     return ues.at(ue_index).get_rrc_ue_cu_cp_adapter();
   }
 
+  // See interface for documentation.
   std::vector<cu_cp_metrics_report::ue_info> handle_ue_metrics_report_request() const override;
 
+  /// Returns the UE task scheduler manager.
   ue_task_scheduler_manager& get_task_sched() { return ue_task_scheds; }
 
+  /// Gets the cell MEAS manager UE context for the given UE index.
   cell_meas_manager_ue_context& get_measurement_context(cu_cp_ue_index_t ue_index)
   {
     ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
@@ -180,6 +212,7 @@ private:
   /// \return The UE index.
   cu_cp_ue_index_t allocate_ue_index();
 
+  /// Increases the next UE index.
   void increase_next_ue_index()
   {
     if (next_ue_index == cu_cp_ue_index_t::max) {
@@ -187,7 +220,7 @@ private:
       next_ue_index = cu_cp_ue_index_t::min;
     } else {
       // Increase cu ue f1ap id counter.
-      next_ue_index = uint_to_ue_index(cu_cp_ue_index_to_uint(next_ue_index) + 1);
+      next_ue_index = uint_to_ue_index(to_underlying(next_ue_index) + 1);
     }
   }
 
@@ -197,45 +230,44 @@ private:
 
   void increase_full_i_rnti(full_i_rnti_t& full_i_rnti) const
   {
-    if (full_i_rnti.value() == full_i_rnti.max()) {
-      // Reset Full-I-RNTI counter.
-      full_i_rnti = full_i_rnti_t{cu_cp_config.node.gnb_id.id, 0, ue_config.nof_i_rnti_ue_bits};
-    } else {
-      // Increase Full-I-RNTI counter.
-      uint32_t next_ue_id = (full_i_rnti.value() - (cu_cp_config.node.gnb_id.id >> ue_config.nof_i_rnti_ue_bits)) + 1;
-      full_i_rnti         = full_i_rnti_t{cu_cp_config.node.gnb_id.id, next_ue_id, ue_config.nof_i_rnti_ue_bits};
-    }
+    // Count the UE reference up, wrapping around at the width the I-RNTI profile leaves for it and keeping the node
+    // identifier.
+    const uint32_t next_ue_ref =
+        full_i_rnti.ue_ref() == full_i_rnti_t::max_ue_ref(full_i_rnti.profile()) ? 0 : full_i_rnti.ue_ref() + 1;
+    full_i_rnti = full_i_rnti_t{full_i_rnti.profile(), full_i_rnti.node_id(), next_ue_ref};
   }
 
+  /// Increases the given short I-RNTI.
   void increase_short_i_rnti(short_i_rnti_t& short_i_rnti) const
   {
-    if (short_i_rnti.value() == short_i_rnti.max()) {
-      // Reset Short-I-RNTI counter.
-      short_i_rnti = short_i_rnti_t{cu_cp_config.node.gnb_id.id, 0, ue_config.nof_i_rnti_ue_bits};
-    } else {
-      // Increase Short-I-RNTI counter.
-      uint32_t next_ue_id = (short_i_rnti.value() - (cu_cp_config.node.gnb_id.id >> ue_config.nof_i_rnti_ue_bits)) + 1;
-      short_i_rnti        = short_i_rnti_t{cu_cp_config.node.gnb_id.id, next_ue_id, ue_config.nof_i_rnti_ue_bits};
-    }
+    const uint32_t next_ue_ref =
+        short_i_rnti.ue_ref() == short_i_rnti_t::max_ue_ref(short_i_rnti.profile()) ? 0 : short_i_rnti.ue_ref() + 1;
+    short_i_rnti = short_i_rnti_t{short_i_rnti.profile(), short_i_rnti.node_id(), next_ue_ref};
   }
 
-  ocudulog::basic_logger&       logger = ocudulog::fetch_basic_logger("CU-UEMNG");
-  const cu_cp_configuration     cu_cp_config;
+  const bool                    enable_rrc_metrics;
   const ue_configuration        ue_config;
   const up_resource_manager_cfg up_config;
   const security_manager_config sec_config;
   const uint32_t                max_nof_ues;
 
-  // Manager of UE task schedulers.
+  timer_manager&          timers;
+  task_executor&          cu_cp_executor;
+  ocudulog::basic_logger& logger;
+
+  /// Manager of UE task schedulers.
   ue_task_scheduler_manager ue_task_scheds;
 
-  // Container of UE contexts handled by the CU-CP.
+  /// Container of UE contexts handled by the CU-CP.
   std::unordered_map<cu_cp_ue_index_t, cu_cp_ue> ues;
 
-  // UE index lookups.
-  std::map<std::tuple<pci_t, rnti_t>, cu_cp_ue_index_t> pci_rnti_to_ue_index;     // ue_indexes indexed by pci and rnti
-  std::map<short_i_rnti_t, cu_cp_ue_index_t>            short_i_rnti_to_ue_index; // ue_indexes indexed by short_i_rnti
-  std::map<full_i_rnti_t, cu_cp_ue_index_t>             full_i_rnti_to_ue_index;  // ue_indexes indexed by full_i_rnti
+  /// UE index lookups.
+  /// ue_indexes indexed by pci and rnti.
+  std::map<std::tuple<pci_t, rnti_t>, cu_cp_ue_index_t> pci_rnti_to_ue_index;
+  /// ue_indexes indexed by short_i_rnti.
+  std::map<short_i_rnti_t, cu_cp_ue_index_t> short_i_rnti_to_ue_index;
+  /// ue_indexes indexed by full_i_rnti.
+  std::map<full_i_rnti_t, cu_cp_ue_index_t> full_i_rnti_to_ue_index;
 
   std::set<plmn_identity> blocked_plmns;
 };

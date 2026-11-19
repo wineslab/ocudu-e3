@@ -3,6 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/ssb/pbch_mib_pack.h"
+#include "ocudu/ran/ssb/pbch_mib_message.h"
+#include "ocudu/ran/ssb/ssb_properties.h"
+#include "ocudu/ran/subcarrier_spacing.h"
+#include <type_traits>
 
 using namespace ocudu;
 

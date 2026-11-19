@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "fmt/format.h"
 #include <cstdint>
 #include <type_traits>
 
@@ -25,22 +24,9 @@ constexpr serv_cell_index_t to_serv_cell_index(std::underlying_type_t<serv_cell_
   return static_cast<serv_cell_index_t>(val);
 }
 
+constexpr std::underlying_type_t<serv_cell_index_t> format_as(serv_cell_index_t ue_idx)
+{
+  return static_cast<std::underlying_type_t<serv_cell_index_t>>(ue_idx);
+}
+
 } // namespace ocudu
-
-namespace fmt {
-template <>
-struct formatter<ocudu::serv_cell_index_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::serv_cell_index_t ue_idx, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", underlying(ue_idx));
-  }
-};
-
-} // namespace fmt

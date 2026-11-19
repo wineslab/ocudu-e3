@@ -8,6 +8,7 @@
 #include "ta_management_system.h"
 #include "ue_cell.h"
 #include "ue_drx_controller.h"
+#include "ue_ta_report_tracker.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/serv_cell_index.h"
 #include "ocudu/scheduler/mac_scheduler.h"
@@ -31,6 +32,7 @@ public:
   ue(const ue_configuration&       cfg_,
      ue_logical_channel_repository dl_lch_repo,
      ue_drx_controller&            drx_ctrl,
+     ue_ta_report_tracker&         ta_report_tracker_,
      ue_ta_manager                 ta_mgr_,
      const ue_cell_lookup&         ue_cells);
   ue(const ue&)            = delete;
@@ -72,13 +74,6 @@ public:
   /// \brief Handles received BSR indication by updating UE UL logical channel states.
   void handle_bsr_indication(const ul_bsr_indication_message& msg) { lc_ch_mgr.handle_bsr_indication(msg); }
 
-  /// \brief Handles received N_TA update indication by forwarding it to Timing Advance manager.
-  void handle_ul_n_ta_update_indication(du_cell_index_t cell_index, float ul_sinr, phy_time_unit n_ta_diff)
-  {
-    const ue_cell* ue_cc = find_cell(cell_index);
-    ta_mgr.handle_ul_n_ta_update_indication(ue_cc->cfg().tag_id(), n_ta_diff.to_Tc(), ul_sinr);
-  }
-
   /// \brief Handles MAC CE indication.
   void handle_dl_mac_ce_indication(const dl_mac_ce_indication& msg)
   {
@@ -87,6 +82,12 @@ public:
 
   /// Called when a new UE configuration is passed to the scheduler, as part of the RRC Reconfiguration procedure.
   void handle_reconfiguration_request(const ue_configuration& new_cfg);
+
+  /// Handle a received N_TA update indication by forwarding it to the Timing Advance manager of the UE.
+  void handle_ul_n_ta_update_indication(time_alignment_group::id_t tag_id, phy_time_unit n_ta_diff, float ul_sinr)
+  {
+    ta_mgr.handle_ul_n_ta_update_indication(tag_id, n_ta_diff.to_Tc(), ul_sinr);
+  }
 
   /// \brief Handles DL Buffer State indication.
   void handle_dl_buffer_state_indication(lcid_t lcid, unsigned bs, slot_point hol_toa = {});
@@ -97,6 +98,9 @@ public:
 
   /// \brief Retrieves UE DRX controller.
   ue_drx_controller& drx_controller() { return drx; }
+
+  /// \brief Retrieves the tracker of the uplink timing advance reported by the UE.
+  ue_ta_report_tracker& ta_report_tracker() { return ta_report; }
 
   /// Retrieve UE logical channel manager.
   const ue_logical_channel_repository& logical_channels() const { return lc_ch_mgr; }
@@ -111,10 +115,12 @@ private:
   const ue_configuration* ue_ded_cfg = nullptr;
   /// UE Logical Channel Manager.
   ue_logical_channel_repository lc_ch_mgr;
-  /// UE Timing Advance Manager.
-  ue_ta_manager ta_mgr;
   /// Controller of DRX active timer.
   ue_drx_controller& drx;
+  /// Tracker of the uplink timing advance reported by the UE.
+  ue_ta_report_tracker& ta_report;
+  /// Timing Advance manager of the UE.
+  ue_ta_manager ta_mgr;
   /// Configured cells for the UE.
   const ue_cell_lookup& cells;
 

@@ -24,6 +24,9 @@ struct rrc_resume_request_response {
   std::optional<rrc_meas_cfg>            meas_cfg;
   // Optional measurement gap config to include in RRC Resume.
   byte_buffer meas_gap_cfg;
+  /// Whether the UE has to apply the configuration in full, i.e. release the one it stored while suspended before
+  /// applying this one (TS 38.331 section 5.3.5.11).
+  bool full_cfg = false;
 };
 
 } // namespace ocudu::ocucp

@@ -200,3 +200,25 @@ prach_symbols_slots_duration ocudu::get_prach_duration_info(const prach_configur
 
   return output;
 }
+
+ofdm_symbol_range ocudu::get_prach_burst_slot_symbols(const prach_symbols_slots_duration& duration_info,
+                                                      bool                                long_preamble,
+                                                      unsigned                            burst_slot_idx)
+{
+  static constexpr unsigned nof_symbols_per_slot = NOF_OFDM_SYM_PER_SLOT_NORMAL_CP;
+
+  if (not long_preamble) {
+    // Every slot of a short-preamble burst occupies the same symbols.
+    return {static_cast<uint8_t>(duration_info.start_symbol_pusch_scs),
+            static_cast<uint8_t>(duration_info.start_symbol_pusch_scs + duration_info.nof_symbols)};
+  }
+
+  // For the first slot, use the start_symbol_pusch_scs; in any other case, the preamble starts from the initial
+  // symbol. For the last slot, compute the final symbol; in any other case, the preamble ends at the last slot's
+  // symbol.
+  const unsigned start = burst_slot_idx == 0 ? duration_info.start_symbol_pusch_scs : 0U;
+  const unsigned stop  = burst_slot_idx + 1 < duration_info.prach_length_slots
+                             ? nof_symbols_per_slot
+                             : (duration_info.start_symbol_pusch_scs + duration_info.nof_symbols) % nof_symbols_per_slot;
+  return {static_cast<uint8_t>(start), static_cast<uint8_t>(stop)};
+}

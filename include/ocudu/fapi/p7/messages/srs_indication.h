@@ -4,6 +4,7 @@
 #pragma once
 
 #include "formatter/formatter_helpers.h"
+#include "ocudu/fapi/fapi_power_unit.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/ran/srs/srs_channel_matrix.h"
@@ -15,8 +16,8 @@ namespace fapi {
 /// Encodes SRS positioning report.
 struct srs_positioning_report {
   /// TUL-RTOA as defined in TS 38.215 on section 5.1.
-  std::optional<phy_time_unit> ul_relative_toa;
-  std::optional<float>         rsrp;
+  std::optional<phy_time_unit>   ul_relative_toa;
+  std::optional<fapi_power_unit> rsrp;
 };
 
 /// SRS indication pdu.
@@ -54,10 +55,10 @@ struct formatter<ocudu::fapi::srs_indication> {
     ocudu::fapi::append_time_advance(ctx, msg.pdu.timing_advance_offset, msg.slot.scs());
 
     if (msg.pdu.positioning.has_value()) {
-      if (msg.pdu.positioning->ul_relative_toa) {
-        format_to(ctx.out(), " RTOA_s={}", *msg.pdu.positioning->rsrp);
+      if (msg.pdu.positioning->ul_relative_toa.has_value()) {
+        format_to(ctx.out(), " RTOA_s={}", msg.pdu.positioning->ul_relative_toa->to_seconds<>());
       }
-      if (msg.pdu.positioning->rsrp) {
+      if (msg.pdu.positioning->rsrp.has_value()) {
         format_to(ctx.out(), " RSRP={}", *msg.pdu.positioning->rsrp);
       }
     }

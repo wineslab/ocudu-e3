@@ -60,6 +60,7 @@ public:
   detail::enable_if_void<Res> await_resume()
   {
     ocudu_sanity_check(not empty(), "Resuming an empty base_task");
+    return;
   }
 
 private:

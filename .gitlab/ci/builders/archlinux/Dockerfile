@@ -4,8 +4,11 @@
 ARG VERSION=base-20251019.0.436919
 FROM archlinux:$VERSION
 
-ADD install_dependencies.sh /usr/local/bin
+ADD install_dependencies.sh common.sh /usr/local/bin
 RUN chmod +x /usr/local/bin/install_dependencies.sh
+
+# mbedtls3 is namespaced out of the default pkg-config search path.
+ENV PKG_CONFIG_PATH=/usr/lib/mbedtls3/pkgconfig
 
 RUN TZ=Europe/Madrid && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ >/etc/timezone
 RUN pacman-key --init \
@@ -16,8 +19,8 @@ RUN install_dependencies.sh && pacman -Syu --noconfirm \
   git \
   base-devel \
   which \
-  clang \
-  ccache valgrind \
+  clang lld mold \
+  ccache valgrind ninja \
   python-pip
 RUN pip install --break-system-packages gcovr==5.0
 
@@ -26,7 +29,7 @@ RUN chmod +x /usr/local/bin/builder.sh /usr/local/bin/get_available_cores.sh
 
 RUN python -m venv /usr/local/builder_tools
 RUN /usr/local/builder_tools/bin/pip install "pandas < 3" "psutil < 6"
-ADD changed_tests.py /usr/local/bin
-RUN chmod +x /usr/local/bin/changed_tests.py
+ADD changed_tests.py add_junit_properties.py /usr/local/bin/
+RUN chmod +x /usr/local/bin/changed_tests.py /usr/local/bin/add_junit_properties.py
 
 WORKDIR /workdir

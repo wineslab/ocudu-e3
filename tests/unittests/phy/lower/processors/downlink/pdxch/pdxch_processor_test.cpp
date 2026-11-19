@@ -6,7 +6,9 @@
 #include "../../../amplitude_control/amplitude_controller_test_doubles.h"
 #include "../../../modulation/ofdm_modulator_test_doubles.h"
 #include "pdxch_processor_notifier_test_doubles.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_dynamic.h"
+#include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/phy/antenna_ports.h"
 #include "ocudu/phy/lower/processors/downlink/downlink_processor_baseband.h"
 #include "ocudu/phy/lower/processors/downlink/downlink_processor_factories.h"
@@ -33,6 +35,12 @@ bool operator==(const lower_phy_baseband_metrics& left, const lower_phy_baseband
     return false;
   }
   return true;
+}
+
+std::ostream& operator<<(std::ostream& os, antenna_topology ant_topology)
+{
+  fmt::print(os, "{}", to_string(ant_topology));
+  return os;
 }
 
 std::ostream& operator<<(std::ostream& os, subcarrier_spacing scs)
@@ -89,11 +97,6 @@ bool operator==(const ofdm_modulator_configuration& left, const ofdm_modulator_c
          (left.cp == right.cp) && (left.scale == right.scale) && (left.center_freq_Hz == right.center_freq_Hz);
 }
 
-bool operator==(span<const cf_t> left, span<const cf_t> right)
-{
-  return std::equal(left.begin(), left.end(), right.begin(), right.end());
-}
-
 bool operator==(const baseband_gateway_buffer_reader& left, const baseband_gateway_buffer_reader& right)
 {
   if (left.get_nof_channels() != right.get_nof_channels()) {
@@ -114,7 +117,7 @@ bool operator==(const baseband_gateway_buffer_reader& left, const baseband_gatew
 
 } // namespace ocudu
 
-using LowerPhyDownlinkProcessorParams = std::tuple<unsigned, sampling_rate, subcarrier_spacing, cyclic_prefix>;
+using LowerPhyDownlinkProcessorParams = std::tuple<antenna_topology, sampling_rate, subcarrier_spacing, cyclic_prefix>;
 
 namespace {
 
@@ -150,10 +153,10 @@ protected:
     ASSERT_NE(pdxch_proc_factory, nullptr);
 
     // Select parameters.
-    nof_tx_ports = std::get<0>(GetParam());
-    srate        = std::get<1>(GetParam());
-    scs          = std::get<2>(GetParam());
-    cp           = std::get<3>(GetParam());
+    tx_ant_topology = std::get<0>(GetParam());
+    srate           = std::get<1>(GetParam());
+    scs             = std::get<2>(GetParam());
+    cp              = std::get<3>(GetParam());
 
     nof_symbols_per_slot   = get_nsymb_per_slot(cp);
     nof_slots_per_subframe = get_nof_slots_per_subframe(scs);
@@ -163,12 +166,12 @@ protected:
     center_freq_Hz = dist_center_freq_Hz(rgen);
 
     // Prepare configurations.
-    pdxch_processor_configuration config = {.cp             = cp,
-                                            .scs            = scs,
-                                            .srate          = srate,
-                                            .bandwidth_rb   = bandwidth_rb,
-                                            .center_freq_Hz = center_freq_Hz,
-                                            .nof_tx_ports   = nof_tx_ports};
+    pdxch_processor_configuration config = {.cp              = cp,
+                                            .scs             = scs,
+                                            .srate           = srate,
+                                            .bandwidth_rb    = bandwidth_rb,
+                                            .center_freq_Hz  = center_freq_Hz,
+                                            .tx_ant_topology = tx_ant_topology};
 
     // Create processor.
     pdxch_proc = pdxch_proc_factory->create(config, modulation_executor);
@@ -180,7 +183,10 @@ protected:
 
   shared_resource_grid get_shared_grid()
   {
-    rg_reader_spy.reset();
+    unsigned nof_tx_ports = get_total_nof_ports(tx_ant_topology);
+    unsigned nof_tx_beams = get_total_nof_beams(tx_ant_topology);
+
+    rg_reader_spy.reset(nof_tx_beams, MAX_NSYMB_PER_SLOT, MAX_NOF_PRBS);
 
     // Add a single resource grid entry per port. This makes the grid non-empty on all ports.
     for (unsigned i_port = 0; i_port != nof_tx_ports; ++i_port) {
@@ -216,7 +222,7 @@ protected:
   sampling_rate      srate;
   unsigned           bandwidth_rb;
   double             center_freq_Hz;
-  unsigned           nof_tx_ports;
+  antenna_topology   tx_ant_topology;
   unsigned           nof_symbols_per_slot;
   unsigned           nof_slots_per_subframe;
   unsigned           nof_slots_per_frame;
@@ -284,7 +290,9 @@ TEST_P(LowerPhyDownlinkProcessorFixture, FlowNoRequest)
 
 TEST_P(LowerPhyDownlinkProcessorFixture, FlowFloodRequest)
 {
-  unsigned sector_id = dist_sector_id(rgen);
+  unsigned nof_tx_ports = get_total_nof_ports(tx_ant_topology);
+  unsigned nof_tx_beams = get_total_nof_beams(tx_ant_topology);
+  unsigned sector_id    = dist_sector_id(rgen);
 
   // Create notifiers and connect.
   pdxch_processor_notifier_spy pdxch_proc_notifier_spy;
@@ -325,7 +333,16 @@ TEST_P(LowerPhyDownlinkProcessorFixture, FlowFloodRequest)
       for (unsigned i_port = 0; i_port != nof_tx_ports; ++i_port) {
         const auto& ofdm_mod_entry = ofdm_mod_entries[i_symbol * nof_tx_ports + i_port];
         ASSERT_EQ(static_cast<const void*>(ofdm_mod_entry.grid), static_cast<const void*>(&rg_reader_spy));
-        ASSERT_EQ(ofdm_mod_entry.port_index, i_port);
+        ASSERT_EQ(ofdm_mod_entry.port_weights.size(), nof_tx_beams);
+        for (unsigned j = 0; j != nof_tx_ports; ++j) {
+          if (j == i_port) {
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].real(), 1.0f);
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].imag(), 0.0f);
+          } else {
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].real(), 0.0f);
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].imag(), 0.0f);
+          }
+        }
         ASSERT_EQ(ofdm_mod_entry.symbol_index, i_symbol_subframe);
       }
     }
@@ -340,6 +357,7 @@ TEST_P(LowerPhyDownlinkProcessorFixture, FlowFloodRequest)
 
 TEST_P(LowerPhyDownlinkProcessorFixture, LateRequest)
 {
+  unsigned nof_tx_ports     = get_total_nof_ports(tx_ant_topology);
   unsigned sector_id        = dist_sector_id(rgen);
   unsigned modulation_count = 0;
 
@@ -413,7 +431,9 @@ TEST_P(LowerPhyDownlinkProcessorFixture, OverflowWithRequest)
   // Maximum number of requests queued in the processor.
   static constexpr unsigned max_nof_concurrent_requests = 16;
 
-  unsigned sector_id = dist_sector_id(rgen);
+  unsigned nof_tx_ports = get_total_nof_ports(tx_ant_topology);
+  unsigned nof_tx_beams = get_total_nof_beams(tx_ant_topology);
+  unsigned sector_id    = dist_sector_id(rgen);
 
   // Create notifiers and connect.
   pdxch_processor_notifier_spy pdxch_proc_notifier_spy;
@@ -453,7 +473,17 @@ TEST_P(LowerPhyDownlinkProcessorFixture, OverflowWithRequest)
       for (unsigned i_port = 0; i_port != nof_tx_ports; ++i_port, ++entry_index) {
         const auto& ofdm_mod_entry = ofdm_mod_entries[entry_index];
         ASSERT_EQ(static_cast<const void*>(ofdm_mod_entry.grid), static_cast<const void*>(&rg_reader_spy));
-        ASSERT_EQ(ofdm_mod_entry.port_index, i_port);
+        // Verify only the expected port has a non-zero weight.
+        ASSERT_EQ(ofdm_mod_entry.port_weights.size(), nof_tx_beams);
+        for (unsigned j = 0; j != nof_tx_ports; ++j) {
+          if (j == i_port) {
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].real(), 1.0f);
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].imag(), 0.0f);
+          } else {
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].real(), 0.0f);
+            ASSERT_EQ(ofdm_mod_entry.port_weights[j].imag(), 0.0f);
+          }
+        }
         ASSERT_EQ(ofdm_mod_entry.symbol_index, i_symbol_subframe);
       }
     }
@@ -490,7 +520,10 @@ TEST_P(LowerPhyDownlinkProcessorFixture, OverflowWithRequest)
 // Creates test suite that combines all possible parameters.
 INSTANTIATE_TEST_SUITE_P(LowerPhyDownlinkProcessor,
                          LowerPhyDownlinkProcessorFixture,
-                         ::testing::Combine(::testing::Values(1, 2, 4),
+                         ::testing::Combine(::testing::Values(antenna_topology::one_port,
+                                                              antenna_topology::two_port,
+                                                              antenna_topology::four_ports,
+                                                              antenna_topology::eight_ports),
                                             ::testing::Values(sampling_rate::from_MHz(3.84),
                                                               sampling_rate::from_MHz(7.68)),
                                             ::testing::Values(subcarrier_spacing::kHz15, subcarrier_spacing::kHz30),

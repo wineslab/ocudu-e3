@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "rlc_stress_test_mac.h"
+#include "ocudu/rlc/rlc_rx.h"
 
 using namespace ocudu;
 

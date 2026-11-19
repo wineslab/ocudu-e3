@@ -9,6 +9,7 @@
 #include "../du_cell_manager.h"
 #include "../du_manager_context.h"
 #include "../ran_resource_management/du_ran_resource_manager.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/mac/config/mac_config_helpers.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/scheduler/config/scheduler_cell_config_validator.h"
@@ -24,10 +25,10 @@ using namespace odu;
 /// Derives MAC Cell Configuration from DU Cell Configuration.
 static mac_cell_creation_request make_mac_cell_config(du_cell_index_t                                 cell_index,
                                                       const du_cell_config&                           du_cfg,
-                                                      const byte_buffer&                              sib1,
-                                                      span<const bcch_dl_sch_payload_type>            si_messages,
+                                                      const mac_cell_sys_info_config&                 sys_info,
                                                       const sched_cell_configuration_request_message& sched_cell_cfg,
-                                                      unsigned                                        max_nof_setup_ues)
+                                                      unsigned max_nof_established_ue_ctxts,
+                                                      unsigned max_nof_rejected_ue_ctxts)
 {
   mac_cell_creation_request mac_cfg{};
   mac_cfg.cell_index = cell_index;
@@ -40,24 +41,38 @@ static mac_cell_creation_request make_mac_cell_config(du_cell_index_t           
   ocudu_assert(cs0_idx.has_value(), "CORESET#0 index not found in common PDCCH configuration");
   mac_cfg.cs0_index     = cs0_idx.value();
   mac_cfg.ss0_index     = du_cfg.ran.dl_cfg_common.init_dl_bwp.pdcch_common.get_searchspace0().value();
-  mac_cfg.sys_info.sib1 = sib1.copy();
-  for (auto& msg : si_messages) {
-    mac_cfg.sys_info.si_messages.push_back(msg);
+  mac_cfg.sys_info.sib1 = sys_info.sib1.copy();
+  for (const auto& msg : sys_info.si_messages) {
+    auto& copied_msg = mac_cfg.sys_info.si_messages.emplace_back();
+    for (const byte_buffer& segment : msg) {
+      copied_msg.push_back(segment.copy());
+    }
   }
-  mac_cfg.sys_info.sib1_contains_hypersfn = du_cfg.ran.init_bwp.paging.edrx_enabled;
+  for (const auto& msg : sys_info.pws_si_messages) {
+    auto& copied_msg = mac_cfg.sys_info.pws_si_messages.emplace_back();
+    for (const byte_buffer& segment : msg) {
+      copied_msg.push_back(segment.copy());
+    }
+  }
+  mac_cfg.sys_info.sib1_contains_hypersfn = sys_info.sib1_contains_hypersfn;
+  mac_cfg.sys_info.si_sched_cfg           = sys_info.si_sched_cfg;
   mac_cfg.sched_req                       = sched_cell_cfg;
   mac_cfg.cell_barred                     = du_cfg.cell_barred;
   mac_cfg.intra_freq_reselection          = du_cfg.intra_freq_reselection;
 
-  // (Implementation-defined) Number of HARQs needed to account for UEs that the cell cannot support but still require
-  // HARQs for sending an RRC Reject. We consider that UEs to be RRC Rejected only need one HARQ.
-  static constexpr unsigned harqs_for_rrc_rejects = 64;
-
   // Dimension the MAC DL HARQ buffer pool based on the number of UEs the cell can actually support (each using the
-  // configured number of DL HARQ processes) plus a margin for UEs that only need a single HARQ to be RRC Rejected.
-  mac_cfg.max_harq_buffers = du_cfg.ran.init_bwp.pdsch.max_harq_procs * max_nof_setup_ues + harqs_for_rrc_rejects;
+  // configured number of DL HARQ processes) plus the UE contexts that only need a single HARQ to be RRC Rejected.
+  mac_cfg.max_harq_buffers =
+      du_cfg.ran.init_bwp.pdsch.max_harq_procs * max_nof_established_ue_ctxts + max_nof_rejected_ue_ctxts;
+  mac_cfg.max_nof_ue_contexts = max_nof_established_ue_ctxts + max_nof_rejected_ue_ctxts;
 
   return mac_cfg;
+}
+
+/// Formats the maximum number of F1-C TNL connection attempts for logging.
+static std::string format_max_retries(unsigned max_retries)
+{
+  return max_retries == du_start_request::unlimited_retries ? "unlimited" : std::to_string(max_retries);
 }
 
 static std::string make_sib_mapping_info_str(span<const sib_type> sib_mapping)
@@ -88,7 +103,7 @@ static void log_cell_si_messages(ocudulog::log_channel&                    info_
                 packed_si_msgs[msg_idx].end(),
                 "SI message #{} cell={}: si_msg_idx={} len={}B sib_mapping=[{}]: {}",
                 msg_idx + 1,
-                fmt::underlying(cell_index),
+                cell_index,
                 msg_idx,
                 packed_si_msgs[msg_idx].length(),
                 sib_mapping,
@@ -111,31 +126,42 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
   proc_logger.log_proc_started();
 
   // Establish TNL association with the CU-CP.
-  for (; count != request.max_f1c_tnl_connection_retries and not ctxt.ctxt.stop_command_received and
-         not ctxt.params.f1ap.conn_mng.connect_to_cu_cp();
-       ++count) {
-    ctxt.logger.warning("F1-C TNL association with CU-CP attempt {}/{} failed. Retrying in {} ms...",
+  for (; not ctxt.ctxt.stop_command_received and not ctxt.params.f1ap.conn_mng.connect_to_cu_cp(); ++count) {
+    if (count + 1 >= request.max_f1c_tnl_connection_retries) {
+      // No attempt is left, so the failure is final and the gateway already reported its cause.
+      report_error("F1 Setup failed. Cause: F1-C TNL connection failed");
+    }
+    // Only the first attempt is reported at warning level. The SCTP gateway announces the repetitions periodically, so
+    // reporting each one of them here would flood the log of a DU that is waiting for its CU-CP.
+    if (count == 0) {
+      ctxt.logger.warning("F1-C TNL association with CU-CP attempt {}/{} failed. Retrying in {} ms...",
+                          count + 1,
+                          format_max_retries(request.max_f1c_tnl_connection_retries),
+                          request.f1c_tnl_connection_retry_wait.count());
+    } else {
+      ctxt.logger.debug("F1-C TNL association with CU-CP attempt {}/{} failed. Retrying in {} ms...",
                         count + 1,
-                        request.max_f1c_tnl_connection_retries,
+                        format_max_retries(request.max_f1c_tnl_connection_retries),
                         request.f1c_tnl_connection_retry_wait.count());
+    }
     CORO_AWAIT(async_wait_for(timer, request.f1c_tnl_connection_retry_wait));
-  }
-  if (count == request.max_f1c_tnl_connection_retries) {
-    report_error("F1 Setup failed. Cause: F1-C TNL connection failed");
   }
   if (ctxt.ctxt.stop_command_received) {
     // DU is being shutdown.
     CORO_EARLY_RETURN();
   }
 
-  // Configure cells.
-  configure_du_cells();
-
   // Initiate F1 Setup.
   CORO_AWAIT_VALUE(response_msg, start_f1_setup_request());
 
   // Handle F1 setup result and activate cells.
   CORO_AWAIT(handle_f1_setup_response(response_msg));
+  if (not response_msg.has_value()) {
+    // The CU-CP rejected the F1 Setup and the TNL association was torn down as a result. Unlike a failed TNL
+    // connection, this is a decision of the CU-CP and not a transient failure, so it is not retried. Close the
+    // application instead of leaving the DU running with no served cell and no way back.
+    report_error("F1 Setup failed. Cause: {}", failure_cause);
+  }
 
   // Notify successful setup and deliver packed F1 setup PDU bytes via notifier.
   if (ctxt.params.f1ap.f1_setup_complete_notifier != nullptr) {
@@ -150,12 +176,8 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
   CORO_RETURN();
 }
 
-void du_setup_procedure::configure_du_cells()
+void odu::configure_du_cells(const du_proc_context_view& ctxt)
 {
-  if (not request.configure_cells) {
-    // No need to reconfigure cells.
-    return;
-  }
   ctxt.cell_mng.remove_all_cells();
 
   // Save cell configurations.
@@ -169,21 +191,20 @@ void du_setup_procedure::configure_du_cells()
     const du_cell_config&           du_cfg     = ctxt.cell_mng.get_cell_cfg(cell_index);
     const mac_cell_sys_info_config& sys_info   = ctxt.cell_mng.get_sys_info(cell_index);
 
-    auto sched_cfg = make_sched_cell_config_req(cell_index, du_cfg, sys_info.si_sched_cfg.si_sched_cfg);
+    const unsigned max_nof_established_ue_ctxts = ctxt.res_mng.get_max_nof_established_ue_contexts(cell_index);
+    const unsigned max_nof_rejected_ue_ctxts    = ctxt.res_mng.get_max_nof_rejected_ue_contexts(cell_index);
+
+    auto sched_cfg = make_sched_cell_config_req(
+        cell_index, du_cfg, sys_info.si_sched_cfg, max_nof_established_ue_ctxts + max_nof_rejected_ue_ctxts);
     error_type<std::string> result =
         config_validators::validate_sched_cell_configuration_request_message(sched_cfg, ctxt.params.mac.sched_cfg);
     if (not result.has_value()) {
-      report_error("Invalid cell={} configuration. Cause: {}", fmt::underlying(cell_index), result.error());
+      report_error("Invalid cell={} configuration. Cause: {}", cell_index, result.error());
     }
 
     // Forward config to MAC.
-    ctxt.params.mac.mgr.get_cell_manager().add_cell(
-        make_mac_cell_config(cell_index,
-                             du_cfg,
-                             sys_info.sib1,
-                             sys_info.si_messages,
-                             sched_cfg,
-                             ctxt.res_mng.get_max_nof_setup_ues(cell_index)));
+    ctxt.params.mac.mgr.get_cell_manager().add_cell(make_mac_cell_config(
+        cell_index, du_cfg, sys_info, sched_cfg, max_nof_established_ue_ctxts, max_nof_rejected_ue_ctxts));
   }
 }
 
@@ -229,7 +250,7 @@ async_task<f1_setup_result> du_setup_procedure::start_f1_setup_request()
       ctxt.logger.info(serv_cell.du_sys_info.packed_sib1.begin(),
                        serv_cell.du_sys_info.packed_sib1.end(),
                        "SIB1 cell={}: {}",
-                       fmt::underlying(to_du_cell_index(i)),
+                       to_du_cell_index(i),
                        js_str);
 
       log_cell_si_messages(
@@ -259,6 +280,7 @@ async_task<void> du_setup_procedure::handle_f1_setup_response(const f1_setup_res
         break;
       case f1_setup_failure::result_code::proc_failure:
         failure_cause = "DU failed to run F1 Setup Procedure";
+        break;
       default:
         report_fatal_error("Invalid F1 Setup Response");
     }

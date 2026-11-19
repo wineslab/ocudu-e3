@@ -3,15 +3,18 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
 #include "tests/test_doubles/rrc/rrc_test_message_validators.h"
 #include "tests/unittests/cu_cp/test_helpers.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
+#include "ocudu/asn1/rrc_nr/dl_dcch_msg.h"
+#include "ocudu/cu_cp/cu_cp_command_handler.h"
 #include "ocudu/e1ap/common/e1ap_types.h"
 #include "ocudu/f1ap/f1ap_message.h"
 #include "ocudu/ngap/ngap_message.h"
@@ -569,4 +572,98 @@ TEST_F(cu_cp_pdu_session_resource_modify_test,
   // Inject RRC Reconfiguration Complete and await successful PDU Session Resource Modify Response
   ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_pdu_session_modify_response(
       generate_rrc_reconfiguration_complete_pdu(transaction_id, count)));
+}
+
+TEST_F(cu_cp_pdu_session_resource_modify_test,
+       when_mobility_config_shrinks_then_modification_reconfiguration_carries_removals)
+{
+  cu_cp_mobility_config_handler& mob_cfg = get_cu_cp().get_command_handler().get_mobility_config_handler();
+
+  const nr_cell_identity serving_nci = nr_cell_identity::create(gnb_id_t{411, 22}, 0U).value();
+  const nr_cell_identity ext_nci     = nr_cell_identity::create(gnb_id_t{0x100, 22}, 0U).value();
+
+  // Add an external neighbor cell and a relation from the serving cell at runtime, referencing the A3
+  // report config the test environment configures under id 2.
+  serving_cell_meas_config ext_cell;
+  ext_cell.gnb_id_bit_length   = 22;
+  ext_cell.nci                 = ext_nci;
+  ext_cell.pci                 = 3;
+  ext_cell.band.emplace()      = nr_band::n78;
+  ext_cell.ssb_arfcn.emplace() = 632128;
+  ext_cell.ssb_scs.emplace()   = subcarrier_spacing::kHz30;
+  {
+    rrc_ssb_mtc ssb_mtc;
+    ssb_mtc.dur                                = 1;
+    ssb_mtc.periodicity_and_offset.periodicity = rrc_periodicity_and_offset::periodicity_t::sf5;
+    ssb_mtc.periodicity_and_offset.offset      = 0;
+    ext_cell.ssb_mtc.emplace()                 = ssb_mtc;
+  }
+  ASSERT_TRUE(mob_cfg.update_mobility_cell(ext_cell));
+  ASSERT_TRUE(mob_cfg.update_neighbor(serving_nci, ext_nci, {uint_to_report_cfg_id(2)}));
+
+  // First modification: the RRC Reconfiguration carries the measConfig additions for the new neighbor and
+  // becomes the UE's stored measurement config.
+  ASSERT_TRUE(
+      send_pdu_session_modify_request_and_await_bearer_context_modification_request(psi, {uint_to_qos_flow_id(2)}, {}));
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_ue_context_modification_request(psi, drb_id_t::drb2));
+  ASSERT_TRUE(send_ue_context_modification_response_and_await_bearer_context_modification_request());
+  expected<byte_buffer> rrc_msg =
+      send_bearer_context_modification_response_and_await_rrc_reconfiguration(psi, drb_id_t::drb2);
+  ASSERT_TRUE(rrc_msg.has_value());
+  {
+    asn1::cbit_ref              bref{rrc_msg.value()};
+    asn1::rrc_nr::dl_dcch_msg_s dcch;
+    ASSERT_EQ(dcch.unpack(bref), asn1::OCUDUASN_SUCCESS);
+    const auto& reconfig_ies = dcch.msg.c1().rrc_recfg().crit_exts.rrc_recfg();
+    ASSERT_TRUE(reconfig_ies.meas_cfg_present);
+    ASSERT_GT(reconfig_ies.meas_cfg.meas_obj_to_add_mod_list.size(), 0U);
+  }
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_pdu_session_modify_response(
+      generate_rrc_reconfiguration_complete_pdu(0, 8)));
+
+  // Remove every relation of the serving cell (the one added above plus the two the test environment
+  // configures) and its periodic report: nothing is left to measure.
+  ASSERT_TRUE(mob_cfg.remove_neighbor(serving_nci, ext_nci));
+  ASSERT_TRUE(mob_cfg.remove_neighbor(serving_nci, nr_cell_identity::create(gnb_id_t{411, 22}, 1U).value()));
+  ASSERT_TRUE(mob_cfg.remove_neighbor(serving_nci, nr_cell_identity::create(gnb_id_t{412, 22}, 0U).value()));
+  ASSERT_TRUE(mob_cfg.set_periodic_report(serving_nci, std::nullopt));
+
+  // Second modification (new QoS flow on a new DRB): the RRC Reconfiguration carries only the removals of
+  // the previous measurement config.
+  ASSERT_TRUE(
+      send_pdu_session_modify_request_and_await_bearer_context_modification_request(psi, {uint_to_qos_flow_id(3)}, {}));
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_ue_context_modification_request(psi, drb_id_t::drb3));
+  ASSERT_TRUE(send_ue_context_modification_response_and_await_bearer_context_modification_request({drb_id_t::drb3}));
+  rrc_msg = send_bearer_context_modification_response_and_await_rrc_reconfiguration(psi, drb_id_t::drb3);
+  ASSERT_TRUE(rrc_msg.has_value());
+  {
+    asn1::cbit_ref              bref{rrc_msg.value()};
+    asn1::rrc_nr::dl_dcch_msg_s dcch;
+    ASSERT_EQ(dcch.unpack(bref), asn1::OCUDUASN_SUCCESS);
+    const auto& reconfig_ies = dcch.msg.c1().rrc_recfg().crit_exts.rrc_recfg();
+    ASSERT_TRUE(reconfig_ies.meas_cfg_present);
+    EXPECT_EQ(reconfig_ies.meas_cfg.meas_obj_to_add_mod_list.size(), 0U);
+    EXPECT_GT(reconfig_ies.meas_cfg.meas_obj_to_rem_list.size(), 0U);
+    EXPECT_GT(reconfig_ies.meas_cfg.meas_id_to_rem_list.size(), 0U);
+  }
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_pdu_session_modify_response(
+      generate_rrc_reconfiguration_complete_pdu(1, 9)));
+}
+
+TEST_F(cu_cp_pdu_session_resource_modify_test,
+       when_invalid_mobility_config_commands_are_dispatched_then_they_are_rejected)
+{
+  cu_cp_mobility_config_handler& mob_cfg = get_cu_cp().get_command_handler().get_mobility_config_handler();
+
+  const nr_cell_identity serving_nci = nr_cell_identity::create(gnb_id_t{411, 22}, 0U).value();
+  const nr_cell_identity unknown_nci = nr_cell_identity::create(gnb_id_t{411, 22}, 9U).value();
+
+  // Refusals cross the dispatch boundary as synchronous false results.
+  EXPECT_FALSE(mob_cfg.update_neighbor(unknown_nci, serving_nci, {uint_to_report_cfg_id(2)}));
+  EXPECT_FALSE(mob_cfg.remove_neighbor(serving_nci, unknown_nci));
+  EXPECT_FALSE(mob_cfg.remove_mobility_cell(unknown_nci));
+  // Report config 2 is referenced by the test environment's neighbor relations.
+  EXPECT_FALSE(mob_cfg.remove_report_config(uint_to_report_cfg_id(2)));
+  // A serving-cell periodic report must reference a periodical config; id 2 is event-triggered.
+  EXPECT_FALSE(mob_cfg.set_periodic_report(serving_nci, uint_to_report_cfg_id(2)));
 }

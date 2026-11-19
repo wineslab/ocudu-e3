@@ -9,7 +9,6 @@
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ran/precoding/precoding_matrix_indicator.h"
 #include <optional>
-#include <variant>
 
 namespace ocudu {
 
@@ -36,7 +35,7 @@ struct csi_report_data {
   static_vector<uint8_t, csi_max_nof_reported_rs> cri;
   /// Reference Signal Received Power (RSRP) in dBm for each reported CSI-RS resource if reported. The range is
   /// [-140, -44] dBm.
-  static_vector<int, csi_max_nof_reported_rs> rsrp_dBm;
+  static_vector<int16_t, csi_max_nof_reported_rs> rsrp_dBm;
   /// Rank Indicator (RI) if reported. The range is {1, ..., 8}.
   std::optional<ri_type> ri;
   /// Layer Indicator (LI) if reported.

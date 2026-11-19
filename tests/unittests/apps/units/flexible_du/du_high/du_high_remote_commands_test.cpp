@@ -5,7 +5,9 @@
 #include "apps/units/flexible_o_du/o_du_high/du_high/commands/du_high_remote_commands.h"
 #include "ocudu/du/du_high/du_manager/du_configurator.h"
 #include "ocudu/support/async/async_task.h"
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <limits>
 #include <nlohmann/json.hpp>
 
 using namespace ocudu;
@@ -43,7 +45,7 @@ public:
     });
   }
 
-  void handle_ntn_param_update(const odu::du_ntn_param_update_request&) override {}
+  void handle_ntn_param_update(odu::du_ntn_param_update_request) override {}
 };
 
 /// Build a minimal valid cell skeleton (plmn, nci) with an empty sib section that the caller fills in.
@@ -73,6 +75,41 @@ nlohmann::json sib2_content_with(int q_rx_lev_min, int thresh_low_p, int reselec
           {"q_rx_lev_min", q_rx_lev_min},
           {"s_intra_search_p", 31},
           {"t_reselection_nr", 1}};
+}
+
+/// Build a SIB3 'intra_freq_neigh_cell_list' array with `count` distinct entries (PCI max is 1007).
+nlohmann::json make_neigh_cell_list(unsigned count)
+{
+  nlohmann::json arr = nlohmann::json::array();
+  for (unsigned i = 0; i != count; ++i) {
+    arr.push_back({{"pci", i}, {"q_offset_cell", 0}});
+  }
+  return arr;
+}
+
+/// Build a SIB3 'intra_freq_excluded_cell_list' array with `count` distinct entries.
+nlohmann::json make_excluded_cell_list(unsigned count)
+{
+  nlohmann::json arr = nlohmann::json::array();
+  for (unsigned i = 0; i != count; ++i) {
+    arr.push_back({{"pci_start", i}, {"range", 4}});
+  }
+  return arr;
+}
+
+/// Build a SIB4 'inter_freq_carrier_freq_list' array with `count` distinct entries.
+nlohmann::json make_carrier_list(unsigned count)
+{
+  nlohmann::json arr = nlohmann::json::array();
+  for (unsigned i = 0; i != count; ++i) {
+    arr.push_back({{"arfcn", 620000 + i},
+                   {"ssb_scs", 30},
+                   {"derive_ssb_index_from_cell", true},
+                   {"q_rx_lev_min", -70},
+                   {"thresh_x_high_p", 16},
+                   {"thresh_x_low_p", 4}});
+  }
+  return arr;
 }
 
 } // namespace
@@ -706,6 +743,108 @@ TEST(sib_update_remote_command, sib3_with_empty_content_is_valid)
   EXPECT_TRUE(sib3.intra_freq_excluded_cell_list.empty());
 }
 
+// SIB3/SIB4 list cardinality boundary tests. The RRC ASN.1 encoder caps intra_freq_neigh_cell_list and
+// intra_freq_excluded_cell_list at MAX_NOF_SIB3_INTRA_FREQ_CELLS entries each, and inter_freq_carrier_freq_list at
+// MAX_NOF_SIB4_INTER_FREQ_CARRIERS entries; an oversized list must be rejected here, at the parser boundary, rather
+// than reaching the encoder.
+
+TEST(sib_update_remote_command, sib3_neigh_cell_list_at_max_boundary_accepted)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {{"type", "sib3"},
+                 {"content", {{"intra_freq_neigh_cell_list", make_neigh_cell_list(MAX_NOF_SIB3_INTRA_FREQ_CELLS)}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_TRUE(res.has_value()) << res.error();
+
+  const auto& sib3 = std::get<sib3_info>(*mock.last_req->cells[0].new_sys_info);
+  EXPECT_EQ(sib3.intra_freq_neigh_cell_list.size(), MAX_NOF_SIB3_INTRA_FREQ_CELLS);
+}
+
+TEST(sib_update_remote_command, sib3_neigh_cell_list_exceeding_max_rejected)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {
+      {"type", "sib3"},
+      {"content", {{"intra_freq_neigh_cell_list", make_neigh_cell_list(MAX_NOF_SIB3_INTRA_FREQ_CELLS + 1)}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("intra_freq_neigh_cell_list"), std::string::npos) << "actual: " << res.error();
+  EXPECT_FALSE(mock.last_req.has_value());
+}
+
+TEST(sib_update_remote_command, sib3_excluded_cell_list_at_max_boundary_accepted)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {
+      {"type", "sib3"},
+      {"content", {{"intra_freq_excluded_cell_list", make_excluded_cell_list(MAX_NOF_SIB3_INTRA_FREQ_CELLS)}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_TRUE(res.has_value()) << res.error();
+
+  const auto& sib3 = std::get<sib3_info>(*mock.last_req->cells[0].new_sys_info);
+  EXPECT_EQ(sib3.intra_freq_excluded_cell_list.size(), MAX_NOF_SIB3_INTRA_FREQ_CELLS);
+}
+
+TEST(sib_update_remote_command, sib3_excluded_cell_list_exceeding_max_rejected)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {
+      {"type", "sib3"},
+      {"content", {{"intra_freq_excluded_cell_list", make_excluded_cell_list(MAX_NOF_SIB3_INTRA_FREQ_CELLS + 1)}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("intra_freq_excluded_cell_list"), std::string::npos) << "actual: " << res.error();
+  EXPECT_FALSE(mock.last_req.has_value());
+}
+
+TEST(sib_update_remote_command, sib4_carrier_freq_list_at_max_boundary_accepted)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {{"type", "sib4"},
+                 {"content", {{"inter_freq_carrier_freq_list", make_carrier_list(MAX_NOF_SIB4_INTER_FREQ_CARRIERS)}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_TRUE(res.has_value()) << res.error();
+
+  const auto& sib4 = std::get<sib4_info>(*mock.last_req->cells[0].new_sys_info);
+  EXPECT_EQ(sib4.inter_freq_carrier_freq_list.size(), MAX_NOF_SIB4_INTER_FREQ_CARRIERS);
+}
+
+TEST(sib_update_remote_command, sib4_carrier_freq_list_exceeding_max_rejected)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {
+      {"type", "sib4"},
+      {"content", {{"inter_freq_carrier_freq_list", make_carrier_list(MAX_NOF_SIB4_INTER_FREQ_CARRIERS + 1)}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("inter_freq_carrier_freq_list"), std::string::npos) << "actual: " << res.error();
+  EXPECT_FALSE(mock.last_req.has_value());
+}
+
 // Multi-cell.
 
 TEST(sib_update_remote_command, multi_cell_request_produces_multiple_cell_entries)
@@ -751,4 +890,293 @@ TEST(sib_update_remote_command, configurator_failure_is_reported_as_error)
   auto res = cmd.execute(wrap(cell));
   ASSERT_FALSE(res.has_value());
   EXPECT_NE(res.error().find("failed"), std::string::npos) << "actual: " << res.error();
+}
+
+// --- rrm_policy_ratio_set: integer range validation ---
+// The parser must reject out-of-range integers instead of silently narrowing them
+// (get<uint8_t>/get<uint32_t>/get<int>), which would truncate a crafted value into an in-range one and select the wrong
+// slice or PRB ratio.
+
+namespace {
+
+/// Builds a minimal valid rrm_policy_ratio_set request with a single policy member.
+nlohmann::json make_rrm_request(nlohmann::json member)
+{
+  nlohmann::json req;
+  req["policies"]["resourceType"]        = "PRB";
+  req["policies"]["rRMPolicyMemberList"] = nlohmann::json::array({std::move(member)});
+  return req;
+}
+
+} // namespace
+
+TEST(rrm_policy_ratio_set_remote_command, valid_request_is_accepted)
+{
+  capturing_du_configurator       mock;
+  rrm_policy_ratio_remote_command cmd{mock};
+
+  auto req                                = make_rrm_request({{"plmn", "001001"}, {"sst", 1}, {"sd", 1}});
+  req["policies"]["min_prb_policy_ratio"] = 10;
+  req["policies"]["max_prb_policy_ratio"] = 90;
+  req["policies"]["dedicated_ratio"]      = 50;
+
+  auto res = cmd.execute(req);
+  ASSERT_TRUE(res.has_value()) << res.error();
+  EXPECT_TRUE(mock.last_req.has_value());
+}
+
+TEST(rrm_policy_ratio_set_remote_command, rejects_out_of_range_sst)
+{
+  capturing_du_configurator       mock;
+  rrm_policy_ratio_remote_command cmd{mock};
+
+  // 256 does not fit in the 8-bit SST; get<uint8_t>() would truncate it to 0 and select a different slice.
+  auto res = cmd.execute(make_rrm_request({{"plmn", "001001"}, {"sst", 256}}));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("sst"), std::string::npos) << "actual: " << res.error();
+  EXPECT_FALSE(mock.last_req.has_value());
+}
+
+TEST(rrm_policy_ratio_set_remote_command, rejects_out_of_range_sd)
+{
+  capturing_du_configurator       mock;
+  rrm_policy_ratio_remote_command cmd{mock};
+
+  // 2^32 + 5 does not fit in uint32; get<uint32_t>() would truncate it to 5, which create() would then accept as valid.
+  auto res = cmd.execute(make_rrm_request({{"plmn", "001001"}, {"sst", 1}, {"sd", 4294967301LL}}));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("sd"), std::string::npos) << "actual: " << res.error();
+}
+
+TEST(rrm_policy_ratio_set_remote_command, rejects_prb_ratio_that_would_truncate_into_range)
+{
+  capturing_du_configurator       mock;
+  rrm_policy_ratio_remote_command cmd{mock};
+
+  // 2^32 + 50 truncates to 50 via get<int>(), which would slip past the 0..100 check on the narrowed value.
+  auto req                                = make_rrm_request({{"plmn", "001001"}, {"sst", 1}});
+  req["policies"]["min_prb_policy_ratio"] = 4294967346LL;
+
+  auto res = cmd.execute(req);
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("min_prb_policy_ratio"), std::string::npos) << "actual: " << res.error();
+}
+
+// --- ssb_set: integer range validation ---
+
+TEST(ssb_set_remote_command, valid_request_is_accepted)
+{
+  capturing_du_configurator mock;
+  ssb_modify_remote_command cmd{mock};
+
+  auto cell                   = make_cell_skeleton();
+  cell["ssb_block_power_dbm"] = 10;
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_TRUE(res.has_value()) << res.error();
+  EXPECT_TRUE(mock.last_req.has_value());
+}
+
+TEST(ssb_set_remote_command, rejects_ssb_power_that_would_truncate_into_range)
+{
+  capturing_du_configurator mock;
+  ssb_modify_remote_command cmd{mock};
+
+  // 2^32 + 25 truncates to 25 via get<int>(), which would slip past the -60..50 check on the narrowed value.
+  auto cell                   = make_cell_skeleton();
+  cell["ssb_block_power_dbm"] = 4294967321LL;
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("ssb_block_power_dbm"), std::string::npos) << "actual: " << res.error();
+}
+
+TEST(ssb_set_remote_command, rejects_uint64_max_ssb_power)
+{
+  capturing_du_configurator mock;
+  ssb_modify_remote_command cmd{mock};
+
+  // UINT64_MAX is stored as an unsigned JSON integer; reading it as int64 wraps to -1, which sits inside the valid
+  // -60..50 window. The signed/unsigned-aware parse must reject it (this is the field whose range includes negatives).
+  auto cell                   = make_cell_skeleton();
+  cell["ssb_block_power_dbm"] = std::numeric_limits<uint64_t>::max();
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("ssb_block_power_dbm"), std::string::npos) << "actual: " << res.error();
+}
+
+// The three PRB-ratio fields share the same parse; exercise them all so a future edit to one path is caught. Every
+// field must reject out-of-range values (including a uint64 that would wrap) and accept the boundaries.
+TEST(rrm_policy_ratio_set_remote_command, prb_ratio_range_is_enforced_for_every_field)
+{
+  for (const char* field : {"min_prb_policy_ratio", "max_prb_policy_ratio", "dedicated_ratio"}) {
+    for (const nlohmann::json& bad :
+         {nlohmann::json(-1), nlohmann::json(101), nlohmann::json(std::numeric_limits<uint64_t>::max())}) {
+      capturing_du_configurator       mock;
+      rrm_policy_ratio_remote_command cmd{mock};
+      auto                            req = make_rrm_request({{"plmn", "001001"}, {"sst", 1}});
+      req["policies"][field]              = bad;
+      auto res                            = cmd.execute(req);
+      ASSERT_FALSE(res.has_value()) << field << " should reject " << bad.dump();
+      EXPECT_NE(res.error().find(field), std::string::npos) << "actual: " << res.error();
+    }
+    for (int good : {0, 100}) {
+      capturing_du_configurator       mock;
+      rrm_policy_ratio_remote_command cmd{mock};
+      auto                            req = make_rrm_request({{"plmn", "001001"}, {"sst", 1}});
+      req["policies"][field]              = good;
+      auto res                            = cmd.execute(req);
+      ASSERT_TRUE(res.has_value()) << field << "=" << good << ": " << res.error();
+    }
+  }
+}
+
+TEST(rrm_policy_ratio_set_remote_command, rejects_uint64_max_sst_and_sd)
+{
+  {
+    capturing_du_configurator       mock;
+    rrm_policy_ratio_remote_command cmd{mock};
+    auto res = cmd.execute(make_rrm_request({{"plmn", "001001"}, {"sst", std::numeric_limits<uint64_t>::max()}}));
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().find("sst"), std::string::npos) << "actual: " << res.error();
+  }
+  {
+    capturing_du_configurator       mock;
+    rrm_policy_ratio_remote_command cmd{mock};
+    auto                            res =
+        cmd.execute(make_rrm_request({{"plmn", "001001"}, {"sst", 1}, {"sd", std::numeric_limits<uint64_t>::max()}}));
+    ASSERT_FALSE(res.has_value());
+    EXPECT_NE(res.error().find("sd"), std::string::npos) << "actual: " << res.error();
+  }
+}
+
+TEST(sib_update_remote_command, rejects_uint64_that_wraps_into_q_rx_lev_min_range)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  // q_rx_lev_min is [-70, -22]. 2^64 - 22 read as int64 wraps to -22, a valid boundary; it must be rejected.
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {{"type", "sib2"},
+                 {"content",
+                  {{"q_hyst_db", 4},
+                   {"thresh_serving_low_p", 14},
+                   {"cell_reselection_priority", 4},
+                   {"q_rx_lev_min", 18446744073709551594ULL},
+                   {"s_intra_search_p", 31},
+                   {"t_reselection_nr", 1}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("q_rx_lev_min"), std::string::npos) << "actual: " << res.error();
+}
+
+TEST(sib_update_remote_command, rejects_uint64_that_wraps_into_q_offset_cell)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  // q_offset_cell accepts negative dB offsets; UINT64_MAX read as int64 wraps to -1, a valid offset. Reject it.
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {{"type", "sib3"},
+                 {"content",
+                  {{"intra_freq_neigh_cell_list",
+                    nlohmann::json::array({{{"pci", 47}, {"q_offset_cell", std::numeric_limits<uint64_t>::max()}}})}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("q_offset_cell"), std::string::npos) << "actual: " << res.error();
+}
+
+TEST(sib_update_remote_command, rejects_uint64_that_wraps_into_q_offset_freq)
+{
+  capturing_du_configurator mock;
+  sib_update_remote_command cmd{mock};
+
+  auto cell   = make_cell_skeleton();
+  cell["sib"] = {{"type", "sib4"},
+                 {"content",
+                  {{"inter_freq_carrier_freq_list",
+                    nlohmann::json::array({{{"arfcn", 649632},
+                                            {"ssb_scs", 30},
+                                            {"derive_ssb_index_from_cell", true},
+                                            {"q_rx_lev_min", -70},
+                                            {"thresh_x_high_p", 16},
+                                            {"thresh_x_low_p", 4},
+                                            {"q_offset_freq", std::numeric_limits<uint64_t>::max()}}})}}}};
+
+  auto res = cmd.execute(wrap(cell));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_NE(res.error().find("q_offset_freq"), std::string::npos) << "actual: " << res.error();
+}
+
+// Every remote-command integer routes through the same "reject a uint64 above INT64_MAX" guard. This drives
+// UINT64_MAX through each guarded SIB field individually so a future field added without the guard is caught here,
+// even though a static read shows every current path already has it (table-driven regression net).
+TEST(sib_update_remote_command, uint64_max_is_rejected_for_every_guarded_field)
+{
+  const uint64_t big = std::numeric_limits<uint64_t>::max();
+
+  auto expect_rejected = [](nlohmann::json cell, const std::string& what) {
+    capturing_du_configurator mock;
+    sib_update_remote_command cmd{mock};
+    auto                      res = cmd.execute(wrap(std::move(cell)));
+    EXPECT_FALSE(res.has_value()) << what << " with UINT64_MAX was accepted";
+    EXPECT_FALSE(mock.last_req.has_value()) << what << " reached the DU despite UINT64_MAX";
+  };
+
+  // SIB2 bounded/enum fields (q_hyst, the reselection thresholds/priority, q_rx_lev_min, t_reselection).
+  for (const char* field : {"q_hyst_db",
+                            "thresh_serving_low_p",
+                            "cell_reselection_priority",
+                            "q_rx_lev_min",
+                            "s_intra_search_p",
+                            "t_reselection_nr"}) {
+    auto content   = sib2_content_with(-70, 14, 4);
+    content[field] = big;
+    auto cell      = make_cell_skeleton();
+    cell["sib"]    = {{"type", "sib2"}, {"content", content}};
+    expect_rejected(std::move(cell), std::string{"sib2."} + field);
+  }
+
+  // SIB3: PCI + q_offset_cell in the neighbour list, PCI-start + excluded range in the excluded list.
+  const auto sib3_base = [] {
+    return nlohmann::json{
+        {"intra_freq_neigh_cell_list", nlohmann::json::array({{{"pci", 47}, {"q_offset_cell", 0}}})},
+        {"intra_freq_excluded_cell_list", nlohmann::json::array({{{"pci_start", 100}, {"range", 4}}})}};
+  };
+  for (const char* field : {"pci", "q_offset_cell"}) {
+    auto content                                    = sib3_base();
+    content["intra_freq_neigh_cell_list"][0][field] = big;
+    auto cell                                       = make_cell_skeleton();
+    cell["sib"]                                     = {{"type", "sib3"}, {"content", content}};
+    expect_rejected(std::move(cell), std::string{"sib3.neigh."} + field);
+  }
+  for (const char* field : {"pci_start", "range"}) {
+    auto content                                       = sib3_base();
+    content["intra_freq_excluded_cell_list"][0][field] = big;
+    auto cell                                          = make_cell_skeleton();
+    cell["sib"]                                        = {{"type", "sib3"}, {"content", content}};
+    expect_rejected(std::move(cell), std::string{"sib3.excluded."} + field);
+  }
+
+  // SIB4 carrier fields (NR-ARFCN, SSB SCS, the bounded thresholds/q_rx_lev_min, q_offset_freq).
+  const auto sib4_base = [] {
+    return nlohmann::json{{"inter_freq_carrier_freq_list",
+                           nlohmann::json::array({{{"arfcn", 649632},
+                                                   {"ssb_scs", 30},
+                                                   {"derive_ssb_index_from_cell", true},
+                                                   {"q_rx_lev_min", -70},
+                                                   {"thresh_x_high_p", 16},
+                                                   {"thresh_x_low_p", 4},
+                                                   {"q_offset_freq", 0}}})}};
+  };
+  for (const char* field : {"arfcn", "ssb_scs", "q_rx_lev_min", "thresh_x_high_p", "thresh_x_low_p", "q_offset_freq"}) {
+    auto content                                      = sib4_base();
+    content["inter_freq_carrier_freq_list"][0][field] = big;
+    auto cell                                         = make_cell_skeleton();
+    cell["sib"]                                       = {{"type", "sib4"}, {"content", content}};
+    expect_rejected(std::move(cell), std::string{"sib4."} + field);
+  }
 }

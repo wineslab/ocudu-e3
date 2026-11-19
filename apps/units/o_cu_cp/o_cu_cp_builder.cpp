@@ -8,15 +8,19 @@
 #include "apps/units/o_cu_cp/cu_cp/metrics/cu_cp_metrics.h"
 #include "apps/units/o_cu_cp/cu_cp/metrics/cu_cp_metrics_consumers.h"
 #include "apps/units/o_cu_cp/cu_cp/metrics/cu_cp_metrics_producer.h"
+#include "cu_cp/commands/cu_cp_remote_commands.h"
 #include "cu_cp/cu_cp_cmdline_commands.h"
 #include "cu_cp/cu_cp_config_translators.h"
 #include "e2/o_cu_cp_e2_config_translators.h"
 #include "o_cu_cp_unit_config.h"
 #include "o_cu_cp_unit_impl.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/cu_cp/cu_cp_command_handler.h"
 #include "ocudu/cu_cp/cu_cp_executor_mapper.h"
 #include "ocudu/cu_cp/o_cu_cp_config.h"
 #include "ocudu/cu_cp/o_cu_cp_factory.h"
-#include "ocudu/e2/e2_cu_metrics_connector.h"
+#include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/i_rnti.h"
 
 using namespace ocudu;
 
@@ -37,8 +41,8 @@ build_cu_cp_metrics_config(std::vector<app_services::metrics_config>&   cu_cp_se
   metrics_service_cfg.callback                      = cu_cp_metrics_callback;
   metrics_service_cfg.producers.push_back(std::move(metrics_generator));
 
-  const app_helpers::metrics_config& unit_metrics_cfg = cu_cp_metrics_cfg.common_metrics_cfg;
-  if (unit_metrics_cfg.enable_json_metrics) {
+  if (const app_helpers::metrics_config& unit_metrics_cfg = cu_cp_metrics_cfg.common_metrics_cfg;
+      unit_metrics_cfg.enable_json_metrics) {
     report_error_if_not(remote_metrics_gateway,
                         "Invalid remote server gateway for sending JSON metrics. Check that remote server is enabled");
     metrics_service_cfg.consumers.push_back(std::make_unique<cu_cp_metrics_consumer_json>(*remote_metrics_gateway));
@@ -54,7 +58,66 @@ build_cu_cp_metrics_config(std::vector<app_services::metrics_config>&   cu_cp_se
   return out;
 }
 
-o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_unit_dependencies& dependencies)
+/// Logs the Local NG-RAN Node Identifier that the I-RNTIs of this node carry, and which gNB IDs a neighbour can be
+/// given while staying distinguishable from it.
+///
+/// The I-RNTI identifies the allocating node by a Local NG-RAN Node Identifier (TS 38.300 Annex F) that is narrower
+/// than a gNB ID. [Implementation-defined] The CU-CP takes it from the least significant bits of its gNB ID
+/// (TS 38.300 Annex C). Peers resolve an I-RNTI at RRC Resume by matching that identifier against the gNB IDs they are
+/// connected to, so gNB IDs sharing those bits address the same node.
+static void
+log_i_rnti_node_identifiers(gnb_id_t gnb_id, full_i_rnti_profile full_profile, short_i_rnti_profile short_profile)
+{
+  const uint32_t full_mask  = (1U << full_i_rnti_t::nof_node_id_bits(full_profile)) - 1;
+  const uint32_t short_mask = (1U << short_i_rnti_t::nof_node_id_bits(short_profile)) - 1;
+  const uint32_t full_id    = full_i_rnti_t::to_local_node_id(full_profile, gnb_id.id);
+  const uint32_t short_id   = short_i_rnti_t::to_local_node_id(short_profile, gnb_id.id);
+
+  // A gNB ID that fits in the node identifier is carried whole, and the I-RNTIs of this node address it alone.
+  const bool full_truncates  = gnb_id.id > full_mask;
+  const bool short_truncates = gnb_id.id > short_mask;
+  if (!full_truncates && !short_truncates) {
+    return;
+  }
+
+  auto is_available = [&](uint32_t candidate) {
+    return (!full_truncates || (candidate & full_mask) != full_id) &&
+           (!short_truncates || (candidate & short_mask) != short_id);
+  };
+
+  // Walk up from the configured gNB ID, which shows that adjacent gNB IDs are usable while those a whole node
+  // identifier apart are not.
+  std::vector<std::string> available;
+  std::vector<std::string> unavailable;
+  const uint64_t           gnb_id_range = uint64_t{1} << gnb_id.bit_length;
+  for (uint64_t candidate = gnb_id.id + 1; candidate < gnb_id_range && (available.size() < 3 || unavailable.size() < 3);
+       ++candidate) {
+    std::vector<std::string>& examples = is_available(candidate) ? available : unavailable;
+    if (examples.size() < 3) {
+      examples.push_back(fmt::format("{:#x}", candidate));
+    }
+  }
+
+  std::vector<std::string> conditions;
+  if (full_truncates) {
+    conditions.push_back(fmt::format("gnb_id & {:#x} != {:#x}", full_mask, full_id));
+  }
+  if (short_truncates) {
+    conditions.push_back(fmt::format("gnb_id & {:#x} != {:#x}", short_mask, short_id));
+  }
+
+  ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("CU-CP", false);
+  logger.info("I-RNTI node identifiers for gnb_id={:#x}: full={:#x}, short={:#x}. A neighbour gNB is told apart from "
+              "this node only if {} (available gnb_ids: {}; unavailable gnb_ids: {})",
+              gnb_id.id,
+              full_id,
+              short_id,
+              fmt::join(conditions, " and "),
+              fmt::join(available, ", "),
+              fmt::join(unavailable, ", "));
+}
+
+o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, const o_cu_cp_unit_dependencies& dependencies)
 {
   ocudu_assert(dependencies.executor_mapper, "Invalid CU-CP executor mapper");
   ocudu_assert(dependencies.ngap_pcap, "Invalid NGAP PCAP");
@@ -70,11 +133,15 @@ o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_u
   cu_cp_cfg.services.timers                 = dependencies.timers;
   cu_cp_cfg.xnap.xnc_gws                    = dependencies.xnc_gws;
 
+  // Only a peer over Xn resolves the I-RNTIs this node allocates.
+  if (!cucp_unit_cfg.xnap_config.gateways.empty()) {
+    log_i_rnti_node_identifiers(cu_cp_cfg.node.gnb_id, cu_cp_cfg.ue.full_i_rnti_prof, cu_cp_cfg.ue.short_i_rnti_prof);
+  }
+
   o_cu_cp_unit ocucp;
   auto         e2_metric_connectors = std::make_unique<e2_cu_metrics_connector_manager>();
 
-  cu_cp_cfg.metrics.metrics_report_period = std::chrono::milliseconds(unit_cfg.cucp_cfg.metrics.cu_cp_report_period);
-  cu_cp_cfg.metrics_notifier              = build_cu_cp_metrics_config(ocucp.metrics,
+  cu_cp_cfg.metrics_notifier = build_cu_cp_metrics_config(ocucp.metrics,
                                                           *dependencies.metrics_notifier,
                                                           dependencies.remote_metrics_gateway,
                                                           unit_cfg.cucp_cfg.metrics,
@@ -100,8 +167,9 @@ o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_u
                                                                      dependencies.executor_mapper->n2_rx_executor())));
   }
 
-  for (unsigned i = 0, e = n2_clients.size(); i != e; ++i) {
-    cu_cp_cfg.ngap.ngaps[i].n2_gw = n2_clients[i].get();
+  cu_cp_cfg.ngap.n2_gws.reserve(n2_clients.size());
+  for (const auto& n2_client : n2_clients) {
+    cu_cp_cfg.ngap.n2_gws.push_back(n2_client.get());
   }
 
   ocucp::o_cu_cp_dependencies ocu_dependencies;
@@ -109,12 +177,12 @@ o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_u
     ocudu_assert(!cucp_unit_cfg.amf_config.amf.supported_tas.empty() &&
                      !cucp_unit_cfg.amf_config.amf.supported_tas.front().plmn_list.empty(),
                  "CU-CP AMF config must have at least one supported TA with a PLMN");
-    o_cu_cp_cfg.e2ap_config =
+    o_cu_cp_cfg.e2ap_cfg =
         generate_e2_config(unit_cfg.e2_cfg,
                            cucp_unit_cfg.gnb_id,
                            cucp_unit_cfg.amf_config.amf.supported_tas.front().plmn_list.front().plmn_id);
     ocu_dependencies.e2_client          = dependencies.e2_gw;
-    ocu_dependencies.e2_cu_metric_iface = &(*e2_metric_connectors).get_e2_metrics_interface(0);
+    ocu_dependencies.e2_cu_metric_iface = &e2_metric_connectors->get_e2_metrics_interface(0);
   }
 
   ocucp.unit = std::make_unique<o_cu_cp_unit_impl>(
@@ -128,6 +196,37 @@ o_cu_cp_unit ocudu::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_u
                                         std::chrono::milliseconds{cucp_unit_cfg.mobility_config.cho_timeout_ms}));
   ocucp.commands.cmdline.commands.push_back(
       std::make_unique<release_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+
+  // Add the remote WS commands.
+  ocucp.commands.remote.push_back(
+      std::make_unique<cell_lock_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<cell_unlock_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<cell_bar_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<cell_unbar_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<cell_status_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<mobility_cell_set_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<mobility_cell_remove_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<neighbor_add_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<neighbor_remove_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<report_config_set_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<report_config_remove_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<periodic_report_set_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(
+      std::make_unique<trigger_handover_remote_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.remote.push_back(std::make_unique<trigger_conditional_handover_remote_command>(
+      ocucp.unit->get_cu_cp().get_command_handler(),
+      std::chrono::milliseconds{cucp_unit_cfg.mobility_config.cho_timeout_ms}));
 
   return ocucp;
 }

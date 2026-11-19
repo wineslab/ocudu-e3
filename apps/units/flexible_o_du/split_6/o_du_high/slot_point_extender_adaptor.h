@@ -5,22 +5,25 @@
 #pragma once
 
 #include "ocudu/fapi/p7/p7_slot_indication_notifier.h"
+#include "ocudu/ran/slot_point_extended.h"
 #include <chrono>
 
 namespace ocudu {
 
-/// Slot point extender adaptor. This object listens to FAPI SLOT.indication messages from the Split 6 O-DU high and
-/// generates an extended slot point using the host time to derive the hyper-SFN and the given slot in the indication.
+/// Hyper-SFN of the first radio frame at or after \c now whose SFN equals \c sfn.
+unsigned get_hyper_sfn(uint32_t sfn, std::chrono::system_clock::time_point now);
+
+/// Lifts a FAPI SFN/slot into a continuous slot timeline. The first indication is seeded by \ref get_hyper_sfn;
+/// later indications advance from the previous extended slot.
 class slot_point_extender_adaptor : public fapi::p7_slot_indication_notifier
 {
-  const std::chrono::microseconds    slot_duration;
   fapi::p7_slot_indication_notifier& notifier;
+  bool                               has_prev_extended_slot{false};
+  slot_point                         prev_raw_slot{};
+  slot_point_extended                prev_extended_slot{};
 
 public:
-  slot_point_extender_adaptor(std::chrono::microseconds slot_duration_, fapi::p7_slot_indication_notifier& notifier_) :
-    slot_duration(slot_duration_), notifier(notifier_)
-  {
-  }
+  explicit slot_point_extender_adaptor(fapi::p7_slot_indication_notifier& notifier_) : notifier(notifier_) {}
 
   void on_slot_indication(const fapi::slot_indication& msg) override;
 };

@@ -5,8 +5,10 @@
 #pragma once
 
 #include "apps/helpers/metrics/metrics_config.h"
+#include "apps/helpers/ntn/ntn_satellite_config.h"
 #include "ntn/du_high_unit_cell_ntn_config.h"
 #include "ocudu/ocudulog/logger.h"
+#include "ocudu/ran/antenna_topology.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/bs_channel_bandwidth.h"
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
@@ -19,6 +21,7 @@
 #include "ocudu/ran/pdcch/search_space.h"
 #include "ocudu/ran/pdsch/pdsch_mcs.h"
 #include "ocudu/ran/prach/prach_configuration.h"
+#include "ocudu/ran/prach/ssb_per_rach_occasions.h"
 #include "ocudu/ran/pucch/pucch_configuration.h"
 #include "ocudu/ran/pucch/pucch_mapping.h"
 #include "ocudu/ran/pusch/pusch_mcs.h"
@@ -31,9 +34,12 @@
 #include "ocudu/ran/subcarrier_spacing.h"
 #include "ocudu/ran/tac.h"
 #include "ocudu/scheduler/config/scheduler_expert_config.h"
+#include "ocudu/support/units.h"
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace ocudu {
@@ -58,10 +64,24 @@ struct du_high_unit_logger_config {
   bool high_latency_diagnostics_enabled = false;
 };
 
+/// Configuration of schedtrace, to trace scheduler events and decisions.
+struct du_high_schedtrace_config {
+  /// Whether to enable tracing of scheduler events and decisions.
+  bool enabled = false;
+  /// \brief Directory where schedtrace files will be stored.
+  ///
+  /// One file will be generated per active cell.
+  std::string path = "/tmp";
+  /// Period at which pending events are flushed into schedtrace file.
+  unsigned flush_period_ms = 50;
+};
+
 /// DU high tracing functionalities.
 struct du_high_unit_tracer_config {
   /// \brief Whether to enable tracing of the DU-high executors.
-  bool executor_tracing_enable = false;
+  bool executor_tracing_enabled = false;
+  /// MAC scheduler event and decision making tracing.
+  du_high_schedtrace_config schedtrace;
 };
 
 /// Timing Advance MAC CE scheduling expert configuration.
@@ -93,6 +113,13 @@ struct du_high_unit_scheduler_config {
   unsigned nof_preselected_newtx_ues = 1024;
   /// Scheduler policy employed to prioritize or deprioritize pre-selected UE candidates.
   std::optional<scheduler_policy_config> policy_cfg;
+
+  /// MCS index to use for Paging PDSCH allocations.
+  unsigned paging_mcs_index = 5;
+  /// Aggregation level for Paging DCI (PDCCH). Values: {1, 2, 4, 8, 16}.
+  unsigned paging_dci_aggr_lev = 4;
+  /// Maximum number of times a paging message is retransmitted before being dropped.
+  unsigned max_paging_retries = 2;
 };
 
 /// DRX configuration.
@@ -109,7 +136,40 @@ struct du_high_unit_drx_config {
   unsigned long_cycle = 0;
 };
 
+/// \brief Beam that the reference signals of a cell can be transmitted on.
+///
+/// The beam is a position within the beam grid that the antenna topology of the cell defines, as per TS 38.214
+/// Section 5.2.2.2.
+///
+/// \remark An accepted beam is not a guarantee that the RU is able to form it.
+struct du_high_unit_ref_beam_config {
+  /// \brief Identifier that the reference signals of the cell use to select this beam.
+  /// \remark Not to be confused with \c beam_identifier, the beam that the RAN and PHY layers transmit on.
+  unsigned ref_beam_id = 0;
+  /// Index of the antenna panel that forms the beam.
+  unsigned i_panel = 0;
+  /// Beam polarization index.
+  unsigned i_pol = 0;
+  /// First dimension beam index, parameter \f$l\f$ of TS 38.214 Section 5.2.2.2.
+  unsigned i_beam_dim1 = 0;
+  /// Second dimension beam index, parameter \f$m\f$ of TS 38.214 Section 5.2.2.2.
+  unsigned i_beam_dim2 = 0;
+};
+
+/// Beam assigned to one transmitted SSB candidate.
+struct du_high_unit_ssb_beam_config {
+  /// Index of the SSB candidate within the SSB burst, as per TS 38.213 Section 4.1.
+  unsigned ssb_index = 0;
+  /// \brief Cell reference beam for this SSB.
+  ///
+  /// The DU assigns one automatically if not present, sweeping the beam grid over the transmitted SSB candidates.
+  std::optional<unsigned> ref_beam_id;
+};
+
 struct du_high_unit_ssb_config {
+  /// \brief Transmitted SSB candidates and the beam assigned to each of them.
+  /// Determines \c ssb-PositionsInBurst, as per TS 38.331.
+  std::vector<du_high_unit_ssb_beam_config> beams = {{}};
   /// SSB period in milliseconds.
   unsigned ssb_period_msec = 10;
   /// \brief \c ss-PBCH-BlockPower, part of \c ServingCellConfigCommonSIB, as per TS 38.331.
@@ -130,6 +190,9 @@ struct du_high_unit_ul_common_config {
   unsigned max_ul_grants_per_slot = 32U;
   /// Minimum distance in PRBs between PUCCH and UE-dedicated PUSCH grants.
   unsigned min_pucch_pusch_prb_distance = 1U;
+  /// UL frequency shift of 7.5 kHz (TS 38.211, Section 6.3.3.2): if true, subcarriers are shifted by 7.5 kHz for
+  /// LTE/NR coexistence on FDD bands.
+  bool freq_shift_7p5khz = false;
 };
 
 /// PDSCH application configuration.
@@ -163,6 +226,12 @@ struct du_high_unit_pdsch_config {
   std::vector<unsigned> rv_sequence = {0, 2, 3, 1};
   /// MCS table to use for PDSCH
   pdsch_mcs_table mcs_table = pdsch_mcs_table::qam256;
+  /// \brief Maximum number of PDSCH repetitions offered in the dedicated Rel-16 TDRA list of supporting UEs. Value 1
+  /// disables dynamic PDSCH repetitions. Values: {1, 2, 3, 4, 5, 6, 7, 8, 16}.
+  unsigned max_nof_rep = 1;
+  /// \brief CQI threshold below which the scheduler uses PDSCH repetitions for supporting UEs. The effective CQI
+  /// is compared against this value. Value 0 disables CQI-triggered repetitions. Values: [0,...,15].
+  float cqi_rep_threshold = 0.0F;
   /// Minimum number of RBs for resource allocation of UE PDSCHs.
   unsigned min_rb_size = 1;
   /// Maximum number of RBs for resource allocation of UE PDSCHs.
@@ -237,10 +306,22 @@ struct du_high_unit_pusch_config {
   unsigned max_rank = 4;
   /// MCS table to use for PUSCH
   pusch_mcs_table mcs_table = pusch_mcs_table::qam256;
+  /// \brief Maximum number of PUSCH repetitions offered in the dedicated Rel-16 TDRA list of supporting UEs. Value 1
+  /// disables dynamic PUSCH repetitions. Values: {1, 2, 3, 4, 7, 8, 12, 16}.
+  unsigned max_nof_rep = 1;
+  /// \brief SINR threshold, in dB, below which the scheduler uses PUSCH repetitions for supporting UEs. The
+  /// effective SINR is compared against this value. If not set, SINR-triggered repetitions are disabled.
+  std::optional<float> sinr_rep_threshold;
+  /// \brief If true, PUSCH repetitions are used for all supporting UEs regardless of the estimated SINR. Intended
+  /// for testing in setups without RF impairments, where the SINR never drops below \c sinr_rep_threshold.
+  bool force_rep = false;
   /// \c msg3-DeltaPreamble, TS 38.331. Values: {-1,...,6}.
   int msg3_delta_preamble = 6;
   /// \c p0-NominalWithGrant, TS 38.331. Value in dBm. Only even values allowed within {-202,...,24}.
   int p0_nominal_with_grant = -76;
+  /// \c p0-NominalWithoutGrant, TS 38.331. Value in dBm. Only even values allowed within {-202,...,24}.
+  /// Default -76 keeps parity with \c p0_nominal_with_grant.
+  int p0_nominal_without_grant = -76;
 
   /// \defgroup betaoffsets
   /// \brief Beta offsets for uplink control information multiplexed in PUSCH.
@@ -317,8 +398,10 @@ struct du_high_unit_pusch_config {
   float olla_target_bler{0.01};
   /// Maximum CQI offset that the OLLA algorithm can apply to the reported CQI.
   float olla_max_snr_offset{5.0};
+  /// Minimum PUSCH SINR, in dB, below which a CRC is ignored by the UL OLLA algorithm.
+  float olla_min_pusch_snr{-10.0};
   /// Position for additional DM-RS in UL (see TS 38.211, clause 6.4.1.1.3).
-  unsigned dmrs_add_pos{2};
+  unsigned dmrs_add_pos{1};
   /// Minimum number of RBs for resource allocation of UE PUSCHs.
   unsigned min_rb_size = 1;
   /// Maximum number of RBs for resource allocation of UE PUSCHs.
@@ -377,8 +460,8 @@ struct du_high_unit_pucch_config {
   unsigned nof_cell_csi_resources = 8;
 
   /// \brief \c SR period in milliseconds.
-  /// Among all values given in \c periodicityAndOffset, part of \c \SchedulingRequestResourceConfig, TS 38.331,
-  /// these are the only ones supported. Values: {1, 2, 2.5, 4, 5, 8, 10, 16, 20, 40, 80, 160, 320}.
+  /// Among all values given in \c periodicityAndOffset, part of \c SchedulingRequestResourceConfig, TS 38.331,
+  /// these are the only ones supported. Values: {1, 2, 2.5, 4, 5, 8, 10, 16, 20, 40, 80}.
   float sr_period_msec = 20.0F;
 
   /// PUCCH F0 resource parameter.
@@ -457,6 +540,10 @@ struct du_high_unit_pucch_config {
   /// Maximum number of consecutive undecoded PUCCH Format 2 for CSI before an RLF is reported.
   unsigned max_consecutive_kos = 100;
 
+  /// \brief SINR threshold, in dB, below which PUCCH UCI indications reported by the PHY are considered invalid.
+  /// If not set, no SINR-based filtering of PUCCH UCI indications is applied.
+  std::optional<float> sinr_threshold_dB;
+
   /// Enable closed-loop PUCCH power control.
   bool enable_closed_loop_pw_control = false;
   /// Target PUSCH SINR to be achieved with close-loop power control, in dB. Only relevant if \c
@@ -506,6 +593,8 @@ struct du_high_unit_pucch_config {
            f4_intraslot_freq_hopping == rhs.f4_intraslot_freq_hopping && f4_additional_dmrs == rhs.f4_additional_dmrs &&
            f4_pi2_bpsk == rhs.f4_pi2_bpsk && f4_enable_occ == rhs.f4_enable_occ && f4_occ_length == rhs.f4_occ_length &&
            min_k1 == rhs.min_k1 && max_consecutive_kos == rhs.max_consecutive_kos &&
+           sinr_threshold_dB.has_value() == rhs.sinr_threshold_dB.has_value() &&
+           (!sinr_threshold_dB.has_value() || almost_equal<float>(*sinr_threshold_dB, *rhs.sinr_threshold_dB)) &&
            enable_closed_loop_pw_control == rhs.enable_closed_loop_pw_control &&
            almost_equal<float>(pucch_f0_sinr_target_dB, rhs.pucch_f0_sinr_target_dB) &&
            almost_equal<float>(pucch_f2_sinr_target_dB, rhs.pucch_f2_sinr_target_dB) &&
@@ -519,6 +608,33 @@ struct du_high_unit_pucch_config {
            repetition_factors == rhs.repetition_factors;
   }
   bool operator!=(const du_high_unit_pucch_config& rhs) const { return !(*this == rhs); }
+};
+
+struct du_high_configured_grants {
+  /// If present, enables Configured Grants Type1 and sets its periodicity in slots.
+  /// For 14-symbol slots, values: {1, 2, 4, 5, 8, 10, 16, 20, 32, 40, 64, 80, 128, 160, 256, 320, 512, 640, 1024, 1280,
+  /// 2560, 5120}.
+  /// For 12 symbol slots, all values above except {1014, 5120}.
+  /// \remark Only 14-symbol slot is currently supported.
+  std::optional<unsigned> periodicity_slots;
+  /// Configured Grant grant size in bytes.
+  /// When \ref requested_bitrate is set, \c grant_size gets ignored.
+  /// \remark The default of 120 bytes results in 10 PRBs at the default MCS 5, which fits within the default
+  /// \ref max_nof_cell_cg_rbs.
+  unsigned grant_size{120};
+  /// Configured Grant requested bitrate. The CLI value is expressed in kBps, while this field stores it normalized in
+  /// bytes per second.
+  /// Setting this automatically makes \ref grant_size be ignored.
+  /// \remark The periodicity doesn't change this bitrate, but it affects the auto-computed grant size per period.
+  std::optional<unsigned> requested_bitrate;
+  /// MCS configured for the UE configured grant. Values: {1,...,27}.
+  unsigned mcs = 5;
+  /// Number of HARQ processes reserved for configured grant. Values: {1,...,16}.
+  unsigned nof_harq_processes = 4;
+  /// Number of RBs that are available for configured grants at cell-level. Values: {1,...,275}.
+  unsigned max_nof_cell_cg_rbs = 20;
+  /// SINR threshold required for the Configured Grant PUSCH to be detected as transmitted. Range: [-30.0, 30.0].
+  float sinr_threshold_dB = -8.0;
 };
 
 struct du_high_unit_srs_config {
@@ -575,6 +691,71 @@ struct du_high_unit_phy_cell_group_config {
   /// The maximum total TX power to be used by the UE in this NR cell group across all serving cells in FR1.
   std::optional<int> p_nr_fr1;
 };
+
+/// \brief Normal-accuracy geographical position of the cell/TRP antenna, i.e. the NG-RAN Access Point Position IE.
+/// See TS 38.473, Section 9.3.1.174.
+struct du_high_unit_cell_geo_coordinates_normal_config {
+  /// Latitude of the antenna position, in degrees [-90, 90].
+  double latitude = 0.0;
+  /// Longitude of the antenna position, in degrees [-180, 180].
+  double longitude = 0.0;
+  /// Altitude of the antenna position, in metres.
+  double altitude = 0.0;
+  /// Uncertainty semi-major axis, as an "uncertainty code" per TS 38.473, Section 9.3.1.174. Values: {0,...,127}.
+  /// \remark Defaults to the maximum code (largest uncertainty): K=0 would encode a literal 0 metre uncertainty
+  /// (perfect precision), which is a misleading claim to make by default rather than an "unset" sentinel.
+  uint8_t uncertainty_semi_major = 127;
+  /// Uncertainty semi-minor axis, as an "uncertainty code" per TS 38.473, Section 9.3.1.174. Values: {0,...,127}.
+  /// \remark Defaults to the maximum code (largest uncertainty); see \c uncertainty_semi_major.
+  uint8_t uncertainty_semi_minor = 127;
+  /// Orientation of the major axis of the uncertainty ellipse, in degrees. Values: {0,...,179}.
+  uint8_t orientation_of_major_axis = 0;
+  /// Uncertainty altitude, as an "uncertainty code" per TS 38.473, Section 9.3.1.174. Values: {0,...,127}.
+  /// \remark Defaults to the maximum code (largest uncertainty); see \c uncertainty_semi_major.
+  uint8_t uncertainty_altitude = 127;
+  /// Confidence, in percentage. Values: {0,...,100}.
+  /// \remark Defaults to 0, which TS 23.032, Section 6.5 defines as the "no information" sentinel value.
+  uint8_t confidence = 0;
+};
+
+/// \brief High-accuracy geographical position of the cell/TRP antenna, i.e. the NG-RAN High Accuracy Access Point
+/// Position IE. See TS 38.473, Section 9.3.1.190.
+/// \remark Latitude, longitude and altitude are given in real-world units and converted to their IE-encoded values
+/// using the High Accuracy Point/Altitude scale factors defined in TS 23.032, Sections 6.1a and 6.3a. The
+/// uncertainty and uncertainty altitude fields are left as raw "uncertainty code" values (TS 23.032, Sections 6.2a
+/// and 6.4), as for the normal-accuracy NG-RAN Access Point Position.
+struct du_high_unit_cell_geo_coordinates_ha_config {
+  /// Latitude of the antenna position, in degrees [-90, 90].
+  double latitude = 0.0;
+  /// Longitude of the antenna position, in degrees [-180, 180].
+  double longitude = 0.0;
+  /// Altitude of the antenna position, in metres [-500, 10000].
+  double altitude = 0.0;
+  /// Uncertainty semi-major axis, as an "uncertainty code" per TS 23.032, Section 6.2a. Values: {0,...,255}.
+  /// \remark Defaults to the maximum code (largest uncertainty): K=0 would encode a literal 0 metre uncertainty
+  /// (perfect precision), which is a misleading claim to make by default rather than an "unset" sentinel.
+  uint16_t uncertainty_semi_major = 255;
+  /// Uncertainty semi-minor axis, as an "uncertainty code" per TS 23.032, Section 6.2a. Values: {0,...,255}.
+  /// \remark Defaults to the maximum code (largest uncertainty); see \c uncertainty_semi_major.
+  uint16_t uncertainty_semi_minor = 255;
+  /// Orientation of the major axis of the uncertainty ellipse, in degrees. Values: {0,...,179}.
+  uint8_t orientation_of_major_axis = 0;
+  /// Horizontal confidence, in percentage. Values: {0,...,100}.
+  /// \remark Defaults to 0, which TS 23.032, Section 6.5 defines as the "no information" sentinel value.
+  uint8_t horizontal_confidence = 0;
+  /// Uncertainty altitude, as an "uncertainty code" per TS 23.032, Section 6.4. Values: {0,...,255}.
+  /// \remark Defaults to the maximum code (largest uncertainty); see \c uncertainty_semi_major.
+  uint16_t uncertainty_altitude = 255;
+  /// Vertical confidence, in percentage. Values: {0,...,100}.
+  /// \remark Defaults to 0, which TS 23.032, Section 6.5 defines as the "no information" sentinel value.
+  uint8_t vertical_confidence = 0;
+};
+
+/// \brief Geographical coordinates of the cell/TRP antenna, reported to the CU in the F1AP TRP Information Response
+/// procedure. See TS 38.473, Section 9.3.1.184 (Direct definition): either the normal- or the high-accuracy
+/// position, never both.
+using du_high_unit_cell_geo_coordinates_config =
+    std::variant<du_high_unit_cell_geo_coordinates_normal_config, du_high_unit_cell_geo_coordinates_ha_config>;
 
 /// TDD pattern configuration. See TS 38.331, \c TDD-UL-DL-Pattern.
 struct tdd_ul_dl_pattern_unit_config {
@@ -778,67 +959,90 @@ struct du_high_unit_sib_config {
     std::vector<freq_priority_slicing_config> freq_prio_list_slicing;
   };
 
-  /// \brief Earthquake and Tsunami Warning System (ETWS) message parameters.
+  /// \brief Earthquake and Tsunami Warning System (ETWS) configuration.
   ///
-  /// ETWS messages are broadcasted over SIB 6 and SIB 7. SIB 6 carries the ETWS primary notification, while SIB-7
-  /// carries the secondary notification.
+  /// ETWS messages are broadcast over SIB 6 and SIB 7. SIB 6 carries the ETWS primary notification, while SIB 7
+  /// carries the secondary notification. A cell only accepts a Write-Replace Warning for them if this is set.
   struct etws_config {
-    /// \brief ETWS message ID (see \ref sib6_info::message_id). Values: {0, ..., 0xffff}
-    /// \remark See TS23.041 Section 9.4.1.2.2 for a list of meaningful values.
-    unsigned message_id = 0x1104;
-    /// \brief ETWS message serial number (see \ref sib6_info::serial_number). Values: {0, ..., 0xffff}
-    /// \remark See TS23.041 Section 9.4.1.2.1 for a list of meaningful values.
-    unsigned serial_num = 0x3000;
-    /// \brief ETWS warning type (see \ref sib6_info::warning_type). Values: {0, ..., 0xffff}
-    /// \remark See TS23.041 Section 9.3.24 for a list of meaningful values.
-    unsigned warning_type = 0x0980;
-    /// \brief CBS Coding scheme used for the warning message. Values: {0, ..., 0xff}.
+    /// \brief Fixed ETWS content that the cell broadcasts from its start, for testing purposes.
     ///
-    /// Supported coding schemes:
-    ///   - 0x00..0x0f: Languages using GSM-7 default alphabet.
-    ///   - 0x40..0x4f: General data coding indication (uncompressed text, no message class meaning).
-    ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
-    ///   - 0x50..0x5f: General data coding indication (uncompressed text, message class meaning).
-    ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
-    ///   - 0xf0..0xff: Data coding / message handling.
-    ///     Bit 2 must be set to 0 (GSM-7 encoding).
-    ///
-    /// \remark See TS23.038 Section 5 for a list of meaningful values.
-    unsigned data_coding_scheme = 0x00;
-    /// \brief ETWS warning message.
-    ///
-    /// Character support depends on the chosen coding scheme (see \ref data_coding_scheme).
-    ///
-    /// \remark Required if SIB-7 is scheduled in \ref si_sched_info, otherwise leave unset.
-    std::optional<std::string> warning_message;
+    /// This is a testing aid, not part of the real Write-Replace Warning feature.
+    struct test_config {
+      /// \brief ETWS message ID (see \ref sib6_info::message_id). Values: {0, ..., 0xffff}
+      /// \remark See TS23.041 Section 9.4.1.2.2 for a list of meaningful values.
+      unsigned message_id = 0x1104;
+      /// \brief ETWS message serial number (see \ref sib6_info::serial_number). Values: {0, ..., 0xffff}
+      /// \remark See TS23.041 Section 9.4.1.2.1 for a list of meaningful values.
+      unsigned serial_num = 0x3000;
+      /// \brief ETWS warning type (see \ref sib6_info::warning_type). Values: {0, ..., 0xffff}
+      /// \remark See TS23.041 Section 9.3.24 for a list of meaningful values.
+      unsigned warning_type = 0x0980;
+      /// \brief CBS Coding scheme used for the warning message. Values: {0, ..., 0xff}.
+      ///
+      /// Supported coding schemes:
+      ///   - 0x00..0x0f: Languages using GSM-7 default alphabet.
+      ///   - 0x40..0x4f: General data coding indication (uncompressed text, no message class meaning).
+      ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
+      ///   - 0x50..0x5f: General data coding indication (uncompressed text, message class meaning).
+      ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
+      ///   - 0xf0..0xff: Data coding / message handling.
+      ///     Bit 2 must be set to 0 (GSM-7 encoding).
+      ///
+      /// \remark See TS23.038 Section 5 for a list of meaningful values.
+      unsigned data_coding_scheme = 0x00;
+      /// \brief ETWS warning message.
+      /// \remark Character support depends on the chosen coding scheme (see \ref data_coding_scheme). Must not be
+      /// empty.
+      std::string warning_message = "Test ETWS warning message.";
+    };
+
+    /// \brief si-Periodicity of the SI messages carrying SIB6 and SIB7, in radio frames.
+    /// \remark Values: {8, 16, 32, 64, 128, 256, 512}.
+    unsigned si_period_rf = 64;
+    /// \brief Content broadcast from the cell start. If unset, SIB6/7 stay dormant until an F1AP Write-Replace
+    /// Warning arrives.
+    std::optional<test_config> test;
   };
 
-  /// \brief Commercial Mobile Alert Service (CMAS) message parameters.
+  /// \brief Commercial Mobile Alert Service (CMAS) configuration.
   ///
-  /// CMAS messages are broadcasted over SIB 8.
+  /// CMAS messages are broadcast over SIB 8. A cell only accepts a Write-Replace Warning for it if this is set.
   struct cmas_config {
-    /// \brief CMAS message ID (see \ref sib8_info::message_id). Values: {0, ..., 0xffff}
-    /// \remark See TS23.041 Section 9.4.1.2.2 for a list of meaningful values.
-    unsigned message_id = 0x1112;
-    /// \brief CMAS message serial number (see \ref sib8_info::serial_number). Values: {0, ..., 0xffff}
-    /// \remark See TS23.041 Section 9.4.1.2.1 for a list of meaningful values.
-    unsigned serial_num = 0x3003;
-    /// \brief CBS Coding scheme used for the warning message Values: {0, ..., 0xff}.
+    /// \brief Fixed CMAS content that the cell broadcasts from its start, for testing purposes.
     ///
-    /// Supported coding schemes:
-    ///   - 0x00..0x0f: Languages using GSM-7 default alphabet.
-    ///   - 0x40..0x4f: General data coding indication (uncompressed text, no message class meaning).
-    ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
-    ///   - 0x50..0x5f: General data coding indication (uncompressed text, message class meaning).
-    ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
-    ///   - 0xf0..0xff: Data coding / message handling.
-    ///     Bit 2 must be set to 0 (GSM-7 encoding).
-    ///
-    /// \remark See TS23.038 Section 5 for a list of meaningful values.
-    unsigned data_coding_scheme = 0x00;
-    /// \brief CMAS warning message.
-    /// \remark Character support depends on the chosen coding scheme (see \ref data_coding_scheme).
-    std::string warning_message;
+    /// This is a testing aid, not part of the real Write-Replace Warning feature.
+    struct test_config {
+      /// \brief CMAS message ID (see \ref sib8_info::message_id). Values: {0, ..., 0xffff}
+      /// \remark See TS23.041 Section 9.4.1.2.2 for a list of meaningful values.
+      unsigned message_id = 0x1112;
+      /// \brief CMAS message serial number (see \ref sib8_info::serial_number). Values: {0, ..., 0xffff}
+      /// \remark See TS23.041 Section 9.4.1.2.1 for a list of meaningful values.
+      unsigned serial_num = 0x3003;
+      /// \brief CBS Coding scheme used for the warning message Values: {0, ..., 0xff}.
+      ///
+      /// Supported coding schemes:
+      ///   - 0x00..0x0f: Languages using GSM-7 default alphabet.
+      ///   - 0x40..0x4f: General data coding indication (uncompressed text, no message class meaning).
+      ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
+      ///   - 0x50..0x5f: General data coding indication (uncompressed text, message class meaning).
+      ///     Set bits 3..2 to 0b00 for GSM-7 or 0b10 for UCS-2. Other character sets are not supported.
+      ///   - 0xf0..0xff: Data coding / message handling.
+      ///     Bit 2 must be set to 0 (GSM-7 encoding).
+      ///
+      /// \remark See TS23.038 Section 5 for a list of meaningful values.
+      unsigned data_coding_scheme = 0x00;
+      /// \brief CMAS warning message.
+      /// \remark Character support depends on the chosen coding scheme (see \ref data_coding_scheme). Must not be
+      /// empty.
+      std::string warning_message = "Test CMAS warning message.";
+    };
+
+    /// \brief si-Periodicity of the SI message carrying SIB8, in radio frames.
+    /// \remark Values: {8, 16, 32, 64, 128, 256, 512}.
+    unsigned si_period_rf = 64;
+    /// \brief Content broadcast from the cell start. If unset, SIB8 stays dormant until an F1AP Write-Replace Warning
+    /// arrives.
+    std::optional<test_config> test;
   };
 
   struct sib_ue_timers_and_constants {
@@ -863,6 +1067,9 @@ struct du_high_unit_sib_config {
     /// t319
     /// Values (in ms): {100, 200, 300, 400, 600, 1000, 1500, 2000}
     unsigned t319 = 1000;
+    /// t304
+    /// Values (in ms): {50, 100, 150, 200, 500, 1000, 2000, 10000}
+    unsigned t304 = 2000;
   };
 
   /// The length of the SI scheduling window, in slots. It is always shorter or equal to the period of the SI message.
@@ -909,6 +1116,61 @@ struct du_high_unit_csi_config {
   int pwr_ctrl_offset = 0;
   /// \brief Type of CSI reporting configuration to use.
   csi_report_type report_type = csi_report_type::periodic;
+  /// \brief Enable Type-II CSI reporting in the cell for UEs that support Type-II codebook.
+  ///
+  /// Note the use of precoding Type-II codebooks limits the maximum number of layer per UE to 2.
+  bool type2_codebook_enabled = false;
+};
+
+/// \brief Configuration of a single DL-PRS resource within a PRS Resource Set.
+///
+/// \remark See TS 38.455, Section 9.2.44 and TS 38.211, Section 7.4.1.7.
+struct du_high_unit_prs_resource_config {
+  /// Sequence ID seeding the PRS pseudo-random sequence. Values: {0,...,4095}.
+  unsigned sequence_id = 0;
+  /// RE offset (comb offset) of the resource. Values: {0,...,comb_size - 1}.
+  unsigned re_offset = 0;
+  /// Slot offset of the resource, on top of the slot offset of the resource set. Values: {0,...,511}.
+  unsigned slot_offset = 0;
+  /// First OFDM symbol of the resource within the slot. Values: {0,...,12}.
+  unsigned symbol_offset = 0;
+};
+
+/// \brief Configuration of a DL-PRS Resource Set.
+///
+/// \remark See TS 38.455, Section 9.2.44 and TS 38.211, Section 7.4.1.7.
+struct du_high_unit_prs_resource_set_config {
+  /// \brief PRS bandwidth, in PRBs. It must be a multiple of 4. Values: {24,...,272}.
+  ///
+  /// If not set, it is derived from the cell bandwidth, rounded down to a multiple of 4 PRBs.
+  std::optional<unsigned> bandwidth_prbs;
+  /// Start PRB of the resource set, relative to Point A. Values: {0,...,2176}.
+  unsigned start_prb = 0;
+  /// Comb size, or \f$K_{comb}^{PRS}\f$. Values: {2, 4, 6, 12}.
+  unsigned comb_size = 2;
+  /// \brief Resource set periodicity, or \f$T_{per}^{PRS}\f$, in slots.
+  ///
+  /// Valid values are given by \ref prs_constants::VALID_PERIODICITIES.
+  unsigned periodicity_slots = 160;
+  /// Resource set slot offset within the period, or \f$T_{offset}^{PRS}\f$. Values: {0,...,periodicity - 1}.
+  unsigned slot_offset = 0;
+  /// Resource repetition factor, or \f$T_{rep}^{PRS}\f$. Values: {1, 2, 4, 6, 8, 16, 32}.
+  unsigned repetition_factor = 1;
+  /// Resource time gap between repetitions, or \f$T_{gap}^{PRS}\f$, in slots. Values: {1, 2, 4, 8, 16, 32}.
+  unsigned time_gap = 1;
+  /// Number of OFDM symbols of each resource, or \f$L_{PRS}\f$. Values: {2, 4, 6, 12}.
+  unsigned nof_symbols = 2;
+  /// Transmission power offset of the resource set, in dB. Values: {-60,...,50}.
+  int power_offset_db = 0;
+  /// PRS resources belonging to this resource set. TS 38.455, Section 9.2.44, allows up to 64 resources per set.
+  std::vector<du_high_unit_prs_resource_config> resources;
+  // TODO: Muting (Options 1 and 2) and QCL information.
+};
+
+/// DL-PRS application configuration.
+struct du_high_unit_prs_config {
+  /// PRS resource sets of the cell. TS 38.455, Section 9.2.44, allows up to 8 resource sets per TRP.
+  std::vector<du_high_unit_prs_resource_set_config> resource_sets;
 };
 
 /// MAC Buffer Status Report application configuration.
@@ -934,7 +1196,8 @@ struct mac_phr_unit_config {
 /// MAC Scheduler Request configuration.
 struct mac_sr_unit_config {
   /// \brief \c sr-ProhibitTimer, or timer for SR transmission on PUCCH.
-  /// Values are in ms. Values: {1, 2, 4, 8, 16, 32, 64, 128}. When the field is absent, the UE applies the value 0.
+  /// Values are in ms. Values: {1, 2, 4, 8, 16, 32, 64, 128}, and {192, 256, 320, 384, 448, 512, 576, 640, 1082} for
+  /// NTN (\c sr-ProhibitTimer-v1700). When the field is absent, the UE applies the value 0.
   std::optional<unsigned> sr_prohibit_timer;
   /// \brief \c sr-TransMax possible values, or maximum number of SR transmissions.
   /// Values: {4, 8, 16, 32, 64}.
@@ -992,6 +1255,16 @@ struct du_high_unit_rach_config {
   unsigned zero_correlation_zone = 0;
   unsigned fixed_msg3_mcs        = 0;
   unsigned max_msg3_harq_retx    = 4;
+  /// \brief SNR threshold, in dB, below which a detected PRACH preamble is excluded from the RAR/Msg3 grant and
+  /// triggers a Backoff Indicator in the RAR. Disabled if not set.
+  std::optional<float> backoff_indicator_snr_threshold;
+  /// \brief Maximum number of preambles accepted per PRACH occasion. Excess preambles (weakest by SNR first) are
+  /// excluded from the RAR/Msg3 grant and trigger a Backoff Indicator in the RAR. Defaults to the maximum number of
+  /// preambles per occasion, i.e. no filtering.
+  unsigned backoff_indicator_max_preambles = MAX_PREAMBLES_PER_PRACH_OCCASION;
+  /// \brief Requested Backoff Indicator duration, in ms, signalled in the RAR when congestion control is triggered.
+  /// Mapped to the closest value in TS38.321, Table 7.2-1.
+  unsigned backoff_indicator_duration_ms = 40;
   /// \c preambleReceivedTargetPower, target power at the network rx side, in dBm. Only values multiple of 2 are
   /// valid.
   int preamble_rx_target_pw = -100;
@@ -1001,6 +1274,9 @@ struct du_high_unit_rach_config {
   /// \brief Whether to enable contention-free random access (CFRA) or not. If enabled, the number of RA preambles
   /// used for CBRA (see \c nof_cb_preambles_per_ssb) must be less than \c total_nof_ra_preambles.
   bool cfra_enabled = false;
+  /// \brief Whether a CFRA UE's pending UCI may be multiplexed into its Msg3 PUSCH, rather than restricting the Msg3
+  /// to slots where the UE has no PUCCH.
+  bool multiplex_uci_on_cf_rar_ul_grant = true;
   /// Offset of lowest PRACH transmission occasion in frequency domain respective to PRB 0. To minimize interference
   /// with the PUCCH, the user should leave some guardband between the PUCCH CRBs and the PRACH PRBs.
   /// Possible values: {0,...,MAX_NOF_PRB - 1}.
@@ -1022,8 +1298,7 @@ struct du_high_unit_rach_config {
   /// RA-Response (MSG2) window length in number of slots. Values: {1, 2, 4, 8, 10, 20, 40, 80}.  If not specified, it
   /// is automatically derived to be equal to 10ms.
   std::optional<unsigned> ra_resp_window;
-  /// Number of RBs that are used as guardband on each side of the PRACH RBs dedicated interval for short PRACH
-  /// formats.
+  /// Number of RBs that are used as guardband on each side of the PRACH RBs dedicated interval.
   unsigned nof_prach_guardbands_rbs = 3;
   /// Configuration of slice-specific RACH configurations.
   std::vector<ra_prioritization_slice_info> ra_prio_slice_info_list;
@@ -1083,6 +1358,11 @@ struct du_high_unit_base_cell_config {
   bs_channel_bandwidth channel_bw_mhz = bs_channel_bandwidth::MHz20;
   /// Number of antennas in downlink.
   unsigned nof_antennas_dl = 1;
+  /// \brief Topology of the downlink antennas.
+  ///
+  /// The number of downlink antennas gives the topology. It is derived once, so that all stack components of a
+  /// cell/sector use the same topology.
+  antenna_topology tx_ant_topology = antenna_topology::one_port;
   /// Number of antennas in uplink.
   unsigned nof_antennas_ul = 1;
   /// Human readable full PLMN (without possible filler digit).
@@ -1091,11 +1371,16 @@ struct du_high_unit_base_cell_config {
   std::vector<std::string> additional_plmns;
   /// TAC.
   tac_t tac = 7;
+  /// Additional TACs broadcast alongside \c tac in \c trackingAreaList, TS 38.331. NTN cells only; at most
+  /// MAX_NOF_TACS_NTN - 1, since \c tac takes the first.
+  std::vector<tac_t> additional_tacs;
   /// Whether the DU adds this cell to the list of served cells while communicating with the CU-CP or it waits for a
   /// command from the SMO to activate it.
   bool enabled = true;
   /// MIB cellBarred field (TS 38.331): if true, UEs cannot camp on this cell.
   bool cell_barred = false;
+  /// Coexistence with E-UTRA/NB-IoT (TS 38.331): if true, LTE-style UL frequency shift is enabled.
+  bool eutra_coexistence = false;
   /// MIB intraFreqReselection field (TS 38.331): if true, intra-frequency cell reselection is allowed when barred.
   bool intra_freq_reselection = true;
   /// \c q-RxLevMin, part of \c cellSelectionInfo, \c SIB1, TS 38.331, in dBm.
@@ -1104,6 +1389,10 @@ struct du_high_unit_base_cell_config {
   int q_qual_min = -20;
   /// SSB parameters.
   du_high_unit_ssb_config ssb_cfg;
+  /// \brief List of beams for transmitting the reference signals of the cell.
+  ///
+  /// Leave empty for letting the DU select the beams automatically.
+  std::vector<du_high_unit_ref_beam_config> ref_beams;
   /// SIB parameters.
   du_high_unit_sib_config sib_cfg;
   /// UL common configuration parameters.
@@ -1120,8 +1409,12 @@ struct du_high_unit_base_cell_config {
   du_high_unit_pucch_config pucch_cfg;
   /// SRS configuration.
   du_high_unit_srs_config srs_cfg;
+  /// Configured Grant configuration.
+  du_high_configured_grants cg_cfg;
   /// Physical Cell Group parameters.
   du_high_unit_phy_cell_group_config pcg_cfg;
+  /// Geographical coordinates of the cell/TRP antenna, reported in the F1AP TRP Information Response.
+  std::optional<du_high_unit_cell_geo_coordinates_config> geo_coordinates_cfg;
   /// MAC Cell Gropup parameters.
   du_high_unit_mac_cell_group_config mcg_cfg;
   /// TDD slot configuration.
@@ -1130,6 +1423,8 @@ struct du_high_unit_base_cell_config {
   du_high_unit_paging_config paging_cfg;
   /// CSI configuration.
   du_high_unit_csi_config csi_cfg;
+  /// DL-PRS configuration.
+  du_high_unit_prs_config prs_cfg;
   /// Scheduler radio resource allocation configuration.
   du_high_unit_scheduler_config scheduler_cfg;
   /// Timing Advance MAC CE control-loop management and scheduling configuration.
@@ -1282,10 +1577,23 @@ struct du_high_unit_rlc_am_config {
   du_high_unit_rlc_rx_am_config rx;
 };
 
-/// QoS configuration
+/// Proactive UL grant triggered in reaction to a DL allocation on an SRB. Presence enables the feature; the grant size
+/// is fixed internally. Currently supported only for SRB1.
+struct du_high_unit_srb_triggered_ul_grant_config {
+  // Minimum delay between DL PDCCH and UL PDCCH grant in ms.
+  std::chrono::milliseconds delay{10};
+};
+
+/// MAC scheduler configuration for an SRB.
+struct du_high_unit_srb_mac_config {
+  std::optional<du_high_unit_srb_triggered_ul_grant_config> triggered_ul_grant;
+};
+
+/// SRB configuration
 struct du_high_unit_srb_config {
-  unsigned                   srb_id;
-  du_high_unit_rlc_am_config rlc;
+  unsigned                    srb_id;
+  du_high_unit_rlc_am_config  rlc;
+  du_high_unit_srb_mac_config mac;
 };
 
 /// F1-U configuration at DU side
@@ -1314,7 +1622,7 @@ struct du_high_unit_rlc_um_config {
 };
 
 /// RLC configuration
-struct du_high_unit_rlc_config {
+struct du_high_unit_rlc_bearer_config {
   std::string                mode = "am";
   du_high_unit_rlc_um_config um;
   du_high_unit_rlc_am_config am;
@@ -1322,8 +1630,10 @@ struct du_high_unit_rlc_config {
 
 /// Proactive UL grant triggered in reaction to a DL allocation, per 5QI.
 struct du_high_unit_triggered_ul_grant_config {
-  uint8_t  delay_slots = 3;   // Minimum slots delay between PDSCH and UL PDCCH grant.
-  unsigned grant_size  = 512; // Value of triggered ul grant in bytes.
+  // Minimum delay between PDSCH and UL PDCCH grant in ms.
+  std::chrono::milliseconds delay{3};
+  // Value of triggered ul grant in bytes.
+  units::bytes grant_size{512};
 };
 
 /// MAC scheduler configuration per 5QI.
@@ -1333,10 +1643,10 @@ struct du_high_unit_mac_config {
 
 /// QoS configuration
 struct du_high_unit_qos_config {
-  five_qi_t                  five_qi = uint_to_five_qi(9);
-  du_high_unit_rlc_config    rlc;
-  du_high_unit_f1u_du_config f1u_du;
-  du_high_unit_mac_config    mac;
+  five_qi_t                      five_qi = uint_to_five_qi(9);
+  du_high_unit_rlc_bearer_config rlc;
+  du_high_unit_f1u_du_config     f1u_du;
+  du_high_unit_mac_config        mac;
 };
 
 /// User-defined NR frequency band.
@@ -1358,6 +1668,18 @@ struct du_high_unit_custom_band_config {
   /// GSCN step for SSB candidate search. Valid values: 1, 3, 7, 16. Default = 1.
   uint8_t delta_gscn = 1;
   bool    ntn        = false;
+};
+
+/// RLC configuration.
+struct du_high_unit_rlc_config {
+  std::size_t drb_rx_window_seg_size      = 256;
+  std::size_t drb_rx_window_seg_pool_size = 2048;
+  std::size_t drb_tx_window_seg_size      = 256;
+  std::size_t drb_tx_window_seg_pool_size = 2048;
+  std::size_t srb_rx_window_seg_size      = 8;
+  std::size_t srb_rx_window_seg_pool_size = 2048;
+  std::size_t srb_tx_window_seg_size      = 8;
+  std::size_t srb_tx_window_seg_pool_size = 2048;
 };
 
 /// DU high configuration.
@@ -1387,8 +1709,18 @@ struct du_high_unit_config {
   std::vector<du_high_unit_qos_config> qos_cfg;
   /// DU high expert execution settings.
   du_high_unit_expert_execution_config expert_execution_cfg;
-  /// SRB configuration.
-  std::map<srb_id_t, du_high_unit_srb_config> srb_cfg;
+  /// SRB configuration. A list of per-SRB entries keyed internally by their srb_id field; converted to the
+  /// srb_id-keyed form during translation.
+  std::vector<du_high_unit_srb_config> srb_cfg;
+  /// Globally-defined satellites, referenced by satellite_idx in per-cell NTN configs.
+  std::vector<ntn_satellite_config> ntn_satellites;
+  /// RLC configuration.
+  du_high_unit_rlc_config rlc_cfg;
+  /// \brief Whether a failed F1-C TNL connection is retried indefinitely on startup.
+  ///
+  /// \note It is not part of the DU-high CLI schema. Only the applications that connect to a remote CU-CP own an F1-C
+  /// TNL connection, so the option lives in their own F1AP section and is copied here before the unit is created.
+  bool retry_f1c_connection = false;
 
   /// Returns true if testmode is enabled, false otherwise.
   bool is_testmode_enabled() const { return test_mode_cfg.test_ue.rnti != rnti_t::INVALID_RNTI; }

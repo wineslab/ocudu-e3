@@ -4,6 +4,7 @@
 
 #include "handover_reconfiguration_routine.h"
 #include "../../up_resource_manager/up_resource_manager_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/cell_group_config.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp_bearer_context_update.h"
 

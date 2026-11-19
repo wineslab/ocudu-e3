@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/phy/upper/channel_state_information.h"
 #include "ocudu/support/format/delimited_formatter.h"
@@ -89,7 +90,7 @@ struct formatter<ocudu::channel_state_information> {
       auto total_evm  = csi.get_total_evm();
       auto symbol_evm = csi.get_symbol_evm();
       if (std::any_of(symbol_evm.begin(), symbol_evm.end(), [](auto elem) { return elem.has_value(); })) {
-        helper.format_if_verbose(ctx, "evm=[{:.2f}]", symbol_evm);
+        helper.format_if_verbose(ctx, "evm={::.2f}", symbol_evm);
       } else if (total_evm.has_value()) {
         helper.format_if_verbose(ctx, "evm={:.2f}", total_evm);
       }
@@ -110,7 +111,7 @@ struct formatter<ocudu::channel_state_information> {
       // Print the RSRP for each port, if available. Otherwise, print the average RSRP.
       ocudu::span<const float> port_rsrp = csi.get_port_rsrp_dB();
       if (std::any_of(port_rsrp.begin(), port_rsrp.end(), [](auto elem) { return !std::isnan(elem); })) {
-        helper.format_if_verbose(ctx, "rsrp=[{:.1f}]dB", port_rsrp);
+        helper.format_if_verbose(ctx, "rsrp={::.1f}dB", port_rsrp);
       } else {
         std::optional<float> rsrp_dB = csi.get_rsrp_dB();
         if (rsrp_dB.has_value()) {

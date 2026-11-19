@@ -6,6 +6,7 @@
 #include "srs_validator_generic_impl.h"
 #include "ocudu/adt/complex.h"
 #include "ocudu/adt/expected.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/adt/tensor.h"
 #include "ocudu/ocuduvec/add.h"
@@ -66,7 +67,7 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
   ocudu_assert(handle_validation(msg, srs_validator_generic_impl(max_nof_prb).is_valid(config)), "{}", msg);
 
   unsigned nof_rx_ports         = config.ports.size();
-  auto     nof_antenna_ports    = static_cast<unsigned>(config.resource.nof_antenna_ports);
+  auto     nof_tx_antenna_ports = static_cast<unsigned>(config.resource.nof_antenna_ports);
   auto     nof_symbols          = static_cast<unsigned>(config.resource.nof_symbols);
   unsigned nof_symbols_per_slot = get_nsymb_per_slot(cyclic_prefix::NORMAL);
   ocudu_assert(config.resource.start_symbol.value() + nof_symbols <= nof_symbols_per_slot,
@@ -96,27 +97,33 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
   result.time_alignment.resolution     = 0;
   result.time_alignment.min            = std::numeric_limits<double>::min();
   result.time_alignment.max            = std::numeric_limits<double>::max();
-  result.channel_matrix                = srs_channel_matrix(nof_rx_ports, nof_antenna_ports);
+  result.channel_matrix                = srs_channel_matrix(nof_rx_ports, nof_tx_antenna_ports);
 
   // Temporary LSE.
   static_tensor<3, cf_t, max_seq_length * srs_constants::max_nof_rx_ports * srs_constants::max_nof_tx_ports> temp_lse(
-      {sequence_length, nof_rx_ports, nof_antenna_ports});
+      {sequence_length, nof_rx_ports, nof_tx_antenna_ports});
 
   // All sequences of pilots.
   static_tensor<2, cf_t, max_seq_length * srs_constants::max_nof_tx_ports> all_sequences(
-      {sequence_length, nof_antenna_ports});
+      {sequence_length, nof_tx_antenna_ports});
 
   // Auxiliary buffer for noise computation.
   static_tensor<3, cf_t, 2 * max_seq_length * srs_constants::max_nof_rx_ports> temp_noise(
       {sequence_length, 2, nof_rx_ports});
   ocuduvec::zero(temp_noise.get_data());
 
+  // Auxiliary buffer for storing data for DOA estimation.
+  static_tensor<2, cf_t, max_seq_length* static_cast<unsigned>(srs_nof_symbols::n4) * srs_constants::max_nof_rx_ports>
+      doa_data({sequence_length * nof_symbols, nof_rx_ports});
+
+  static_vector<cf_t, max_seq_length> rx_sequence_base(sequence_length);
+
   srs_information info_port0         = get_srs_information(config.resource, /*antenna_port*/ 0);
-  bool            interleaved_pilots = (nof_antenna_ports == 4) && (info_port0.n_cs >= info_port0.n_cs_max / 2);
+  bool            interleaved_pilots = (nof_tx_antenna_ports == 4) && (info_port0.n_cs >= info_port0.n_cs_max / 2);
 
   float epre = 0;
   // Iterate transmit ports.
-  for (unsigned i_antenna_port = 0; i_antenna_port != nof_antenna_ports; ++i_antenna_port) {
+  for (unsigned i_antenna_port = 0; i_antenna_port != nof_tx_antenna_ports; ++i_antenna_port) {
     // Obtain SRS information for a given SRS antenna port.
     srs_information info = get_srs_information(config.resource, i_antenna_port);
 
@@ -135,15 +142,22 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
       span<cf_t> mean_lse = temp_lse.get_view({i_rx_port_index, i_antenna_port});
       // View for noise computation: with interleaved pilots, we need to keep track of two different sets of REs - those
       // for odd-indexed ports and those for even-indexed ports.
-      span<cf_t> noise_help = temp_noise.get_view({(interleaved_pilots) ? i_antenna_port % 2 : 0U, i_rx_port_index});
+      span<cf_t> noise_help = temp_noise.get_view({interleaved_pilots ? i_antenna_port % 2 : 0U, i_rx_port_index});
 
       // Extract sequence for all symbols and average LSE.
       for (unsigned i_symbol     = config.resource.start_symbol.value(),
                     i_symbol_end = config.resource.start_symbol.value() + nof_symbols;
            i_symbol != i_symbol_end;
            ++i_symbol) {
+        span<cf_t> rx_sequence(rx_sequence_base);
+
+        // We need to store the data corresponding to Tx port 0 for DOA estimation.
+        if (i_antenna_port == 0) {
+          unsigned i_symbol_relative = i_symbol - config.resource.start_symbol.value();
+          rx_sequence = doa_data.get_view({i_rx_port}).subspan(i_symbol_relative * sequence_length, sequence_length);
+        }
+
         // Extract received sequence.
-        static_vector<cf_t, max_seq_length> rx_sequence(info.sequence_length);
         grid.get(rx_sequence, i_rx_port, i_symbol, info.mapping_initial_subcarrier, info.comb_size);
 
         // Since the same SRS sequence is sent over all symbols, it makes sense to average out the noise. When pilots
@@ -186,13 +200,17 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
   }
 
   // Average time alignment across all paths.
-  result.time_alignment.time_alignment /= nof_antenna_ports;
+  result.time_alignment.time_alignment /= nof_tx_antenna_ports;
+
+  if (deps.direction_estimator) {
+    result.doa_result = deps.direction_estimator->estimate(doa_data);
+  }
 
   float noise_var = 0;
   float rsrp      = 0;
   // Compensate time alignment and estimate channel coefficients.
   for (unsigned i_rx_port = 0; i_rx_port != nof_rx_ports; ++i_rx_port) {
-    for (unsigned i_antenna_port = 0; i_antenna_port != nof_antenna_ports; ++i_antenna_port) {
+    for (unsigned i_antenna_port = 0; i_antenna_port != nof_tx_antenna_ports; ++i_antenna_port) {
       // View to the mean LSE for a port combination.
       span<cf_t> mean_lse = temp_lse.get_view({i_rx_port, i_antenna_port});
 
@@ -217,7 +235,7 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
 
       // View for noise computation: with interleaved pilots, we need to keep track of two different sets of REs -
       // those for odd-indexed ports and those for even-indexed ports.
-      span<cf_t> noise_help = temp_noise.get_view({(interleaved_pilots) ? i_antenna_port % 2 : 0U, i_rx_port});
+      span<cf_t> noise_help = temp_noise.get_view({interleaved_pilots ? i_antenna_port % 2 : 0U, i_rx_port});
 
       if ((i_antenna_port == 0) || (interleaved_pilots && (i_antenna_port == 1))) {
         compensate_phase_shift(noise_help, phase_shift_subcarrier, phase_shift_offset);
@@ -243,7 +261,7 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
   // reconstructed one. For each Rx port, the number of degrees of freedom used to estimate the channel coefficients
   // is usually equal nof_antenna_ports, but when pilots are interleaved, in which case it's 2. Also, when
   // interleaving pilots, we look at double the samples.
-  unsigned nof_estimates     = (interleaved_pilots ? 2 : nof_antenna_ports);
+  unsigned nof_estimates     = (interleaved_pilots ? 2 : nof_tx_antenna_ports);
   unsigned correction_factor = (interleaved_pilots ? 2 : 1);
   noise_var /= static_cast<float>((nof_symbols * sequence_length - nof_estimates) * correction_factor * nof_rx_ports);
 
@@ -254,7 +272,7 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
   result.channel_matrix *= 1 / noise_std;
 
   epre /= static_cast<float>(nof_symbols * correction_factor * nof_rx_ports);
-  rsrp /= static_cast<float>(nof_antenna_ports * nof_rx_ports);
+  rsrp /= static_cast<float>(nof_tx_antenna_ports * nof_rx_ports);
 
   // Set noise variance, EPRE and RSRP.
   result.noise_variance = noise_var;

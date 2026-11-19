@@ -6,7 +6,7 @@
 
 #include "ue_context/ngap_ue_logger.h"
 #include "ue_context/ngap_ue_transaction_manager.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/support/async/async_task.h"
 
 namespace ocudu::ocucp {
@@ -24,7 +24,7 @@ private:
   bool               fill_ngap_dl_ran_status_transfer();
 
   ngap_ue_transaction_manager& ev_mng;
-  ngap_ue_logger&              logger;
+  ngap_ue_logger               logger;
 
   cu_cp_ue_index_t      ue_index;
   cu_cp_status_transfer dl_ran_status_transfer;

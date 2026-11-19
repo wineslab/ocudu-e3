@@ -5,7 +5,6 @@
 
 #include "ocudu/adt/strong_type.h"
 #include "ocudu/support/ocudu_assert.h"
-#include "fmt/format.h"
 #include <type_traits>
 
 namespace ocudu {
@@ -140,20 +139,3 @@ protected:
 };
 
 } // namespace ocudu
-
-namespace fmt {
-
-/// Formatter for bounded_integer<...> types.
-template <typename Integer, Integer MIN_VALUE, Integer MAX_VALUE>
-struct formatter<ocudu::bounded_integer<Integer, MIN_VALUE, MAX_VALUE>> : public formatter<Integer> {
-  template <typename FormatContext>
-  auto format(const ocudu::bounded_integer<Integer, MIN_VALUE, MAX_VALUE>& s, FormatContext& ctx) const
-  {
-    if (s.valid()) {
-      return fmt::format_to(ctx.out(), "{}", static_cast<Integer>(s));
-    }
-    return fmt::format_to(ctx.out(), "INVALID");
-  }
-};
-
-} // namespace fmt

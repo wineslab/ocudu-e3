@@ -177,7 +177,7 @@ int main(int argc, char** argv)
     params.data_width = bit_width;
 
     // Measurement description.
-    std::string common_meas_name         = to_string(params.type) + "-" + std::to_string(bit_width) + "b";
+    std::string common_meas_name         = std::string(to_string(params.type)) + "-" + std::to_string(bit_width) + "b";
     std::string meas_descr_compression   = common_meas_name + " compression";
     std::string meas_descr_decompression = common_meas_name + " decompression";
 

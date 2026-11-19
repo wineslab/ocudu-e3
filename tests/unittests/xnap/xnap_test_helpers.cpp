@@ -4,6 +4,7 @@
 
 #include "xnap_test_helpers.h"
 #include "lib/xnap/procedures/xn_setup_procedure_asn1_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/cu_cp/cu_cp_configuration_helpers.h"
 #include "ocudu/support/async/async_test_utils.h"
 
@@ -16,6 +17,20 @@ xnap_test::xnap_test() :
     cucfg.services.timers         = &timers;
     cucfg.services.cu_cp_executor = &ctrl_worker;
     return cucfg;
+  }()),
+  ue_cfg([this]() {
+    return ue_manager_config{.gnb_id              = cu_cp_cfg.node.gnb_id,
+                             .max_nof_ues         = cu_cp_cfg.admission.max_nof_ues,
+                             .drb_config          = cu_cp_cfg.bearers.drb_config,
+                             .max_nof_drbs_per_ue = cu_cp_cfg.admission.max_nof_drbs_per_ue,
+                             .int_algo_pref_list  = cu_cp_cfg.security.int_algo_pref_list,
+                             .enc_algo_pref_list  = cu_cp_cfg.security.enc_algo_pref_list,
+                             .enable_rrc_metrics  = cu_cp_cfg.metrics.layers_cfg.enable_rrc_metrics,
+                             .ue                  = cu_cp_cfg.ue};
+  }()),
+  ue_dependencies([this]() {
+    return ue_manager_dependencies{
+        .timers = timers, .cu_cp_executor = ctrl_worker, .logger = ocudulog::fetch_basic_logger("CU-CP")};
   }())
 {
   // Init test's loggers.
@@ -27,7 +42,9 @@ xnap_test::xnap_test() :
 
   xnap = std::make_unique<xnap_impl>(xnc_peer_index_t::min, xnap_local_cfg, cu_cp_notifier, timers, ctrl_worker);
 
-  xnap->set_tx_association_notifier(std::make_unique<dummy_xnap_message_notifier>(last_tx_msg));
+  auto tx_notifier = std::make_unique<dummy_xnap_message_notifier>(last_tx_msg);
+  tx_notifier_spy  = tx_notifier.get();
+  xnap->set_tx_association_notifier(std::move(tx_notifier));
 }
 
 void xnap_test::TearDown()
@@ -36,7 +53,7 @@ void xnap_test::TearDown()
   ocudulog::flush();
 }
 
-bool xnap_test::run_xn_setup(const xnap_configuration& peer_cfg)
+bool xnap_test::run_xn_setup(const xnap_configuration& peer_cfg, span<const cu_cp_served_cell_info> peer_cells)
 {
   // Action 1: Launch XN setup procedure
   logger.info("Launch xn setup request procedure...");
@@ -44,7 +61,7 @@ bool xnap_test::run_xn_setup(const xnap_configuration& peer_cfg)
   lazy_task_launcher<bool> t_launcher(t);
 
   // Action 2: Send XN setup response from peer.
-  xnap_message setup_resp = generate_asn1_xn_setup_response(peer_cfg);
+  xnap_message setup_resp = generate_asn1_xn_setup_response(peer_cfg, peer_cells);
   xnap->handle_message(setup_resp);
 
   // Check procedure completion.

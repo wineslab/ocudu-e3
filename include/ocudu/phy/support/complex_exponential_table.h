@@ -9,6 +9,7 @@
 #include "ocudu/support/ocudu_assert.h"
 #include <array>
 #include <cmath>
+#include <vector>
 
 namespace ocudu {
 

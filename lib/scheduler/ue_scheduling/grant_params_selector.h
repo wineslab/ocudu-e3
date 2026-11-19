@@ -20,7 +20,8 @@ namespace sched_helper {
 struct dl_sched_context {
   /// SearchSpace to use.
   search_space_id ss_id;
-  /// PDSCH time-domain resource index.
+  /// PDSCH time-domain resource index. Indexes the PDSCH TDRA list in use for the SearchSpace (Rel-16 list if
+  /// configured, else common/legacy) and is signalled directly in the DCI Time domain resource assignment field.
   uint8_t pdsch_td_res_index;
   /// Recommended MCS, considering channel state or, in case of reTx, last HARQ MCS.
   sch_mcs_index recommended_mcs;
@@ -30,9 +31,14 @@ struct dl_sched_context {
   unsigned expected_nof_rbs;
   /// Pending bytes for newTx.
   units::bytes pending_bytes;
+  /// Number of Rel-16 slot-based PDSCH repetitions of the selected TDRA row, or nullopt for a single transmission.
+  std::optional<uint8_t> nof_repetitions;
 };
 
 /// Retrieve recommended PDCCH and PDSCH parameters for a newTx DL grant.
+/// The number of Rel-16 PDSCH repetitions to request is decided by link adaptation: when it asks for repetitions, the
+/// selector picks the TDRA row carrying that repetitionNumber-r16 and returns nullopt if it does not fit the slot;
+/// otherwise it picks a single-transmission row.
 std::optional<dl_sched_context> get_newtx_dl_sched_context(const slice_ue& u,
                                                            slot_point      pdcch_slot,
                                                            slot_point      pdsch_slot,
@@ -40,6 +46,8 @@ std::optional<dl_sched_context> get_newtx_dl_sched_context(const slice_ue& u,
                                                            units::bytes    pending_bytes);
 
 /// Retrieve recommended PDCCH and PDSCH parameters for a reTx DL grant.
+/// The reTx keeps the repetition scheme of the original transmission, so only the TDRA row carrying its
+/// repetitionNumber-r16 is eligible. Returns nullopt, deferring the grant, when that row does not fit the slot.
 std::optional<dl_sched_context> get_retx_dl_sched_context(const slice_ue&               u,
                                                           slot_point                    pdcch_slot,
                                                           slot_point                    pdsch_slot,
@@ -73,9 +81,21 @@ struct ul_sched_context {
   units::bytes pending_bytes;
   /// PUSCH config params.
   pusch_config_params pusch_cfg;
+  /// Number of Rel-16 PUSCH repetitions of the selected TDRA row, or nullopt for a single transmission.
+  std::optional<uint8_t> nof_repetitions;
+  /// \brief TDRA index of the single-transmission row to fall back to, when the bundle implied by
+  /// \c pusch_td_res_index turns out not to be schedulable in this slot.
+  ///
+  /// Picked by the very search that picked \c pusch_td_res_index, which walks the same candidates either way, so it
+  /// costs nothing. Empty when the selected row is already a single transmission, or when no single-transmission row
+  /// qualifies for this slot.
+  std::optional<uint8_t> single_tx_pusch_td_res_index;
 };
 
 /// Retrieve recommended PDCCH and PUSCH parameters for a newTx UL grant.
+/// The number of Rel-16 PUSCH repetitions to request is decided by link adaptation: when it asks for repetitions, the
+/// selector picks the TDRA row carrying that numberOfRepetitions-r16 and returns nullopt if it does not fit the slot;
+/// otherwise it picks a single-transmission row.
 std::optional<ul_sched_context> get_newtx_ul_sched_context(const slice_ue&   u,
                                                            slot_point        pdcch_slot,
                                                            slot_point        pusch_slot,
@@ -84,6 +104,8 @@ std::optional<ul_sched_context> get_newtx_ul_sched_context(const slice_ue&   u,
                                                            ofdm_symbol_range allowed_symbols);
 
 /// Retrieve recommended PDCCH and PUSCH parameters for a reTx UL grant.
+/// The reTx tries to reuse the repetition scheme of the original transmission, if it's not possible, fallback to single
+/// transmission.
 std::optional<ul_sched_context> get_retx_ul_sched_context(const slice_ue&               u,
                                                           slot_point                    pdcch_slot,
                                                           slot_point                    pusch_slot,
@@ -91,6 +113,50 @@ std::optional<ul_sched_context> get_retx_ul_sched_context(const slice_ue&       
                                                           const ul_harq_process_handle& h_ul,
                                                           ofdm_symbol_range             allowed_symbols,
                                                           unsigned                      max_rbs = MAX_NOF_PRBS);
+
+/// Re-size an already selected UL grant for a UCI payload that became known only after the \c ul_sched_context was
+/// built, i.e. once a PUSCH repetition bundle's slots were resolved. Only the UCI-dependent parameters are
+/// recomputed (PUSCH config params, MCS, RB count); the searchSpace, TDRA row and RB limits stay as selected.
+/// \param[in] bundle_tx_offsets Slot offsets of the bundle's occasions beyond the base one, relative to
+/// \c pusch_slot. The UE multiplexes the UCI onto a single occasion, so a CSI report due in any of them rides here.
+/// \return false if no valid MCS/RB combination fits the new payload, in which case \c ctxt is left untouched and the
+/// grant is to be deferred.
+/// TODO: Refactor \c get_ul_sched_context to avoid this resizing in case of PUSCH repetitions.
+bool resize_newtx_ul_grant_for_uci(ul_sched_context&   ctxt,
+                                   const slice_ue&     u,
+                                   slot_point          pusch_slot,
+                                   unsigned            uci_nof_harq_bits,
+                                   span<const uint8_t> bundle_tx_offsets);
+
+/// \brief Downgrade an already selected newTx UL grant to the single-transmission TDRA row picked alongside the
+/// repetition one, for when the bundle cannot be scheduled after all.
+///
+/// The row taking over spans a different number of symbols, so the grant is re-sized for it (PUSCH config params,
+/// MCS, RB count); the searchSpace and RB limits stay as selected.
+/// \param[in] uci_nof_harq_bits HARQ-ACK bits booked in \c pusch_slot, the only slot a single transmission occupies.
+/// \return false if the selector found no single-transmission row, or if no valid MCS/RB combination fits it, in
+/// which case \c ctxt is left untouched and the grant is to be skipped.
+bool downgrade_newtx_ul_grant_to_single_tx(ul_sched_context& ctxt,
+                                           const slice_ue&   u,
+                                           slot_point        pusch_slot,
+                                           unsigned          uci_nof_harq_bits);
+
+/// Downgrade an already selected reTx UL grant to a single transmission. See
+/// \ref downgrade_newtx_ul_grant_to_single_tx.
+bool downgrade_retx_ul_grant_to_single_tx(ul_sched_context&             ctxt,
+                                          const slice_ue&               u,
+                                          slot_point                    pusch_slot,
+                                          unsigned                      uci_nof_harq_bits,
+                                          const ul_harq_process_handle& h_ul);
+
+/// Re-size an already selected reTx UL grant for a UCI payload known only after the bundle was resolved. See
+/// \ref resize_newtx_ul_grant_for_uci.
+bool resize_retx_ul_grant_for_uci(ul_sched_context&             ctxt,
+                                  const slice_ue&               u,
+                                  slot_point                    pusch_slot,
+                                  unsigned                      uci_nof_harq_bits,
+                                  const ul_harq_process_handle& h_ul,
+                                  span<const uint8_t>           bundle_tx_offsets);
 
 /// Select UL VRBs to allocate for a newTx.
 vrb_interval compute_newtx_ul_vrbs(const ul_sched_context& decision_ctxt,

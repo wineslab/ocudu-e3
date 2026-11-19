@@ -39,7 +39,7 @@ public:
 
   // See the interface for documentation.
   void
-  demodulate(resource_grid_writer& grid, span<const cf_t> input, unsigned port_index, unsigned symbol_index) override
+  demodulate(resource_grid_writer& grid, span<const ci16_t> input, unsigned port_index, unsigned symbol_index) override
   {
     auto demodulator = demodulators->get();
     if (!demodulator) {

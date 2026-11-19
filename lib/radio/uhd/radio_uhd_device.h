@@ -136,9 +136,44 @@ public:
       }
     }
 
+    std::string tx_subdev_spec;
+    if (device_addr.has_key("tx_subdev_spec")) {
+      tx_subdev_spec = device_addr.pop("tx_subdev_spec");
+    }
+    std::string rx_subdev_spec;
+    if (device_addr.has_key("rx_subdev_spec")) {
+      rx_subdev_spec = device_addr.pop("rx_subdev_spec");
+    }
+
     fmt::print("Making USRP object with args '{}'\n", device_addr.to_string());
 
-    return safe_execution([this, &device_addr]() { usrp = uhd::usrp::multi_usrp::make(device_addr); });
+    if (!safe_execution([this, &device_addr]() { usrp = uhd::usrp::multi_usrp::make(device_addr); })) {
+      return false;
+    }
+
+    if (!tx_subdev_spec.empty() && !set_tx_subdev_spec(tx_subdev_spec)) {
+      return false;
+    }
+
+    if (!rx_subdev_spec.empty() && !set_rx_subdev_spec(rx_subdev_spec)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  bool set_tx_subdev_spec(const std::string& subdev_spec)
+  {
+    logger.debug("Setting Tx subdevice spec to '{}'.", subdev_spec);
+
+    return safe_execution([this, &subdev_spec]() { usrp->set_tx_subdev_spec(uhd::usrp::subdev_spec_t(subdev_spec)); });
+  }
+
+  bool set_rx_subdev_spec(const std::string& subdev_spec)
+  {
+    logger.debug("Setting Rx subdevice spec to '{}'.", subdev_spec);
+
+    return safe_execution([this, &subdev_spec]() { usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t(subdev_spec)); });
   }
 
   bool is_connection_valid()

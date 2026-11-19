@@ -4,6 +4,7 @@
 
 #include "ocudu/phy/upper/signal_processors/pusch/factories.h"
 #include "dmrs_pusch_estimator_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

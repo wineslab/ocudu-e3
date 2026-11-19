@@ -33,8 +33,7 @@ lower_phy_uplink_processor_impl::lower_phy_uplink_processor_impl(std::unique_ptr
   temp_buffer(config.nof_rx_ports, 2 * config.rate.get_dft_size(config.scs)),
   prach_proc(std::move(prach_proc_)),
   puxch_proc(std::move(puxch_proc_)),
-  cfo_processor(config.rate),
-  temp_cf_buffer({2 * config.rate.get_dft_size(config.scs), config.nof_rx_ports})
+  cfo_processor(config.rate)
 {
   ocudu_assert(prach_proc, "Invalid PRACH processor.");
   ocudu_assert(puxch_proc, "Invalid PUxCH processor.");
@@ -203,18 +202,8 @@ void lower_phy_uplink_processor_impl::process_collecting(const baseband_gateway_
     return;
   }
 
-  // View over the temporary float-based complex samples for CFO processor.
-  span<cf_t> view;
   // Perform carrier frequency offset compensation.
-  for (unsigned i_channel = 0; i_channel != temp_buffer.get_nof_channels(); ++i_channel) {
-    // The CFO compensation is not currently supported for 16-bit complex integer samples. So, it must convert it to
-    // single-precision complex floating-point samples.
-    span<ci16_t> channel_buffer = temp_buffer.get_writer().get_channel_buffer(i_channel);
-    view                        = temp_cf_buffer.get_view({i_channel}).subspan(0, channel_buffer.size());
-    ocuduvec::convert(view, channel_buffer, scaling_factor_ci16_to_cf);
-    cfo_processor.process(view);
-    ocuduvec::convert(channel_buffer, view, scaling_factor_cf_to_ci16);
-  }
+  cfo_processor.process(temp_buffer.get_writer());
 
   // Advance CFO processor number of samples.
   cfo_processor.advance(temp_buffer.get_nof_samples());
@@ -239,11 +228,14 @@ void lower_phy_uplink_processor_impl::process_collecting(const baseband_gateway_
 
     // Process received signal before demodulation.
     for (unsigned i_channel = 0; i_channel != nof_channels; ++i_channel) {
-      // Perform signal measurements. Reuse the previous view of the float-based complex samples.
-      avg_power.update(ocuduvec::average_power(view));
-      peak_power.update(ocuduvec::max_abs_element(view).second);
-      nof_clipped_samples += ocuduvec::count_if_part_abs_greater_than(view, 0.95);
-      total_processed_samples += view.size();
+      // Perform signal measurements on CI16 samples.
+      span<const ci16_t> channel_buffer = temp_buffer.get_reader().get_channel_buffer(i_channel);
+
+      avg_power.update(ocuduvec::average_power(channel_buffer, ocuduvec::scaling_factor_ci16_to_cf));
+      peak_power.update(ocuduvec::max_abs_element(channel_buffer, ocuduvec::scaling_factor_ci16_to_cf).second);
+      nof_clipped_samples +=
+          ocuduvec::count_if_part_abs_greater_than(channel_buffer, 0.95F, ocuduvec::scaling_factor_ci16_to_cf);
+      total_processed_samples += channel_buffer.size();
     }
 
     lower_phy_baseband_metrics metrics = {.avg_power  = avg_power.get_mean(),

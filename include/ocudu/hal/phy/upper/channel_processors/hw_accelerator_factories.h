@@ -7,6 +7,7 @@
 #include "ocudu/hal/dpdk/bbdev/bbdev_acc.h"
 #include "ocudu/hal/phy/upper/channel_processors/hw_accelerator_pdsch_enc.h"
 #include "ocudu/hal/phy/upper/channel_processors/hw_accelerator_pdsch_enc_factory.h"
+#include <memory>
 
 namespace ocudu {
 namespace hal {

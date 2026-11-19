@@ -5,10 +5,8 @@
 #pragma once
 
 #include "ocudu/adt/static_vector.h"
-#include "ocudu/ran/du_types.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/support/units.h"
-#include <cstdint>
 
 namespace ocudu {
 

@@ -6,6 +6,7 @@
 #include "../operation_controller_dummy.h"
 #include "ofh_data_flow_uplane_downlink_data.h"
 #include "sequence_identifier_generator.h"
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ofh/compression/iq_compressor.h"

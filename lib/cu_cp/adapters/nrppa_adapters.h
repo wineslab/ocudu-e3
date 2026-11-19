@@ -66,6 +66,12 @@ public:
     return ue->get_du_index();
   }
 
+  std::optional<nr_cell_global_id_t> get_serving_cell_id() const override
+  {
+    ocudu_assert(ue != nullptr, "CU-CP UE must not be nullptr");
+    return ue->get_serving_cell_id();
+  }
+
   std::optional<cell_measurement_positioning_info>& on_measurement_results_required() override
   {
     ocudu_assert(ue != nullptr, "CU-CP UE must not be nullptr");
@@ -110,6 +116,13 @@ public:
   {
     ocudu_assert(f1ap_handler != nullptr, "F1AP NRPPA handler must not be nullptr");
     return f1ap_handler->handle_positioning_measurement_request(request);
+  }
+
+  async_task<expected<e_cid_measurement_response_t, e_cid_measurement_failure_t>>
+  on_e_cid_measurement_request(const e_cid_measurement_request_t& request) override
+  {
+    ocudu_assert(f1ap_handler != nullptr, "F1AP NRPPA handler must not be nullptr");
+    return f1ap_handler->handle_e_cid_measurement_request(request);
   }
 
 private:

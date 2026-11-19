@@ -260,8 +260,15 @@ uplane_message_decoder_impl::decode_section(uplane_message_decoder_results&    r
   auto& section = results.sections.emplace_back();
   fill_results_from_decoder_section(section, decoder_ofh_up_section);
 
-  // Decode the IQ data.
-  decode_iq_data(section, deserializer, section.ud_comp_hdr);
+  // Consider IQ data that cannot be decompressed as a malformed message.
+  if (OCUDU_UNLIKELY(!decode_iq_data(section, deserializer, section.ud_comp_hdr))) {
+    logger.info("Sector#{}: detected malformed Open Fronthaul message as the IQ data of compression type '{}' could "
+                "not be decompressed",
+                sector_id,
+                to_string(section.ud_comp_hdr.type));
+
+    return decoded_section_status::malformed;
+  }
 
   return decoded_section_status::ok;
 }
@@ -332,7 +339,7 @@ uplane_message_decoder_impl::decode_compression_length(decoder_uplane_section_pa
   return decoded_section_status::ok;
 }
 
-void uplane_message_decoder_impl::decode_iq_data(uplane_section_params&             results,
+bool uplane_message_decoder_impl::decode_iq_data(uplane_section_params&             results,
                                                  network_order_binary_deserializer& deserializer,
                                                  const ru_compression_params&       compression_params)
 {
@@ -347,7 +354,8 @@ void uplane_message_decoder_impl::decode_iq_data(uplane_section_params&         
 
   // Decompress the samples.
   results.iq_samples.resize(results.nof_prbs * NOF_SUBCARRIERS_PER_RB);
-  decompressor->decompress(results.iq_samples, compressed_data, compression_params);
+
+  return decompressor->decompress(results.iq_samples, compressed_data, compression_params);
 }
 
 std::optional<filter_index_type> ocudu::ofh::uplane_peeker::peek_filter_index(span<const uint8_t> message)

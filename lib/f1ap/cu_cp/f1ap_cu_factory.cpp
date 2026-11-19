@@ -4,6 +4,7 @@
 
 #include "ocudu/f1ap/cu_cp/f1ap_cu_factory.h"
 #include "f1ap_cu_impl.h"
+#include "ocudu/adt/format.h"
 
 /// Notice this would be the only place were we include concrete class implementation files.
 

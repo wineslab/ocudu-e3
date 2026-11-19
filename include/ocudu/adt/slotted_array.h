@@ -4,9 +4,10 @@
 #pragma once
 
 #include "ocudu/adt/detail/slotted_array_detail.h"
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/adt/tiny_optional.h"
 #include "ocudu/support/ocudu_assert.h"
-#include <array>
+#include <vector>
 
 /// \file Definitions of slotted_array<T, N> used to manage containers with optional elements. All the defined classes
 /// provide methods to access, remove, add elements by index with O(1) complexity, iterators that skip absent elements,
@@ -163,6 +164,9 @@ public:
   /// \brief Checks the number of elements stored in the container.
   constexpr size_t size() const noexcept { return nof_elems; }
 
+  /// \brief Maximum number of elements that can be stored in the container.
+  constexpr size_t capacity() const noexcept { return N; }
+
   iterator       begin() { return iterator{vec, 0}; }
   iterator       end() { return iterator{vec, vec.size()}; }
   const_iterator begin() const { return const_iterator{vec, 0}; }
@@ -192,7 +196,7 @@ public:
   /// \param idx Position of the constructed element in the array
   /// \param args Arguments to pass to element ctor
   template <typename... Args>
-  void emplace(size_t idx, Args&&... args)
+  T& emplace(size_t idx, Args&&... args)
   {
     static_assert(std::is_constructible_v<value_type, Args&&...>, "Ctor T(Args...) does not exist.");
     ocudu_assert(idx < N, "Index {} exceeds maximum size of slotted_array {}", idx, N);
@@ -201,7 +205,8 @@ public:
     }
     this->nof_elems += this->contains(idx) ? 0 : 1;
     this->vec[idx].emplace(std::forward<Args>(args)...);
-    ocudu_assert(this->vec[idx].has_value(), "Inserted object must be represent an optional with value");
+    ocudu_assert(this->vec[idx].has_value(), "Inserted object must represent an optional with value");
+    return (*this)[idx];
   }
 
   /// Erase object pointed by the given index

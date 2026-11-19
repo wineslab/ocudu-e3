@@ -19,6 +19,7 @@
 #include "ocudu/ran/srs/srs_channel_matrix.h"
 #include "ocudu/ran/uci/uci_constants.h"
 #include "ocudu/scheduler/config/logical_channel_group.h"
+#include <chrono>
 #include <variant>
 
 namespace ocudu {
@@ -57,6 +58,8 @@ struct ul_crc_pdu_indication {
   std::optional<float> ul_rsrp_dBFS;
   /// Timing Advance Offset measured for the UE.
   std::optional<phy_time_unit> time_advance_offset;
+  /// Index of the RA preamble that originated this PDU, set only for MsgA PUSCH receptions.
+  std::optional<uint8_t> rapid;
 };
 
 /// UL HARQ CRC indication for a given UE PDU.
@@ -256,19 +259,32 @@ struct ul_phr_indication_message {
   phr_report      phr;
 };
 
-class scheduler_feedback_handler
+/// Information and context relative to a Timing Advance Report forwarded by MAC.
+struct ul_ta_report_indication_message {
+  du_cell_index_t cell_index;
+  du_ue_index_t   ue_index;
+  rnti_t          rnti;
+  slot_point      slot_rx;
+  /// Uplink timing advance T_TA reported by the UE (TS 38.211, 4.3.1), rounded up to a whole 15kHz slot by the UE.
+  std::chrono::microseconds ul_ta;
+};
+
+/// Interface used to push the feedback that is directed at a UE of a cell.
+class ue_feedback_handler
 {
 public:
-  virtual ~scheduler_feedback_handler()                                       = default;
+  virtual ~ue_feedback_handler()                                              = default;
   virtual void handle_ul_bsr_indication(const ul_bsr_indication_message& bsr) = 0;
-  virtual void handle_crc_indication(const ul_crc_indication& crc)            = 0;
-  virtual void handle_uci_indication(const uci_indication& uci)               = 0;
-  virtual void handle_srs_indication(const srs_indication& srs)               = 0;
 
   /// \brief Handles PHR indication sent by MAC.
   ///
   /// \param phr PHR indication message sent by MAC.
   virtual void handle_ul_phr_indication(const ul_phr_indication_message& phr_ind) = 0;
+
+  /// \brief Handles a Timing Advance Report indication sent by MAC.
+  ///
+  /// The reported T_TA places this UE's uplink measurement gap window when the cell has no estimate of its own.
+  virtual void handle_ul_ta_report_indication(const ul_ta_report_indication_message& ta_report_ind) = 0;
 
   /// \brief Command scheduling of DL MAC CE for a given UE.
   ///
@@ -277,6 +293,17 @@ public:
 
   /// \brief Handle indication that C-RNTI CE was received for the provided UE.
   virtual void handle_crnti_ce_received(du_ue_index_t ue_index) = 0;
+};
+
+/// \brief Interface used to push cell-specific feedback to the scheduler.
+///
+/// It extends the feedback directed at a UE with the one that the cell handles without reaching the UE context.
+class scheduler_feedback_handler : public ue_feedback_handler
+{
+public:
+  virtual void handle_crc_indication(const ul_crc_indication& crc) = 0;
+  virtual void handle_uci_indication(const uci_indication& uci)    = 0;
+  virtual void handle_srs_indication(const srs_indication& srs)    = 0;
 };
 
 } // namespace ocudu

@@ -4,6 +4,7 @@
 
 #include "paging_helpers.h"
 #include "pdcch/pdcch_type0_helpers.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 
@@ -38,8 +39,8 @@ paging_slot_helper::paging_slot_helper(const cell_configuration& cell_cfg_) : ce
       ocudu_assert(
           cell_cfg.params.dl_cfg_common.pcch_cfg.ns == pcch_config::nof_po_per_pf::one,
           "Number of Paging Occasions per Paging Frame must be 1 for SS/PBCH and CORESET multiplexing patter 1.");
-      for (size_t i_ssb = 0; i_ssb != cell_cfg.params.ssb_cfg.ssb_bitmap.get_L_max(); ++i_ssb) {
-        if (not cell_cfg.params.ssb_cfg.ssb_bitmap.test(i_ssb)) {
+      for (size_t i_ssb = 0; i_ssb != cell_cfg.params.ssb_cfg.ssb_beams.get_L_max(); ++i_ssb) {
+        if (not cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(i_ssb)) {
           continue;
         }
         // For Ns = 1, there is only one PO which starts from the first PDCCH monitoring occasion for paging in the PF.
@@ -92,9 +93,9 @@ bool paging_slot_helper::is_paging_slot_in_search_space_id_gt_0(slot_point pdcch
       std::max(ss_cfg->get_monitoring_slot_periodicity(), pdcch_slot.nof_slots_per_frame());
 
   // For each beam, check if the paging needs to be allocated in this slot.
-  for (unsigned ssb_idx = 0; ssb_idx != cell_cfg.params.ssb_cfg.ssb_bitmap.get_L_max(); ++ssb_idx) {
+  for (unsigned ssb_idx = 0; ssb_idx != cell_cfg.params.ssb_cfg.ssb_beams.get_L_max(); ++ssb_idx) {
     // Do not schedule the paging for the SSB indices that are not used.
-    if (not cell_cfg.params.ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+    if (not cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
       continue;
     }
 
@@ -133,10 +134,10 @@ bool paging_slot_helper::is_paging_slot_in_search_space0(slot_point pdcch_slot, 
       ss0_periodicity_in_ms * static_cast<unsigned>(pdcch_slot.nof_slots_per_subframe());
 
   // For each beam, check if the paging needs to be allocated in this slot.
-  const unsigned L_max = cell_cfg.params.ssb_cfg.ssb_bitmap.get_L_max();
+  const unsigned L_max = cell_cfg.params.ssb_cfg.ssb_beams.get_L_max();
   for (unsigned ssb_idx = 0; ssb_idx != L_max; ++ssb_idx) {
     // Do not schedule the paging for the SSB indices that are not used.
-    if (not cell_cfg.params.ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+    if (not cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
       continue;
     }
 
@@ -181,8 +182,8 @@ void paging_slot_helper::precompute_type2_pdcch_slots(subcarrier_spacing scs_com
   }
 
   unsigned nof_ssb_transmitted{};
-  for (size_t i_ssb = 0; i_ssb != cell_cfg.params.ssb_cfg.ssb_bitmap.get_L_max(); ++i_ssb) {
-    if (not cell_cfg.params.ssb_cfg.ssb_bitmap.test(i_ssb)) {
+  for (size_t i_ssb = 0; i_ssb != cell_cfg.params.ssb_cfg.ssb_beams.get_L_max(); ++i_ssb) {
+    if (not cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(i_ssb)) {
       continue;
     }
     nof_ssb_transmitted++;
@@ -192,10 +193,10 @@ void paging_slot_helper::precompute_type2_pdcch_slots(subcarrier_spacing scs_com
   // PDCCH-ConfigCommon IE of the active BWP.
   const auto&   first_pmo_of_po = cell_cfg.params.dl_cfg_common.pcch_cfg.first_pdcch_monitoring_occasion_of_po_value;
   const auto    nof_po_per_pf   = static_cast<unsigned>(cell_cfg.params.dl_cfg_common.pcch_cfg.ns);
-  const uint8_t L_max           = cell_cfg.params.ssb_cfg.ssb_bitmap.get_L_max();
+  const uint8_t L_max           = cell_cfg.params.ssb_cfg.ssb_beams.get_L_max();
   for (unsigned po_idx = 0; po_idx < nof_po_per_pf; po_idx++) {
     for (uint8_t i_ssb = 0; i_ssb != L_max; ++i_ssb) {
-      if (not cell_cfg.params.ssb_cfg.ssb_bitmap.test(i_ssb)) {
+      if (not cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(i_ssb)) {
         continue;
       }
       // See TS 38.304, clause 7.1.

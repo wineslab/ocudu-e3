@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "ue_capability_summary.h"
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/du/du_cell_config.h"
 #include "ocudu/ocudulog/logger.h"
+#include "ocudu/scheduler/rrm/ue_capability_summary.h"
 
 namespace asn1::rrc_nr {
 

@@ -8,7 +8,6 @@
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/subcarrier_spacing.h"
 #include <optional>
-#include <vector>
 
 namespace ocudu {
 

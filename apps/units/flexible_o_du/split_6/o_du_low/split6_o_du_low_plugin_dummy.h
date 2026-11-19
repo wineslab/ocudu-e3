@@ -18,6 +18,9 @@ public:
   void on_parsing_configuration_registration(CLI::App& app) override {}
 
   // See interface for documentation.
+  void on_configuration_parameters_autoderivation(CLI::App& app) override {}
+
+  // See interface for documentation.
   bool on_configuration_validation() const override { return false; }
 
   // See interface for documentation.

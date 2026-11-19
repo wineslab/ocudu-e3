@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/static_vector.h"
-#include "ocudu/adt/tiny_optional.h"
+#include <optional>
 
 namespace ocudu {
 

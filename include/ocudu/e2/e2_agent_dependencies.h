@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ocudu/e2/e2ap_configuration.h"
+#include "ocudu/e2/e2ap_config.h"
 #include "ocudu/e2/e2sm/e2sm.h"
 #include "ocudu/support/timers.h"
 #include <memory>
@@ -25,11 +25,10 @@ struct e2sm_module {
 
 /// O-RAN E2 Agent dependencies.
 struct e2_agent_dependencies {
-  ocudulog::basic_logger*                            logger;
-  e2ap_configuration                                 cfg;
-  e2_connection_client*                              e2_client;
-  timer_factory*                                     timers;
-  task_executor*                                     task_exec;
+  ocudulog::basic_logger&                            logger;
+  e2_connection_client&                              e2_client;
+  timer_factory&                                     timers;
+  task_executor&                                     task_exec;
   std::unique_ptr<e2_node_component_config_provider> node_component_config_provider;
   std::vector<e2sm_module>                           e2sm_modules;
 };

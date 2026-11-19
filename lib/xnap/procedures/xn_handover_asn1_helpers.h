@@ -69,6 +69,26 @@ inline bool asn1_to_ue_context_info_ho_request(xnap_ue_context_info_ho_request& 
     }
 
     request.pdu_session_res_to_be_setup_list.emplace(pdu_session_id, pdu_session_item);
+
+    // Fill the source's DRB-to-QoS-flow mapping, if the peer signalled it in the Data Forwarding and Offloading Info
+    // from source NG-RAN node IE (TS 38.423 Section 9.2.1.17). This node reports the mapping through AS-Config in the
+    // RRC container instead, but peers may use this XnAP-native IE, so both are accepted and merged at the target.
+    if (asn1_pdu_session.dataforwardinginfofrom_source_present) {
+      cu_cp_pdu_session_res_info_item pdu_session_res_info_item;
+      pdu_session_res_info_item.pdu_session_id = pdu_session_id;
+      for (const auto& asn1_drb_to_qos_flow_map :
+           asn1_pdu_session.dataforwardinginfofrom_source.source_drb_to_qos_flow_map) {
+        cu_cp_drbs_to_qos_flows_map_item drb_to_qos_flow_map;
+        drb_to_qos_flow_map.drb_id = uint_to_drb_id(asn1_drb_to_qos_flow_map.drb_id);
+        for (const auto& asn1_qos_flow : asn1_drb_to_qos_flow_map.qos_flows_list) {
+          cu_cp_associated_qos_flow assoc_qos_flow;
+          assoc_qos_flow.qos_flow_id = uint_to_qos_flow_id(asn1_qos_flow.qfi);
+          drb_to_qos_flow_map.associated_qos_flow_list.push_back(assoc_qos_flow);
+        }
+        pdu_session_res_info_item.drbs_to_qos_flows_map_list.push_back(drb_to_qos_flow_map);
+      }
+      request.pdu_session_res_info_list.push_back(pdu_session_res_info_item);
+    }
   }
 
   // Fill RRC container (RRC handover preparation information).
@@ -98,7 +118,11 @@ inline bool asn1_to_handover_request(xnap_handover_request& request, const asn1:
   request.nr_cgi = asn1_to_cgi(asn1_request->target_cell_global_id.nr());
 
   // Fill GUAMI.
-  request.guami = asn1_to_guami(asn1_request->guami);
+  expected<guami_t, std::string> guami = asn1_to_guami(asn1_request->guami);
+  if (!guami.has_value()) {
+    return false;
+  }
+  request.guami = guami.value();
 
   // Fill UE context info HO request.
   if (!asn1_to_ue_context_info_ho_request(request.ue_context_info_ho_request,
@@ -142,7 +166,7 @@ inline bool handover_request_ack_to_asn1(asn1::xnap::ho_request_ack_s&     asn1_
     for (const auto& not_admitted_item : ho_response.pdu_session_failed_to_setup_list) {
       asn1::xnap::pdu_session_res_not_admitted_item_s asn1_not_admitted_item;
       // Fill PDU session ID.
-      asn1_not_admitted_item.pdu_session_id = pdu_session_id_to_uint(not_admitted_item.pdu_session_id);
+      asn1_not_admitted_item.pdu_session_id = to_underlying(not_admitted_item.pdu_session_id);
       // Fill cause.
       if (!std::holds_alternative<xnap_cause_t>(not_admitted_item.cause)) {
         return false;

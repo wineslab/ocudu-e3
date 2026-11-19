@@ -4,10 +4,11 @@
 
 #pragma once
 
-#include "ocudu/phy/support/precoding_formatters.h"
 #include "ocudu/phy/support/re_pattern_formatters.h"
 #include "ocudu/phy/upper/channel_processors/pdsch/pdsch_processor.h"
 #include "ocudu/ran/pdsch/pdsch_context_formatter.h"
+#include "ocudu/ran/precoding_beamforming_formatters.h"
+#include "fmt/ranges.h"
 
 namespace fmt {
 
@@ -56,14 +57,14 @@ struct formatter<ocudu::pdsch_processor::pdu_t> {
   template <typename FormatContext>
   auto format(const ocudu::pdsch_processor::pdu_t& pdu, FormatContext& ctx) const
   {
-    helper.format_always(ctx, "rnti=0x{:04x}", pdu.rnti);
+    helper.format_always(ctx, "rnti={}", pdu.rnti);
     if (pdu.context.has_value()) {
       helper.format_always(ctx, *pdu.context);
     }
     helper.format_if_verbose(ctx, "bwp=[{}, {})", pdu.bwp_start_rb, pdu.bwp_start_rb + pdu.bwp_size_rb);
     helper.format_always(ctx, "prb={}", pdu.freq_alloc);
     helper.format_always(ctx, "symb=[{}, {})", pdu.start_symbol_index, pdu.start_symbol_index + pdu.nof_symbols);
-    helper.format_always(ctx, ocudu::span<const ocudu::pdsch_processor::codeword_description>(pdu.codewords));
+    helper.format_always(ctx, fmt::join(pdu.codewords, " "));
 
     helper.format_if_verbose(ctx, "n_id={}", pdu.n_id);
     helper.format_if_verbose(
@@ -78,9 +79,15 @@ struct formatter<ocudu::pdsch_processor::pdu_t> {
     helper.format_if_verbose(ctx, "power_data={:+.1f}dB", pdu.ratio_pdsch_data_to_sss_dB);
     helper.format_if_verbose(ctx, "slot={}", pdu.slot);
     helper.format_if_verbose(ctx, "cp={}", pdu.cp.to_string());
-    helper.format_if_verbose(ctx, "precoding={}", pdu.precoding);
+
+    if (helper.is_multiline()) {
+      helper.format_if_verbose(ctx, "{:n}", pdu.precoding_and_beamforming);
+    } else {
+      helper.format_if_verbose(ctx, "{}", pdu.precoding_and_beamforming);
+    }
+
     if (pdu.reserved.get_nof_entries() > 0) {
-      helper.format_if_verbose(ctx, "reserved=[{:,}]", pdu.reserved.get_re_patterns());
+      helper.format_if_verbose(ctx, "reserved={}", pdu.reserved.get_re_patterns());
     }
     return ctx.out();
   }

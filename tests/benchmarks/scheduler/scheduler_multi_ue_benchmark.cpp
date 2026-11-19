@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "lib/du/du_high/du_manager/ran_resource_management/du_pucch_resource_manager.h"
 #include "scheduler_test_doubles.h"
 #include "tests/test_doubles/scheduler/cell_config_builder_profiles.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
-#include "ocudu/adt/circular_array.h"
+#include "ocudu/adt/circular_vector.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/scheduler/config/ran_cell_config_helper.h"
 #include "ocudu/scheduler/config/sched_cell_config_helpers.h"
 #include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
 #include "ocudu/scheduler/result/sched_result.h"
+#include "ocudu/scheduler/rrm/pucch_resource_manager.h"
 #include "ocudu/scheduler/scheduler_factory.h"
 #include "ocudu/support/benchmark_utils.h"
 #include <getopt.h>
@@ -106,11 +106,8 @@ public:
     auto& pcell = (*ue_cfg_msg.cfg.cells)[0];
 
     // Generate PUCCH resources for the UE.
-    odu::cell_group_config cell_group;
-    cell_group.cells.emplace(SERVING_PCELL_IDX, pcell);
-    bool success = pucch_res_mng.alloc_resources(cell_group);
+    bool success = pucch_res_mng.alloc_resources(pcell);
     ocudu_assert(success, "Failed to allocate resources for UE={}", ue_count);
-    pcell = cell_group.cells.at(SERVING_PCELL_IDX);
 
     sch->handle_ue_creation_request(ue_cfg_msg);
     ue_count++;
@@ -141,7 +138,7 @@ public:
 
     // Process past UCI results.
     slot_point          sl_rx = next_sl_tx.without_hyper_sfn() - dl_pipeline_delay - uci_process_delay;
-    const sched_result& res   = sched_results[sl_rx.to_uint()];
+    const sched_result& res   = sched_results[sl_rx.count()];
     if (res.success) {
       uci_indication ind;
       ind.slot_rx    = sl_rx;
@@ -175,7 +172,11 @@ public:
           if (pucch.csi_rep_cfg.has_value()) {
             f2.csi = csi_report_data{.ri                    = 4,
                                      .pmi                   = precoding_matrix_indicator{pmi_typeI_single_panel{
-                                         pmi_codebook_single_panel_config::two_one, 0, std::nullopt, std::nullopt, 0}},
+                                                           {pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
+                                         0,
+                                         std::nullopt,
+                                         std::nullopt,
+                                         0}},
                                      .first_tb_wideband_cqi = 15,
                                      .valid                 = true};
           }
@@ -192,12 +193,15 @@ public:
           if (ul_grant.uci.value().harq.has_value()) {
             pusch_pdu.harqs.resize(ul_grant.uci->harq.value().harq_ack_nof_bits, mac_harq_ack_report_status::ack);
           }
-          pusch_pdu.csi =
-              csi_report_data{.ri                    = 4,
-                              .pmi                   = precoding_matrix_indicator{pmi_typeI_single_panel{
-                                  pmi_codebook_single_panel_config::two_one, 0, std::nullopt, std::nullopt, 0}},
-                              .first_tb_wideband_cqi = 15,
-                              .valid                 = true};
+          pusch_pdu.csi = csi_report_data{.ri                    = 4,
+                                          .pmi                   = precoding_matrix_indicator{pmi_typeI_single_panel{
+                                                                {pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
+                                              0,
+                                              std::nullopt,
+                                              std::nullopt,
+                                              0}},
+                                          .first_tb_wideband_cqi = 15,
+                                          .valid                 = true};
           ind.ucis.push_back(pdu);
         }
       }
@@ -215,13 +219,13 @@ private:
   const unsigned dl_pipeline_delay = 4;
   const unsigned uci_process_delay = 2;
 
-  sched_cfg_dummy_notifier       cfg_notif;
-  sched_dummy_metric_notifier    metric_notif;
-  scheduler_expert_config        expert_cfg;
-  cell_config_builder_params     builder_params;
-  std::vector<ran_cell_config>   cell_cfgs;
-  ocudulog::basic_logger&        logger;
-  odu::du_pucch_resource_manager pucch_res_mng;
+  sched_cfg_dummy_notifier     cfg_notif;
+  sched_dummy_metric_notifier  metric_notif;
+  scheduler_expert_config      expert_cfg;
+  cell_config_builder_params   builder_params;
+  std::vector<ran_cell_config> cell_cfgs;
+  ocudulog::basic_logger&      logger;
+  pucch_resource_manager       pucch_res_mng;
 
   std::unique_ptr<mac_scheduler> sch;
 
@@ -229,7 +233,8 @@ private:
   slot_point_extended next_sl_tx;
   const sched_result* result = nullptr;
 
-  circular_array<sched_result, 64> sched_results{};
+  static constexpr size_t             nof_stored_sched_results = 64;
+  circular_vector<sched_result, true> sched_results{nof_stored_sched_results};
 };
 
 void benchmark_tdd(benchmarker& bm, const bench_params& params)

@@ -9,7 +9,6 @@
 #include "apps/units/application_unit_commands.h"
 #include "ocudu/du/du.h"
 #include "ocudu/gtpu/gtpu_teid_pool.h"
-#include "ocudu/ntn/ntn_configuration_manager.h"
 #include <memory>
 #include <vector>
 
@@ -41,8 +40,7 @@ struct o_du_unit {
   std::vector<app_services::metrics_config> metrics;
   application_unit_commands                 commands;
   std::unique_ptr<e2_metric_connector_manager<e2_du_metrics_connector, e2_du_metrics_notifier, e2_du_metrics_interface>>
-                                                        e2_metric_connectors;
-  std::unique_ptr<ocudu_ntn::ntn_configuration_manager> ntn_configurator_manager;
+      e2_metric_connectors;
 };
 
 /// O-RAN DU unit dependencies.

@@ -3,8 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_low_config_validator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include "ocudu/phy/upper/channel_processors/prach/prach_detector_phy_validator.h"
+#include <thread>
 
 using namespace ocudu;
 
@@ -21,7 +23,8 @@ static bool validate_upper_phy_threads_appconfig(const du_low_unit_expert_thread
     valid = false;
   }
 
-  if (!max_concurrency_range.contains(config.max_pusch_and_srs_concurrency)) {
+  if ((config.max_pusch_and_srs_concurrency != du_low_unit_expert_threads_config::concurrency_auto) &&
+      !max_concurrency_range.contains(config.max_pusch_and_srs_concurrency)) {
     fmt::print("Maximum joint PUSCH and SRS concurrency (i.e., {}) must be in range {}.\n",
                config.max_pusch_and_srs_concurrency,
                max_concurrency_range);
@@ -87,10 +90,10 @@ static bool validate_expert_phy_unit_config(const du_low_unit_expert_upper_phy_c
 
 static bool validate_log_options(const du_low_unit_logger_config& config, const du_low_prach_validation_config& cell)
 {
-  if (!config.phy_rx_symbols_filename.empty() && config.phy_rx_symbols_port.has_value() &&
-      (config.phy_rx_symbols_port.value() >= cell.nof_antennas_ul)) {
+  if (!config.phy_rx_symbol_printer.filename.empty() && config.phy_rx_symbol_printer.port.has_value() &&
+      (config.phy_rx_symbol_printer.port.value() >= cell.nof_antennas_ul)) {
     fmt::print("Requested IQ dump from Rx port {}, valid Rx ports are 0-{}.\n",
-               config.phy_rx_symbols_port.value(),
+               config.phy_rx_symbol_printer.port.value(),
                cell.nof_antennas_ul - 1);
     return false;
   }

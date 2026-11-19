@@ -17,6 +17,7 @@
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/scheduler/result/dci_info.h"
 #include "ocudu/scheduler/result/vrb_alloc.h"
+#include "ocudu/support/memory_pool/free_list_recycling_object_pool.h"
 
 namespace ocudu {
 
@@ -31,11 +32,22 @@ class harq_timeout_notifier
 public:
   virtual ~harq_timeout_notifier() = default;
 
-  /// \brief Notifies a HARQ timeout.
-  virtual void on_harq_timeout(du_ue_index_t ue_idx, bool is_dl, bool ack) = 0;
+  /// \brief Notifies that a HARQ-ACK/CRC feedback indication was never received from the lower layers.
+  virtual void on_feedback_timeout(du_ue_index_t ue_idx, bool is_dl, bool ack) = 0;
+
+  /// \brief Notifies that a HARQ process with a pending retransmission was never rescheduled in time.
+  virtual void on_retx_timeout(du_ue_index_t ue_idx, bool is_dl) = 0;
 
   /// \brief Notifies a timeout for Feedback Disabled HARQ.
   virtual void on_feedback_disabled_harq_timeout(du_ue_index_t ue_idx, bool is_dl, units::bytes tbs) = 0;
+};
+
+/// Parameters for the allocation of a UL HARQ process reserved for Configured Grants.
+struct cg_harq_alloc_params {
+  /// HARQ process ID reserved for the CG occasion.
+  harq_id_t harq_id;
+  /// Timeout, in slots, after which the CG HARQ process is released (configured_grant_timer x periodicity).
+  unsigned cg_harq_timeout;
 };
 
 namespace harq_utils {
@@ -43,7 +55,7 @@ namespace harq_utils {
 /// Possible states of a HARQ process.
 enum class harq_state_t : uint8_t { empty, pending_retx, waiting_ack };
 
-/// HARQ operation modes as per TS38.300, Section 16.14.2.
+/// HARQ operation modes as per TS 38.300, Section 16.14.2.
 enum class harq_mode_t : uint8_t {
   normal,                     // Standard Stop-and-Wait Operation (NTN: DL Feedback Enabled, UL Mode A)
   feedback_disabled_or_mode_b // Re-use allowed before RTT elapses (NTN: DL Feedback Disabled, UL Mode B)
@@ -61,8 +73,17 @@ struct base_harq_process : public intrusive_double_linked_list_element<>,
   harq_mode_t   mode   = harq_mode_t::normal;
   /// Slot at which the PxSCH was transmitted.
   slot_point slot_tx;
+  /// \brief Slot of the last occasion of the transmission starting at \c slot_tx. Equal to \c slot_tx, unless Rel-16
+  /// PDSCH repetitions were used, in which case it is \c slot_tx + the number of repetitions - 1.
+  slot_point last_occasion_slot;
   /// Slot at which the respective ACK/CRC is expected to be received in the PHY.
   slot_point slot_ack;
+  /// \brief Slot of the last transmission that can carry the respective ACK/CRC.
+  ///
+  /// It only differs from \c slot_ack when the HARQ-ACK is reported over a multi-slot PUCCH repetition burst (see
+  /// TS 38.213, Section 9.2.6), in which case it is the slot of the burst's last repetition. The feedback timeout is
+  /// counted from this slot.
+  slot_point slot_ack_end;
   /// \brief Slot at which the currently set timeout expires. In case of status == waiting_ack, the timeout expires
   /// if no ACK/CRC arrives. In case of status == pending_retx, the timeout expires if no new reTx is scheduled.
   slot_point slot_timeout;
@@ -85,10 +106,12 @@ struct dl_harq_process_impl : public base_harq_process {
       units::bytes  sched_bytes;
     };
 
-    dci_dl_rnti_config_type                     dci_cfg_type;
-    vrb_alloc                                   rbs;
-    uint8_t                                     nof_symbols;
-    uint8_t                                     nof_layers{1};
+    dci_dl_rnti_config_type dci_cfg_type;
+    vrb_alloc               rbs;
+    uint8_t                 nof_symbols;
+    uint8_t                 nof_layers{1};
+    /// Number of Rel-16 slot-based PDSCH repetitions of the grant. Value 1 means a single transmission.
+    uint8_t                                     nof_repetitions{1};
     bool                                        is_fallback{false};
     cqi_value                                   cqi;
     pdsch_mcs_table                             mcs_table;
@@ -113,19 +136,29 @@ struct dl_harq_process_impl : public base_harq_process {
 struct ul_harq_process_impl : public base_harq_process {
   /// \brief Parameters relative to the last allocated PUSCH PDU for this HARQ process.
   struct alloc_params {
-    dci_ul_rnti_config_type       dci_cfg_type;
-    vrb_alloc                     rbs;
-    pusch_mcs_table               mcs_table;
-    sch_mcs_index                 mcs;
-    units::bytes                  tbs;
-    uint8_t                       nof_symbols;
-    uint8_t                       nof_layers;
+    dci_ul_rnti_config_type dci_cfg_type;
+    vrb_alloc               rbs;
+    pusch_mcs_table         mcs_table;
+    sch_mcs_index           mcs;
+    units::bytes            tbs;
+    uint8_t                 nof_symbols;
+    uint8_t                 nof_layers;
+    /// Number of Rel-16 PUSCH repetitions of the original transmission. Value 1 means a single transmission.
+    uint8_t                       nof_repetitions{1};
     std::optional<ran_slice_id_t> slice_id;
     std::optional<sch_mcs_index>  olla_mcs;
+    /// Whether the HARQ process was allocated for a Configured Grant PUSCH. Fixed across HARQ retxs.
+    bool is_cg = false;
   };
 
   /// Parameters used for the last Tx of this HARQ process.
   alloc_params prev_tx_params;
+  /// \brief Decode result accumulated over the occasions of the current transmission, as a logical OR.
+  ///
+  /// A bundle draws one CRC report per occasion and the PHY keeps accumulating soft bits, so an occasion may decode
+  /// the TB before the last one while a single failure says nothing. OR-ing keeps the successful report, whichever
+  /// occasion it came from. Reset at the start of every transmission.
+  bool combined_crc = false;
 };
 
 class ntn_dl_harq_alloc_history;
@@ -143,9 +176,26 @@ struct cell_harq_repository {
     slot_point             last_slot_ack;
     /// NTN helper variable indicating the presence of HARQ process with feedback disabled or mode B.
     bool feedback_disabled_or_mode_b_harq_present = false;
+    /// First HARQ-id that is not reserved for Configured Grant use.
+    harq_id_t first_non_reserved_harq_id = to_harq_id(0);
+
+    // ue_harq_entity_impl objects are recycled to avoid losing the allocated vector memory.
+    void clear()
+    {
+      harqs.clear();
+      free_harq_ids.clear();
+      last_slot_tx                             = slot_point{};
+      last_slot_ack                            = slot_point{};
+      feedback_disabled_or_mode_b_harq_present = false;
+      first_non_reserved_harq_id               = to_harq_id(0);
+    }
   };
 
-  cell_harq_repository(unsigned                max_ues,
+  using ue_entity_pool_type = free_list_recycling_object_pool<ue_harq_entity_impl>;
+  using ue_entity_pool_ptr  = typename ue_entity_pool_type::ptr;
+
+  cell_harq_repository(unsigned                max_nof_ue_indexes,
+                       unsigned                max_nof_ue_contexts,
                        unsigned                max_ack_wait_in_slots,
                        unsigned                harq_retx_timeout,
                        unsigned                max_harqs_per_ue,
@@ -166,24 +216,56 @@ struct cell_harq_repository {
 
   slot_point last_sl_ind;
 
-  std::vector<ue_harq_entity_impl>                               ues;
+  // Note: Declared before the list of UEs, as the entities handed out to the UEs belong to it.
+  ue_entity_pool_type                                            ue_entity_pool;
+  std::vector<ue_entity_pool_ptr>                                ues;
   intrusive_double_linked_list<harq_type, pending_retx_list_tag> harq_pending_retx_list;
   std::vector<intrusive_double_linked_list<harq_type>>           harq_timeout_wheel;
   unsigned                                                       ntn_cs_koffset;
   std::unique_ptr<harq_alloc_history>                            alloc_hist;
 
-  void               slot_indication(slot_point sl_tx);
-  void               stop();
-  void               handle_harq_ack_timeout(harq_type& h, slot_point sl_tx);
-  harq_type*         alloc_harq(du_ue_index_t ue_idx,
-                                slot_point    sl_tx,
-                                slot_point    sl_ack,
-                                unsigned      max_nof_harq_retxs,
-                                bool          select_normal_mode = true);
-  void               dealloc_harq(harq_type& h);
-  void               handle_ack(harq_type& h, bool ack);
-  void               set_pending_retx(harq_type& h);
-  [[nodiscard]] bool handle_new_retx(harq_type& h, slot_point sl_tx, slot_point sl_ack);
+  void slot_indication(slot_point sl_tx);
+  void stop();
+  void handle_harq_ack_timeout(harq_type& h, slot_point sl_tx);
+  /// \brief Allocates a new HARQ process for a UE's new Tx.
+  /// \param[in] ue_idx Index of the UE requesting the allocation.
+  /// \param[in] sl_tx Slot of the PxSCH transmission.
+  /// \param[in] sl_ack Slot at which the respective ACK/CRC is expected to be received in the PHY (see \c
+  /// base_harq_process::slot_ack).
+  /// \param[in] sl_ack_end Slot of the last transmission that can carry the respective ACK/CRC; equal to \c sl_ack
+  /// unless the HARQ-ACK is reported over a multi-slot PUCCH repetition burst (see \c base_harq_process::slot_ack_end).
+  /// \param[in] max_nof_harq_retxs Maximum number of retransmissions allowed for this HARQ process before it is reset.
+  /// \param[in] cg_params If set, forces the allocation of this specific HARQ-id (e.g. for Configured Grants); the
+  /// process must be free and, unless \c select_normal_mode's constraint below applies, not reserved.
+  /// \param[in] select_normal_mode Whether the picked HARQ process must be currently operating in normal mode (as
+  /// opposed to feedback-disabled/mode B). Only relevant for NTN cells.
+  /// \param[in] nof_repetitions Number of consecutive slot-equivalents spanned by this transmission, starting at
+  /// \c sl_tx. Used solely to extend the UE entity's last known Tx slot to the end of the transmission. For DL this
+  /// is the literal repetition count; for UL, whose Rel-17 available-slot-counting window may skip DL/special slots,
+  /// the caller passes 1 + the last occasion's slot offset, which need not equal the repetition count.
+  /// \return Pointer to the allocated HARQ process, or \c nullptr if the UE has no free (and, when applicable, no
+  /// matching reserved or mode-matching) HARQ process available.
+  harq_type* alloc_harq(du_ue_index_t                       ue_idx,
+                        slot_point                          sl_tx,
+                        slot_point                          sl_ack,
+                        slot_point                          sl_ack_end,
+                        unsigned                            max_nof_harq_retxs,
+                        std::optional<cg_harq_alloc_params> cg_params          = std::nullopt,
+                        bool                                select_normal_mode = true,
+                        uint8_t                             nof_repetitions    = 1);
+  void       dealloc_harq(harq_type& h);
+  void       handle_ack(harq_type& h, bool ack);
+  void       set_pending_retx(harq_type& h);
+  /// \brief Reuses a HARQ process with a pending retransmission for a UE's new Tx.
+  /// \param[in] h HARQ process to retransmit, which must currently have a pending retransmission (see \c
+  /// set_pending_retx).
+  /// \param[in] sl_tx, sl_ack, sl_ack_end, nof_repetitions See \c alloc_harq.
+  /// \return Whether the retransmission was accepted. Fails if \c h has no pending retransmission.
+  [[nodiscard]] bool handle_new_retx(harq_type& h,
+                                     slot_point sl_tx,
+                                     slot_point sl_ack,
+                                     slot_point sl_ack_end,
+                                     uint8_t    nof_repetitions = 1);
   void               reserve_ue_harqs(du_ue_index_t ue_idx, rnti_t rnti, unsigned nof_harqs);
   void               extend_ue_harqs(du_ue_index_t ue_idx, rnti_t rnti, unsigned new_nof_harqs);
   void               destroy_ue(du_ue_index_t ue_idx);
@@ -247,6 +329,8 @@ struct dl_harq_alloc_context {
   std::optional<cqi_value> cqi;
   /// Whether the HARQ allocation was done in fallback mode.
   bool is_fallback = false;
+  /// Number of Rel-16 slot-based PDSCH repetitions of the grant (1 = single transmission).
+  uint8_t nof_repetitions = 1;
 };
 
 /// \brief Context of the scheduler during the current PUSCH allocation.
@@ -257,6 +341,8 @@ struct ul_harq_alloc_context {
   std::optional<sch_mcs_index> olla_mcs;
   /// RAN slice identifier of the slice to which PUSCH belongs to.
   std::optional<ran_slice_id_t> slice_id;
+  /// Number of Rel-16 PUSCH repetitions of the grant (1 = single transmission).
+  uint8_t nof_repetitions = 1;
 };
 
 /// \brief Interface used to fetch and update the status of a DL HARQ process.
@@ -282,7 +368,20 @@ public:
 
   using base_type::cancel_retxs;
 
-  [[nodiscard]] bool new_retx(slot_point pdsch_slot, unsigned ack_delay, uint8_t harq_bit_idx);
+  /// \brief Prepares the DL HARQ process for a new retransmission.
+  /// \param[in] pdsch_slot Slot of the PDSCH retransmission.
+  /// \param[in] ack_delay Delay, in slots, of the HARQ-ACK report with respect to the PDSCH.
+  /// \param[in] harq_bit_idx Bit index of the HARQ-ACK in the UCI indication.
+  /// \param[in] nof_repetitions Number of consecutive slots spanned by this transmission, starting at \c pdsch_slot
+  /// (Rel-16 PDSCH repetitions; 1 for a single transmission). See \c cell_harq_repository::handle_new_retx.
+  /// \param[in] last_ack_delay Delay, in slots, of the last transmission carrying the HARQ-ACK report with respect to
+  /// the PDSCH. It only differs from \c ack_delay if the report is repeated over multiple slots. Defaults to
+  /// \c ack_delay.
+  [[nodiscard]] bool new_retx(slot_point              pdsch_slot,
+                              unsigned                ack_delay,
+                              uint8_t                 harq_bit_idx,
+                              uint8_t                 nof_repetitions = 1,
+                              std::optional<unsigned> last_ack_delay  = std::nullopt);
 
   /// \brief Update the state of the DL HARQ process waiting for an HARQ-ACK.
   /// \param[in] ack HARQ-ACK status received.
@@ -296,6 +395,8 @@ public:
 
   slot_point pdsch_slot() const { return impl->slot_tx; }
   slot_point uci_slot() const { return impl->slot_ack; }
+  /// Slot of the last transmission that can carry the HARQ-ACK report (see \c base_harq_process::slot_ack_end).
+  slot_point last_uci_slot() const { return impl->slot_ack_end; }
 
   const grant_params& get_grant_params() const { return impl->prev_tx_params; }
 };
@@ -323,7 +424,9 @@ public:
 
   using base_type::cancel_retxs;
 
-  [[nodiscard]] bool new_retx(slot_point pusch_slot);
+  /// \param[in] nof_repetitions Number of consecutive slots spanned by this transmission, starting at \c pusch_slot
+  /// (Rel-16 PUSCH repetitions; 1 for a single transmission).
+  [[nodiscard]] bool new_retx(slot_point pusch_slot, uint8_t nof_repetitions = 1);
 
   /// Update UL HARQ state given the received CRC indication.
   /// \return Transport Block size of the HARQ whose state was updated.
@@ -334,8 +437,20 @@ public:
   void save_grant_params(const ul_harq_alloc_context& ctx, const pusch_information& pusch);
 
   slot_point pusch_slot() const { return impl->slot_tx; }
+  /// Slot of the last occasion of this transmission. Equals \c pusch_slot() outside a PUSCH repetition bundle.
+  slot_point last_occasion_slot() const { return impl->last_occasion_slot; }
+  /// \brief Folds one occasion's decode result into this transmission's accumulated result and returns it.
+  ///
+  /// Call once per CRC report; the value returned at the last occasion is the one to pass to \c ul_crc_info.
+  bool accumulate_crc(bool crc_success)
+  {
+    impl->combined_crc = impl->combined_crc or crc_success;
+    return impl->combined_crc;
+  }
 
   const grant_params& get_grant_params() const { return impl->prev_tx_params; }
+
+  bool is_cg() const { return impl->prev_tx_params.is_cg; }
 };
 
 namespace harq_utils {
@@ -420,7 +535,8 @@ public:
   /// \brief Default timeout in slots for HARQ to be scheduled for retransmission after a negative CRC/ACK.
   static constexpr unsigned DEFAULT_HARQ_RETX_TIMEOUT_SLOTS = 200U;
 
-  cell_harq_manager(unsigned                               max_ues,
+  cell_harq_manager(unsigned                               max_nof_ue_indexes,
+                    unsigned                               max_nof_ue_contexts,
                     unsigned                               max_harqs_per_ue,
                     std::unique_ptr<harq_timeout_notifier> dl_notifier          = nullptr,
                     std::unique_ptr<harq_timeout_notifier> ul_notifier          = nullptr,
@@ -466,16 +582,20 @@ private:
                                               rnti_t        rnti,
                                               slot_point    pdsch_slot,
                                               unsigned      ack_delay,
+                                              unsigned      last_ack_delay,
                                               unsigned      max_harq_nof_retxs,
                                               uint8_t       harq_bit_idx,
-                                              bool          select_normal_mode = true);
+                                              bool          select_normal_mode = true,
+                                              uint8_t       nof_repetitions    = 1);
 
   /// \brief Called on every UL new Tx to allocate an UL HARQ process.
-  harq_utils::ul_harq_process_impl* new_ul_tx(du_ue_index_t ue_idx,
-                                              rnti_t        rnti,
-                                              slot_point    pusch_slot,
-                                              unsigned      max_harq_nof_retxs,
-                                              bool          select_normal_mode = true);
+  harq_utils::ul_harq_process_impl* new_ul_tx(du_ue_index_t                       ue_idx,
+                                              rnti_t                              rnti,
+                                              slot_point                          pusch_slot,
+                                              unsigned                            max_harq_nof_retxs,
+                                              std::optional<cg_harq_alloc_params> cg_params          = std::nullopt,
+                                              bool                                select_normal_mode = true,
+                                              uint8_t                             nof_repetitions    = 1);
 
   const uint8_t                          max_harqs_per_ue;
   std::unique_ptr<harq_timeout_notifier> dl_timeout_notifier;
@@ -512,10 +632,12 @@ public:
   /// \param new_nof_ul_harqs Number of UL HARQ processes.
   /// \param dl_harq_feedback_disabled_mask Bitmask for DL HARQ feedback disabled mode.
   /// \param ul_harq_mode_mask Bitmask for UL HARQ mode (mode A vs mode B).
+  /// \param nof_cg_reserved_harqs Number of UL HARQ processes reserved for Configured Grants.
   void reconfigure(unsigned                              new_nof_dl_harqs,
                    unsigned                              new_nof_ul_harqs,
                    const harq_dl_feedback_disabled_mask& dl_harq_feedback_disabled_mask,
-                   const harq_ul_mode_mask&              ul_harq_mode_mask);
+                   const harq_ul_mode_mask&              ul_harq_mode_mask,
+                   unsigned                              nof_cg_reserved_harqs);
 
   /// Checks whether there are free HARQ processes.
   bool   has_empty_dl_harqs(bool select_normal_mode_only = false) const;
@@ -544,7 +666,7 @@ public:
   std::optional<const dl_harq_process_handle> dl_harq(harq_id_t h_id) const
   {
     if (h_id < get_dl_ue().harqs.size() and get_dl_ue().harqs[h_id].status != harq_utils::harq_state_t::empty) {
-      return dl_harq_process_handle{cell_harq_mgr->dl, cell_harq_mgr->dl.ues[ue_index].harqs[h_id]};
+      return dl_harq_process_handle{cell_harq_mgr->dl, cell_harq_mgr->dl.ues[ue_index]->harqs[h_id]};
     }
     return std::nullopt;
   }
@@ -560,18 +682,36 @@ public:
   std::optional<const ul_harq_process_handle> ul_harq(harq_id_t h_id) const
   {
     if (h_id < get_ul_ue().harqs.size() and get_ul_ue().harqs[h_id].status != harq_utils::harq_state_t::empty) {
-      return ul_harq_process_handle{cell_harq_mgr->ul, cell_harq_mgr->ul.ues[ue_index].harqs[h_id]};
+      return ul_harq_process_handle{cell_harq_mgr->ul, cell_harq_mgr->ul.ues[ue_index]->harqs[h_id]};
     }
     return std::nullopt;
   }
 
-  std::optional<dl_harq_process_handle> alloc_dl_harq(slot_point sl_tx,
-                                                      unsigned   ack_delay,
-                                                      unsigned   max_harq_nof_retxs,
-                                                      unsigned   harq_bit_idx,
-                                                      bool       select_normal_mode = true);
-  std::optional<ul_harq_process_handle>
-  alloc_ul_harq(slot_point sl_tx, unsigned max_harq_nof_retxs, bool select_normal_mode = true);
+  /// \brief Allocates a DL HARQ process for a new transmission.
+  /// \param[in] sl_tx Slot of the PDSCH.
+  /// \param[in] ack_delay Delay, in slots, of the HARQ-ACK report with respect to the PDSCH.
+  /// \param[in] max_harq_nof_retxs Maximum number of retransmissions for this HARQ process.
+  /// \param[in] harq_bit_idx Bit index of the HARQ-ACK in the UCI indication.
+  /// \param[in] select_normal_mode Whether to only select HARQ processes operating in normal mode.
+  /// \param[in] nof_repetitions Number of consecutive slots spanned by this transmission, starting at \c sl_tx
+  /// (Rel-16 PDSCH repetitions; 1 for a single transmission). See \c cell_harq_repository::alloc_harq.
+  /// \param[in] last_ack_delay Delay, in slots, of the last transmission carrying the HARQ-ACK report with respect to
+  /// the PDSCH. It only differs from \c ack_delay if the report is repeated over multiple slots. Defaults to
+  /// \c ack_delay.
+  std::optional<dl_harq_process_handle> alloc_dl_harq(slot_point              sl_tx,
+                                                      unsigned                ack_delay,
+                                                      unsigned                max_harq_nof_retxs,
+                                                      unsigned                harq_bit_idx,
+                                                      bool                    select_normal_mode = true,
+                                                      uint8_t                 nof_repetitions    = 1,
+                                                      std::optional<unsigned> last_ack_delay     = std::nullopt);
+  /// \param[in] nof_repetitions Slot span of the PUSCH repetition bundle starting at \c sl_tx (1 for a single
+  /// transmission).
+  std::optional<ul_harq_process_handle> alloc_ul_harq(slot_point                          sl_tx,
+                                                      unsigned                            max_harq_nof_retxs,
+                                                      std::optional<cg_harq_alloc_params> cg_params = std::nullopt,
+                                                      bool                                select_normal_mode = true,
+                                                      uint8_t                             nof_repetitions    = 1);
 
   std::optional<dl_harq_process_handle>       find_pending_dl_retx();
   std::optional<const dl_harq_process_handle> find_pending_dl_retx() const;
@@ -597,14 +737,15 @@ public:
   units::bytes total_ul_bytes_waiting_ack() const;
 
 private:
-  dl_harq_ent_impl&       get_dl_ue() { return cell_harq_mgr->dl.ues[ue_index]; }
-  const dl_harq_ent_impl& get_dl_ue() const { return cell_harq_mgr->dl.ues[ue_index]; }
-  ul_harq_ent_impl&       get_ul_ue() { return cell_harq_mgr->ul.ues[ue_index]; }
-  const ul_harq_ent_impl& get_ul_ue() const { return cell_harq_mgr->ul.ues[ue_index]; }
+  dl_harq_ent_impl&       get_dl_ue() { return *cell_harq_mgr->dl.ues[ue_index]; }
+  const dl_harq_ent_impl& get_dl_ue() const { return *cell_harq_mgr->dl.ues[ue_index]; }
+  ul_harq_ent_impl&       get_ul_ue() { return *cell_harq_mgr->ul.ues[ue_index]; }
+  const ul_harq_ent_impl& get_ul_ue() const { return *cell_harq_mgr->ul.ues[ue_index]; }
 
-  cell_harq_manager* cell_harq_mgr = nullptr;
-  du_ue_index_t      ue_index      = INVALID_DU_UE_INDEX;
-  rnti_t             crnti         = rnti_t::INVALID_RNTI;
+  harq_id_t          first_non_reserved_harq_id = to_harq_id(0);
+  cell_harq_manager* cell_harq_mgr              = nullptr;
+  du_ue_index_t      ue_index                   = INVALID_DU_UE_INDEX;
+  rnti_t             crnti                      = rnti_t::INVALID_RNTI;
 };
 
 } // namespace ocudu

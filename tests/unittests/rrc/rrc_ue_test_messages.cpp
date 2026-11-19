@@ -13,22 +13,6 @@
 using namespace ocudu;
 using namespace ocucp;
 
-security::sec_key ocudu::ocucp::make_sec_key(std::string hex_str)
-{
-  byte_buffer       key_buf = make_byte_buffer(hex_str).value();
-  security::sec_key key     = {};
-  std::copy(key_buf.begin(), key_buf.end(), key.begin());
-  return key;
-}
-
-security::sec_128_key ocudu::ocucp::make_sec_128_key(std::string hex_str)
-{
-  byte_buffer           key_buf = make_byte_buffer(hex_str).value();
-  security::sec_128_key key     = {};
-  std::copy(key_buf.begin(), key_buf.end(), key.begin());
-  return key;
-}
-
 rrc_meas_cfg ocudu::ocucp::generate_dummy_meas_config()
 {
   rrc_meas_cfg meas_cfg;
@@ -184,7 +168,7 @@ byte_buffer ocudu::ocucp::generate_invalid_rrc_reestablishment_request_pdu(pci_t
   asn1::rrc_nr::ul_ccch_msg_s ul_ccch_msg{};
   auto&                       ccch_c1          = ul_ccch_msg.msg.set_c1();
   auto&                       rrc_reest_req    = ccch_c1.set_rrc_reest_request();
-  rrc_reest_req.rrc_reest_request.ue_id.c_rnti = to_value(c_rnti);
+  rrc_reest_req.rrc_reest_request.ue_id.c_rnti = to_underlying(c_rnti);
   rrc_reest_req.rrc_reest_request.ue_id.pci    = pci;
   rrc_reest_req.rrc_reest_request.ue_id.short_mac_i.from_number(0);
   rrc_reest_req.rrc_reest_request.reest_cause = asn1::rrc_nr::reest_cause_opts::options::other_fail;
@@ -207,11 +191,32 @@ byte_buffer ocudu::ocucp::generate_valid_rrc_reestablishment_request_pdu(pci_t  
   asn1::rrc_nr::ul_ccch_msg_s ul_ccch_msg{};
   auto&                       ccch_c1          = ul_ccch_msg.msg.set_c1();
   auto&                       rrc_reest_req    = ccch_c1.set_rrc_reest_request();
-  rrc_reest_req.rrc_reest_request.ue_id.c_rnti = to_value(c_rnti);
+  rrc_reest_req.rrc_reest_request.ue_id.c_rnti = to_underlying(c_rnti);
   rrc_reest_req.rrc_reest_request.ue_id.pci    = pci;
   rrc_reest_req.rrc_reest_request.ue_id.short_mac_i.from_string(short_mac_i);
   rrc_reest_req.rrc_reest_request.reest_cause = cause;
   rrc_reest_req.rrc_reest_request.spare.from_number(0);
+
+  const asn1::OCUDUASN_CODE ret = ul_ccch_msg.pack(bref);
+  ocudu_assert(ret == asn1::OCUDUASN_SUCCESS, "Failed to pack RRC PDU.");
+
+  return pdu;
+}
+
+byte_buffer ocudu::ocucp::generate_rrc_resume_request_pdu(std::string                  resume_id,
+                                                          std::string                  resume_mac_i,
+                                                          asn1::rrc_nr::resume_cause_e cause)
+{
+  byte_buffer   pdu;
+  asn1::bit_ref bref{pdu};
+
+  asn1::rrc_nr::ul_ccch_msg_s ul_ccch_msg{};
+  auto&                       ccch_c1        = ul_ccch_msg.msg.set_c1();
+  auto&                       rrc_resume_req = ccch_c1.set_rrc_resume_request();
+  rrc_resume_req.rrc_resume_request.resume_id.from_string(resume_id);
+  rrc_resume_req.rrc_resume_request.resume_mac_i.from_string(resume_mac_i);
+  rrc_resume_req.rrc_resume_request.resume_cause = cause;
+  rrc_resume_req.rrc_resume_request.spare.from_number(0);
 
   const asn1::OCUDUASN_CODE ret = ul_ccch_msg.pack(bref);
   ocudu_assert(ret == asn1::OCUDUASN_SUCCESS, "Failed to pack RRC PDU.");

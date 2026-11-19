@@ -54,6 +54,7 @@ void ocudu::register_interrupt_signal_handler(ocudu_signal_handler handler)
   std::signal(SIGTERM, signal_handler);
   std::signal(SIGHUP, signal_handler);
   std::signal(SIGALRM, signal_handler);
+  std::signal(SIGPIPE, SIG_IGN);
 }
 
 void ocudu::register_cleanup_signal_handler(ocudu_signal_handler handler)

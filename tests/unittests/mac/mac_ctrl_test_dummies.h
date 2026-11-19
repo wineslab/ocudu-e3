@@ -41,23 +41,46 @@ public:
                                   const std::vector<mac_logical_channel_config>& ul_logical_channels) override;
   async_task<bool> remove_bearers(du_ue_index_t ue_index, span<const lcid_t> lcids_to_rem) override;
   async_task<void> remove_ue(const mac_ue_delete_request& msg) override;
-  bool             flush_ul_ccch_msg(du_ue_index_t ue_index, byte_buffer pdu) override
+  bool             flush_ul_ccch_msg(du_ue_index_t    ue_index,
+                                     du_cell_index_t  cell_index,
+                                     slot_point       slot_rx,
+                                     byte_buffer      ul_ccch_msg,
+                                     msg3_mac_ce_list mac_ces) override
   {
-    ul_ccch_forwarded = true;
+    if (not ul_ccch_msg.empty()) {
+      ul_ccch_forwarded = true;
+    }
     return true;
   }
   void handle_ue_config_applied(du_ue_index_t ue_index) override {}
 };
 
-class mac_cell_dummy_controller final : public mac_cell_controller
+class mac_cell_dummy_controller final : public mac_dl_cell_controller
 {
 public:
-  async_task<void>                       start() override;
-  async_task<void>                       stop() override { return start(); }
-  async_task<mac_cell_reconfig_response> reconfigure(const mac_cell_reconfig_request& request) override
+  unsigned                                    nof_starts = 0;
+  std::optional<si_version_type>              last_si_version;
+  std::optional<si_version_type>              last_pws_si_version;
+  std::unique_ptr<pws_broadcast_end_notifier> pws_end_notifier;
+
+  async_task<void> start() override;
+  async_task<void> stop() override { return start(); }
+  void             start_broadcast(std::shared_ptr<si_message_extension_handler> ext_handler,
+                                   const si_update_command&                      cmd,
+                                   std::unique_ptr<pws_broadcast_end_notifier>   pws_end_notifier_) override
   {
-    return launch_no_op_task(mac_cell_reconfig_response{true});
+    pws_end_notifier = std::move(pws_end_notifier_);
+    handle_si_update(cmd);
   }
+  void handle_si_update(const si_update_command& cmd) override
+  {
+    if (not cmd.active_pws_si_messages.empty()) {
+      last_pws_si_version = cmd.version;
+      return;
+    }
+    last_si_version = cmd.version;
+  }
+  async_task<void> reconfigure(const mac_dl_cell_reconfig_request& request) override { return start(); }
 };
 
 class mac_dl_dummy_configurer final : public mac_dl_configurator
@@ -69,7 +92,7 @@ public:
   std::optional<mac_ue_delete_request>                                             last_ue_delete_request;
   std::optional<std::pair<du_ue_index_t, std::vector<mac_logical_channel_config>>> last_ue_bearers_added;
   std::optional<std::pair<du_ue_index_t, std::vector<lcid_t>>>                     last_ue_bearers_rem;
-  mac_cell_dummy_controller                                                        cell_ctrl;
+  std::vector<std::unique_ptr<mac_cell_dummy_controller>>                          cell_ctrls;
   test_helpers::dummy_mac_sfn_time_mapper                                          sfn_time_mapper;
 
   async_task<bool> add_ue(const mac_ue_create_request& msg) override;
@@ -80,12 +103,13 @@ public:
   async_task<bool>
   remove_bearers(du_ue_index_t ue_index, du_cell_index_t pcell_index, span<const lcid_t> lcids_to_rem) override;
 
-  mac_cell_controller& add_cell(const mac_cell_creation_request& cell_cfg, mac_cell_config_dependencies deps) override
+  mac_dl_cell_controller& add_cell(const mac_cell_creation_request& cell_cfg,
+                                   mac_cell_config_dependencies     deps) override
   {
-    return cell_ctrl;
+    cell_ctrls.push_back(std::make_unique<mac_cell_dummy_controller>());
+    return *cell_ctrls.back();
   }
   void                      remove_cell(du_cell_index_t cell_index) override {}
-  mac_cell_controller&      get_cell_controller(du_cell_index_t cell_index) override { return cell_ctrl; }
   mac_subframe_time_mapper& get_subframe_time_mapper() override { return sfn_time_mapper; }
 };
 
@@ -157,6 +181,8 @@ class mac_scheduler_dummy_adapter : public mac_scheduler_configurator
 public:
   manual_event<bool>                   ue_created_ev;
   std::optional<mac_ue_create_request> last_ue_create_request;
+
+  test_helpers::dummy_mac_scheduler_adapter cell_cfg;
 
   void add_cell(const mac_scheduler_cell_creation_request& msg) override {}
 

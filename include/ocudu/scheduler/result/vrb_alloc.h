@@ -5,9 +5,11 @@
 #pragma once
 
 #include "ocudu/adt/bounded_bitset.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/resource_allocation/rb_bitmap.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/scheduler/result/resource_block_group.h"
+#include <variant>
 
 namespace ocudu {
 
@@ -17,61 +19,24 @@ struct vrb_alloc {
   vrb_alloc() = default;
 
   /// \brief Creates a RB grant of allocation type1, i.e. a contiguous range of RBs.
-  vrb_alloc(const vrb_interval& other) noexcept : alloc_type_0(false), alloc(other) {}
+  vrb_alloc(const vrb_interval& other) noexcept : alloc(other) {}
 
   /// \brief Creates a RB grant of allocation type0, i.e. a set of potentially non-contiguous RBGs.
-  vrb_alloc(const rbg_bitmap& other) noexcept : alloc_type_0(true), alloc(other) {}
+  vrb_alloc(const rbg_bitmap& other) noexcept : alloc(other) {}
 
-  /// \brief Creates a copy of the RB grant.
-  vrb_alloc(const vrb_alloc& other) noexcept : alloc_type_0(other.alloc_type_0), alloc(other.alloc_type_0, other.alloc)
-  {
-  }
-
-  vrb_alloc& operator=(const vrb_alloc& other) noexcept
-  {
-    if (this == &other) {
-      return *this;
-    }
-    if (other.alloc_type_0) {
-      *this = other.type0();
-    } else {
-      *this = other.type1();
-    }
-    return *this;
-  }
   vrb_alloc& operator=(const vrb_interval& vrbs)
   {
-    if (alloc_type_0) {
-      alloc_type_0 = false;
-      alloc.rbgs.~rbg_bitmap();
-      new (&alloc.interv) vrb_interval(vrbs);
-    } else {
-      alloc.interv = vrbs;
-    }
+    alloc = vrbs;
     return *this;
   }
   vrb_alloc& operator=(const rbg_bitmap& rbgs)
   {
-    if (alloc_type_0) {
-      alloc.rbgs = rbgs;
-    } else {
-      alloc_type_0 = true;
-      alloc.interv.~vrb_interval();
-      new (&alloc.rbgs) rbg_bitmap(rbgs);
-    }
+    alloc = rbgs;
     return *this;
-  }
-  ~vrb_alloc()
-  {
-    if (is_type0()) {
-      alloc.rbgs.~rbg_bitmap();
-    } else {
-      alloc.interv.~vrb_interval();
-    }
   }
 
   /// Checks whether the grant is of type0.
-  bool is_type0() const { return alloc_type_0; }
+  bool is_type0() const { return std::holds_alternative<rbg_bitmap>(alloc); }
 
   /// Checks whether the grant is of type1.
   bool is_type1() const { return not is_type0(); }
@@ -81,12 +46,12 @@ struct vrb_alloc {
   const rbg_bitmap& type0() const
   {
     ocudu_assert(is_type0(), "Access to type0() for prb_grant with allocation type 1 is invalid");
-    return alloc.rbgs;
+    return std::get<rbg_bitmap>(alloc);
   }
   rbg_bitmap& type0()
   {
     ocudu_assert(is_type0(), "Access to type0() for prb_grant with allocation type 1 is invalid");
-    return alloc.rbgs;
+    return std::get<rbg_bitmap>(alloc);
   }
 
   /// \brief Gets the VRB interval of the resource allocation, in case it is of type1. This function fails if
@@ -94,36 +59,23 @@ struct vrb_alloc {
   const vrb_interval& type1() const
   {
     ocudu_assert(is_type1(), "Access to type1() for prb_grant with allocation type 0 is invalid");
-    return alloc.interv;
+    return std::get<vrb_interval>(alloc);
   }
   vrb_interval& type1()
   {
     ocudu_assert(is_type1(), "Access to type1() of prb_grant with allocation type 0 is invalid");
-    return alloc.interv;
+    return std::get<vrb_interval>(alloc);
   }
 
   /// \brief Verifies if grant is not empty in terms of RBs.
   bool any() const { return is_type0() ? type0().any() : not type1().empty(); }
   bool empty() const { return is_type0() ? not type0().any() : type1().empty(); }
 
-private:
-  bool alloc_type_0 = false;
-  union alloc_t {
-    rbg_bitmap   rbgs;
-    vrb_interval interv;
+  bool operator==(const vrb_alloc& other) const { return alloc == other.alloc; }
+  bool operator!=(const vrb_alloc& other) const { return not(*this == other); }
 
-    alloc_t() : interv(0, 0) {}
-    explicit alloc_t(const vrb_interval& prbs) : interv(prbs) {}
-    explicit alloc_t(const rbg_bitmap& rbgs_) : rbgs(rbgs_) {}
-    alloc_t(bool type0, const alloc_t& other)
-    {
-      if (type0) {
-        new (&rbgs) rbg_bitmap(other.rbgs);
-      } else {
-        new (&interv) vrb_interval(other.interv);
-      }
-    }
-  } alloc;
+private:
+  std::variant<vrb_interval, rbg_bitmap> alloc;
 };
 
 /// Converts RBG bitmap to PRB bitmap given a BWP PRB dimensions and the nominal RBG-size.

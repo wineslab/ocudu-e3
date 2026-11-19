@@ -511,6 +511,105 @@ TEST_P(EthFramePoolFixture, clearing_pool_should_clear_only_late_buffers)
   }
 }
 
+TEST(EthFramePoolTest, enqueueing_more_pending_buffers_than_a_burst_fits_should_stop_at_the_burst_size)
+{
+  static constexpr unsigned nof_frames          = 6;
+  static constexpr unsigned nof_pending_buffers = ether::MAX_TX_BURST_SIZE + 44;
+
+  ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("TEST");
+
+  eth_frame_pool pool(
+      logger, units::bytes(1500), nof_frames, ofh::message_type::user_plane, ofh::data_direction::downlink);
+
+  ofh::slot_symbol_point symbol_point(slot_point(0, 0), 0, get_nsymb_per_slot(cyclic_prefix::NORMAL));
+  // Spread the pending buffers over two symbols, so that the burst fills up in the middle of the interval.
+  for (unsigned i = 0; i != nof_pending_buffers; ++i) {
+    auto wr_buffer = pool.reserve(symbol_point + (i % 2));
+    ASSERT_TRUE(wr_buffer) << "Non-empty buffer is expected";
+    wr_buffer->set_size(64);
+  }
+
+  ether::frame_pool_interval                            interval{symbol_point, symbol_point + 1U};
+  static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE> frame_burst;
+  ASSERT_FALSE(pool.enqueue_pending_into_burst(interval, frame_burst)) << "Burst is expected to fill up";
+  ASSERT_EQ(frame_burst.size(), MAX_TX_BURST_SIZE);
+
+  // Once emptied, the burst takes the remaining buffers.
+  frame_burst.clear();
+  ASSERT_TRUE(pool.enqueue_pending_into_burst(interval, frame_burst)) << "All buffers are expected to be enqueued";
+  ASSERT_EQ(frame_burst.size(), nof_pending_buffers - MAX_TX_BURST_SIZE);
+
+  // Verify the pool doesn't have more pending buffers.
+  frame_burst.clear();
+  ASSERT_TRUE(pool.enqueue_pending_into_burst(interval, frame_burst));
+  ASSERT_TRUE(frame_burst.empty());
+}
+
+TEST(EthFramePoolTest, enqueueing_exactly_a_max_burst_of_pending_buffers_should_report_all_enqueued)
+{
+  static constexpr unsigned nof_frames = 6;
+
+  ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("TEST");
+  eth_frame_pool          pool(
+      logger, units::bytes(1500), nof_frames, ofh::message_type::user_plane, ofh::data_direction::downlink);
+
+  ofh::slot_symbol_point symbol_point(slot_point(0, 0), 0, get_nsymb_per_slot(cyclic_prefix::NORMAL));
+  for (unsigned i = 0; i != MAX_TX_BURST_SIZE; ++i) {
+    auto wr_buffer = pool.reserve(symbol_point);
+    ASSERT_TRUE(wr_buffer) << "Non-empty buffer is expected";
+    wr_buffer->set_size(64);
+  }
+
+  static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE> frame_burst;
+  ASSERT_TRUE(pool.enqueue_pending_into_burst(symbol_point, frame_burst)) << "All buffers are expected to be enqueued";
+  ASSERT_TRUE(frame_burst.full());
+}
+
+TEST(EthFramePoolTest, pending_buffers_of_a_past_slot_should_be_dropped_and_reported_as_late)
+{
+  static constexpr unsigned nof_frames          = 6;
+  static constexpr unsigned nof_expired_buffers = 3;
+  static constexpr unsigned nof_on_time_buffers = 2;
+
+  ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("TEST");
+  eth_frame_pool          pool(
+      logger, units::bytes(1500), nof_frames, ofh::message_type::user_plane, ofh::data_direction::downlink);
+
+  unsigned               nof_symbols = get_nsymb_per_slot(cyclic_prefix::NORMAL);
+  ofh::slot_symbol_point past_symbol_point(slot_point(1, 0), 3, nof_symbols);
+  // Same pool entry as the past symbol point, one pool size later.
+  ofh::slot_symbol_point symbol_point(past_symbol_point.get_slot() + pool.pool_size_in_slots(), 3, nof_symbols);
+
+  // Buffers written after the slot was cleared, which the pool keeps pending until the entry is transmitted again.
+  for (unsigned i = 0; i != nof_expired_buffers; ++i) {
+    auto wr_buffer = pool.reserve(past_symbol_point);
+    ASSERT_TRUE(wr_buffer) << "Non-empty buffer is expected";
+    wr_buffer->set_size(64);
+  }
+  for (unsigned i = 0; i != nof_on_time_buffers; ++i) {
+    auto wr_buffer = pool.reserve(symbol_point);
+    ASSERT_TRUE(wr_buffer) << "Non-empty buffer is expected";
+    wr_buffer->set_size(64);
+  }
+
+  // Only the buffers of the transmitted slot are enqueued.
+  static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE> frame_burst;
+  ASSERT_TRUE(pool.enqueue_pending_into_burst(symbol_point, frame_burst));
+  ASSERT_EQ(frame_burst.size(), nof_on_time_buffers);
+  for (const auto& buffer : frame_burst) {
+    ASSERT_EQ(buffer->get_slot_symbol(), symbol_point) << "Retrieved frame buffer has incorrect timestamp";
+  }
+
+  // The expired buffers are freed, so no buffer remains pending.
+  frame_burst.clear();
+  ASSERT_TRUE(pool.enqueue_pending_into_burst(symbol_point, frame_burst));
+  ASSERT_TRUE(frame_burst.empty());
+
+  // The expired buffers are reported as late once.
+  ASSERT_EQ(pool.clear_slot(symbol_point.get_slot() + 1, 0), nof_expired_buffers);
+  ASSERT_EQ(pool.clear_slot(symbol_point.get_slot() + 1, 0), 0);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     EthFramePoolTestSuite,
     EthFramePoolFixture,

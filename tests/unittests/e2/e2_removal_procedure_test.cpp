@@ -4,6 +4,7 @@
 
 #include "lib/e2/common/e2ap_asn1_utils.h"
 #include "tests/unittests/e2/common/e2_test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/async_test_utils.h"
 #include <gtest/gtest.h>
 

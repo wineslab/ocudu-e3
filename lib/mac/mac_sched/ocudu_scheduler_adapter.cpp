@@ -31,6 +31,7 @@ make_scheduler_ue_reconfiguration_request(const mac_ue_reconfiguration_request& 
   ret.ue_index = request.ue_index;
   ret.crnti    = request.crnti;
   ret.cfg      = request.sched_cfg;
+  ret.cs_rnti  = request.assigned_cs_rnti;
   return ret;
 }
 
@@ -215,9 +216,9 @@ void ocudu_scheduler_adapter::handle_dl_mac_ce_indication(const mac_ce_schedulin
   sched_impl->handle_dl_mac_ce_indication(dl_mac_ce_indication{mac_ce.ue_index, mac_ce.ce_lcid});
 }
 
-static slot_point chrono_to_slot_point(std::chrono::high_resolution_clock::time_point hol_toa,
-                                       std::chrono::high_resolution_clock::time_point last_slot_tp,
-                                       slot_point                                     last_slot_p)
+static slot_point chrono_to_slot_point(std::chrono::steady_clock::time_point hol_toa,
+                                       std::chrono::steady_clock::time_point last_slot_tp,
+                                       slot_point                            last_slot_p)
 {
   using namespace std::chrono;
   static constexpr microseconds half_system_frame_dur = milliseconds{10240 / 2};
@@ -246,8 +247,8 @@ void ocudu_scheduler_adapter::handle_dl_buffer_state_update(const mac_dl_buffer_
   bs.bs       = mac_dl_bs_ind.bs;
   if (mac_dl_bs_ind.hol_toa.has_value()) {
     // Check if at least one slot indication has been processed.
-    const high_resolution_clock::time_point sl_tp = last_slot_tp.load(std::memory_order_relaxed);
-    if (sl_tp != high_resolution_clock::time_point{}) {
+    const steady_clock::time_point sl_tp = last_slot_tp.load(std::memory_order_relaxed);
+    if (sl_tp != steady_clock::time_point{}) {
       // Convert HOL TOA from chrono time point to slots.
       bs.hol_toa = chrono_to_slot_point(
           mac_dl_bs_ind.hol_toa.value(), sl_tp, last_slot_point.load(std::memory_order_relaxed).without_hyper_sfn());
@@ -270,6 +271,18 @@ void ocudu_scheduler_adapter::handle_ul_phr_indication(const mac_phr_ce_info& ph
   sched_impl->handle_ul_phr_indication(ind);
 }
 
+void ocudu_scheduler_adapter::handle_ul_ta_report_indication(const mac_ta_report_ce_info& ta_report)
+{
+  // Forward the Timing Advance Report to the scheduler.
+  ul_ta_report_indication_message ind{};
+  ind.cell_index = ta_report.cell_index;
+  ind.ue_index   = ta_report.ue_index;
+  ind.rnti       = ta_report.rnti;
+  ind.slot_rx    = ta_report.slot_rx;
+  ind.ul_ta      = ta_report.ul_ta;
+  sched_impl->handle_ul_ta_report_indication(ind);
+}
+
 void ocudu_scheduler_adapter::handle_crnti_ce_indication(du_ue_index_t old_ue_index, du_cell_index_t cell_index)
 {
   rlf_handler.handle_crnti_ce(old_ue_index);
@@ -282,7 +295,7 @@ const sched_result& ocudu_scheduler_adapter::slot_indication(slot_point_extended
 
   // Mark start of the slot in time (estimate).
   if (last_slot_point.exchange(slot_tx, std::memory_order_relaxed) != slot_tx) {
-    auto slot_tp = high_resolution_clock::now();
+    auto slot_tp = steady_clock::now();
     last_slot_tp.store(slot_tp, std::memory_order_relaxed);
   }
 
@@ -290,7 +303,7 @@ const sched_result& ocudu_scheduler_adapter::slot_indication(slot_point_extended
 
   if (res.success) {
     // Store UCI PDUs for later decoding.
-    cell_handlers[cell_idx].uci_decoder.store_uci(slot_tx.without_hyper_sfn(), res.ul.pucchs, res.ul.puschs);
+    cell_handlers[cell_idx].uci_decoder.store_uci(slot_tx.without_hyper_sfn(), res.ul.pucchs.unsorted(), res.ul.puschs);
   }
 
   return res;
@@ -312,10 +325,21 @@ void ocudu_scheduler_adapter::handle_si_change_indication(const si_scheduling_up
   sched_impl->handle_si_update_request(request);
 }
 
+void ocudu_scheduler_adapter::handle_pws_si_change_indication(const pws_si_scheduling_update_request& request)
+{
+  sched_impl->handle_pws_si_update_request(request);
+}
+
 void ocudu_scheduler_adapter::handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& req)
 {
   // Update RRM policies in the scheduler.
   sched_impl->handle_slice_reconfiguration_request(req);
+}
+
+void ocudu_scheduler_adapter::handle_ntn_ul_ta_update(const sched_cell_ntn_ul_ta_update& req)
+{
+  // Update the reference location uplink timing advance in the scheduler cell configuration.
+  sched_impl->handle_ntn_ul_ta_update(req);
 }
 
 void ocudu_scheduler_adapter::sched_config_notif_adapter::on_ue_config_complete(du_ue_index_t ue_index,
@@ -382,6 +406,7 @@ void ocudu_scheduler_adapter::cell_handler::handle_crc(const mac_crc_indication_
     pdu.rnti                       = mac_pdu.rnti;
     pdu.ue_index                   = parent.rnti_mng[mac_pdu.rnti];
     pdu.harq_id                    = to_harq_id(mac_pdu.harq_id);
+    pdu.rapid                      = mac_pdu.rapid;
     pdu.tb_crc_success             = mac_pdu.tb_crc_success;
     pdu.ul_sinr_dB                 = mac_pdu.ul_sinr_dB;
     pdu.ul_rsrp_dBFS               = mac_pdu.ul_rsrp_dBFS;

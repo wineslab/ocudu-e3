@@ -10,19 +10,19 @@
 #include "e2_impl.h"
 #include "e2_subscription_manager_impl.h"
 #include "ocudu/e2/e2.h"
-#include "ocudu/support/synchronization/baton.h"
+#include "ocudu/support/synchronization/sync_event.h"
 #include <thread>
 
 using namespace ocudu;
 using namespace asn1::e2ap;
 
-e2_entity::e2_entity(e2_agent_dependencies&& dependencies) :
-  logger(*dependencies.logger),
-  cfg(dependencies.cfg),
-  task_exec(*dependencies.task_exec),
-  timers(*dependencies.timers),
+e2_entity::e2_entity(const e2ap_config& cfg_, e2_agent_dependencies dependencies) :
+  logger(dependencies.logger),
+  cfg(cfg_),
+  task_exec(dependencies.task_exec),
+  timers(dependencies.timers),
   main_ctrl_loop(128),
-  node_cfg_timeout(dependencies.timers->create_timer()),
+  node_cfg_timeout(timers.create_timer()),
   node_component_config_provider(std::move(dependencies.node_component_config_provider))
 {
   e2sm_mngr         = std::make_unique<e2sm_manager>(logger);
@@ -35,13 +35,13 @@ e2_entity::e2_entity(e2_agent_dependencies&& dependencies) :
     subscription_mngr->add_ran_function_oid(ran_func_id, oid);
   }
 
-  e2ap = std::make_unique<e2_impl>(logger,
-                                   *this,
-                                   *dependencies.timers,
-                                   *dependencies.e2_client,
-                                   *subscription_mngr,
-                                   *e2sm_mngr,
-                                   *dependencies.task_exec);
+  e2ap = std::make_unique<e2_impl>(e2_impl_dependencies{.logger            = logger,
+                                                        .agent_notifier    = *this,
+                                                        .timers            = dependencies.timers,
+                                                        .e2_client         = dependencies.e2_client,
+                                                        .subscription_mngr = *subscription_mngr,
+                                                        .e2sm_mngr         = *e2sm_mngr,
+                                                        .task_exec         = dependencies.task_exec});
 }
 
 void e2_entity::start()
@@ -49,7 +49,7 @@ void e2_entity::start()
   // Start a 5-second timeout so that the setup coroutine is not blocked indefinitely waiting for
   // interface-setup bytes that may never arrive (e.g. if no F1/NG/E1 setup is performed).
   // Dispatch the callback body to task_exec so the aggregator event is only accessed on the E2 thread.
-  node_cfg_timeout.set(std::chrono::milliseconds(5000), [this](timer_id_t) {
+  node_cfg_timeout.set(std::chrono::milliseconds(5000), [this]() {
     if (!task_exec.execute([this]() { node_component_config_provider->on_timeout(); })) {
       logger.warning("Failed to dispatch node config timeout to E2 executor");
     }
@@ -70,8 +70,8 @@ void e2_entity::start()
 
 void e2_entity::stop()
 {
-  baton               stop_baton;
-  scoped_baton_sender signal_stop{stop_baton};
+  sync_event stop_sync;
+  auto       tk = stop_sync.get_token();
 
   stopped = true;
 
@@ -81,24 +81,32 @@ void e2_entity::stop()
   }
 
   // Stop and delete RIC connection.
-  while (not task_exec.defer([this, signal_stop = std::move(signal_stop)]() mutable {
-    main_ctrl_loop.schedule([this, signal_stop = std::move(signal_stop)](coro_context<async_task<void>>& ctx) mutable {
-      CORO_BEGIN(ctx);
-      CORO_AWAIT(disconnect_ric());
+  // Note: tk is copied, not moved, because a failed defer destroys the task and its token copy.
+  while (not task_exec.defer([this, tk]() mutable {
+    if (not main_ctrl_loop.schedule([this, tk = std::move(tk)](coro_context<async_task<void>>& ctx) {
+          CORO_BEGIN(ctx);
+          CORO_AWAIT(disconnect_ric());
 
-      // RIC disconnection successfully finished. Stop the main task loop.
-      // Dispatch main async task loop destruction via defer so that the current coroutine ends successfully.
-      while (not task_exec.defer([signal_stop = std::move(signal_stop)]() mutable { signal_stop.post(); })) {
-        logger.warning("Unable to stop E2 Agent. Retrying...");
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      CORO_RETURN();
-    });
+          // RIC disconnection successfully finished. Stop the main task loop.
+          // Dispatch main async task loop destruction via defer so that the current coroutine ends successfully.
+          while (not task_exec.defer([tk]() {
+            // Releases the token.
+          })) {
+            logger.warning("Unable to stop E2 Agent. Retrying...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+          CORO_RETURN();
+        })) {
+      logger.error("Failed to schedule the RIC disconnection. The E2 TNL association is left up.");
+    }
   })) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  stop_baton.wait();
+  // Let only the dispatched tasks keep the token.
+  tk.reset();
+
+  stop_sync.wait();
 }
 
 void e2_entity::on_e2_disconnection()

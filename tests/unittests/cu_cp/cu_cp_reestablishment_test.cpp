@@ -10,6 +10,7 @@
 #include "tests/test_doubles/rrc/rrc_test_message_validators.h"
 #include "tests/test_doubles/rrc/rrc_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/f1ap/f1ap_message.h"
@@ -439,7 +440,7 @@ TEST_F(cu_cp_reestablishment_test,
   // Connect UE 0x4601.
   EXPECT_TRUE(connect_new_ue(du_idx, old_du_ue_id, old_crnti));
   EXPECT_TRUE(authenticate_ue(du_idx, old_du_ue_id, amf_ue_id));
-  EXPECT_TRUE(setup_ue_security_and_ue_capabilies(du_idx, old_du_ue_id));
+  EXPECT_TRUE(setup_ue_security_and_ue_capabilities(du_idx, old_du_ue_id));
 
   // Run Reestablishment.
   gnb_du_ue_f1ap_id_t new_du_ue_id = int_to_gnb_du_ue_f1ap_id(1);
@@ -620,7 +621,7 @@ TEST_F(cu_cp_reestablishment_test, when_old_ue_is_busy_with_a_procedure_then_ree
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ues.size(), 2) << "Old UE should not be removed yet as its RRC Setup procedure is not completed";
 
-  // STATUS: UE Context Release Complete for old UE and it should be finally removed.
+  // STATUS: UE Context Release Complete for old UE, and it should be finally removed.
   this->get_du(du_idx).push_ul_pdu(test_helpers::generate_ue_context_release_complete(f1ap_pdu));
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ues.size(), 1) << "Old UE was not removed";

@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include "ocudu/gateways/dtls_context_config.h"
 #include "ocudu/gateways/network_gateway.h"
+#include <chrono>
 #include <optional>
 #include <sys/types.h>
 
@@ -39,6 +41,8 @@ struct sctp_network_gateway_config : public common_network_gateway_config {
   std::optional<std::chrono::milliseconds> hb_interval;
   std::optional<int32_t>                   assoc_max_rxt;
   std::optional<bool>                      nodelay;
+
+  std::optional<dtls_context_config> dtls_cfg;
 };
 
 /// \brief Configuration for SCTP network client
@@ -46,6 +50,12 @@ struct sctp_network_connector_config : public sctp_network_gateway_config {
   std::string              dest_name;
   std::vector<std::string> connect_addresses;
   int                      connect_port = 0;
+  /// \brief Whether the user of the client retries a failed connection attempt.
+  ///
+  /// It only affects how a failed attempt is reported: a connection that is retried is expected to recover on its own,
+  /// so its failures are reported as warnings and the repetitions are throttled, while a failure that is not retried
+  /// is reported as an error.
+  bool connection_is_retried = false;
 };
 
 /// \brief Interface to inject PDUs into gateway entity.

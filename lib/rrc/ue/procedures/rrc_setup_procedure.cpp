@@ -5,6 +5,7 @@
 #include "rrc_setup_procedure.h"
 #include "../rrc_asn1_helpers.h"
 #include "ue/rrc_asn1_converters.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/dl_ccch_msg.h"
 #include "ocudu/ran/cause/common.h"
 #include <variant>
@@ -43,6 +44,8 @@ void rrc_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
 {
   CORO_BEGIN(ctx);
 
+  logger.log_info("\"{}\" started...", name());
+
   // create SRB1
   create_srb1();
 
@@ -61,7 +64,7 @@ void rrc_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
       metrics_notifier.on_failed_rrc_connection_establishment(establishment_fail_cause_t::no_reply);
       rrc_ue.on_ue_release_required(cause_protocol_t::unspecified);
     } else {
-      logger.log_info("\"{}\" cancelled", name());
+      logger.log_warning("\"{}\" cancelled", name());
       // Do nothing. We are likely shutting down the DU processor.
     }
     CORO_EARLY_RETURN();
@@ -119,7 +122,7 @@ void rrc_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
 
   send_initial_ue_msg();
 
-  logger.log_debug("\"{}\" finished successfully", name());
+  logger.log_info("\"{}\" finished successfully", name());
 
   CORO_RETURN();
 }
@@ -152,11 +155,12 @@ void rrc_setup_procedure::send_initial_ue_msg()
 
   const auto& rrc_setup_complete = rrc_setup_complete_msg.crit_exts.rrc_setup_complete();
 
-  init_ue_msg.ue_index                  = context.ue_index;
-  init_ue_msg.nas_pdu                   = rrc_setup_complete.ded_nas_msg.copy();
-  init_ue_msg.establishment_cause       = context.connection_cause;
-  init_ue_msg.user_location_info.nr_cgi = {context.plmn_id, context.cell.cgi.nci};
-  init_ue_msg.user_location_info.tai    = {context.plmn_id, context.cell.tac};
+  init_ue_msg.ue_index                    = context.ue_index;
+  init_ue_msg.nas_pdu                     = rrc_setup_complete.ded_nas_msg.copy();
+  init_ue_msg.establishment_cause         = context.connection_cause;
+  init_ue_msg.user_location_info.nr_cgi   = {context.plmn_id, context.cell.cgi.nci};
+  init_ue_msg.user_location_info.tai      = {context.plmn_id, context.cell.tac};
+  init_ue_msg.user_location_info.tac_list = context.cell.tac_list;
 
   if (rrc_setup_complete.ng_5_g_s_tmsi_value_present) {
     if (rrc_setup_complete.ng_5_g_s_tmsi_value.type() ==

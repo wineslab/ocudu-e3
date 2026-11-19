@@ -25,7 +25,7 @@ public:
                    "ue={}{}{}: ",
                    ue_index,
                    ran_ue_id != ran_ue_id_t::invalid ? fmt::format(" ran_ue={}", fmt::underlying(ran_ue_id)) : "",
-                   amf_ue_id != amf_ue_id_t::invalid ? fmt::format(" amf_ue={}", fmt::underlying(amf_ue_id)) : "");
+                   amf_ue_id != amf_ue_id_t::invalid ? fmt::format(" amf_ue={}", amf_ue_id) : "");
     prefix = ocudu::to_c_str(buffer);
   }
   const char* to_c_str() const { return prefix.c_str(); }
@@ -34,25 +34,11 @@ private:
   std::string prefix;
 };
 
+inline const char* format_as(const ngap_ue_log_prefix& o)
+{
+  return o.to_c_str();
+}
+
 using ngap_ue_logger = prefixed_logger<ngap_ue_log_prefix>;
 
 } // namespace ocudu::ocucp
-
-namespace fmt {
-
-// associated formatter
-template <>
-struct formatter<ocudu::ocucp::ngap_ue_log_prefix> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::ocucp::ngap_ue_log_prefix o, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", o.to_c_str());
-  }
-};
-} // namespace fmt

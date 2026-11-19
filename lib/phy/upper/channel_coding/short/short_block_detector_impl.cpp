@@ -4,6 +4,7 @@
 
 #include "short_block_detector_impl.h"
 #include "short_block_encoder_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ocuduvec/bit.h"
 #include "ocudu/ocuduvec/copy.h"

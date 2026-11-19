@@ -25,7 +25,7 @@ struct flexible_o_du_unit_config {
   struct ru_config {
     app_helpers::metrics_config config;
     bool                        enable_ru_metrics;
-    float                       dBFS_calibration_value = 1.F;
+    float                       rx_gain_dB;
   };
 
   /// O-RAN DU high configuration.
@@ -44,6 +44,7 @@ struct flexible_o_du_ru_config {
     bs_channel_bandwidth                   bw;
     unsigned                               nof_rx_antennas;
     unsigned                               nof_tx_antennas;
+    antenna_topology                       tx_ant_topology = antenna_topology::one_port;
     std::optional<tdd_ul_dl_config_common> tdd_config;
     arfcn_t                                dl_arfcn;
     arfcn_t                                ul_arfcn;
@@ -53,6 +54,7 @@ struct flexible_o_du_ru_config {
   std::vector<cell_config> cells;
   unsigned                 max_processing_delay;
   unsigned                 prach_nof_ports;
+  bool                     is_rt_mode_enabled;
 };
 
 /// Radio Unit dependencies of the flexible O-RAN DU.

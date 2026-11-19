@@ -4,6 +4,7 @@
 
 #include "ocudu/ocuduvec/bit.h"
 #include "ocudu/phy/upper/sequence_generators/sequence_generator_factories.h"
+#include "fmt/format.h"
 #include <gtest/gtest.h>
 #include <random>
 

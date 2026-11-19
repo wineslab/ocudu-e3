@@ -4,7 +4,9 @@
 #include "ocudu/ocuduvec/prod.h"
 #include "ocudu/ocuduvec/simd.h"
 #include "ocudu/support/math/math_utils.h"
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace ocudu;
 using namespace ocuduvec;
@@ -47,19 +49,19 @@ static void prod_sss_simd(const int16_t* x, const int16_t* y, int16_t* z, std::s
 #if OCUDU_SIMD_S_SIZE
   if (SIMD_IS_ALIGNED(x) && SIMD_IS_ALIGNED(y) && SIMD_IS_ALIGNED(z)) {
     for (; i + OCUDU_SIMD_S_SIZE < len + 1; i += OCUDU_SIMD_S_SIZE) {
-      simd_s_t a = ocudu_simd_s_load(x + i);
-      simd_s_t b = ocudu_simd_s_load(y + i);
+      simd_i16_t a = ocudu_simd_s_load(x + i);
+      simd_i16_t b = ocudu_simd_s_load(y + i);
 
-      simd_s_t r = ocudu_simd_s_mul(a, b);
+      simd_i16_t r = ocudu_simd_s_mul(a, b);
 
       ocudu_simd_s_store(z + i, r);
     }
   } else {
     for (; i + OCUDU_SIMD_S_SIZE < len + 1; i += OCUDU_SIMD_S_SIZE) {
-      simd_s_t a = ocudu_simd_s_loadu(x + i);
-      simd_s_t b = ocudu_simd_s_loadu(y + i);
+      simd_i16_t a = ocudu_simd_s_loadu(x + i);
+      simd_i16_t b = ocudu_simd_s_loadu(y + i);
 
-      simd_s_t r = ocudu_simd_s_mul(a, b);
+      simd_i16_t r = ocudu_simd_s_mul(a, b);
 
       ocudu_simd_s_storeu(z + i, r);
     }
@@ -242,6 +244,13 @@ void ocudu::ocuduvec::prod_cexp(span<cbf16_t> out, span<const cbf16_t> in, float
 }
 
 void ocudu::ocuduvec::prod_cexp(span<cbf16_t> out, span<const cf_t> in, float norm_cfo, float initial_phase)
+{
+  ocudu_ocuduvec_assert_size(out, in);
+
+  prod_cexp_simd(out.data(), in.data(), norm_cfo, initial_phase, in.size());
+}
+
+void ocudu::ocuduvec::prod_cexp(span<ci16_t> out, span<const ci16_t> in, float norm_cfo, float initial_phase)
 {
   ocudu_ocuduvec_assert_size(out, in);
 

@@ -7,6 +7,7 @@
 #include "apps/units/o_cu_cp/o_cu_cp_application_unit.h"
 #include "apps/units/o_cu_up/o_cu_up_application_unit.h"
 #include "yaml_roundtrip_test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/config_parsers.h"
 #include "CLI/CLI11.hpp"
 

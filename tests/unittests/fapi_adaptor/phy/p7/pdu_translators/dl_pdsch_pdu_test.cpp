@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "../message_builder_helpers.h"
 #include "pdsch.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi/p7/builders/dl_pdsch_pdu_builder.h"
-#include "ocudu/fapi_adaptor/precoding_matrix_table_generator.h"
+#include "ocudu/fapi_adaptor/precoding_codebook_generator.h"
 #include "ocudu/ran/pdcch/dci_format.h"
 #include <gtest/gtest.h>
 #include <random>
@@ -111,8 +113,8 @@ TEST(fapi_to_phy_pdsch_conversion_test, valid_pdu_conversion_success)
   std::uniform_int_distribution<unsigned> sfn_dist(0, 1023);
   std::uniform_int_distribution<unsigned> slot_dist(0, 159);
   std::uniform_int_distribution<unsigned> rnti_dist(1, 65535);
-  std::uniform_int_distribution<unsigned> bwp_size_dist(1, 275);
-  std::uniform_int_distribution<unsigned> bwp_start_dist(0, 274);
+  std::uniform_int_distribution<unsigned> bwp_size_dist(1, MAX_NOF_PRBS);
+  std::uniform_int_distribution<unsigned> bwp_start_dist(0, MAX_NOF_PRBS - 1);
   std::uniform_int_distribution<unsigned> nid_pdsch_dist(0, 1023);
   std::uniform_int_distribution<unsigned> dmrs_scrambling_dist(0, 65535);
   std::uniform_int_distribution<unsigned> binary_dist(0, 1);
@@ -120,8 +122,8 @@ TEST(fapi_to_phy_pdsch_conversion_test, valid_pdu_conversion_success)
   std::uniform_int_distribution<unsigned> nr_of_symbols_dist(1, 14);
   std::uniform_int_distribution<unsigned> start_symbol_index_dist(0, 13);
 
-  auto                               pm_tools = generate_precoding_matrix_tables(1, 0);
-  const precoding_matrix_repository& pm_repo  = *std::get<std::unique_ptr<precoding_matrix_repository>>(pm_tools);
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_one_port{}, antenna_topology::one_port, 0);
+  const precoding_codebook_repository& pm_repo = *std::get<std::unique_ptr<precoding_codebook_repository>>(pm_tools);
 
   for (auto cyclic_p : {cyclic_prefix::NORMAL, cyclic_prefix::EXTENDED}) {
     for (auto ref_point : {fapi::pdsch_ref_point_type::point_a, fapi::pdsch_ref_point_type::subcarrier_0}) {
@@ -209,7 +211,7 @@ TEST(fapi_to_phy_pdsch_conversion_test, valid_pdu_conversion_success)
                     ASSERT_EQ(slot, proc_pdu.slot);
                     ASSERT_EQ(static_cast<unsigned>(cyclic_p), static_cast<unsigned>(proc_pdu.cp.value));
 
-                    ASSERT_EQ(to_value(rnti), proc_pdu.rnti);
+                    ASSERT_EQ(rnti, proc_pdu.rnti);
                     ASSERT_EQ(bwp_size, proc_pdu.bwp_size_rb);
                     ASSERT_EQ(bwp_start, proc_pdu.bwp_start_rb);
 
@@ -259,4 +261,21 @@ TEST(fapi_to_phy_pdsch_conversion_test, valid_pdu_conversion_success)
       }
     }
   }
+}
+
+TEST(fapi_to_phy_pdsch_conversion_test, beamformed_pdsch_is_mapped_onto_its_beam)
+{
+  auto pm_tools = generate_precoding_codebooks(pmi_codebook_one_port{}, antenna_topology::one_port, 0);
+  const precoding_codebook_repository& pm_repo = *std::get<std::unique_ptr<precoding_codebook_repository>>(pm_tools);
+
+  const beam_identifier beam_id = to_beam_id(3);
+
+  fapi::dl_pdsch_pdu fapi_pdu                  = unittest::build_valid_dl_pdsch_pdu();
+  fapi_pdu.precoding_and_beamforming.prg.beams = precoding_beam_list({beam_id});
+
+  pdsch_processor::pdu_t proc_pdu;
+  convert_pdsch_fapi_to_phy(proc_pdu, fapi_pdu, slot_point(1, 0), {}, pm_repo);
+
+  ASSERT_EQ(proc_pdu.precoding_and_beamforming,
+            precoding_beamforming_configuration::make_wideband(precoding_beam_list({beam_id})));
 }

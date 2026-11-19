@@ -7,6 +7,7 @@
 #include "ofh_receiver_impl.h"
 #include "ofh_sequence_id_checker_dummy_impl.h"
 #include "ofh_sequence_id_checker_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ofh/compression/compression_factory.h"
 #include "ocudu/ofh/ecpri/ecpri_factories.h"
 #include "ocudu/ofh/ethernet/ethernet_factories.h"

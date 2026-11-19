@@ -61,6 +61,7 @@ function(sbom_generate)
 	set(options)
 	set(oneValueArgs
 	    OUTPUT
+	    INSTALL_COMPONENT
 	    LICENSE
 	    COPYRIGHT
 	    PROJECT
@@ -168,12 +169,19 @@ function(sbom_generate)
 	# Prevent collision with other generated SPDXID with -[0-9]+ suffix.
 	string(REGEX REPLACE "-([0-9]+)$" "\\1" SBOM_GENERATE_PROJECT "${SBOM_GENERATE_PROJECT}")
 
+	set(_install_component_arg)
+	if(NOT "${SBOM_GENERATE_INSTALL_COMPONENT}" STREQUAL "")
+		set(_install_component_arg COMPONENT "${SBOM_GENERATE_INSTALL_COMPONENT}")
+	endif()
+	set_property(GLOBAL PROPERTY sbom_install_component "${SBOM_GENERATE_INSTALL_COMPONENT}")
+
 	install(
 		CODE "
 		message(STATUS \"Installing: ${SBOM_GENERATE_OUTPUT}\")
 		set(SBOM_EXT_DOCS)
 		file(WRITE \"${PROJECT_BINARY_DIR}/sbom/sbom.spdx.in\" \"\")
 		"
+		${_install_component_arg}
 	)
 
 	file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/sbom)
@@ -246,6 +254,7 @@ Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-${SBOM_GENERATE_PROJECT}
 				file(READ \"${_f}\" _f_contents)
 				file(APPEND \"${PROJECT_BINARY_DIR}/sbom/sbom.spdx.in\" \"\${_f_contents}\")
 			"
+			${_install_component_arg}
 		)
 
 		set(SBOM_LAST_SPDXID
@@ -268,6 +277,7 @@ Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-${SBOM_GENERATE_PROJECT}
 					file(READ \"${_f_in_gen}\" _f_contents)
 					file(APPEND \"${PROJECT_BINARY_DIR}/sbom/sbom.spdx.in\" \"\${_f_contents}\")
 				"
+				${_install_component_arg}
 			)
 		endforeach()
 
@@ -277,7 +287,7 @@ Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-${SBOM_GENERATE_PROJECT}
 		)
 	endif()
 
-	install(CODE "set(SBOM_VERIFICATION_CODES \"\")")
+	install(CODE "set(SBOM_VERIFICATION_CODES \"\")" ${_install_component_arg})
 
 	set_property(GLOBAL PROPERTY SBOM_FILENAME "${SBOM_GENERATE_OUTPUT}")
 	set(SBOM_FILENAME
@@ -364,6 +374,11 @@ function(sbom_finalize)
 
 	get_property(_sbom GLOBAL PROPERTY SBOM_FILENAME)
 	get_property(_sbom_project GLOBAL PROPERTY sbom_project)
+	get_property(_install_component GLOBAL PROPERTY sbom_install_component)
+	set(_install_component_suffix "")
+	if(NOT "${_install_component}" STREQUAL "")
+		set(_install_component_suffix " COMPONENT ${_install_component}")
+	endif()
 
 	if("${_sbom_project}" STREQUAL "")
 		message(FATAL_ERROR "Call sbom_generate() first")
@@ -371,7 +386,7 @@ function(sbom_finalize)
 
 	get_property(_packages GLOBAL PROPERTY sbom_packages)
 	foreach(_p IN LISTS _packages)
-		file(APPEND ${PROJECT_BINARY_DIR}/sbom/CMakeLists.txt "install(SCRIPT ${_p})
+		file(APPEND ${PROJECT_BINARY_DIR}/sbom/CMakeLists.txt "install(SCRIPT ${_p}${_install_component_suffix})
 "
 		)
 	endforeach()
@@ -379,14 +394,14 @@ function(sbom_finalize)
 	get_property(_licenses GLOBAL PROPERTY sbom_licenses)
 	foreach(_lic IN LISTS _licenses)
 		file(APPEND ${PROJECT_BINARY_DIR}/sbom/CMakeLists.txt
-		     "install(SCRIPT ${PROJECT_BINARY_DIR}/sbom/${_lic}.cmake)
+		     "install(SCRIPT ${PROJECT_BINARY_DIR}/sbom/${_lic}.cmake${_install_component_suffix})
 "
 		)
 	endforeach()
 
 	get_property(_relations GLOBAL PROPERTY sbom_relations)
 	foreach(_rel IN LISTS _relations)
-		file(APPEND ${PROJECT_BINARY_DIR}/sbom/CMakeLists.txt "install(SCRIPT ${_rel})
+		file(APPEND ${PROJECT_BINARY_DIR}/sbom/CMakeLists.txt "install(SCRIPT ${_rel}${_install_component_suffix})
 "
 		)
 	endforeach()
@@ -462,7 +477,7 @@ function(sbom_finalize)
 		)
 	endif()
 
-	file(APPEND ${PROJECT_BINARY_DIR}/sbom/CMakeLists.txt "install(SCRIPT verify.cmake)
+	file(APPEND ${PROJECT_BINARY_DIR}/sbom/CMakeLists.txt "install(SCRIPT verify.cmake${_install_component_suffix})
 "
 	)
 
@@ -649,13 +664,18 @@ FileCopyrightText: NOASSERTION${relationship}
 			"
 	)
 
-	install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/${SBOM_FILE_SPDXID}.cmake)
+	get_property(_install_component GLOBAL PROPERTY sbom_install_component)
+	set(_install_component_arg)
+	if(NOT "${_install_component}" STREQUAL "")
+		set(_install_component_arg COMPONENT "${_install_component}")
+	endif()
+	install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/${SBOM_FILE_SPDXID}.cmake ${_install_component_arg})
 endfunction()
 
 # Append a target output to the SBOM. Use this after calling sbom_generate().
 function(sbom_target)
 	set(options)
-	set(oneValueArgs TARGET)
+	set(oneValueArgs TARGET FILENAME)
 	set(multiValueArgs)
 	cmake_parse_arguments(
 		SBOM_TARGET "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN}
@@ -667,11 +687,14 @@ function(sbom_target)
 
 	get_target_property(_type ${SBOM_TARGET_TARGET} TYPE)
 	if("${_type}" STREQUAL "EXECUTABLE")
-        string(REPLACE "_" "-" target_id "${SBOM_TARGET_TARGET}")
-        sbom_file(FILENAME ${CMAKE_INSTALL_BINDIR}/$<TARGET_FILE_NAME:${SBOM_TARGET_TARGET}>
-                  FILETYPE BINARY ${SBOM_TARGET_UNPARSED_ARGUMENTS}
-                  SPDXID       "SPDXRef-Binary-${target_id}"
-        )
+		if("${SBOM_TARGET_FILENAME}" STREQUAL "")
+			set(SBOM_TARGET_FILENAME ${CMAKE_INSTALL_BINDIR}/$<TARGET_FILE_NAME:${SBOM_TARGET_TARGET}>)
+		endif()
+		string(REPLACE "_" "-" target_id "${SBOM_TARGET_TARGET}")
+		sbom_file(FILENAME ${SBOM_TARGET_FILENAME}
+		          FILETYPE BINARY ${SBOM_TARGET_UNPARSED_ARGUMENTS}
+		          SPDXID       "SPDXRef-Binary-${target_id}"
+		)
 	elseif("${_type}" STREQUAL "STATIC_LIBRARY")
 		sbom_file(FILENAME ${CMAKE_INSTALL_LIBDIR}/$<TARGET_FILE_NAME:${SBOM_TARGET_TARGET}>
 			  FILETYPE BINARY ${SBOM_TARGET_UNPARSED_ARGUMENTS}
@@ -783,7 +806,12 @@ Relationship: ${SBOM_DIRECTORY_RELATIONSHIP}-\${_count}
 			"
 	)
 
-	install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/${SBOM_DIRECTORY_SPDXID}.cmake)
+	get_property(_install_component GLOBAL PROPERTY sbom_install_component)
+	set(_install_component_arg)
+	if(NOT "${_install_component}" STREQUAL "")
+		set(_install_component_arg COMPONENT "${_install_component}")
+	endif()
+	install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/${SBOM_DIRECTORY_SPDXID}.cmake ${_install_component_arg})
 
 	set(SBOM_LAST_SPDXID
 	    ""

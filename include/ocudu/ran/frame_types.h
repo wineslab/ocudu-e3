@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <cstddef>
-
 namespace ocudu {
 
 /// The number of OFDM symbols per slot is constant for all numerologies.

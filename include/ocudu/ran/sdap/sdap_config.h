@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "fmt/format.h"
+#include "fmt/base.h"
 
 namespace ocudu {
 
@@ -26,44 +26,22 @@ struct sdap_ran_config {
   sdap_hdr_dl_cfg header_dl   = sdap_hdr_dl_cfg::absent;
 };
 
+inline const char* format_as(sdap_hdr_ul_cfg hdr_cfg)
+{
+  static constexpr const char* options[] = {"present", "absent"};
+  return options[static_cast<unsigned>(hdr_cfg)];
+}
+
+inline const char* format_as(sdap_hdr_dl_cfg hdr_cfg)
+{
+  static constexpr const char* options[] = {"present", "absent"};
+  return options[static_cast<unsigned>(hdr_cfg)];
+}
+
 } // namespace ocudu
 
 // Formatters
 namespace fmt {
-
-// Header config
-template <>
-struct formatter<ocudu::sdap_hdr_ul_cfg> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::sdap_hdr_ul_cfg hdr_cfg, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"present", "absent"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(hdr_cfg)]);
-  }
-};
-
-// Header config
-template <>
-struct formatter<ocudu::sdap_hdr_dl_cfg> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::sdap_hdr_dl_cfg hdr_cfg, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"present", "absent"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(hdr_cfg)]);
-  }
-};
 
 // SDAP config
 template <>

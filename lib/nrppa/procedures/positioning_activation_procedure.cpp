@@ -5,6 +5,7 @@
 #include "positioning_activation_procedure.h"
 #include "../nrppa_asn1_converters.h"
 #include "../nrppa_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/nrppa/common.h"
 #include "ocudu/asn1/nrppa/nrppa.h"
 #include "ocudu/asn1/nrppa/nrppa_pdu_contents.h"
@@ -36,12 +37,18 @@ void positioning_activation_procedure::operator()(coro_context<async_task<void>>
 
   logger.info("ue={}: \"{}\" initialized", pos_act_request.ue_index, name());
 
-  // Sanity check.
+  // The DU serving the UE may have disconnected between the arrival of the NRPPa PDU and this task
+  // running on the UE task loop.
   if (!du_ctxt_list.contains(du_index)) {
     logger.error("DU context not found for UE {}", pos_act_request.ue_index);
     logger.info("ue={}: \"{}\" failed", pos_act_request.ue_index, name());
     send_ul_nrppa_pdu(
-        create_positioning_activation_failure(nrppa_cause_protocol_t::msg_not_compatible_with_receiver_state));
+        logger,
+        cu_cp_notifier,
+        create_positioning_activation_failure(nrppa_cause_protocol_t::msg_not_compatible_with_receiver_state),
+        "PositioningActivationResponse",
+        "PositioningActivationFailure",
+        pos_act_request.ue_index);
     CORO_EARLY_RETURN();
   }
 
@@ -64,22 +71,12 @@ void positioning_activation_procedure::handle_procedure_outcome()
   }
 
   // Send response to CU-CP.
-  send_ul_nrppa_pdu(asn1_pos_act_outcome);
-}
-
-void positioning_activation_procedure::send_ul_nrppa_pdu(const asn1::nrppa::nr_ppa_pdu_c& outcome)
-{
-  // Pack into PDU.
-  ul_nrppa_pdu = pack_into_pdu(outcome,
-                               outcome.type().value == asn1::nrppa::nr_ppa_pdu_c::types_opts::successful_outcome
-                                   ? "PositioningActivationResponse"
-                                   : "PositioningActivationFailure");
-
-  // Log Tx message.
-  log_nrppa_message(ocudulog::fetch_basic_logger("NRPPA"), Tx, ul_nrppa_pdu, outcome);
-
-  // Send response to CU-CP.
-  cu_cp_notifier.on_ul_nrppa_pdu(ul_nrppa_pdu, pos_act_request.ue_index);
+  send_ul_nrppa_pdu(logger,
+                    cu_cp_notifier,
+                    asn1_pos_act_outcome,
+                    "PositioningActivationResponse",
+                    "PositioningActivationFailure",
+                    pos_act_request.ue_index);
 }
 
 asn1::nrppa::nr_ppa_pdu_c

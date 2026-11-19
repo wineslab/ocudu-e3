@@ -5,12 +5,12 @@
 #pragma once
 
 #include "ocudu/asn1/xnap/xnap_ies.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
 #include "ocudu/ran/cause/xnap_cause.h"
 #include "ocudu/ran/cu_cp_cell_configuration.h"
 #include "ocudu/ran/cu_cp_location_reporting_types.h"
 #include "ocudu/ran/cu_types.h"
 #include "ocudu/ran/guami.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/ran/nr_cgi.h"
 #include "ocudu/ran/qos/qos_parameters.h"
 #include "ocudu/ran/s_nssai.h"
@@ -113,11 +113,17 @@ inline asn1::xnap::guami_s guami_to_asn1(const guami_t& guami)
 
 /// \brief Converts ASN.1 encoded GUAMI into internal GUAMI struct.
 /// \param[in] asn1_guami The ASN.1 encoded GUAMI.
-/// \return The internal GUAMI struct.
-inline guami_t asn1_to_guami(const asn1::xnap::guami_s& asn1_guami)
+/// \return The internal GUAMI struct if the conversion is successful, otherwise an error message.
+inline expected<guami_t, std::string> asn1_to_guami(const asn1::xnap::guami_s& asn1_guami)
 {
+  expected<plmn_identity> plmn_identity = plmn_identity::from_bytes(asn1_guami.plmn_id.to_bytes());
+  if (!plmn_identity.has_value()) {
+    return make_unexpected(
+        fmt::format("Failed to convert GUAMI PLMN ID {} to common type", asn1_guami.plmn_id.to_string()));
+  }
+
   guami_t guami;
-  guami.plmn.from_bytes(asn1_guami.plmn_id.to_bytes());
+  guami.plmn          = plmn_identity.value();
   guami.amf_region_id = asn1_guami.amf_region_id.to_number();
   guami.amf_set_id    = asn1_guami.amf_set_id.to_number();
   guami.amf_pointer   = asn1_guami.amf_pointer.to_number();
@@ -216,7 +222,7 @@ qos_flow_level_qos_parameters_to_asn1(const qos_flow_level_qos_parameters& qos_f
     asn1_dynamic_5qi.packet_error_rate.per_exponent = dynamic_5qi.per.exponent;
     if (dynamic_5qi.five_qi.has_value()) {
       asn1_dynamic_5qi.five_qi_present = true;
-      asn1_dynamic_5qi.five_qi         = five_qi_to_uint(dynamic_5qi.five_qi.value());
+      asn1_dynamic_5qi.five_qi         = to_underlying(dynamic_5qi.five_qi.value());
     }
     if (dynamic_5qi.is_delay_critical.has_value()) {
       asn1_dynamic_5qi.delay_crit_present = true;
@@ -237,7 +243,7 @@ qos_flow_level_qos_parameters_to_asn1(const qos_flow_level_qos_parameters& qos_f
     asn1_qos_flow_level_params.qos_characteristics.set_non_dyn();
     auto& asn1_non_dynamic_5qi = asn1_qos_flow_level_params.qos_characteristics.non_dyn();
 
-    asn1_non_dynamic_5qi.five_qi = five_qi_to_uint(non_dynamic_5qi.five_qi);
+    asn1_non_dynamic_5qi.five_qi = to_underlying(non_dynamic_5qi.five_qi);
 
     if (non_dynamic_5qi.qos_prio_level.has_value()) {
       asn1_non_dynamic_5qi.prio_level_qos_present = true;
@@ -451,21 +457,21 @@ inline bool pdu_session_res_admitted_item_to_asn1(asn1::xnap::pdu_session_res_ad
                                                   const cu_cp_xn_pdu_session_res_admitted_item& admitted_item)
 {
   // Fill PDU session ID.
-  asn1_admitted_item.pdu_session_id = pdu_session_id_to_uint(admitted_item.pdu_session_id);
+  asn1_admitted_item.pdu_session_id = to_underlying(admitted_item.pdu_session_id);
 
   // Fill PDU session res admitted info.
   // > Fill QoS flows admitted list.
   for (const auto& qos_flow_item : admitted_item.qos_flows_setup_list) {
     asn1::xnap::qos_flows_admitted_item_s asn1_qos_flow_admitted_item;
     // Fill QoS flow ID.
-    asn1_qos_flow_admitted_item.qfi = qos_flow_id_to_uint(qos_flow_item.qos_flow_id);
+    asn1_qos_flow_admitted_item.qfi = to_underlying(qos_flow_item.qos_flow_id);
     asn1_admitted_item.pdu_session_res_admitted_info.qos_flows_admitted_list.push_back(asn1_qos_flow_admitted_item);
   }
   // > Fill QoS flows not admitted list.
   for (const auto& qos_flow_not_admitted_item : admitted_item.qos_flows_failed_to_setup_list) {
     asn1::xnap::qos_flowwith_cause_item_s asn1_qos_flow_not_admitted_item;
     // Fill QoS flow ID.
-    asn1_qos_flow_not_admitted_item.qfi = qos_flow_id_to_uint(qos_flow_not_admitted_item.qos_flow_id);
+    asn1_qos_flow_not_admitted_item.qfi = to_underlying(qos_flow_not_admitted_item.qos_flow_id);
     // Fill cause.
     const auto* cause = std::get_if<std::optional<xnap_cause_t>>(&qos_flow_not_admitted_item.cause);
     if (cause && cause->has_value()) {
@@ -482,7 +488,7 @@ inline bool pdu_session_res_admitted_item_to_asn1(asn1::xnap::pdu_session_res_ad
   for (const auto& qfi : data_forwarding_info_from_target->qos_flows_accepted_for_data_forwarding_list) {
     asn1::xnap::qos_f_lows_accepted_to_be_forwarded_item_s asn1_qos_flow_accepted_for_data_forwarding_item;
     // Fill QoS flow ID.
-    asn1_qos_flow_accepted_for_data_forwarding_item.qos_flow_id = qos_flow_id_to_uint(qfi);
+    asn1_qos_flow_accepted_for_data_forwarding_item.qos_flow_id = to_underlying(qfi);
     asn1_admitted_item.pdu_session_res_admitted_info.data_forwarding_info_from_target
         .qos_flows_accepted_for_data_forwarding_list.push_back(asn1_qos_flow_accepted_for_data_forwarding_item);
   }
@@ -508,7 +514,7 @@ inline bool pdu_session_res_admitted_item_to_asn1(asn1::xnap::pdu_session_res_ad
   for (const auto& drb_item : data_forwarding_info_from_target->data_forwarding_resp_drb_item_list) {
     asn1::xnap::data_forwarding_resp_drb_item_s asn1_drb_item;
     // Fill DRB ID.
-    asn1_drb_item.drb_id = drb_id_to_uint(drb_item.drb_id);
+    asn1_drb_item.drb_id = to_underlying(drb_item.drb_id);
     // Fill DL forwarding UP TNL.
     if (drb_item.dl_forwarding_up_tnl.has_value()) {
       asn1_drb_item.dl_forwarding_up_tnl_present = true;
@@ -534,7 +540,7 @@ inline cu_cp_tx_bw asn1_to_tx_bw(const asn1::xnap::nr_tx_bw_s& asn1_tx_bw)
   cu_cp_tx_bw tx_bw;
 
   // Fill NR SCS.
-  tx_bw.nr_scs = to_subcarrier_spacing(asn1_tx_bw.nr_scs.to_string());
+  tx_bw.nr_scs = khz_to_scs(asn1_tx_bw.nr_scs.to_number());
 
   // Fill NR NRB.
   tx_bw.nr_nrb = asn1_tx_bw.nr_nrb.to_number();
@@ -626,6 +632,160 @@ inline cu_cp_nr_mode_info asn1_to_nr_mode_info(const asn1::xnap::nr_mode_info_c&
   }
 
   return nr_mode_info;
+}
+
+/// \brief Convert \c cu_cp_tx_bw to XNAP ASN.1.
+/// \param[in] tx_bw The common type TX BW.
+/// \return The ASN.1 type TX BW.
+inline asn1::xnap::nr_tx_bw_s tx_bw_to_asn1(const cu_cp_tx_bw& tx_bw)
+{
+  asn1::xnap::nr_tx_bw_s asn1_tx_bw;
+
+  // Fill NR SCS.
+  if (not asn1::number_to_enum(asn1_tx_bw.nr_scs, scs_to_khz(tx_bw.nr_scs))) {
+    report_fatal_error("Invalid subcarrier spacing {}", to_string(tx_bw.nr_scs));
+  }
+
+  // Fill NR NRB.
+  if (not asn1::number_to_enum(asn1_tx_bw.nr_nrb, tx_bw.nr_nrb)) {
+    report_fatal_error("Invalid number of resource blocks {}", tx_bw.nr_nrb);
+  }
+
+  return asn1_tx_bw;
+}
+
+/// \brief Convert \c cu_cp_nr_freq_info to XNAP ASN.1.
+/// \param[in] nr_freq_info The common type NR freq info.
+/// \return The ASN.1 type NR freq info.
+inline asn1::xnap::nr_freq_info_s nr_freq_info_to_asn1(const cu_cp_nr_freq_info& nr_freq_info)
+{
+  asn1::xnap::nr_freq_info_s asn1_nr_freq_info;
+
+  // Fill NR ARFCN.
+  asn1_nr_freq_info.nr_arfcn = nr_freq_info.nr_arfcn;
+
+  // Fill SUL info.
+  if (nr_freq_info.sul_info.has_value()) {
+    asn1_nr_freq_info.sul_info_present       = true;
+    asn1_nr_freq_info.sul_info.sul_freq_info = nr_freq_info.sul_info.value().sul_nr_arfcn;
+    asn1_nr_freq_info.sul_info.sul_tx_bw     = tx_bw_to_asn1(nr_freq_info.sul_info.value().sul_tx_bw);
+  }
+
+  // Fill freq band list.
+  for (const auto& freq_band : nr_freq_info.freq_band_list_nr) {
+    asn1::xnap::nr_freq_band_item_s asn1_freq_band;
+    asn1_freq_band.nr_freq_band = freq_band.freq_band_ind_nr;
+    for (const auto& sul_band : freq_band.supported_sul_band_list) {
+      asn1::xnap::supported_sul_band_item_s asn1_sul_band;
+      asn1_sul_band.sul_band_item = sul_band.freq_band_ind_nr;
+      asn1_freq_band.supported_sul_band_list.push_back(asn1_sul_band);
+    }
+    asn1_nr_freq_info.freq_band_list.push_back(asn1_freq_band);
+  }
+
+  return asn1_nr_freq_info;
+}
+
+/// \brief Convert \c cu_cp_nr_mode_info to XNAP ASN.1.
+/// \param[in] nr_mode_info The common type NR mode info.
+/// \return The ASN.1 type NR mode info.
+inline asn1::xnap::nr_mode_info_c nr_mode_info_to_asn1(const cu_cp_nr_mode_info& nr_mode_info)
+{
+  asn1::xnap::nr_mode_info_c asn1_nr_mode_info;
+
+  if (const auto* fdd_info = std::get_if<cu_cp_fdd_info>(&nr_mode_info)) {
+    asn1::xnap::nr_mode_info_fdd_s& asn1_fdd_info = asn1_nr_mode_info.set_fdd();
+
+    asn1_fdd_info.ul_nr_freq_info      = nr_freq_info_to_asn1(fdd_info->ul_nr_freq_info);
+    asn1_fdd_info.dl_nr_freq_info      = nr_freq_info_to_asn1(fdd_info->dl_nr_freq_info);
+    asn1_fdd_info.ul_nr_transmisson_bw = tx_bw_to_asn1(fdd_info->ul_tx_bw);
+    asn1_fdd_info.dl_nr_transmisson_bw = tx_bw_to_asn1(fdd_info->dl_tx_bw);
+  } else {
+    const auto&                     tdd_info      = std::get<cu_cp_tdd_info>(nr_mode_info);
+    asn1::xnap::nr_mode_info_tdd_s& asn1_tdd_info = asn1_nr_mode_info.set_tdd();
+
+    asn1_tdd_info.nr_freq_info      = nr_freq_info_to_asn1(tdd_info.nr_freq_info);
+    asn1_tdd_info.nr_transmisson_bw = tx_bw_to_asn1(tdd_info.tx_bw);
+  }
+
+  return asn1_nr_mode_info;
+}
+
+/// \brief Convert \c cu_cp_served_cell_info to XNAP ASN.1.
+/// \param[in] served_cell The common type served cell info.
+/// \return The ASN.1 type served cell info.
+inline asn1::xnap::served_cell_info_nr_s served_cell_info_nr_to_asn1(const cu_cp_served_cell_info& served_cell)
+{
+  asn1::xnap::served_cell_info_nr_s asn1_served_cell;
+
+  // Fill PCI and cell id.
+  asn1_served_cell.nr_pci  = served_cell.nr_pci;
+  asn1_served_cell.cell_id = cgi_to_asn1(served_cell.nr_cgi);
+
+  // Fill TAC.
+  if (served_cell.five_gs_tac.has_value()) {
+    asn1_served_cell.tac.from_number(served_cell.five_gs_tac.value());
+  }
+
+  // Fill RANAC.
+  if (served_cell.ranac.has_value()) {
+    asn1_served_cell.ranac_present = true;
+    asn1_served_cell.ranac         = served_cell.ranac.value();
+  }
+
+  // Fill broadcast PLMNs.
+  for (const auto& plmn : served_cell.served_plmns) {
+    asn1::fixed_octstring<3, true> asn1_plmn;
+    asn1_plmn = plmn.to_bytes();
+    asn1_served_cell.broadcast_plmn.push_back(asn1_plmn);
+  }
+
+  // Fill NR mode info.
+  asn1_served_cell.nr_mode_info = nr_mode_info_to_asn1(served_cell.nr_mode_info);
+
+  // Fill measurement timing configuration.
+  asn1_served_cell.meas_timing_cfg = served_cell.meas_timing_cfg.copy();
+
+  // Fill connectivity support.
+  asn1_served_cell.connect_support.endc_support = asn1::xnap::connect_support_s::endc_support_opts::not_supported;
+
+  return asn1_served_cell;
+}
+
+/// \brief Convert XNAP ASN.1 to \c cu_cp_served_cell_info.
+/// \param[in] asn1_served_cell The ASN.1 type served cell info.
+/// \return The common type served cell info.
+inline cu_cp_served_cell_info asn1_to_served_cell_info(const asn1::xnap::served_cell_info_nr_s& asn1_served_cell)
+{
+  cu_cp_served_cell_info served_cell;
+
+  // Fill PCI and cell id.
+  served_cell.nr_pci = asn1_served_cell.nr_pci;
+  served_cell.nr_cgi = asn1_to_cgi(asn1_served_cell.cell_id);
+
+  // Fill TAC.
+  served_cell.five_gs_tac = asn1_served_cell.tac.to_number();
+
+  // Fill RANAC.
+  if (asn1_served_cell.ranac_present) {
+    served_cell.ranac = asn1_served_cell.ranac;
+  }
+
+  // Fill served PLMNs. A PLMN that is not valid BCD is left out.
+  for (const auto& asn1_plmn : asn1_served_cell.broadcast_plmn) {
+    expected<plmn_identity> plmn = plmn_identity::from_bytes(asn1_plmn.to_bytes());
+    if (plmn.has_value()) {
+      served_cell.served_plmns.push_back(plmn.value());
+    }
+  }
+
+  // Fill NR mode info.
+  served_cell.nr_mode_info = asn1_to_nr_mode_info(asn1_served_cell.nr_mode_info);
+
+  // Fill measurement timing configuration.
+  served_cell.meas_timing_cfg = asn1_served_cell.meas_timing_cfg.copy();
+
+  return served_cell;
 }
 
 /// \brief Convert XNAP ASN1 event_type_e to common type event_type.

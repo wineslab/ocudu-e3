@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "e2sm_kpm_cu_meas_provider_impl.h"
+#include "ocudu/adt/format.h"
 #include <algorithm>
 
 using namespace asn1::e2ap;

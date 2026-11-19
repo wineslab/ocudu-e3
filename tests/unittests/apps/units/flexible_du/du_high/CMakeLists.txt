@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-
 set_directory_properties(PROPERTIES LABELS "du_high;apps")
 
 add_subdirectory(metrics)
@@ -15,3 +14,37 @@ target_link_libraries(du_high_remote_commands_test
         ocudu_gtest_main
         gtest)
 add_test(du_high_remote_commands_test du_high_remote_commands_test)
+
+add_executable(du_high_sib_config_test du_high_sib_config_test.cpp)
+target_include_directories(du_high_sib_config_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(du_high_sib_config_test
+        ocudu_du_high_unit_helpers
+        ocudu_app_services
+        gtest
+        gtest_main)
+gtest_discover_tests(du_high_sib_config_test)
+
+add_executable(du_high_sr_config_test du_high_sr_config_test.cpp)
+target_include_directories(du_high_sr_config_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(du_high_sr_config_test
+        ocudu_du_high_unit_helpers
+        gtest
+        gtest_main)
+add_test(du_high_sr_config_test du_high_sr_config_test)
+
+add_executable(du_high_config_autoderivation_test du_high_config_autoderivation_test.cpp)
+target_include_directories(du_high_config_autoderivation_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(du_high_config_autoderivation_test
+        ocudu_du_high_unit_helpers
+        gtest
+        gtest_main)
+add_test(du_high_config_autoderivation_test du_high_config_autoderivation_test)
+
+add_executable(du_high_config_validator_test du_high_config_validator_test.cpp)
+target_include_directories(du_high_config_validator_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(du_high_config_validator_test
+        ocudu_du_high_unit_helpers
+        ocudu_app_services
+        ocudu_gtest_main
+        gtest)
+add_test(du_high_config_validator_test du_high_config_validator_test)

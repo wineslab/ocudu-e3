@@ -3,16 +3,35 @@
 
 #pragma once
 
-#include <cstdint>
+#include "ocudu/ran/beamforming/beam_identifier.h"
+#include "ocudu/ran/precoding/precoding_weight_matrix.h"
+#include <variant>
 
 namespace ocudu {
 namespace fapi {
 
+/// Index of a precoding matrix in the precoding matrix table, as per SCF-222 v4.0 section 3.4.2.5.
+using precoding_matrix_index = uint16_t;
+
 /// Precoding and beamforming PDU.
 struct tx_precoding_and_beamforming_pdu {
+  /// \brief Precoding of a Physical Resource Group (PRG).
+  ///
+  /// It holds the index of the precoding matrix in the precoding matrix table, or the precoding weights themselves. A
+  /// \c std::monostate means that no precoding has been set, which tells an unset PRG apart from the index zero.
+  ///
+  /// [Implementation-defined] The precoding weights extend the SCF FAPI. The precoding matrix table can only hold the
+  /// matrices that are enumerable at cell creation, which excludes the Type II codebook ones.
+  using prg_precoding = std::variant<std::monostate, precoding_matrix_index, precoding_weight_matrix>;
+
   /// Physical resource groups information.
   struct prgs_info {
-    uint16_t pm_index;
+    /// Precoding of the physical resource group.
+    prg_precoding precoding;
+    /// \brief Beam that carries each of the precoding matrix virtual ports.
+    ///
+    /// An empty list selects the antenna ports, that is, no beamforming.
+    precoding_beam_list beams;
   };
 
   uint16_t prg_size;

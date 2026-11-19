@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "rlc_stress_test_traffic.h"
+#include "ocudu/pdcp/pdcp_tx.h"
 
 using namespace ocudu;
 

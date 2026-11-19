@@ -13,9 +13,6 @@
 
 namespace ocudu {
 
-class cell_configuration;
-struct search_space_info;
-struct pusch_config_common;
 struct pusch_time_domain_resource_allocation;
 
 /// \brief Returns the list of all applicable PUSCH Time Domain resource indexes for a given PDCCH slot, based on the
@@ -25,37 +22,16 @@ struct pusch_time_domain_resource_allocation;
 ///
 /// \param[in] pdcch_slot Slot at which the PDCCH is supposed to be scheduled.
 /// \param[in] tdd_cfg_common TDD configuration, if present.
-/// \param[in] pusch_cfg_common PUSCH common configuration.
-/// \param[in] dl_data_to_ul_ack List of viable k1 values.
-/// \param[in] ss_info SearchSpace information.
+/// \param[in] pusch_td_list List of applicable PUSCH Time Domain resource allocations (cell-common or UE-dedicated).
+/// \param[in] min_k1 Minimum k1 value applicable for the PDCCH slot.
+/// \param[in] is_fallback whether it's for fallback scheduler.
 /// \return List of PUSCH Time Domain resource indexes.
-/// \remark If \c ss_info is nullptr, then minimum k1 is taken from \c cell_cfg.
-static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>
-get_pusch_td_resource_indices(slot_point                                    pdcch_slot,
-                              const std::optional<tdd_ul_dl_config_common>& tdd_cfg_common,
-                              const pusch_config_common&                    pusch_cfg_common,
-                              span<const uint8_t>                           dl_data_to_ul_ack,
-                              const search_space_info*                      ss_info = nullptr);
-
-/// \brief Returns the list circularly indexed by slot containing the list of applicable PUSCH Time Domain resource
-/// indexes per slot, only for TDD UL-heavy pattern.
-///
-/// This function ensures that UL PDCCH scheduling the PUSCH are fairly distributed across DL slots.
-///
-/// \param[in] scs SCS common value.
-/// \param[in] tdd_cfg_common TDD configuration.
-/// \param[in] pusch_cfg_common PUSCH common configuration.
-/// \param[in] dl_data_to_ul_ack List of viable k1 values.
-/// \param[in] ss_info SearchSpace information.
-///
-/// \remark The list of applicable PUSCH Time Domain resources would be empty for UL slots as UL PDCCHs are scheduled
-/// only over DL slots.
-std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>>
-get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing             scs,
-                                                 const tdd_ul_dl_config_common& tdd_cfg_common,
-                                                 const pusch_config_common&     pusch_cfg_common,
-                                                 span<const uint8_t>            dl_data_to_ul_ack,
-                                                 const search_space_info*       ss_info = nullptr);
+static_vector<uint8_t, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>
+get_pusch_td_resource_indices(slot_point                                        pdcch_slot,
+                              const std::optional<tdd_ul_dl_config_common>&     tdd_cfg_common,
+                              span<const pusch_time_domain_resource_allocation> pusch_td_list,
+                              unsigned                                          min_k1,
+                              bool                                              is_fallback = false);
 
 /// Returns the list circularly indexed by slot containing the list of applicable PUSCH Time Domain resource indexes per
 /// slot.
@@ -72,22 +48,19 @@ get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing             
 ///
 /// \param[in] scs SCS common value.
 /// \param[in] tdd_cfg_common TDD configuration, if present.
-/// \param[in] pusch_cfg_common PUSCH common configuration.
-/// \param[in] dl_data_to_ul_ack List of viable k1 values.
-/// \param[in] ss_info SearchSpace information.
+/// \param[in] pusch_td_list List of applicable PUSCH Time Domain resource allocations (cell-common or UE-dedicated).
+/// \param[in] min_k1 Minimum k1 value applicable for the PDCCH slot.
 /// \return A list circularly indexed by slot containing the list of applicable PUSCH Time Domain resource indexes per
 /// slot.
 /// \remark The periodicity of the circularly indexed list is equal to nof. slots in a TDD period in case of TDD and 1
 /// slot in case of FDD.
-/// \remark If \c ss_info is nullptr, then minimum k1 is taken from \c cell_cfg.
 /// \remark The list of applicable PUSCH Time Domain resources would be empty for UL slots as UL PDCCHs are scheduled
 /// only over DL slots.
 /// \remark In case of FDD, the list returned would contain applicable PUSCH Time Domain resource indexes for only one
 /// slot.
-std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>>
-get_pusch_td_resource_indices_per_slot(subcarrier_spacing                            scs,
-                                       const std::optional<tdd_ul_dl_config_common>& tdd_cfg_common,
-                                       const pusch_config_common&                    pusch_cfg_common,
-                                       span<const uint8_t>                           dl_data_to_ul_ack,
-                                       const search_space_info*                      ss_info = nullptr);
+std::vector<static_vector<uint8_t, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>>
+get_pusch_td_resource_indices_per_slot(subcarrier_spacing                                scs,
+                                       const std::optional<tdd_ul_dl_config_common>&     tdd_cfg_common,
+                                       span<const pusch_time_domain_resource_allocation> pusch_td_list,
+                                       unsigned                                          min_k1);
 } // namespace ocudu

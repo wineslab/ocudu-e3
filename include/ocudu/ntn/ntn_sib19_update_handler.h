@@ -19,10 +19,6 @@ struct ntn_sib19_update_request {
 
   /// NR Cell Global ID of the cell being configured.
   nr_cell_global_id_t nr_cgi;
-  /// SI message index.
-  unsigned si_msg_idx;
-  /// SIB index (should be 19 for SIB19).
-  unsigned sib_idx;
   /// Slot at which the SIB19 is transmitted.
   slot_point slot;
   /// SI period in number of slots.
@@ -31,6 +27,11 @@ struct ntn_sib19_update_request {
   sib19_info sib19;
   /// Epoch time for the SIB19 update.
   time_point epoch_time;
+  /// \brief Uplink timing advance T_TA of a UE at the cell reference location (TS 38.211, Section 4.3.1).
+  ///
+  /// Not broadcast: it is a gNB-internal estimate, see \c ntn_cell_params::ref_location_ul_ta. Absent for TN cells and
+  /// whenever it could not be computed, e.g. when no reference location is configured.
+  std::optional<std::chrono::microseconds> ref_location_ul_ta;
   /// When true, the handler must set sib19 in the DU request to trigger
   /// a SIB1 systemInfoValueTag increment.
   bool si_valuetag_change = false;

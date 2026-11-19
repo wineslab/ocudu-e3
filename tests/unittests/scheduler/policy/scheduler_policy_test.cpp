@@ -10,8 +10,10 @@
 #include "lib/scheduler/srs/srs_allocator_impl.h"
 #include "lib/scheduler/uci_scheduling/uci_allocator_impl.h"
 #include "lib/scheduler/ue_context/ue.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
 #include "lib/scheduler/ue_scheduling/intra_slice_scheduler.h"
 #include "lib/scheduler/ue_scheduling/ue_cell_grid_allocator.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/cell_config_builder_profiles.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/utils/test_rng.h"
@@ -56,11 +58,20 @@ protected:
     res_logger(false, cell_cfg_req.ran.pci),
     cell_cfg(*cfg_mng.add_cell(cell_cfg_req)),
     cell_metrics(cell_cfg, cell_cfg_req.metrics),
+    cell_ues(cell_cfg, &cell_metrics),
     ues(cell_cfg.expert_cfg.ue),
-    cell_ues(ues.add_cell(cell_cfg, &cell_metrics)),
     slice_sched(cell_cfg, ues),
-    intra_slice_sched(cell_cfg.expert_cfg.ue, ues, pdcch_alloc, uci_alloc, srs_alloc, res_grid, cell_metrics, logger)
+    intra_slice_sched(cell_cfg.expert_cfg.ue,
+                      ues,
+                      cell_ues,
+                      pdcch_alloc,
+                      uci_alloc,
+                      srs_alloc,
+                      res_grid,
+                      cell_metrics,
+                      logger)
   {
+    ues.register_cell(cell_ues);
     logger.set_level(ocudulog::basic_levels::debug);
     ocudulog::init();
   }
@@ -116,7 +127,8 @@ protected:
   {
     ue_ded_cell_cfg_list.push_back(cfg_mng.add_ue(ue_req));
     ocudu_assert(ue_ded_cell_cfg_list.back() != nullptr, "Failed to create UE configuration");
-    ues.add_ue(*ue_ded_cell_cfg_list.back(), ue_req.starts_in_fallback, ue_req.ul_ccch_slot_rx, ue_req.cfra_enabled);
+    ues.add_ue(*ue_ded_cell_cfg_list.back(),
+               {sched_config_helper::to_ue_creation_mode(ue_req), ue_req.ul_ccch_slot_rx});
     slice_sched.add_ue(ue_req.ue_index);
     return ues[ue_req.ue_index];
   }
@@ -185,8 +197,8 @@ protected:
   uci_allocator_impl   uci_alloc{cell_cfg, pucch_alloc};
   srs_allocator_impl   srs_alloc{cell_cfg, std::nullopt};
   cell_metrics_handler cell_metrics;
+  ue_cell_repository   cell_ues;
   ue_repository        ues;
-  ue_cell_repository&  cell_ues;
   // NOTE: Policy scheduler is part of RAN slice instances created in slice scheduler.
   inter_slice_scheduler slice_sched;
   intra_slice_scheduler intra_slice_sched;
@@ -618,7 +630,10 @@ using gbr_bitrate_bps = uint64_t;
 class scheduler_pf_qos_test : public base_scheduler_policy_test, public ::testing::TestWithParam<gbr_bitrate_bps>
 {
 protected:
-  scheduler_pf_qos_test() : base_scheduler_policy_test(test_params{policy_scheduler_type::time_qos}) {}
+  scheduler_pf_qos_test() : base_scheduler_policy_test(test_params{policy_scheduler_type::time_qos})
+  {
+    OCUDU_TEST_REQUIREMENTS("DU-QOS-1");
+  }
 
   static double to_bytes_per_slot(uint64_t bitrate_bps, subcarrier_spacing bwp_scs)
   {

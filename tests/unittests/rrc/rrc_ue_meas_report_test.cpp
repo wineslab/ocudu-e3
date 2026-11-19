@@ -5,6 +5,7 @@
 #include "lib/rrc/ue/rrc_measurement_types_asn1_converters.h"
 #include "rrc_ue_test_helpers.h"
 #include "rrc_ue_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg_ies.h"
 #include <gtest/gtest.h>
 
@@ -99,4 +100,27 @@ TEST_F(rrc_ue_packed_meas_config, cond_meas_true_returns_non_empty_without_mutat
   // as the baseline, confirming the CHO path did not overwrite the stored meas config.
   byte_buffer regular_packed_after = rrc_ue->get_packed_meas_config();
   ASSERT_EQ(regular_packed.length(), regular_packed_after.length());
+}
+
+TEST_F(rrc_ue_packed_meas_config, removal_only_config_clears_stored_meas_config)
+{
+  // Give the UE a regular stored config first.
+  ASSERT_TRUE(rrc_ue->generate_meas_config(rrc_ue->get_meas_config()).has_value());
+  ASSERT_TRUE(rrc_ue->get_meas_config().has_value());
+
+  // The measurement manager now answers with a removal-only config (everything was removed).
+  rrc_meas_cfg rem_only;
+  rem_only.meas_obj_to_rem_list.push_back(uint_to_meas_obj_id(1));
+  rem_only.meas_id_to_rem_list.push_back(uint_to_meas_id(1));
+  rrc_ue_cu_cp_notifier.next_meas_cfg = rem_only;
+
+  std::optional<rrc_meas_cfg> result = rrc_ue->generate_meas_config(rrc_ue->get_meas_config());
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value().meas_obj_to_add_mod_list.empty());
+  ASSERT_FALSE(result.value().meas_obj_to_rem_list.empty());
+
+  // The stored config reflects that the UE is left without measurements, and the serving cell
+  // measurement object is cleared with it.
+  EXPECT_FALSE(rrc_ue->get_meas_config().has_value());
+  EXPECT_FALSE(rrc_ue->get_serving_cell_mo().has_value());
 }

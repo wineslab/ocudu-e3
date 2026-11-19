@@ -75,13 +75,18 @@ struct ntn_assistance_info_update {
   /// Moving reference location for NTN Earth-moving cell.
   std::optional<geodetic_coordinates_t> moving_reference_location;
   /// Ephemeris info.
-  std::variant<ecef_coordinates_t, orbital_coordinates_t> ephemeris_info;
+  ntn_ephemeris_info_t ephemeris_info;
   /// Timing advance info (ta-Common, ta-CommonDrift, ta-CommonDriftVariant).
   std::optional<ta_info_t> ta_info;
   /// Epoch time for NTN assistance info.
   std::optional<epoch_time_t> epoch_time;
   /// Validity duration for UL sync assistance info in seconds.
   std::optional<unsigned> ntn_ul_sync_validity_dur;
+  /// \brief Uplink timing advance T_TA of a UE at the cell reference location (TS 38.211, Section 4.3.1).
+  ///
+  /// Unlike the other fields here this one is not broadcast; it is a gNB-internal estimate consumed by the scheduler
+  /// and by the measurement gap selection. See \c ntn_cell_params::ref_location_ul_ta.
+  std::optional<std::chrono::microseconds> ref_location_ul_ta;
 };
 
 /// NTN parameters to be updated in a single cell.
@@ -91,16 +96,12 @@ struct du_cell_ntn_param_update_request {
   nr_cell_global_id_t nr_cgi;
   /// NTN assistance information update.
   std::optional<ntn_assistance_info_update> ntn_assistance_info;
-  /// SI message index.
-  unsigned si_msg_idx;
-  /// SIB index (e.g., sib2 => value 2).
-  unsigned sib_idx;
   /// Slot at which the first SI is transmitted.
   slot_point slot;
   /// SI period in nof slots, required if more than one are SI PDU passed.
   std::optional<unsigned> si_slot_period;
-  /// Packed content of SIB messages.
-  span<byte_buffer> si_messages;
+  /// Packed content of SIB messages. Owned by the request so the buffers outlive the deferred MAC update.
+  std::vector<byte_buffer> si_messages;
   /// SIB19 update. When present, triggers SIB1 systemInfoValueTag increment.
   std::optional<sib19_info> sib19;
 };
@@ -139,7 +140,9 @@ public:
                                                                       task_executor& continuation_exec) = 0;
 
   /// Update NTN parameters from outside the DU.
-  virtual void handle_ntn_param_update(const du_ntn_param_update_request& req) = 0;
+  /// \note The request is taken by value so the DU manager can move it into the deferred update task; the request owns
+  /// the SI message buffers, which would otherwise dangle once the caller's stack unwinds.
+  virtual void handle_ntn_param_update(du_ntn_param_update_request req) = 0;
 };
 
 } // namespace odu

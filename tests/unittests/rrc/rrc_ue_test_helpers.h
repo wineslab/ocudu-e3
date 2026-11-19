@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../cu_cp/test_helpers.h"
+#include "lib/cu_cp/pdcp/srb_pdcp_ue_context.h"
 #include "lib/cu_cp/ue_manager/cu_cp_ue_impl.h"
 #include "lib/rrc/ue/rrc_ue_impl.h"
 #include "rrc_ue_test_messages.h"
@@ -53,23 +54,43 @@ static security::security_context generate_security_context(ue_security_manager&
   return sec_ctxt;
 }
 
+/// Serving cell the RRC UE under test is created on.
+struct rrc_ue_test_cell_params {
+  std::vector<nr_band> bands            = {nr_band::n78};
+  ntn_location_mapping location_mapping = {};
+};
+
 /// Helper class to setup RRC UE for testing specific
 /// RRC procedures
 class rrc_ue_test_helper
 {
 protected:
   rrc_ue_test_helper() :
-    cu_cp_cfg([this]() {
+    cu_cp_cfg([]() {
       cu_cp_configuration cucfg             = config_helpers::make_default_cu_cp_config();
-      cucfg.services.timers                 = &timers;
-      cucfg.services.cu_cp_executor         = &ctrl_worker;
       cucfg.rrc.rrc_procedure_guard_time_ms = std::chrono::milliseconds{10000};
       return cucfg;
+    }()),
+    ue_cfg([this]() {
+      return ue_manager_config{
+          .gnb_id              = cu_cp_cfg.node.gnb_id,
+          .max_nof_ues         = cu_cp_cfg.admission.max_nof_ues,
+          .drb_config          = cu_cp_cfg.bearers.drb_config,
+          .max_nof_drbs_per_ue = cu_cp_cfg.admission.max_nof_drbs_per_ue,
+          .int_algo_pref_list  = cu_cp_cfg.security.int_algo_pref_list,
+          .enc_algo_pref_list  = cu_cp_cfg.security.enc_algo_pref_list,
+          .enable_rrc_metrics  = cu_cp_cfg.metrics.layers_cfg.enable_rrc_metrics,
+          .ue                  = cu_cp_cfg.ue,
+      };
+    }()),
+    ue_dependencies([this]() {
+      return ue_manager_dependencies{
+          .timers = timers, .cu_cp_executor = ctrl_worker, .logger = ocudulog::fetch_basic_logger("CU-CP")};
     }())
   {
   }
 
-  void init()
+  void init(const rrc_ue_test_cell_params& cell_params = {})
   {
     // Add UE to UE manager.
     allocated_ue_index = ue_mng.add_ue(cu_cp_du_index_t::min);
@@ -87,10 +108,12 @@ protected:
     rrc_ue_create_msg.rrc_ue_cu_cp_notifier = &rrc_ue_cu_cp_notifier;
     rrc_ue_create_msg.measurement_notifier  = &rrc_ue_cu_cp_notifier;
     rrc_ue_create_msg.cu_cp_ue_notifier     = &ue_mng.find_ue(allocated_ue_index)->get_rrc_ue_cu_cp_ue_notifier();
-    rrc_ue_create_msg.cell.bands.push_back(nr_band::n78);
+    rrc_ue_create_msg.cell.bands            = cell_params.bands;
+    rrc_ue_create_msg.cell.location_mapping = cell_params.location_mapping;
     rrc_ue_create_msg.cell.plmn_identity_list.push_back(plmn_identity::test_value());
+    rrc_ue_create_msg.cell.timers.t301 = test_t301;
 
-    rrc_ue_cfg_t ue_cfg;
+    rrc_ue_cfg_t rrc_ue_cfg;
     // Add meas timing.
     rrc_meas_timing meas_timing;
     meas_timing.freq_and_timing.emplace();
@@ -101,22 +124,30 @@ protected:
         rrc_periodicity_and_offset::periodicity_t::sf10;
     meas_timing.freq_and_timing.value().ssb_meas_timing_cfg.periodicity_and_offset.offset = 0;
 
-    ue_cfg.meas_timings.push_back(meas_timing);
-    ue_cfg.rrc_procedure_guard_time_ms = cu_cp_cfg.rrc.rrc_procedure_guard_time_ms;
-    rrc_ue                             = std::make_unique<rrc_ue_impl>(*rrc_ue_create_msg.f1ap_pdu_notifier,
+    rrc_ue_cfg.meas_timings.push_back(meas_timing);
+    rrc_ue_cfg.rrc_procedure_guard_time_ms = cu_cp_cfg.rrc.rrc_procedure_guard_time_ms;
+
+    // Create PDCP context for the UE (mirrors what du_processor_impl does in production).
+    pdcp_ctx =
+        std::make_unique<srb_pdcp_ue_context>(allocated_ue_index, timer_factory{timers, ctrl_worker}, ctrl_worker, 1u);
+
+    rrc_ue = std::make_unique<rrc_ue_impl>(*rrc_ue_create_msg.f1ap_pdu_notifier,
                                            rrc_ue_ngap_notifier,
                                            *rrc_ue_create_msg.rrc_ue_cu_cp_notifier,
                                            *rrc_ue_create_msg.measurement_notifier,
                                            *rrc_ue_create_msg.cu_cp_ue_notifier,
                                            rrc_ue_rrc_du_notifier,
+                                           *pdcp_ctx,
                                            rrc_ue_create_msg.ue_index,
                                            rrc_ue_create_msg.c_rnti,
                                            rrc_ue_create_msg.cell,
-                                           ue_cfg,
+                                           rrc_ue_cfg,
                                            std::move(rrc_ue_create_msg.du_to_cu_container),
                                            std::optional<rrc_ue_transfer_context>{});
 
     ASSERT_NE(rrc_ue, nullptr);
+    // Wire PDCP UL delivery path to RRC (no-op release callback for tests).
+    pdcp_ctx->connect_rrc_ue(rrc_ue->get_ul_pdu_handler(), [](ngap_cause_t) {});
   }
 
   asn1::rrc_nr::dl_ccch_msg_s get_srb0_pdu()
@@ -251,25 +282,25 @@ protected:
         c_rnti);
   }
 
+  void receive_resume_request()
+  {
+    // Inject RRC Resume Request into UE object.
+    rrc_ue->get_ul_pdu_handler().handle_ul_ccch_pdu(generate_rrc_resume_request_pdu(), to_rnti(0x1234));
+  }
+
   void receive_reestablishment_complete()
   {
-    // Inject RRC Reestablishment complete.
-    rrc_ue->get_ul_pdu_handler().handle_ul_dcch_pdu(srb_id_t::srb1,
-                                                    byte_buffer::create(rrc_reest_complete_pdu).value());
+    pdcp_ctx->handle_ul_dcch_pdu(srb_id_t::srb1, byte_buffer::create(rrc_reest_complete_pdu).value());
   }
 
   void receive_setup_complete()
   {
-    // Inject RRC setup complete.
-    rrc_ue->get_ul_pdu_handler().handle_ul_dcch_pdu(srb_id_t::srb1,
-                                                    byte_buffer::create(rrc_setup_complete_pdu).value());
+    pdcp_ctx->handle_ul_dcch_pdu(srb_id_t::srb1, byte_buffer::create(rrc_setup_complete_pdu).value());
   }
 
   void receive_corrupted_setup_complete()
   {
-    // Inject corrupted RRC setup complete.
-    rrc_ue->get_ul_pdu_handler().handle_ul_dcch_pdu(srb_id_t::srb1,
-                                                    byte_buffer::create(corrupted_rrc_setup_complete_pdu).value());
+    pdcp_ctx->handle_ul_dcch_pdu(srb_id_t::srb1, byte_buffer::create(corrupted_rrc_setup_complete_pdu).value());
   }
 
   void send_dl_info_transfer(byte_buffer nas_pdu)
@@ -315,7 +346,7 @@ protected:
   void receive_smc_complete()
   {
     // Inject RRC SMC complete into UE object.
-    rrc_ue->get_ul_pdu_handler().handle_ul_dcch_pdu(srb_id_t::srb1, byte_buffer::create(rrc_smc_complete_pdu).value());
+    pdcp_ctx->handle_ul_dcch_pdu(srb_id_t::srb1, byte_buffer::create(rrc_smc_complete_pdu).value());
   }
 
   void check_smc_pdu() { ASSERT_EQ(rrc_ue_f1ap_notifier.last_rrc_pdu, byte_buffer::create(rrc_smc_pdu).value()); }
@@ -334,7 +365,7 @@ protected:
     byte_buffer ul_dcch_msg_pdu = byte_buffer::create(span<uint8_t>{rrc_ue_capability_information_pdu}).value();
 
     // Inject RRC UE capability information into UE object.
-    rrc_ue->get_ul_pdu_handler().handle_ul_dcch_pdu(srb_id_t::srb1, std::move(ul_dcch_msg_pdu));
+    pdcp_ctx->handle_ul_dcch_pdu(srb_id_t::srb1, std::move(ul_dcch_msg_pdu));
   }
 
   void check_rrc_reconfig_pdu() { ASSERT_EQ(rrc_ue_f1ap_notifier.last_rrc_pdu, rrc_reconfig_pdu); }
@@ -342,8 +373,16 @@ protected:
   void receive_reconfig_complete()
   {
     // Inject RRC Reconfiguration complete into UE object.
-    rrc_ue->get_ul_pdu_handler().handle_ul_dcch_pdu(srb_id_t::srb1,
-                                                    byte_buffer::create(rrc_reconfig_complete_pdu).value());
+    pdcp_ctx->handle_ul_dcch_pdu(srb_id_t::srb1, byte_buffer::create(rrc_reconfig_complete_pdu).value());
+  }
+
+  /// Makes the CU-CP answer a UE context retrieval with a context retrieved from a peer NG-RAN node, as if no local UE
+  /// context had matched the reestablishment identity.
+  void add_retrievable_ue_context()
+  {
+    rrc_ue_cu_cp_notifier.context_retrieval_succeeds = true;
+    rrc_ue_cu_cp_notifier.retrieved_sec_context =
+        generate_security_context(ue_mng.find_ue(allocated_ue_index)->get_security_manager());
   }
 
   void add_ue_reestablishment_context(cu_cp_ue_index_t ue_index)
@@ -430,6 +469,9 @@ protected:
               92);
   }
 
+  /// T301 the test cell advertises, as the RRC DU would derive it from SIB1.
+  static constexpr std::chrono::milliseconds test_t301{2000};
+
   cu_cp_ue_index_t allocated_ue_index;
 
   timer_manager               timers;
@@ -439,12 +481,15 @@ protected:
   dummy_rrc_ue_cu_cp_adapter  rrc_ue_cu_cp_notifier;
   dummy_rrc_ue_rrc_du_adapter rrc_ue_rrc_du_notifier;
   cu_cp_configuration         cu_cp_cfg;
+  ue_manager_config           ue_cfg;
+  ue_manager_dependencies     ue_dependencies;
 
-  ue_manager ue_mng{cu_cp_cfg};
+  ue_manager ue_mng{ue_cfg, ue_dependencies};
 
-  std::unique_ptr<rrc_ue_interface> rrc_ue;
-  ocudulog::basic_logger&           logger = ocudulog::fetch_basic_logger("TEST", false);
-  dummy_ue_task_scheduler           task_sched_handle{timers, ctrl_worker};
+  std::unique_ptr<srb_pdcp_ue_context> pdcp_ctx;
+  std::unique_ptr<rrc_ue_interface>    rrc_ue;
+  ocudulog::basic_logger&              logger = ocudulog::fetch_basic_logger("TEST", false);
+  dummy_ue_task_scheduler              task_sched_handle{timers, ctrl_worker};
 
   // UL-CCCH with RRC setup request message.
   std::array<uint8_t, 6> rrc_setup_pdu = {0x1d, 0xec, 0x89, 0xd0, 0x57, 0x66};

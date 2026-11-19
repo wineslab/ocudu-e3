@@ -6,6 +6,7 @@
 #include "lib/e2/common/e2ap_asn1_helpers.h"
 #include "lib/e2/common/e2ap_asn1_utils.h"
 #include "tests/unittests/e2/common/e2_test_helpers.h"
+#include "ocudu/e2/e2_cu_up_factory.h"
 #include "ocudu/support/async/async_test_utils.h"
 #include <gtest/gtest.h>
 
@@ -52,13 +53,14 @@ TEST_F(e2_entity_test, e2ap_setup_request_du_global_node_id_is_correct)
   auto owned_collector = std::make_unique<e2_node_component_config_collector>(task_worker, 1);
   owned_collector->deliver(e2_node_component_interface_type::f1, byte_buffer{}, byte_buffer{});
   e2agent = create_e2_du_agent(cfg,
-                               *e2_client,
-                               &(*du_metrics),
-                               &(*f1ap_ue_id_mapper),
-                               &(*du_rc_param_configurator),
-                               factory,
-                               task_worker,
-                               std::move(owned_collector));
+                               e2ap_dependencies{.e2_client                      = *e2_client,
+                                                 .e2_metrics_var                 = &(*du_metrics),
+                                                 .f1ap_ue_id_translator          = &(*f1ap_ue_id_mapper),
+                                                 .du_configurator                = &(*du_rc_param_configurator),
+                                                 .timers                         = factory,
+                                                 .e2_exec                        = task_worker,
+                                                 .node_component_config_provider = std::move(owned_collector),
+                                                 .logger = ocudulog::fetch_basic_logger("TEST")});
   task_worker.run_pending_tasks();
   e2agent->start();
 
@@ -68,7 +70,7 @@ TEST_F(e2_entity_test, e2ap_setup_request_du_global_node_id_is_correct)
   uint32_t    expected_plmn = bcd_helper::plmn_string_to_bcd(test_plmn);
   ASSERT_EQ(gnb.global_gnb_id.plmn_id.to_number(), expected_plmn);
   ASSERT_TRUE(gnb.gnb_du_id_present);
-  ASSERT_EQ(gnb.gnb_du_id, gnb_du_id_to_int(test_du_id));
+  ASSERT_EQ(gnb.gnb_du_id, to_underlying(test_du_id));
   ASSERT_FALSE(gnb.gnb_cu_up_id_present);
 }
 
@@ -83,7 +85,7 @@ TEST_F(e2_entity_test, e2ap_setup_request_cu_cp_global_node_id_is_correct)
   auto cu_configurator_ = std::make_unique<dummy_cu_configurator>();
   owned_collector->deliver(e2_node_component_interface_type::ng, byte_buffer{}, byte_buffer{});
   e2agent = create_e2_cu_cp_agent(
-      cfg, *e2_client, cu_metrics.get(), cu_configurator_.get(), factory, task_worker, std::move(owned_collector));
+      cfg, *e2_client, cu_metrics.get(), *cu_configurator_, factory, task_worker, std::move(owned_collector));
   task_worker.run_pending_tasks();
   e2agent->start();
 
@@ -107,8 +109,7 @@ TEST_F(e2_entity_test, e2ap_setup_request_cu_up_global_node_id_is_correct)
   auto cu_metrics       = std::make_unique<dummy_e2_cu_metrics>();
   auto cu_configurator_ = std::make_unique<dummy_cu_configurator>();
   owned_collector->deliver(e2_node_component_interface_type::e1, byte_buffer{}, byte_buffer{});
-  e2agent = create_e2_cu_up_agent(
-      cfg, *e2_client, cu_metrics.get(), cu_configurator_.get(), factory, task_worker, std::move(owned_collector));
+  e2agent = create_e2_cu_up_agent(cfg, *e2_client, cu_metrics.get(), factory, task_worker, std::move(owned_collector));
   task_worker.run_pending_tasks();
   e2agent->start();
 
@@ -119,7 +120,7 @@ TEST_F(e2_entity_test, e2ap_setup_request_cu_up_global_node_id_is_correct)
   ASSERT_EQ(gnb.global_gnb_id.plmn_id.to_number(), expected_plmn);
   ASSERT_FALSE(gnb.gnb_du_id_present);
   ASSERT_TRUE(gnb.gnb_cu_up_id_present);
-  ASSERT_EQ(gnb.gnb_cu_up_id, gnb_cu_up_id_to_uint(static_cast<gnb_cu_up_id_t>(1)));
+  ASSERT_EQ(gnb.gnb_cu_up_id, to_underlying(static_cast<gnb_cu_up_id_t>(1)));
 }
 
 /// Test successful E2 setup procedure
@@ -147,6 +148,29 @@ TEST_F(e2_test, when_e2_setup_response_received_then_e2_connected)
 
   ASSERT_TRUE(t.ready());
   ASSERT_TRUE(t.get().success);
+}
+
+/// A response carrying a transaction id different from the one sent in the request must not be treated as a valid
+/// completion of the E2 Setup procedure.
+TEST_F(e2_test, when_e2_setup_response_has_mismatched_transaction_id_then_e2_setup_failed)
+{
+  report_fatal_error_if_not(e2->handle_e2_tnl_connection_request(), "Unable to establish dummy SCTP connection");
+  test_logger.info("Launch e2 setup request procedure...");
+  e2_setup_request_message                      request;
+  async_task<e2_setup_response_message>         t = e2->handle_e2_setup_request(request);
+  lazy_task_launcher<e2_setup_response_message> t_launcher(t);
+
+  ASSERT_FALSE(t.ready());
+
+  // Response carries a transaction id that does not match the one used in the request.
+  unsigned   sent_transaction_id  = get_transaction_id(e2_client->last_tx_e2_pdu.pdu).value();
+  unsigned   wrong_transaction_id = sent_transaction_id + 1;
+  e2_message e2_setup_response    = generate_e2_setup_response(wrong_transaction_id);
+  test_logger.info("Injecting E2SetupResponse with mismatched transaction id");
+  e2->handle_message(e2_setup_response);
+
+  ASSERT_TRUE(t.ready());
+  ASSERT_FALSE(t.get().success);
 }
 
 TEST_F(e2_test, when_e2_setup_failure_received_then_e2_setup_failed)
@@ -382,6 +406,6 @@ TEST_F(e2_test, fill_e2ap_setup_request_uses_real_bytes_when_node_cfg_vector_pro
   ASSERT_EQ(gnb.global_gnb_id.gnb_id.gnb_id().to_number(), static_cast<uint64_t>(cfg.gnb_id.id));
   ASSERT_EQ(gnb.global_gnb_id.gnb_id.gnb_id().length(), static_cast<uint32_t>(cfg.gnb_id.bit_length));
   ASSERT_TRUE(gnb.gnb_du_id_present);
-  ASSERT_EQ(gnb.gnb_du_id, gnb_du_id_to_int(cfg.gnb_du_id.value()));
+  ASSERT_EQ(gnb.gnb_du_id, to_underlying(cfg.gnb_du_id.value()));
   ASSERT_FALSE(gnb.gnb_cu_up_id_present);
 }

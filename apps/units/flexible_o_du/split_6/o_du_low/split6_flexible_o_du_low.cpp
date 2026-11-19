@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "split6_flexible_o_du_low.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi_adaptor/mac/operation_controller.h"
 
 using namespace ocudu;

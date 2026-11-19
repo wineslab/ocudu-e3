@@ -34,7 +34,7 @@ public:
   /// \param[in] pdsch_slot Slot where the PDSCH is scheduled.
   void store_pdsch_grant(unsigned crbs, slot_point pdsch_slot)
   {
-    pdsch_rb_count += crbs;
+    pdsch_rb_count_per_slot[pdsch_slot.count() % pdsch_rb_count_per_slot.size()] += crbs;
     last_pdsch_alloc_slot = pdsch_slot;
   }
 
@@ -53,6 +53,14 @@ public:
   unsigned nof_pusch_rbs_allocated(slot_point pusch_slot) const
   {
     return pusch_rb_count_per_slot[pusch_slot.count() % pusch_rb_count_per_slot.size()];
+  }
+
+  /// \brief Number of PDSCH RBs already allocated to this slice in the given slot.
+  /// \remark Unlike PUSCH, most PDSCH grants target the current slot (k0=0); however, PDSCH repetition occasions can
+  /// land in future slots, so this is tracked per-slot rather than as a single running counter.
+  unsigned nof_pdsch_rbs_allocated(slot_point pdsch_slot) const
+  {
+    return pdsch_rb_count_per_slot[pdsch_slot.count() % pdsch_rb_count_per_slot.size()];
   }
 
   /// Number of slots elapsed between the provided PDSCH slot and the last time this slice was scheduled.
@@ -77,8 +85,8 @@ public:
   slice_rrm_policy_config   cfg;
   const unsigned            min_k2;
 
-  /// Counter of how many RBs have been scheduled for PDSCH in the current slot for this slice.
-  unsigned pdsch_rb_count = 0;
+  /// Ring of counters of how many RBs have been scheduled for PDSCH in a particular slot for this slice.
+  std::vector<unsigned> pdsch_rb_count_per_slot;
   /// Ring of counters of how many RBs have been scheduled for PUSCH in a particular slot for this slice.
   std::vector<unsigned> pusch_rb_count_per_slot;
 

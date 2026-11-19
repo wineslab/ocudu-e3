@@ -9,6 +9,8 @@
 #include "ocudu/fapi/p7/messages/srs_indication.h"
 #include "ocudu/fapi/p7/messages/uci_indication.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/csi_report/csi_report_packed.h"
+#include "ocudu/ran/uci/uci_payload_type.h"
 
 using namespace ocudu;
 using namespace fapi_adaptor;
@@ -19,6 +21,14 @@ class mac_cell_rach_handler_dummy : public mac_cell_rach_handler
 {
 public:
   void handle_rach_indication(const mac_rach_indication& rach_ind) override {}
+
+  std::optional<rnti_t>
+  handle_msga_ccch_sdu(rnti_t ra_rnti, uint8_t rapid, slot_point sl_rx, const ue_con_res_id_t& con_res_id) override
+  {
+    return std::nullopt;
+  }
+
+  std::optional<ue_con_res_id_t> resolve_msga_con_res_id(rnti_t tc_rnti) override { return std::nullopt; }
 };
 
 class mac_pdu_handler_dummy : public mac_pdu_handler
@@ -51,40 +61,10 @@ static mac_pdu_handler_dummy dummy_pdu_handler;
 /// actual, cell-specific MAC CRC handler, which will be later set up through the \ref set_cell_crc_handler() method.
 static mac_cell_control_information_handler_dummy dummy_cell_control_handler;
 
-/// Converts the given FAPI UCI SINR to dB as per SCF-222 v4.0 section 3.4.9.
-static float to_uci_ul_sinr(int sinr)
+/// Converts the given power in fapi_power_units to dBFS or nullopt.
+static std::optional<float> to_dBFS(std::optional<fapi::fapi_power_unit> power)
 {
-  return static_cast<float>(sinr) * 0.002F;
-}
-
-/// Converts the given FAPI UCI RSSI to dB as per SCF-222 v4.0 section 3.4.9.
-static float to_uci_ul_rssi(unsigned rssi)
-{
-  return static_cast<float>(rssi - 1280) * 0.1F;
-}
-
-/// Converts the given FAPI UCI RSRP to dBFS as per SCF-222 v4.0 section 3.4.9.
-static float to_uci_ul_rsrp(uint16_t rsrp)
-{
-  return (static_cast<float>(rsrp) - 1280.0F) * 0.1F;
-}
-
-/// Converts the given FAPI UCI SINR to dB as per SCF-222 v4.0 section 3.4.9.
-static std::optional<float> convert_fapi_to_mac_ul_sinr(int16_t fapi_ul_sinr)
-{
-  if (fapi_ul_sinr != std::numeric_limits<decltype(fapi_ul_sinr)>::min()) {
-    return to_uci_ul_sinr(fapi_ul_sinr);
-  }
-  return std::nullopt;
-}
-
-/// Converts the given FAPI UCI RSRP to dBFS as per SCF-222 v4.0 section 3.4.9.
-static std::optional<float> convert_fapi_to_mac_rsrp(uint16_t fapi_rsrp)
-{
-  if (fapi_rsrp != std::numeric_limits<decltype(fapi_rsrp)>::max()) {
-    return to_uci_ul_rsrp(fapi_rsrp);
-  }
-  return std::nullopt;
+  return power.has_value() ? std::make_optional<float>(power->to_dBFS()) : std::nullopt;
 }
 
 fapi_to_mac_indications_fastpath_translator::fapi_to_mac_indications_fastpath_translator(
@@ -111,6 +91,7 @@ void fapi_to_mac_indications_fastpath_translator::on_rx_data_indication(const fa
       mac_rx_pdu& pdu = indication.pdus.emplace_back();
       pdu.harq_id     = msg.pdu.harq_id;
       pdu.rnti        = msg.pdu.rnti;
+      pdu.rapid       = msg.pdu.rapid;
       pdu.pdu         = std::move(pdu_buffer.value());
 
       if (OCUDU_UNLIKELY(logger.debug.enabled())) {
@@ -133,9 +114,10 @@ void fapi_to_mac_indications_fastpath_translator::on_crc_indication(const fapi::
 
   pdu.harq_id             = msg.pdu.harq_id;
   pdu.rnti                = msg.pdu.rnti;
+  pdu.rapid               = msg.pdu.rapid;
   pdu.tb_crc_success      = msg.pdu.tb_crc_status_ok;
-  pdu.ul_sinr_dB          = convert_fapi_to_mac_ul_sinr(msg.pdu.ul_sinr_metric);
-  pdu.ul_rsrp_dBFS        = convert_fapi_to_mac_rsrp(msg.pdu.rsrp);
+  pdu.ul_sinr_dB          = msg.pdu.ul_sinr_metric_dB;
+  pdu.ul_rsrp_dBFS        = to_dBFS(msg.pdu.rsrp);
   pdu.time_advance_offset = msg.pdu.timing_advance_offset;
 
   if (OCUDU_UNLIKELY(logger.debug.enabled())) {
@@ -143,15 +125,6 @@ void fapi_to_mac_indications_fastpath_translator::on_crc_indication(const fapi::
   }
 
   cell_control_handler->handle_crc(indication);
-}
-
-/// Converts the given FAPI UCI RSSI to dB as per SCF-222 v4.0 section 3.4.9.
-static std::optional<float> convert_fapi_to_mac_rssi(uint16_t fapi_rssi)
-{
-  if (fapi_rssi != std::numeric_limits<decltype(fapi_rssi)>::max()) {
-    return to_uci_ul_rssi(fapi_rssi);
-  }
-  return std::nullopt;
 }
 
 /// Returns true if the UCI payload is valid given a FAPI detection status.
@@ -164,9 +137,9 @@ static bool is_fapi_uci_payload_valid(uci_pusch_or_pucch_f2_3_4_detection_status
 static void convert_fapi_to_mac_pucch_f0_f1_uci_ind(mac_uci_pdu::pucch_f0_or_f1_type&     mac_pucch,
                                                     const fapi::uci_pucch_pdu_format_0_1& fapi_pucch)
 {
-  mac_pucch.ul_sinr_dB          = convert_fapi_to_mac_ul_sinr(fapi_pucch.ul_sinr_metric);
-  mac_pucch.rssi_dBFS           = convert_fapi_to_mac_rssi(fapi_pucch.rssi);
-  mac_pucch.rsrp_dBFS           = convert_fapi_to_mac_rsrp(fapi_pucch.rsrp);
+  mac_pucch.ul_sinr_dB          = fapi_pucch.ul_sinr_metric_dB;
+  mac_pucch.rssi_dBFS           = to_dBFS(fapi_pucch.rssi);
+  mac_pucch.rsrp_dBFS           = to_dBFS(fapi_pucch.rsrp);
   mac_pucch.time_advance_offset = fapi_pucch.timing_advance_offset;
 
   // Fill SR.
@@ -183,9 +156,9 @@ static void convert_fapi_to_mac_pucch_f0_f1_uci_ind(mac_uci_pdu::pucch_f0_or_f1_
 
 static void convert_fapi_to_mac_pusch_uci_ind(mac_uci_pdu::pusch_type& mac_pusch, const fapi::uci_pusch_pdu& fapi_pusch)
 {
-  mac_pusch.ul_sinr_dB          = convert_fapi_to_mac_ul_sinr(fapi_pusch.ul_sinr_metric);
-  mac_pusch.rssi_dBFS           = convert_fapi_to_mac_rssi(fapi_pusch.rssi);
-  mac_pusch.rsrp_dBFS           = convert_fapi_to_mac_rsrp(fapi_pusch.rsrp);
+  mac_pusch.ul_sinr_dB          = fapi_pusch.ul_sinr_metric_dB;
+  mac_pusch.rssi_dBFS           = to_dBFS(fapi_pusch.rssi);
+  mac_pusch.rsrp_dBFS           = to_dBFS(fapi_pusch.rsrp);
   mac_pusch.time_advance_offset = fapi_pusch.timing_advance_offset;
 
   // Fill HARQ.
@@ -201,25 +174,29 @@ static void convert_fapi_to_mac_pusch_uci_ind(mac_uci_pdu::pusch_type& mac_pusch
 
   // Fill CSI Part 1.
   if (fapi_pusch.csi_part1.has_value()) {
+    const uci_payload_type& payload = fapi_pusch.csi_part1->payload;
+
     mac_uci_pdu::pusch_type::csi_information& csi = mac_pusch.csi_part1_info.emplace();
     csi.is_valid                                  = is_fapi_uci_payload_valid(fapi_pusch.csi_part1->detection_status);
-    csi.payload                                   = fapi_pusch.csi_part1->payload;
+    csi.payload                                   = payload.slice<csi_report_max_size.value()>(0, payload.size());
   }
 
   // Fill CSI Part 2.
   if (fapi_pusch.csi_part2.has_value()) {
+    const uci_payload_type& payload = fapi_pusch.csi_part2->payload;
+
     mac_uci_pdu::pusch_type::csi_information& csi = mac_pusch.csi_part2_info.emplace();
     csi.is_valid                                  = is_fapi_uci_payload_valid(fapi_pusch.csi_part2->detection_status);
-    csi.payload                                   = fapi_pusch.csi_part2->payload;
+    csi.payload                                   = payload.slice<csi_report_max_size.value()>(0, payload.size());
   }
 }
 
 static void convert_fapi_to_mac_pucch_f2_f3_f4_uci_ind(mac_uci_pdu::pucch_f2_or_f3_or_f4_type& mac_pucch,
                                                        const fapi::uci_pucch_pdu_format_2_3_4& fapi_pucch)
 {
-  mac_pucch.ul_sinr_dB          = convert_fapi_to_mac_ul_sinr(fapi_pucch.ul_sinr_metric);
-  mac_pucch.rssi_dBFS           = convert_fapi_to_mac_rssi(fapi_pucch.rssi);
-  mac_pucch.rsrp_dBFS           = convert_fapi_to_mac_rsrp(fapi_pucch.rsrp);
+  mac_pucch.ul_sinr_dB          = fapi_pucch.ul_sinr_metric_dB;
+  mac_pucch.rssi_dBFS           = to_dBFS(fapi_pucch.rssi);
+  mac_pucch.rsrp_dBFS           = to_dBFS(fapi_pucch.rsrp);
   mac_pucch.time_advance_offset = fapi_pucch.timing_advance_offset;
 
   // Fill SR.
@@ -240,16 +217,20 @@ static void convert_fapi_to_mac_pucch_f2_f3_f4_uci_ind(mac_uci_pdu::pucch_f2_or_
 
   // Fill CSI Part 1.
   if (fapi_pucch.csi_part1.has_value()) {
+    const uci_payload_type& payload = fapi_pucch.csi_part1->payload;
+
     mac_uci_pdu::pucch_f2_or_f3_or_f4_type::csi_information& csi = mac_pucch.csi_part1_info.emplace();
     csi.is_valid = is_fapi_uci_payload_valid(fapi_pucch.csi_part1->detection_status);
-    csi.payload  = fapi_pucch.csi_part1->payload;
+    csi.payload  = payload.slice<csi_report_max_size.value()>(0, payload.size());
   }
 
   // Fill CSI Part 2.
   if (fapi_pucch.csi_part2.has_value()) {
+    const uci_payload_type& payload = fapi_pucch.csi_part2->payload;
+
     mac_uci_pdu::pucch_f2_or_f3_or_f4_type::csi_information& csi = mac_pucch.csi_part2_info.emplace();
     csi.is_valid = is_fapi_uci_payload_valid(fapi_pucch.csi_part2->detection_status);
-    csi.payload  = fapi_pucch.csi_part2->payload;
+    csi.payload  = payload.slice<csi_report_max_size.value()>(0, payload.size());
   }
 }
 
@@ -299,7 +280,8 @@ void fapi_to_mac_indications_fastpath_translator::on_srs_indication(const fapi::
   }
 
   if (msg.pdu.positioning) {
-    mac_pdu.report = mac_srs_pdu::positioning_report{msg.pdu.positioning->ul_relative_toa, msg.pdu.positioning->rsrp};
+    mac_pdu.report =
+        mac_srs_pdu::positioning_report{msg.pdu.positioning->ul_relative_toa, to_dBFS(msg.pdu.positioning->rsrp)};
   }
 
   if (OCUDU_UNLIKELY(logger.debug.enabled())) {
@@ -309,38 +291,19 @@ void fapi_to_mac_indications_fastpath_translator::on_srs_indication(const fapi::
   cell_control_handler->handle_srs(mac_msg);
 }
 
-/// Converts the given FAPI RACH occasion RSSI to dB as per SCF-222 v4.0 section 3.4.11.
-static float to_prach_rssi_dB(int fapi_rssi)
-{
-  return (fapi_rssi - 140000) * 0.001F;
-}
-
-/// Converts the given FAPI RACH occasion RSSI to dB as per SCF-222 v4.0 section 3.4.11.
-static std::optional<float> convert_fapi_to_mac_rssi_dB(uint32_t fapi_rssi)
-{
-  if (fapi_rssi != std::numeric_limits<decltype(fapi_rssi)>::max()) {
-    return to_prach_rssi_dB(fapi_rssi);
-  }
-  return std::nullopt;
-}
-
-/// Converts the given FAPI RACH preamble power to dB as per SCF-222 v4.0 section 3.4.11.
-static float to_prach_preamble_power_dB(int fapi_power)
-{
-  return static_cast<float>(fapi_power - 140000) * 0.001F;
-}
-
-/// Converts the given FAPI RACH preamble power to dB as per SCF-222 v4.0 section 3.4.11.
-static std::optional<float> convert_fapi_to_mac_preamble_power_dB(uint32_t fapi_power)
-{
-  if (fapi_power != std::numeric_limits<decltype(fapi_power)>::max()) {
-    return to_prach_preamble_power_dB(fapi_power);
-  }
-  return std::nullopt;
-}
-
 void fapi_to_mac_indications_fastpath_translator::on_rach_indication(const fapi::rach_indication& msg)
 {
+  static constexpr unsigned MAX_OCCASION_SLOT_INDEX = 79;
+  if (msg.pdu.slot_index > MAX_OCCASION_SLOT_INDEX) {
+    logger.warning("Sector#{}: Discarding RACH indication for slot {}. Cause: reported PRACH occasion slot index {} "
+                   "exceeds the maximum of {}",
+                   sector_id,
+                   msg.slot,
+                   msg.pdu.slot_index,
+                   MAX_OCCASION_SLOT_INDEX);
+    return;
+  }
+
   mac_rach_indication indication;
   indication.slot_rx = msg.slot;
 
@@ -348,7 +311,7 @@ void fapi_to_mac_indications_fastpath_translator::on_rach_indication(const fapi:
   occas.frequency_index                     = msg.pdu.ra_index;
   occas.slot_index                          = msg.pdu.slot_index;
   occas.start_symbol                        = msg.pdu.symbol_index;
-  occas.rssi_dBFS                           = convert_fapi_to_mac_rssi_dB(msg.pdu.avg_rssi);
+  occas.rssi_dBFS                           = to_dBFS(msg.pdu.avg_rssi);
 
   for (const auto& preamble : msg.pdu.preambles) {
     if (!preamble.timing_advance_offset) {
@@ -360,7 +323,7 @@ void fapi_to_mac_indications_fastpath_translator::on_rach_indication(const fapi:
 
     mac_rach_indication::rach_preamble& mac_pream = occas.preambles.emplace_back();
     mac_pream.index                               = preamble.preamble_index;
-    mac_pream.pwr_dBFS                            = convert_fapi_to_mac_preamble_power_dB(preamble.preamble_pwr);
+    mac_pream.pwr_dBFS                            = to_dBFS(preamble.preamble_pwr);
     mac_pream.time_advance                        = preamble.timing_advance_offset.value();
   }
 

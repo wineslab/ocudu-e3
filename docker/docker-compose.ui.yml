@@ -51,7 +51,7 @@ services:
       context: grafana
       args:
         GF_VERSION: ${GF_VERSION}
-        LOGO_URL: ${GF_LOGO_URL}
+        LOGO_SRC: ${GF_LOGO_URL}
     volumes:
       - grafana-storage:/var/lib/grafana:rw
     env_file:

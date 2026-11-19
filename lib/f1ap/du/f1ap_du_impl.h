@@ -8,6 +8,7 @@
 #include "f1ap_du_connection_handler.h"
 #include "f1ap_du_context.h"
 #include "f1ap_du_metrics_collector_impl.h"
+#include "procedures/f1ap_du_ref_time_info_report_procedure.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/f1ap/du/f1ap_du.h"
 #include "ocudu/support/async/async_task.h"
@@ -28,6 +29,7 @@ public:
                task_executor&           ctrl_exec,
                f1ap_ue_executor_mapper& ue_exec_mapper,
                f1ap_du_paging_notifier& paging_notifier_,
+               f1ap_du_pws_notifier&    pws_notifier_,
                timer_manager&           timers_);
   ~f1ap_du_impl() override;
 
@@ -117,6 +119,9 @@ private:
   /// \brief Handle Paging as per TS38.473, Section 8.7.
   void handle_paging_request(const asn1::f1ap::paging_s& msg);
 
+  /// \brief Handle WRITE-REPLACE WARNING REQUEST as per TS 38.473, Section 8.5.1.
+  void handle_write_replace_warning_request(const asn1::f1ap::write_replace_warning_request_s& msg);
+
   /// \brief Handle POSITIONING MEASUREMENT REQUEST as per TS 38.473, Section 8.13.3.
   void handle_positioning_measurement_request(const asn1::f1ap::positioning_meas_request_s& msg);
 
@@ -126,6 +131,12 @@ private:
   /// \brief Handle POSITIONING INFORMATION REQUEST as per TS 38.473, Section 8.13.9.
   void handle_positioning_information_request(const asn1::f1ap::positioning_info_request_s& msg);
 
+  /// \brief Handle E-CID MEASUREMENT INITIATION REQUEST as per TS 38.473, Section 8.13.12.
+  void handle_e_cid_measurement_initiation_request(const asn1::f1ap::e_c_id_meas_initiation_request_s& msg);
+
+  /// \brief Handle REFERENCE TIME INFORMATION REPORTING CONTROL as per TS 38.473, Section 8.12.1.
+  void handle_ref_time_info_report_ctrl(const asn1::f1ap::ref_time_info_report_ctrl_s& msg);
+
   /// \brief Log F1AP PDU.
   void log_pdu(bool is_rx, const f1ap_message& pdu);
 
@@ -133,6 +144,7 @@ private:
   task_executor&           ctrl_exec;
   f1ap_du_configurator&    du_mng;
   f1ap_du_paging_notifier& paging_notifier;
+  f1ap_du_pws_notifier&    pws_notifier;
   timer_manager&           timers;
 
   f1ap_du_connection_handler connection_handler;
@@ -144,6 +156,8 @@ private:
   std::unique_ptr<f1ap_event_manager> events;
 
   std::unique_ptr<f1ap_message_notifier> tx_pdu_notifier;
+
+  std::unique_ptr<f1ap_du_ref_time_info_report_procedure> ref_time_proc;
 
   f1ap_metrics_collector_impl metrics;
 };

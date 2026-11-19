@@ -17,8 +17,31 @@ namespace ocudu::ocucp {
 
 struct cu_cp_configuration;
 
+/// DU processor repository configuration.
 struct du_repository_config {
-  const cu_cp_configuration&             cu_cp;
+  gnb_id_t                                      gnb_id;
+  std::string                                   ran_node_name;
+  std::vector<cu_cp_configuration::ngap_config> ngaps;
+  unsigned                                      max_nof_dus;
+  srb_pdcp_config                               srb2_cfg;
+  std::map<five_qi_t, cu_cp_qos_config>         drb_config;
+  security::preferred_integrity_algorithms      int_algo_pref_list;
+  security::preferred_ciphering_algorithms      enc_algo_pref_list;
+  bool                                          force_reestablishment_fallback;
+  bool                                          force_resume_fallback;
+  std::chrono::milliseconds                     rrc_procedure_guard_time_ms;
+  std::optional<std::chrono::seconds>           rrc_reject_wait_time;
+  unsigned                                      rrc_version;
+  bool                                          enable_rrc_metrics;
+  f1ap_configuration                            f1ap;
+  /// Coarse UE location to TAC mappings, one entry per NTN cell.
+  std::vector<ntn_cell_location_mapping> ntn_location_mappings;
+};
+
+/// DU processor repository dependencies.
+struct du_repository_dependencies {
+  task_executor&                         cu_cp_executor;
+  timer_manager&                         timers;
   cu_cp_du_event_handler&                cu_cp_du_handler;
   cu_cp_measurement_config_handler&      meas_config_handler;
   cu_cp_ue_removal_handler&              ue_removal_handler;
@@ -26,23 +49,35 @@ struct du_repository_config {
   async_task_scheduler&                  common_task_sched;
   ue_manager&                            ue_mng;
   du_connection_notifier&                du_conn_notif;
+  cu_cp_ref_time_report_notifier&        ref_time_report_notifier;
   ocudulog::basic_logger&                logger;
 };
 
+/// DU processor repository.
 class du_processor_repository : public du_repository_metrics_handler
 {
 public:
-  explicit du_processor_repository(du_repository_config cfg_);
+  du_processor_repository(const du_repository_config& configuration_, const du_repository_dependencies& dependencies);
 
   /// \brief Checks whether a cell with the specified PCI is served by any of the connected DUs.
   /// \param[in] pci The serving cell PCI.
   /// \return The index of the DU serving the given PCI.
-  cu_cp_du_index_t find_du(pci_t pci);
+  cu_cp_du_index_t find_du(pci_t pci) const;
 
   /// \brief Checks whether a cell with the specified CGI is served by any of the connected DUs.
   /// \param[in] cgi The serving cell CGI.
   /// \return The index of the DU serving the given CGI.
-  cu_cp_du_index_t find_du(const nr_cell_global_id_t& cgi);
+  cu_cp_du_index_t find_du(const nr_cell_global_id_t& cgi) const;
+
+  /// \brief Find the DU that hosts the given CGI in any state (served or deactivated).
+  ///
+  /// Used by the cell lifecycle command path to resolve previously-locked cells when running an
+  /// activate command. find_du(cgi) only searches served cells and would miss locked ones.
+  cu_cp_du_index_t find_du_any_state(const nr_cell_global_id_t& cgi);
+
+  /// \brief PCI-keyed variant of find_du_any_state(). Lets the mobility path recognize a handover
+  /// target that a local DU hosts in deactivated state instead of treating the PCI as foreign.
+  cu_cp_du_index_t find_du_any_state(pci_t pci);
 
   /// \brief Find a DU object.
   /// \param[in] du_index The index of the DU processor object.
@@ -56,11 +91,17 @@ public:
 
   std::vector<cu_cp_du_index_t> get_du_processor_indexes() const;
 
+  /// \brief Get the NR cells currently served by the connected DUs.
+  std::vector<cu_cp_served_cell_info> get_served_cells();
+
+  // See interface for documentation.
   std::vector<cu_cp_metrics_report::du_info> handle_du_metrics_report_request() const override;
 
-  size_t get_nof_f1ap_ues();
+  /// Gets the number of F1AP UEs.
+  size_t get_nof_f1ap_ues() const;
 
-  size_t get_nof_rrc_ues();
+  /// Gets the number of RRC UEs.
+  size_t get_nof_rrc_ues() const;
 
   /// \brief Adds a DU processor object to the CU-CP.
   /// \return The DU index of the added DU processor object.
@@ -75,10 +116,12 @@ public:
   size_t get_nof_dus() const { return du_db.size(); }
 
 private:
+  /// Holds the DU context.
   struct du_context {
     // CU-CP handler of DU processor events.
     du_processor_cu_cp_adapter du_to_cu_cp_notifier;
 
+    /// DU processor.
     std::unique_ptr<du_processor> processor;
 
     /// Notifier used by the CU-CP to push F1AP Tx messages to the respective DU.
@@ -89,8 +132,19 @@ private:
   /// \return The DU index.
   cu_cp_du_index_t get_next_du_index();
 
-  du_repository_config    cfg;
-  ocudulog::basic_logger& logger;
+  du_repository_config cfg;
+
+  task_executor&                         cu_cp_executor;
+  timer_manager&                         timers;
+  cu_cp_du_event_handler&                cu_cp_du_handler;
+  cu_cp_measurement_config_handler&      meas_config_handler;
+  cu_cp_ue_removal_handler&              ue_removal_handler;
+  cu_cp_ue_context_manipulation_handler& ue_context_handler;
+  async_task_scheduler&                  common_task_sched;
+  ue_manager&                            ue_mng;
+  du_connection_notifier&                du_conn_notif;
+  cu_cp_ref_time_report_notifier&        ref_time_report_notifier;
+  ocudulog::basic_logger&                logger;
 
   std::map<cu_cp_du_index_t, du_context> du_db;
 

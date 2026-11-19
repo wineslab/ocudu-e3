@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ofdm_prach_demodulator_impl.h"
+#include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ocuduvec/sc_prod.h"
 #include "ocudu/ran/prach/prach_frequency_mapping.h"
@@ -12,7 +13,7 @@
 using namespace ocudu;
 
 void ofdm_prach_demodulator_impl::demodulate(prach_buffer&                                buffer,
-                                             span<const cf_t>                             input,
+                                             span<const ci16_t>                           input,
                                              const ofdm_prach_demodulator::configuration& config)
 {
   // Cyclic prefix extension for short preambles at 0 and 0.5 ms from the start of the subframe.
@@ -116,7 +117,7 @@ void ofdm_prach_demodulator_impl::demodulate(prach_buffer&                      
     unsigned nof_samples   = occasion_duration.to_samples(srate.to_Hz());
 
     // Select view of the input samples for the occasion.
-    span<const cf_t> input_occasion = input.subspan(sample_offset, nof_samples);
+    span<const ci16_t> input_occasion = input.subspan(sample_offset, nof_samples);
 
     // Get frequency mapping information, common for all frequency-domain occasions.
     prach_frequency_mapping_information freq_mapping_info = prach_frequency_mapping_get(preamble_info.scs, pusch_scs);
@@ -157,8 +158,9 @@ void ofdm_prach_demodulator_impl::demodulate(prach_buffer&                      
     // Process each PRACH symbol.
     for (unsigned i_symbol = 0; i_symbol != nof_symbols; ++i_symbol) {
       // Load symbol time-domain in the DFT.
-      ocuduvec::copy(dft.get_input(),
-                     input_occasion.subspan(cyclic_prefix_length + ofdm_symbol_len * i_symbol, ofdm_symbol_len));
+      ocuduvec::convert(dft.get_input(),
+                        input_occasion.subspan(cyclic_prefix_length + ofdm_symbol_len * i_symbol, ofdm_symbol_len),
+                        ocuduvec::scaling_factor_ci16_to_cf);
 
       // Perform DFT.
       span<const cf_t> dft_output = dft.run();

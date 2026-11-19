@@ -4,6 +4,7 @@
 
 #include "ngap_test_helpers.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ngap/ngap_handover.h"
 #include "ocudu/ran/cu_types.h"
 #include "ocudu/ran/rb_id.h"

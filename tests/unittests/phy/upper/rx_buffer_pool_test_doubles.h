@@ -5,13 +5,14 @@
 #pragma once
 
 #include "ocudu/phy/upper/log_likelihood_ratio.h"
+#include "ocudu/phy/upper/rx_buffer_decoder_callback.h"
 #include "ocudu/phy/upper/rx_buffer_pool.h"
 #include "ocudu/phy/upper/unique_rx_buffer.h"
 #include "ocudu/ran/slot_point.h"
 
 namespace ocudu {
 
-class rx_buffer_pool_spy : public rx_buffer_pool, private unique_rx_buffer::callback
+class rx_buffer_pool_spy : public rx_buffer_pool, private unique_rx_buffer::buffer_management
 {
 public:
   unique_rx_buffer reserve(slot_point slot, trx_buffer_identifier id, unsigned nof_codeblocks, bool new_data) override
@@ -19,7 +20,8 @@ public:
     if (is_locked()) {
       return unique_rx_buffer();
     }
-    return unique_rx_buffer(*this);
+    is_buffer_locked = true;
+    return unique_rx_buffer(*this, 0);
   }
   void run_slot(slot_point slot) override { current_slot = slot; }
 
@@ -40,14 +42,20 @@ public:
     static static_bit_buffer<8> buffer = {};
     return buffer;
   }
+  void decode_cb_in_sequence(unsigned                    retransmission,
+                             unsigned                    codeblock_id,
+                             rx_buffer_decoder_callback& decoder_callback) override
+  {
+    decoder_callback.codeblock_decode(codeblock_id);
+  }
 
-  bool try_lock() override
+  bool try_lock()
   {
     is_buffer_locked = true;
     return true;
   }
-  void unlock() override { is_buffer_locked = false; }
-  void release() override { is_buffer_locked = false; }
+  void unlock(unsigned) override { is_buffer_locked = false; }
+  void release(unsigned) override { is_buffer_locked = false; }
 
   void clear()
   {

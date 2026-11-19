@@ -5,9 +5,11 @@
 #pragma once
 
 #include "../cu_up_processor/cu_up_processor_repository.h"
+#include "../ngap_repository.h"
 #include "../ue_manager/ue_manager_impl.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/ran/plmn_identity.h"
+#include "ocudu/support/async/manual_event.h"
 
 namespace ocudu::ocucp {
 

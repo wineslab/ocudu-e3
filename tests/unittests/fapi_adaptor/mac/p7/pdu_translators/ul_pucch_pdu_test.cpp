@@ -4,6 +4,7 @@
 
 #include "helpers.h"
 #include "pucch.h"
+#include "tests/ocudu_test_requirements.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -45,6 +46,27 @@ TEST(mac_fapi_ul_pucch_format1_pdu_conversor_test, ul_pucch_format1_pdu_valid_sh
   // UCI bits.
   ASSERT_EQ(static_cast<unsigned>(mac_pdu.uci_bits.sr_bits), static_cast<uint8_t>(format1->sr_present));
   ASSERT_EQ(mac_pdu.uci_bits.harq_ack_nof_bits, format1->bit_len_harq.value());
+
+  // Multi-slot TX indicator (common to all formats).
+  ASSERT_EQ(fapi_pdu.multi_slot_tx_indicator,
+            mac_pdu.repetition.has_value() ? mac_pdu.repetition->position : pucch_repetition_tx_slot::no_multi_slot);
+}
+
+TEST(mac_fapi_ul_pucch_format1_pdu_conversor_test, multi_slot_tx_indicator_is_forwarded)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  // Repetition state used to be a per-format field that was silently dropped at the FAPI boundary; verify that it now
+  // reaches the FAPI PDU's multi_slot_tx_indicator from the common part of pucch_info.
+  pucch_info_test_helper pdu_test    = build_valid_pucch_format_1_pdu();
+  pdu_test.info.repetition           = pucch_info::repetition_info{slot_point{}, pucch_repetition_tx_slot::starts};
+  const pucch_info&          mac_pdu = pdu_test.info;
+  fapi::ul_pucch_pdu         fapi_pdu;
+  fapi::ul_pucch_pdu_builder builder(fapi_pdu);
+
+  convert_pucch_mac_to_fapi(builder, mac_pdu);
+
+  ASSERT_EQ(fapi_pdu.multi_slot_tx_indicator, pucch_repetition_tx_slot::starts);
 }
 
 TEST(mac_fapi_ul_pucch_format2_pdu_conversor_test, ul_pucch_format2_pdu_valid_should_pass)

@@ -9,6 +9,7 @@
 #include "test_utils/indication_generators.h"
 #include "test_utils/result_test_helpers.h"
 #include "test_utils/scheduler_test_simulator.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "ocudu/ran/du_types.h"
 #include <gtest/gtest.h>
@@ -89,11 +90,13 @@ class scheduler_retx_tester : public base_scheduler_retx_tester, public ::testin
 
 TEST_P(scheduler_retx_tester, msg3_gets_retx_if_nacked)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
+
   test_params  params          = GetParam();
   const size_t MAX_PUSCH_DELAY = 16, MAX_RETX_DELAY = 16;
 
-  bench.sched->handle_rach_indication(
-      test_helper::create_rach_indication(bench.next_slot_rx(), {test_helper::create_preamble(0, this->ue_rnti)}));
+  bench.sched->handle_rach_indication(test_helper::create_rach_indication(
+      bench.cell_cfg(to_du_cell_index(0)), bench.next_slot_rx(), {test_helper::create_preamble(0, this->ue_rnti)}));
 
   const ul_sched_info* grant = run_until_next_pusch_alloc(MAX_PUSCH_DELAY);
   ASSERT_NE(grant, nullptr) << "No Msg3 was scheduled";

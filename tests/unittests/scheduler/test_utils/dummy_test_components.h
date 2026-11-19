@@ -9,7 +9,8 @@
 #include "lib/scheduler/pdcch_scheduling/pdcch_resource_allocator.h"
 #include "lib/scheduler/uci_scheduling/uci_allocator.h"
 #include "ocudu/scheduler/scheduler_metrics.h"
-#include "ocudu/support/ocudu_test.h"
+#include "ocudu/support/error_handling.h"
+#include <set>
 
 namespace ocudu {
 
@@ -26,13 +27,17 @@ public:
     // do nothing.
   }
 
-  pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                              rnti_t                        rnti,
-                                              search_space_id               ss_id,
-                                              aggregation_level             aggr_lvl) override
+  pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                              rnti_t                         rnti,
+                                              search_space_id                ss_id,
+                                              aggregation_level              aggr_lvl,
+                                              std::optional<beam_identifier> beam) override
   {
-    TESTASSERT_EQ(fmt::underlying(ss_id),
-                  fmt::underlying(slot_alloc.cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.ra_search_space_id));
+    report_fatal_error_if_not(
+        (fmt::underlying(ss_id)) ==
+            (fmt::underlying(slot_alloc.cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.ra_search_space_id)),
+        "fmt::underlying(ss_id) != "
+        "fmt::underlying(slot_alloc.cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.ra_search_space_id)");
     if (fail_pdcch_alloc_cond and fail_pdcch_alloc_cond(slot_alloc.slot)) {
       return nullptr;
     }
@@ -41,9 +46,12 @@ public:
     slot_alloc.result.dl.dl_pdcchs.back().ctx.bwp_cfg = &slot_alloc.cfg.params.dl_cfg_common.init_dl_bwp.generic_params;
     slot_alloc.result.dl.dl_pdcchs.back().ctx.coreset_cfg =
         &*slot_alloc.cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.coreset0;
-    slot_alloc.result.dl.dl_pdcchs.back().ctx.cces          = {get_ncce(slot_alloc.slot), ocudu::aggregation_level::n4};
+    slot_alloc.result.dl.dl_pdcchs.back().ctx.cces          = {static_cast<uint8_t>(get_ncce(slot_alloc.slot)),
+                                                               ocudu::aggregation_level::n4};
     slot_alloc.result.dl.dl_pdcchs.back().ctx.context.ss_id = ss_id;
-    return &slot_alloc.result.dl.dl_pdcchs[0];
+    slot_alloc.result.dl.dl_pdcchs.back().ctx.precoding_and_beamforming =
+        beam.has_value() ? make_single_beam_precoding(*beam) : make_default_precoding();
+    return &slot_alloc.result.dl.dl_pdcchs.back();
   }
 
   pdcch_dl_information* alloc_dl_pdcch_ue(cell_slot_resource_allocator& slot_alloc,
@@ -66,11 +74,14 @@ public:
     return nullptr;
   }
 
-  pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                              rnti_t                        rnti,
-                                              search_space_id               ss_id,
-                                              aggregation_level             aggr_lvl) override
+  pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                              rnti_t                         rnti,
+                                              search_space_id                ss_id,
+                                              aggregation_level              aggr_lvl,
+                                              std::optional<beam_identifier> beam) override
   {
+    next_ue_ul_pdcch_alloc.ctx.precoding_and_beamforming =
+        beam.has_value() ? make_single_beam_precoding(*beam) : make_default_precoding();
     return &next_ue_ul_pdcch_alloc;
   }
 
@@ -104,11 +115,12 @@ public:
 
   void slot_indication(slot_point sl_tx) override { next_uci_allocation.reset(); }
 
-  std::optional<uci_allocation> alloc_harq_ack(cell_resource_allocator&     res_alloc,
-                                               rnti_t                       crnti,
-                                               const ue_cell_configuration& ue_cell_cfg,
-                                               unsigned                     k0,
-                                               span<const uint8_t>          k1_list) override
+  std::optional<uci_allocation>
+  alloc_harq_ack(cell_resource_allocator& res_alloc,
+                 const ue_cell&           ue_cc,
+                 unsigned                 k0,
+                 span<const uint8_t>      k1_list,
+                 pucch_repetition_factor  max_rep_factor = pucch_repetition_factor::n1) override
   {
     return next_uci_allocation;
   }
@@ -116,26 +128,27 @@ public:
   void multiplex_uci_on_pusch(ul_sched_info&                pusch_grant,
                               cell_slot_resource_allocator& slot_alloc,
                               const ue_cell_configuration&  ue_cell_cfg,
-                              rnti_t                        crnti,
-                              bool                          aperiodic_csi_request) override
+                              bool                          aperiodic_csi_request,
+                              bool                          configured_grant = false) override
   {
   }
 
-  void alloc_sr_opportunity(cell_slot_resource_allocator& slot_alloc,
-                            rnti_t                        crnti,
-                            const ue_cell_configuration&  ue_cell_cfg) override
+  bool alloc_sr_opportunity(cell_slot_resource_allocator& slot_alloc, const ue_cell_configuration& ue_cell_cfg) override
   {
+    return true;
   }
 
-  void alloc_csi_opportunity(cell_slot_resource_allocator& slot_alloc,
-                             rnti_t                        crnti,
+  bool alloc_csi_opportunity(cell_slot_resource_allocator& slot_alloc,
                              const ue_cell_configuration&  ue_cell_cfg) override
   {
+    return true;
   }
 
   uint8_t get_scheduled_pdsch_counter_in_ue_uci(slot_point uci_slot, rnti_t crnti) override { return 0; }
 
   bool has_harq_ack_on_common_pucch_res(rnti_t crnti, slot_point sl_tx) override { return false; }
+
+  bool has_pucch_repetition(rnti_t crnti, slot_point sl_tx) override { return false; }
 };
 
 class sched_cfg_dummy_notifier : public sched_configuration_notifier
@@ -145,8 +158,27 @@ public:
   std::optional<du_ue_index_t>   last_ue_index_cfg;
   std::optional<du_ue_index_t>   last_ue_index_deleted;
 
-  void on_ue_config_complete(du_ue_index_t ue_index, bool ue_creation_result) override { last_ue_index_cfg = ue_index; }
-  void on_ue_deletion_completed(du_ue_index_t ue_index) override { last_ue_index_deleted = ue_index; }
+  void on_ue_config_complete(du_ue_index_t ue_index, bool ue_creation_result) override
+  {
+    last_ue_index_cfg = ue_index;
+    completed_deletions.erase(ue_index);
+    completed_creations.insert(ue_index);
+  }
+  void on_ue_deletion_completed(du_ue_index_t ue_index) override
+  {
+    last_ue_index_deleted = ue_index;
+    completed_creations.erase(ue_index);
+    completed_deletions.insert(ue_index);
+  }
+
+  // Per-UE completion state that, unlike the "last_*" fields, does not lose events when several UEs complete
+  // concurrently.
+  bool ue_creation_completed(du_ue_index_t ue_index) const { return completed_creations.count(ue_index) > 0; }
+  bool ue_deletion_completed(du_ue_index_t ue_index) const { return completed_deletions.count(ue_index) > 0; }
+
+private:
+  std::set<du_ue_index_t> completed_creations;
+  std::set<du_ue_index_t> completed_deletions;
 };
 
 class scheduler_ue_metrics_dummy_notifier : public scheduler_metrics_notifier
@@ -162,7 +194,8 @@ class scheduler_harq_timeout_dummy_notifier : public harq_timeout_notifier
 public:
   du_ue_index_t last_ue_idx = INVALID_DU_UE_INDEX;
 
-  void on_harq_timeout(du_ue_index_t ue_idx, bool is_dl, bool ack) override { last_ue_idx = ue_idx; }
+  void on_feedback_timeout(du_ue_index_t ue_idx, bool is_dl, bool ack) override { last_ue_idx = ue_idx; }
+  void on_retx_timeout(du_ue_index_t ue_idx, bool is_dl) override { last_ue_idx = ue_idx; }
   void on_feedback_disabled_harq_timeout(du_ue_index_t ue_idx, bool is_dl, units::bytes tbs) override {}
 };
 

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/sdap/sdap_config.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 
 namespace ocudu {
 

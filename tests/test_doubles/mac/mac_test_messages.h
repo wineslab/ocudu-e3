@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include "ocudu/adt/span.h"
 #include "ocudu/mac/mac_cell_control_information_handler.h"
 #include "ocudu/mac/mac_pdu_handler.h"
 #include "ocudu/ran/harq_id.h"
+#include "ocudu/ran/rnti.h"
 
 namespace ocudu {
 
@@ -14,6 +16,7 @@ struct pucch_info;
 struct uci_info;
 struct ul_sched_info;
 struct srs_info;
+class slot_point;
 
 namespace test_helpers {
 

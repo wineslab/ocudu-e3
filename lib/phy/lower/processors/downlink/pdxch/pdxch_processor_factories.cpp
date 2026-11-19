@@ -31,7 +31,7 @@ public:
                                                .center_freq_Hz = config.center_freq_Hz};
 
     pdxch_processor_impl::configuration pdxch_config = {
-        .scs = config.scs, .cp = config.cp, .srate = config.srate, .nof_tx_ports = config.nof_tx_ports};
+        .scs = config.scs, .cp = config.cp, .srate = config.srate, .tx_ant_topology = config.tx_ant_topology};
 
     return std::make_unique<pdxch_processor_impl>(ofdm_mod_factory->create_ofdm_symbol_modulator(mod_config),
                                                   amplitude_control_factory->create(),

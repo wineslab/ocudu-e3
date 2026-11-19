@@ -6,11 +6,14 @@
 
 #include "lib/rlc/rlc_bearer_logger.h"
 #include "rlc_stress_test_args.h"
-#include "ocudu/rlc/rlc_rx.h"
+#include "ocudu/adt/byte_buffer_chain.h"
+#include "ocudu/ran/gnb_du_id.h"
 #include "ocudu/rlc/rlc_tx.h"
 #include <random>
 
 namespace ocudu {
+class rlc_rx_lower_layer_interface;
+
 class mac_dummy : public rlc_tx_lower_layer_notifier
 {
   const stress_test_args& args;

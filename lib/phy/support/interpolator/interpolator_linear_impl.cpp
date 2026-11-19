@@ -6,6 +6,7 @@
 /// \brief Linear interpolator definition.
 
 #include "interpolator_linear_impl.h"
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ocuduvec/simd.h"
 #include "ocudu/support/ocudu_assert.h"

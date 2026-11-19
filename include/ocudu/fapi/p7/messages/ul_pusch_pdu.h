@@ -9,10 +9,10 @@
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/dmrs/dmrs.h"
 #include "ocudu/ran/harq_id.h"
-#include "ocudu/ran/pusch/pusch_context.h"
 #include "ocudu/ran/pusch/pusch_mcs.h"
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
+#include "ocudu/ran/rnti.h"
 #include "ocudu/ran/sch/ldpc_base_graph.h"
 #include "ocudu/ran/subcarrier_spacing.h"
 #include "ocudu/ran/uci/uci_configuration.h"
@@ -53,6 +53,12 @@ struct ul_pusch_pdu {
 
   using transform_precoding_config = std::variant<transform_precoding_enabled, transform_precoding_disabled>;
 
+  /// Holds the parameters required for TTI bundling.
+  struct tti_bundling {
+    uint8_t tb_over_ms_num_total_slots;
+    uint8_t tb_over_ms_remaining_slots;
+  };
+
   rnti_t                                           rnti;
   uint32_t                                         handle = 0;
   crb_interval                                     bwp;
@@ -78,8 +84,9 @@ struct ul_pusch_pdu {
   ldpc_base_graph_type                             ldpc_base_graph;
   units::bytes                                     tb_size_lbrm_bytes;
   std::optional<uci_part1_to_part2_correspondence> uci_correspondence;
-  /// Vendor specific parameters.
-  std::optional<pusch_context> context;
+  std::optional<uint8_t>                           rapid;
+  std::optional<tti_bundling>                      repetitions;
+  harq_id_t                                        harq_id = INVALID_HARQ_ID;
 };
 
 } // namespace fapi
@@ -153,6 +160,15 @@ struct formatter<ocudu::fapi::ul_pusch_pdu> {
                 pdu.pusch_uci->beta_offset_csi1,
                 pdu.pusch_uci->beta_offset_csi2);
     }
+
+    if (pdu.repetitions.has_value()) {
+      format_to(ctx.out(),
+                " tb_over_ms_num_total_slots={} tb_over_ms_remaining_slots={}",
+                pdu.repetitions->tb_over_ms_num_total_slots,
+                pdu.repetitions->tb_over_ms_remaining_slots);
+    }
+
+    format_to(ctx.out(), " harq_id={}", pdu.harq_id);
 
     return ctx.out();
   }

@@ -6,9 +6,9 @@
 #include "lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.h"
 #include "lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.h"
 #include "tests/unittests/e2/common/e2_test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/support/executors/task_worker.h"
-#include "ocudu/support/ocudu_test.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -100,14 +100,16 @@ protected:
     node_component_config_collector = std::make_unique<e2_node_component_config_collector>(task_worker, 1);
     // Pre-deliver a dummy F1 config so the setup coroutine is not blocked awaiting it.
     node_component_config_collector->deliver(e2_node_component_interface_type::f1, {}, {});
-    e2agent = create_e2_du_agent(cfg,
-                                 *e2_client,
-                                 du_metrics.get(),
-                                 f1ap_ue_id_mapper.get(),
-                                 du_rc_param_configurator.get(),
-                                 factory,
-                                 task_worker,
-                                 std::move(node_component_config_collector));
+    e2agent = create_e2_du_agent(
+        cfg,
+        e2ap_dependencies{.e2_client                      = *e2_client,
+                          .e2_metrics_var                 = du_metrics.get(),
+                          .f1ap_ue_id_translator          = f1ap_ue_id_mapper.get(),
+                          .du_configurator                = du_rc_param_configurator.get(),
+                          .timers                         = factory,
+                          .e2_exec                        = task_worker,
+                          .node_component_config_provider = std::move(node_component_config_collector),
+                          .logger                         = ocudulog::fetch_basic_logger("TEST")});
     task_worker.run_pending_tasks();
     if (external_pcap_writer) {
       packer = std::make_unique<e2ap_asn1_packer>(*gw, e2agent->get_e2_interface(), *external_pcap_writer);
@@ -160,7 +162,7 @@ protected:
     timers.tick();
     task_worker.run_pending_tasks();
   }
-  e2ap_configuration                                   cfg = {};
+  e2ap_config                                          cfg = {};
   timer_factory                                        factory;
   timer_manager                                        timers;
   std::unique_ptr<dummy_sctp_association_sdu_notifier> gw;
@@ -374,7 +376,7 @@ TEST_P(e2sm_kpm_du_meas_provider_test, e2sm_kpm_ind_three_drb_rlc_metrics)
     report_service->collect_measurements();
   }
 
-  TESTASSERT_EQ(true, report_service->is_ind_msg_ready());
+  ASSERT_EQ(true, report_service->is_ind_msg_ready());
   // Get RIC indication msg content.
   byte_buffer ind_hdr_bytes = report_service->get_indication_header();
   byte_buffer ind_msg_bytes = report_service->get_indication_message();
@@ -387,29 +389,28 @@ TEST_P(e2sm_kpm_du_meas_provider_test, e2sm_kpm_ind_three_drb_rlc_metrics)
     return;
   }
 
-  TESTASSERT_EQ(nof_ues, ric_ind_msg.ind_msg_formats.ind_msg_format3().ue_meas_report_list.size());
+  ASSERT_EQ(nof_ues, ric_ind_msg.ind_msg_formats.ind_msg_format3().ue_meas_report_list.size());
   for (unsigned ue_idx = 0; ue_idx < nof_ues; ++ue_idx) {
-    TESTASSERT_EQ(
-        nof_meas_data,
-        ric_ind_msg.ind_msg_formats.ind_msg_format3().ue_meas_report_list[ue_idx].meas_report.meas_data.size());
+    ASSERT_EQ(nof_meas_data,
+              ric_ind_msg.ind_msg_formats.ind_msg_format3().ue_meas_report_list[ue_idx].meas_report.meas_data.size());
     for (unsigned i = 0; i < nof_meas_data; ++i) {
       auto& meas_record = ric_ind_msg.ind_msg_formats.ind_msg_format3()
                               .ue_meas_report_list[ue_idx]
                               .meas_report.meas_data[i]
                               .meas_record;
-      TESTASSERT_EQ(nof_records, meas_record.size());
-      TESTASSERT_EQ(expected_drop_rate, meas_record[0].integer());
+      ASSERT_EQ(nof_records, meas_record.size());
+      ASSERT_EQ(expected_drop_rate, meas_record[0].integer());
       if (nof_records >= 2) {
-        TESTASSERT_EQ((i + 1) * expected_dl_vol[ue_idx], meas_record[1].integer());
+        ASSERT_EQ((i + 1) * expected_dl_vol[ue_idx], meas_record[1].integer());
       }
       if (nof_records >= 3) {
-        TESTASSERT_EQ((i + 1) * expected_ul_vol[ue_idx], meas_record[2].integer());
+        ASSERT_EQ((i + 1) * expected_ul_vol[ue_idx], meas_record[2].integer());
       }
       if (nof_records >= 4) {
-        TESTASSERT_EQ(expected_dl_throughput, meas_record[3].real().value);
+        ASSERT_EQ(expected_dl_throughput, meas_record[3].real().value);
       }
       if (nof_records >= 5) {
-        TESTASSERT_EQ(expected_ul_throughput, meas_record[4].real().value);
+        ASSERT_EQ(expected_ul_throughput, meas_record[4].real().value);
       }
     }
   }
@@ -482,7 +483,7 @@ TEST_P(e2sm_kpm_du_meas_provider_test, e2sm_kpm_ind_e2_level_rlc_metrics)
     report_service->collect_measurements();
   }
 
-  TESTASSERT_EQ(true, report_service->is_ind_msg_ready());
+  ASSERT_EQ(true, report_service->is_ind_msg_ready());
   // Get RIC indication msg content.
   byte_buffer ind_hdr_bytes = report_service->get_indication_header();
   byte_buffer ind_msg_bytes = report_service->get_indication_message();
@@ -495,13 +496,13 @@ TEST_P(e2sm_kpm_du_meas_provider_test, e2sm_kpm_ind_e2_level_rlc_metrics)
     return;
   }
 
-  TESTASSERT_EQ(nof_meas_data, ric_ind_msg.ind_msg_formats.ind_msg_format1().meas_data.size());
+  ASSERT_EQ(nof_meas_data, ric_ind_msg.ind_msg_formats.ind_msg_format1().meas_data.size());
   for (unsigned i = 0; i < nof_meas_data; ++i) {
     auto& meas_record = ric_ind_msg.ind_msg_formats.ind_msg_format1().meas_data[i].meas_record;
-    TESTASSERT_EQ(nof_records, meas_record.size());
-    TESTASSERT_EQ(expected_drop_rate, meas_record[0].integer());
-    TESTASSERT_EQ((i + 1) * expected_dl_vol, meas_record[1].integer());
-    TESTASSERT_EQ((i + 1) * expected_ul_vol, meas_record[2].integer());
+    ASSERT_EQ(nof_records, meas_record.size());
+    ASSERT_EQ(expected_drop_rate, meas_record[0].integer());
+    ASSERT_EQ((i + 1) * expected_dl_vol, meas_record[1].integer());
+    ASSERT_EQ((i + 1) * expected_ul_vol, meas_record[2].integer());
   }
 
   if (g_enable_pcap) {
@@ -586,7 +587,7 @@ TEST_P(e2sm_kpm_du_meas_provider_test, e2sm_kpm_ind_e2_level_prb_metrics)
   // Trigger measurement collection.
   report_service->collect_measurements();
 
-  TESTASSERT_EQ(true, report_service->is_ind_msg_ready());
+  ASSERT_EQ(true, report_service->is_ind_msg_ready());
   // Get RIC indication msg content.
   byte_buffer ind_hdr_bytes = report_service->get_indication_header();
   byte_buffer ind_msg_bytes = report_service->get_indication_message();
@@ -599,15 +600,15 @@ TEST_P(e2sm_kpm_du_meas_provider_test, e2sm_kpm_ind_e2_level_prb_metrics)
     return;
   }
 
-  TESTASSERT_EQ(nof_meas_data, ric_ind_msg.ind_msg_formats.ind_msg_format1().meas_data.size());
+  ASSERT_EQ(nof_meas_data, ric_ind_msg.ind_msg_formats.ind_msg_format1().meas_data.size());
   auto& meas_record = ric_ind_msg.ind_msg_formats.ind_msg_format1().meas_data[0].meas_record;
-  TESTASSERT_EQ(nof_records, meas_record.size());
-  TESTASSERT_EQ(expected_dl_used_prbs, meas_record[0].integer());
-  TESTASSERT_EQ(expected_ul_used_prbs, meas_record[1].integer());
-  TESTASSERT_EQ(expected_dl_avail_prbs, meas_record[2].integer());
-  TESTASSERT_EQ(expected_ul_avail_prbs, meas_record[3].integer());
-  TESTASSERT_EQ(expected_dl_tot_prbs, meas_record[4].integer());
-  TESTASSERT_EQ(expected_ul_tot_prbs, meas_record[5].integer());
+  ASSERT_EQ(nof_records, meas_record.size());
+  ASSERT_EQ(expected_dl_used_prbs, meas_record[0].integer());
+  ASSERT_EQ(expected_ul_used_prbs, meas_record[1].integer());
+  ASSERT_EQ(expected_dl_avail_prbs, meas_record[2].integer());
+  ASSERT_EQ(expected_ul_avail_prbs, meas_record[3].integer());
+  ASSERT_EQ(expected_dl_tot_prbs, meas_record[4].integer());
+  ASSERT_EQ(expected_ul_tot_prbs, meas_record[5].integer());
 
   if (g_enable_pcap) {
     e2_message e2_msg = generate_e2_ind_msg(ind_hdr_bytes, ind_msg_bytes);

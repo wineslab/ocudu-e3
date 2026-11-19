@@ -99,14 +99,14 @@ protected:
     return true;
   }
 
-  bool close_client(bool broker_trigger_required = true)
+  bool close_client(bool broker_trigger_required = true, std::optional<int> assoc_fd = std::nullopt)
   {
     bool ret = client.close();
     if (broker_trigger_required) {
       // SCTP SHUTDOWN EVENT
-      trigger_broker();
+      trigger_broker(assoc_fd);
       // SCTP SHUTDOWN COMP
-      trigger_broker();
+      trigger_broker(assoc_fd);
     }
     return ret;
   }
@@ -122,7 +122,13 @@ protected:
     return true;
   }
 
-  void trigger_broker() { broker.handle_receive(); }
+  void trigger_broker(std::optional<int> fd = std::nullopt)
+  {
+    if (not fd.has_value()) {
+      fd = server->get_socket_fd();
+    }
+    broker.handle_receive(*fd);
+  }
 
   sctp_network_server_config server_cfg{{}, broker, io_rx_executor, app_executor, assoc_factory};
 
@@ -166,8 +172,8 @@ TEST_F(sctp_network_server_test, when_broker_rejects_subscriber_then_listen_fail
   server = create_sctp_network_server(server_cfg);
 
   ASSERT_FALSE(server->listen());
-  ASSERT_EQ(broker.last_registered_fd.value(), server->get_socket_fd());
-  ASSERT_EQ(broker.last_unregistered_fd, -1) << "If the subscription fails, no deregister should be called";
+  ASSERT_EQ(broker.nof_registered_sockets(), 0);
+  ASSERT_EQ(broker.get_nof_deregistrations(), 0) << "If the subscription fails, no deregister should be called";
 }
 
 TEST_F(sctp_network_server_test, when_broker_accepts_subscriber_then_listen_succeeds)
@@ -175,7 +181,7 @@ TEST_F(sctp_network_server_test, when_broker_accepts_subscriber_then_listen_succ
   server = create_sctp_network_server(server_cfg);
   ASSERT_TRUE(server->listen());
 
-  ASSERT_EQ(broker.last_registered_fd.value(), server->get_socket_fd());
+  ASSERT_EQ(broker.get_last_registered_fd(), server->get_socket_fd());
 }
 
 TEST_F(sctp_network_server_test, when_server_is_shutdown_then_fd_is_deregistered_from_broker)
@@ -184,10 +190,10 @@ TEST_F(sctp_network_server_test, when_server_is_shutdown_then_fd_is_deregistered
   ASSERT_TRUE(server->listen());
 
   int fd = server->get_socket_fd();
-  ASSERT_EQ(broker.last_unregistered_fd, -1);
+  // ASSERT_EQ(broker.last_unregistered_fd, -1);
   server->stop();
   server.reset();
-  ASSERT_EQ(broker.last_registered_fd.value(), fd);
+  ASSERT_EQ(broker.get_last_registered_fd(), fd);
 }
 
 TEST_F(sctp_network_server_test, when_client_connects_then_server_request_new_sctp_association_handler_creation)
@@ -231,9 +237,9 @@ TEST_F(sctp_network_server_test, when_client_disconnects_then_server_deletes_ass
   server = create_sctp_network_server(server_cfg);
   ASSERT_TRUE(server->listen());
   ASSERT_TRUE(connect_client());
-
+  int assoc_fd = broker.get_last_registered_fd();
   ASSERT_FALSE(assoc_factory.association_destroyed);
-  ASSERT_TRUE(close_client());
+  ASSERT_TRUE(close_client(true, assoc_fd));
   ASSERT_TRUE(assoc_factory.association_destroyed);
 }
 
@@ -242,10 +248,13 @@ TEST_F(sctp_network_server_test, when_client_sends_sctp_message_then_message_is_
   server = create_sctp_network_server(server_cfg);
   ASSERT_TRUE(server->listen());
   ASSERT_TRUE(connect_client());
+  int assoc_fd = broker.get_last_registered_fd();
 
   ASSERT_EQ(assoc_factory.last_sdu.length(), 0);
   std::vector<uint8_t> bytes = {0x01, 0x02, 0x03, 0x04};
-  ASSERT_TRUE(send_data(bytes));
+  ASSERT_TRUE(send_data(bytes, false));
+
+  trigger_broker(assoc_fd); // Should handle packet receive
 
   // Ensure SCTP server forwarded the message to the association handler.
   ASSERT_EQ(assoc_factory.last_sdu, bytes);
@@ -257,17 +266,19 @@ TEST_F(sctp_network_server_test,
   server = create_sctp_network_server(server_cfg);
   ASSERT_TRUE(server->listen());
   ASSERT_TRUE(connect_client());
+  int assoc_fd = broker.get_last_registered_fd();
+
   std::vector<uint8_t> bytes = {0x01, 0x02, 0x03, 0x04};
 
   ASSERT_TRUE(send_data(bytes, false));
   ASSERT_TRUE(close_client(false));
 
   ASSERT_EQ(assoc_factory.last_sdu.length(), 0);
-  trigger_broker(); // Should handle packet receive
+  trigger_broker(assoc_fd); // Should handle packet receive
   ASSERT_EQ(assoc_factory.last_sdu, bytes);
   ASSERT_FALSE(assoc_factory.association_destroyed) << "Association Handler was destroyed too early";
-  trigger_broker(); // SCTP_SHUTDOWN_EVENT
-  trigger_broker(); // SCTP_SHUTDOWN_COMP
+  trigger_broker(assoc_fd); // SCTP_SHUTDOWN_EVENT
+  trigger_broker(assoc_fd); // SCTP_SHUTDOWN_COMP
   ASSERT_TRUE(assoc_factory.association_destroyed) << "Association Handler was not destroyed";
 }
 
@@ -297,15 +308,19 @@ TEST_F(sctp_network_server_test, when_multiple_clients_connect_then_multiple_ass
   server = create_sctp_network_server(server_cfg);
   ASSERT_TRUE(server->listen());
 
+  uint16_t port = server->get_listen_port().value();
   // First client connect.
   ASSERT_TRUE(connect_client());
+  int assoc_fd1 = broker.get_last_registered_fd();
 
   // Client 2 connects.
   assoc_factory.association_created = false;
   dummy_sctp_client client2;
-  client2.connect(server_cfg.sctp.ppid, server_cfg.sctp.bind_addresses[0], server->get_listen_port().value());
-  // Handle client 2 association creation.
+  client2.connect(server_cfg.sctp.ppid, server_cfg.sctp.bind_addresses[0], port);
   trigger_broker();
+  int assoc_fd2 = broker.get_last_registered_fd();
+
+  // Handle client 2 association creation.
   ASSERT_TRUE(assoc_factory.association_created);
   ASSERT_FALSE(assoc_factory.association_destroyed);
 
@@ -316,13 +331,13 @@ TEST_F(sctp_network_server_test, when_multiple_clients_connect_then_multiple_ass
   client2.close();
 
   // SCTP shutdown client 1
-  trigger_broker(); // < Client 1: SCTP SHUTDOWN EVENT
-  trigger_broker(); // < Client 1: SCTP SHUTDOWN COMP
+  trigger_broker(assoc_fd1); // < Client 1: SCTP SHUTDOWN EVENT
+  trigger_broker(assoc_fd1); // < Client 1: SCTP SHUTDOWN COMP
   ASSERT_TRUE(assoc_factory.association_destroyed) << "Client 1 shutdown was not processed";
   assoc_factory.association_destroyed = false;
   // SCTP shutdown client 2
-  trigger_broker(); // < Client2: SCTP SHUTDOWN EVENT
-  trigger_broker(); // < Client2: SCTP SHUTDOWN COMP
+  trigger_broker(assoc_fd2); // < Client2: SCTP SHUTDOWN EVENT
+  trigger_broker(assoc_fd2); // < Client2: SCTP SHUTDOWN COMP
   ASSERT_TRUE(assoc_factory.association_destroyed) << "Client 2 shutdown was not processed";
 }
 

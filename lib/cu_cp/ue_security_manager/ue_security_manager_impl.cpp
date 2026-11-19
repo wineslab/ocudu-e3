@@ -49,8 +49,8 @@ bool ue_security_manager::init_security_context(const security::security_context
     return false;
   }
   logger.debug("Selected security algorithms integrity=NIA{} ciphering=NEA{}",
-               fmt::underlying(sec_context.sel_algos.integ_algo),
-               fmt::underlying(sec_context.sel_algos.cipher_algo));
+               sec_context.sel_algos.integ_algo,
+               sec_context.sel_algos.cipher_algo);
 
   // Generate K_rrc_enc and K_rrc_int
   sec_context.generate_as_keys();
@@ -58,6 +58,40 @@ bool ue_security_manager::init_security_context(const security::security_context
   // Set security state to partially enabled. It will be set to fully enabled when the UE confirms the security
   // configuration.
   sec_context.state = security::security_state::partially_enabled;
+
+  return true;
+}
+
+bool ue_security_manager::init_handover_security_context(const security::security_context& sec_ctxt)
+{
+  if (not init_security_context(sec_ctxt)) {
+    return false;
+  }
+
+  return finalize_security_context();
+}
+
+bool ue_security_manager::init_retrieved_security_context(const security::security_context&                  sec_ctxt,
+                                                          const std::optional<security::sec_selected_algos>& algos)
+{
+  sec_context = sec_ctxt;
+
+  // The UE keeps ciphering and integrity protecting with the algorithms it was given, so the ones the peer signalled
+  // are taken over. Without them, they are selected from the UE capabilities the peer reported.
+  if (algos.has_value()) {
+    sec_context.sel_algos = algos.value();
+  } else if (not sec_context.select_algorithms(cfg.int_algo_pref_list, cfg.enc_algo_pref_list)) {
+    logger.error("Could not select security algorithm for the retrieved security context");
+    return false;
+  }
+  logger.debug("Selected security algorithms integrity=NIA{} ciphering=NEA{}",
+               sec_context.sel_algos.integ_algo,
+               sec_context.sel_algos.cipher_algo);
+
+  // Derive the AS keys from the KgNB* the peer transferred.
+  sec_context.generate_as_keys();
+
+  sec_context.state = security::security_state::fully_enabled;
 
   return true;
 }
@@ -83,6 +117,14 @@ bool ue_security_manager::is_security_enabled() const
 security::security_context ue_security_manager::get_security_context() const
 {
   return sec_context;
+}
+
+security::security_context ue_security_manager::get_handover_security_context(pci_t    target_pci,
+                                                                              unsigned target_ssb_arfcn) const
+{
+  security::security_context target_sec_context = sec_context;
+  target_sec_context.horizontal_key_derivation(target_pci, target_ssb_arfcn);
+  return target_sec_context;
 }
 
 security::sec_selected_algos ue_security_manager::get_security_algos() const

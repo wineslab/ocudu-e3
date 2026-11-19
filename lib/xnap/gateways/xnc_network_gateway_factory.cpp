@@ -96,7 +96,7 @@ private:
   ocudulog::basic_logger&                logger;
 };
 
-/// Adapter of the SCTP server to the XN-C interface of the CU-CP.
+/// Adapter of the SCTP server to the Xn-C interface of the CU-CP.
 class xnc_sctp_server final : public ocucp::xnc_connection_gateway, public sctp_network_association_factory
 {
 public:
@@ -105,7 +105,7 @@ public:
     // Create SCTP server.
     sctp_server = create_sctp_network_server(
         sctp_network_server_config{params.sctp, params.broker, params.io_rx_executor, params.ctrl_exec, *this});
-    report_error_if_not(sctp_server != nullptr, "Failed to create SCTP server");
+    report_error_if_not(sctp_server != nullptr, "Failed to create Xn-C SCTP server");
   }
 
   void stop() override { sctp_server->stop(); }

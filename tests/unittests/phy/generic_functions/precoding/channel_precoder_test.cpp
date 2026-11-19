@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "support/compare_sequences.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/zero.h"
 #include "ocudu/phy/generic_functions/precoding/precoding_factories.h"
@@ -22,26 +24,6 @@ using MultiplePRGParams = std::tuple<
     unsigned,
     // Number of antenna ports.
     unsigned>;
-
-namespace ocudu {
-
-static std::ostream& operator<<(std::ostream& os, span<const cf_t> data)
-{
-  fmt::print(os, "{}", data);
-  return os;
-}
-
-static bool operator==(span<const cf_t> lhs, span<const cbf16_t> rhs)
-{
-  static constexpr float max_relative_error_cbf16 = 1.0F / 256.0F;
-  return std::equal(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), [](cf_t lhs_cf, cbf16_t rhs_val) {
-    cf_t  rhs_cf = to_cf(rhs_val);
-    float error  = std::abs(lhs_cf - rhs_cf) / std::abs(lhs_cf);
-    return error < max_relative_error_cbf16;
-  });
-}
-
-} // namespace ocudu
 
 namespace {
 class PrecodingFixture : public ::testing::TestWithParam<MultiplePRGParams>
@@ -233,7 +215,20 @@ TEST_P(PrecodingFixture, RandomWeightsCft)
 
     // For each antenna port, compare the precoded RE with the golden sequence for all RE and PRG.
     for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
-      ASSERT_EQ(span<const cf_t>(golden.get_slice(i_port)), span<const cbf16_t>(precoding_buffer.get_slice(i_port)));
+      error_type<std::string> compare_result = compare_sequences(
+          span<const cf_t>(golden.get_slice(i_port)),
+          span<const cbf16_t>(precoding_buffer.get_slice(i_port)),
+          [](const cf_t& lhs_cf, const cbf16_t& rhs_val) {
+            cf_t rhs_cf = to_cf(rhs_val);
+            // Check against division by zero: when the golden value is not normal, the actual
+            // value must be exactly zero.
+            if (!std::isnormal(std::abs(lhs_cf))) {
+              return rhs_cf == cf_t(0.0F, 0.0F) ? 0.0F : 1.0F;
+            }
+            return std::abs(lhs_cf - rhs_cf) / std::abs(lhs_cf);
+          },
+          1.0F / 256.0F);
+      ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
     }
   }
 }
@@ -267,8 +262,24 @@ TEST_P(PrecodingFixture, RandomWeightsCi8)
 
     // For each antenna port, compare the precoded RE with the golden sequence for all RE and PRG.
     for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
-      ASSERT_EQ(golden.get_slice(i_port), precoding_buffer.get_slice(i_port))
-          << " nof_ports=" << nof_ports << " nof_layers=" << nof_layers;
+      span<const cbf16_t> actual = precoding_buffer.get_slice(i_port);
+      // The precoder output is quantized to cbf16_t, so a tolerance comparison is required (same as
+      // RandomWeightsCft). The previous operator==(span<const cf_t>, span<const cbf16_t>) applied a
+      // relative error of 1/256; keep the same semantics here.
+      error_type<std::string> result = compare_sequences(
+          actual,
+          golden.get_slice(i_port),
+          [](const cbf16_t& lhs_val, const cf_t& rhs_cf) {
+            cf_t lhs_cf = to_cf(lhs_val);
+            // Check against division by zero: when the golden value is not normal, the actual
+            // value must be exactly zero.
+            if (!std::isnormal(std::abs(rhs_cf))) {
+              return lhs_cf == cf_t(0.0F, 0.0F) ? 0.0F : 1.0F;
+            }
+            return std::abs(lhs_cf - rhs_cf) / std::abs(rhs_cf);
+          },
+          1.0F / 256.0F);
+      ASSERT_TRUE(result.has_value()) << result.error() << " nof_ports=" << nof_ports << " nof_layers=" << nof_layers;
     }
   }
 }

@@ -21,6 +21,13 @@ flexible_o_du_impl::flexible_o_du_impl(unsigned nof_cells_, flexible_o_du_metric
 {
 }
 
+flexible_o_du_impl::~flexible_o_du_impl()
+{
+  // Detach from the RU here as well as in stop(): the RU is destroyed before the DU, whose NTN update timers can
+  // still reach this adapter. Covers the paths that destroy the O-DU without stopping it first.
+  ru_doppler_adapt.disconnect();
+}
+
 void flexible_o_du_impl::start()
 {
   du->get_operation_controller().start();
@@ -29,6 +36,8 @@ void flexible_o_du_impl::start()
 
 void flexible_o_du_impl::stop()
 {
+  // Detach from the RU before any member is destroyed.
+  ru_doppler_adapt.disconnect();
   ru->get_controller().get_operation_controller().stop();
   du->get_operation_controller().stop();
 }
@@ -41,6 +50,7 @@ void flexible_o_du_impl::add_ru(std::unique_ptr<radio_unit> active_ru)
   // Connect the RU adaptor to the RU.
   ru_dl_rg_adapt.connect(ru->get_downlink_plane_handler());
   ru_ul_request_adapt.connect(ru->get_uplink_plane_handler());
+  ru_doppler_adapt.connect(ru->get_controller());
 
   // Update the RU metrics collector.
   if (auto* collector = ru->get_metrics_collector()) {

@@ -42,20 +42,12 @@ public:
   /// \brief Sets the power parameters of the \e RACH.indication PDU and returns a reference to the builder.
   ///
   /// These parameters are specified in SCF-222 v4.0 section 3.4.11 in table RACH.indication message body.
-  rach_indication_pdu_builder& set_power_parameters(std::optional<float> avg_rssi_dB, std::optional<float> avg_snr_dB)
+  rach_indication_pdu_builder& set_power_parameters(std::optional<fapi_power_unit> avg_rssi,
+                                                    std::optional<float>           avg_snr_dB)
 
   {
-    pdu.avg_rssi = (avg_rssi_dB) ? static_cast<uint32_t>((avg_rssi_dB.value() + 140.F) * 1000.F)
-                                 : std::numeric_limits<uint32_t>::max();
-
-    unsigned avg_snr =
-        (avg_snr_dB) ? static_cast<unsigned>((avg_snr_dB.value() + 64.F) * 2) : std::numeric_limits<uint8_t>::max();
-
-    ocudu_assert(avg_snr <= std::numeric_limits<uint8_t>::max(),
-                 "Average SNR ({}) exceeds the maximum ({}).",
-                 avg_snr,
-                 std::numeric_limits<uint8_t>::max());
-    pdu.avg_snr = static_cast<uint8_t>(avg_snr);
+    pdu.avg_rssi   = avg_rssi;
+    pdu.avg_snr_dB = avg_snr_dB;
 
     return *this;
   }
@@ -64,31 +56,19 @@ public:
   ///
   /// These parameters are specified in SCF-222 v4.0 section 3.4.11 in table RACH.indication message body.
   /// Units for timing advace offset parameter are specified in SCF-222 v4.0 section 3.4.11 in table RACH.indication
-  /// message body, and this function expect this units.
-  rach_indication_pdu_builder& add_preamble(unsigned                     preamble_index,
-                                            std::optional<phy_time_unit> timing_advance_offset,
-                                            std::optional<float>         preamble_power,
-                                            std::optional<float>         preamble_snr)
+  /// message body, and this function expect these units.
+  rach_indication_pdu_builder& add_preamble(unsigned                       preamble_index,
+                                            std::optional<phy_time_unit>   timing_advance_offset,
+                                            std::optional<fapi_power_unit> preamble_power,
+                                            std::optional<float>           preamble_snr_dB)
 
   {
     auto& preamble = pdu.preambles.emplace_back();
 
-    preamble.preamble_index = preamble_index;
-
+    preamble.preamble_index        = preamble_index;
     preamble.timing_advance_offset = timing_advance_offset;
-
-    preamble.preamble_pwr = (preamble_power) ? static_cast<uint32_t>((preamble_power.value() + 140.F) * 1000.F)
-                                             : std::numeric_limits<uint32_t>::max();
-
-    unsigned snr = (preamble_snr) ? static_cast<unsigned>((preamble_snr.value() + 64.F) * 2.F)
-                                  : std::numeric_limits<uint8_t>::max();
-
-    ocudu_assert(snr <= std::numeric_limits<uint8_t>::max(),
-                 "Preamble SNR ({}) exceeds the maximum ({}).",
-                 snr,
-                 std::numeric_limits<uint8_t>::max());
-
-    preamble.preamble_snr = static_cast<uint8_t>(snr);
+    preamble.preamble_pwr          = preamble_power;
+    preamble.preamble_snr_dB       = preamble_snr_dB;
 
     return *this;
   }
@@ -115,17 +95,17 @@ public:
   /// \brief Sets a PDU to the \e RACH.indication message and returns a reference to the builder.
   ///
   /// These parameters are specified in SCF-222 v4.0 section 3.4.11 in table RACH.indication message body.
-  rach_indication_pdu_builder set_pdu(uint8_t              symbol_index,
-                                      uint8_t              slot_index,
-                                      uint8_t              ra_index,
-                                      std::optional<float> avg_rssi,
-                                      std::optional<float> avg_snr)
+  rach_indication_pdu_builder set_pdu(uint8_t                        symbol_index,
+                                      uint8_t                        slot_index,
+                                      uint8_t                        ra_index,
+                                      std::optional<fapi_power_unit> avg_rssi,
+                                      std::optional<float>           avg_snr_dB)
   {
     rach_indication_pdu_builder builder(msg.pdu);
 
     builder.set_time_domain_parameters(symbol_index, slot_index)
         .set_frequency_domain_parameters(ra_index)
-        .set_power_parameters(avg_rssi, avg_snr);
+        .set_power_parameters(avg_rssi, avg_snr_dB);
 
     return builder;
   }

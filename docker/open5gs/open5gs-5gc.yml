@@ -8,8 +8,8 @@ logger:
 test:
   serving:
     - plmn_id:
-        mcc: 001
-        mnc: 01
+        mcc: ${MCC}
+        mnc: ${MNC}
 
 global:
   parameter:
@@ -64,14 +64,14 @@ mme:
         - address: 127.0.0.4
   gummei:
     - plmn_id:
-        mcc: 001
-        mnc: 01
+        mcc: ${MCC}
+        mnc: ${MNC}
       mme_gid: 2
       mme_code: 1
   tai:
     - plmn_id:
-        mcc: 001
-        mnc: 01
+        mcc: ${MCC}
+        mnc: ${MNC}
       tac: 7
   security:
     integrity_order: [EIA2, EIA1, EIA0]
@@ -161,20 +161,29 @@ amf:
       - address: ${OPEN5GS_IP}
   guami:
     - plmn_id:
-        mcc: 001
-        mnc: 01
+        mcc: ${MCC}
+        mnc: ${MNC}
       amf_id:
         region: 2
         set: 1
   tai:
     - plmn_id:
-        mcc: 001
-        mnc: 01
+        mcc: ${MCC}
+        mnc: ${MNC}
       tac: 7
+    # TACs 8 and 9 are served only for the multi-TAC NTN example; every other example registers with TAC 7.
+    - plmn_id:
+        mcc: ${MCC}
+        mnc: ${MNC}
+      tac: 8
+    - plmn_id:
+        mcc: ${MCC}
+        mnc: ${MNC}
+      tac: 9
   plmn_support:
     - plmn_id:
-        mcc: 001
-        mnc: 01
+        mcc: ${MCC}
+        mnc: ${MNC}
       s_nssai:
         - sst: 1
   security:

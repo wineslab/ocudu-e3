@@ -9,7 +9,7 @@
 #include "ocudu/f1ap/du/f1c_bearer.h"
 #include "ocudu/f1ap/f1ap_message_notifier.h"
 #include "ocudu/support/async/protocol_transaction_manager.h"
-#include "ocudu/support/memory_pool/unsync_fixed_size_memory_block_pool.h"
+#include "ocudu/support/memory_pool/free_list_memory_pool.h"
 #include <deque>
 
 namespace ocudu {
@@ -104,7 +104,7 @@ private:
       observer.subscribe_to(source, time_to_wait);
     }
   };
-  using event_ptr = unsync_fixed_size_object_pool<event_context>::ptr;
+  using event_ptr = free_list_object_pool<event_context>::ptr;
 
   async_task<bool> handle_pdu_and_await(byte_buffer               pdu,
                                         bool                      tx_or_delivery,
@@ -135,9 +135,9 @@ private:
 
   // Pool of events for PDU transmission and delivery. Each entry is represented by the PDCP SN (negative if
   // the pool element is negative) and the event flag to wait for.
-  unsync_fixed_size_object_pool<event_context> event_pool;
-  std::vector<event_ptr>                       pending_deliveries;
-  std::vector<event_ptr>                       pending_transmissions;
+  free_list_object_pool<event_context> event_pool;
+  std::vector<event_ptr>               pending_deliveries;
+  std::vector<event_ptr>               pending_transmissions;
 };
 
 } // namespace odu

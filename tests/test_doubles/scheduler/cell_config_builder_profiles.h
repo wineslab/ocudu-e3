@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include "ocudu/ran/bs_channel_bandwidth.h"
 #include "ocudu/ran/duplex_mode.h"
+#include "ocudu/ran/nr_band.h"
 #include "ocudu/scheduler/config/cell_config_builder_params.h"
 
 namespace ocudu {
+
 namespace cell_config_builder_profiles {
 
 /// Create basic cell build parameters with given duplex mode, frequency range and bandwidth.
@@ -25,7 +28,8 @@ enum class tdd_pattern_profile_fr1_30khz {
   DDDSUDDSUU, ///< FR1.30-3.
   DDDSUUDDDD, ///< FR1.30-4.
   DSUU,       ///< FR1.30-5.
-  DSSU        ///< FR1.30-6.
+  DSSU,       ///< FR1.30-6.
+  DDDDDDSUUU  ///< custom.
 };
 
 /// List of TDD UL-DL configurations for FR2, SCS 60kHz, specified in TS 38.101-4, Table A.1.3-1.

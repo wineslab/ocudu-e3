@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ofh_uplane_rx_symbol_data_flow_notifier.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ofh/ofh_uplane_rx_symbol_notifier.h"
 
 using namespace ocudu;

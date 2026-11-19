@@ -4,7 +4,8 @@
 
 #include "inter_cu_handover_execution_target_routine.h"
 #include "../pdu_session_routine_helpers.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/security/security.h"
 #include "ocudu/support/async/coroutine.h"
 #include "ocudu/support/async/when_all.h"
@@ -74,16 +75,23 @@ void inter_cu_handover_execution_target_routine::operator()(coro_context<async_t
 
   if (!is_xn_handover()) {
     // Send handover notify from here. Use UE selected PLMN in the NR-CGI in case of MOCN.
-    ngap.get_ngap_control_message_handler().handle_inter_cu_ho_rrc_recfg_complete(
-        ue->get_ue_index(),
-        {ue->get_ue_context().plmn, ue->get_rrc_ue()->get_cell_context().cgi.nci},
-        ue->get_rrc_ue()->get_cell_context().tac);
+    // Note: get_cell_context() returns by value, so keep a copy rather than a reference into a temporary.
+    const rrc_cell_context      target_cell = ue->get_rrc_ue()->get_cell_context();
+    cu_cp_user_location_info_nr user_location_info;
+    user_location_info.nr_cgi   = {ue->get_ue_context().plmn, target_cell.cgi.nci};
+    user_location_info.tai      = {ue->get_ue_context().plmn, target_cell.tac};
+    user_location_info.tac_list = target_cell.tac_list;
+    ue->get_rrc_ue()->fill_ue_derived_location(user_location_info);
+
+    ngap.get_ngap_control_message_handler().handle_inter_cu_ho_rrc_recfg_complete(ue->get_ue_index(),
+                                                                                  user_location_info);
   } else {
     // Prepare Path Switch Request.
     path_switch_request = fill_path_switch_request(xnap_ho_target_execution_ctxt.value(),
                                                    ue->get_rrc_ue()->get_cell_context(),
                                                    ue->get_ue_context().plmn,
                                                    ue->get_security_manager().get_security_context());
+    ue->get_rrc_ue()->fill_ue_derived_location(path_switch_request.user_location_info);
 
     // Send Path Switch Request from here.
     CORO_AWAIT_VALUE(path_switch_response,
@@ -148,7 +156,7 @@ std::vector<async_task<bool>> inter_cu_handover_execution_target_routine::build_
   } else {
     pending_events.push_back(launch_async([this](coro_context<async_task<bool>>& task_ctx) {
       CORO_BEGIN(task_ctx);
-      // Await SN Status Transfer from source XN-C.
+      // Await SN Status Transfer from source Xn-C.
       CORO_AWAIT_VALUE(sn_status, xnap->handle_sn_status_transfer_expected(ue->get_ue_index()));
       if (!sn_status.has_value()) {
         CORO_EARLY_RETURN(false);
@@ -180,8 +188,29 @@ void inter_cu_handover_execution_target_routine::fill_e1ap_bearer_context_modifi
   slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_res_to_modify_item>& pdu_sessions =
       ng_request->pdu_session_res_to_modify_list;
   for (const cu_cp_drbs_subject_to_status_transfer_item& ngap_drb : sn_status->drbs_subject_to_status_transfer_list) {
+    // TS 38.423 Section 8.2.2.1 (Xn SN Status Transfer) / TS 38.413 Sections 8.4.6-8.4.7 (NGAP Uplink/Downlink RAN
+    // Status Transfer): the list reflects the source's DRB configuration and is not guaranteed to be a subset of
+    // the DRBs admitted at this target. DRB IDs are allocated independently by each RAN node (TS 38.300 Section
+    // 9.2.3.2.3). A numeric ID match is therefore only trustworthy when admission actually confirmed it against the
+    // source's own DRB-to-QoS-flow mapping (see up_old_drb_association); an unconfirmed match must not be trusted, even
+    // if the ID happens to exist here.
+    if (!ue->get_up_resource_manager().has_drb(ngap_drb.drb_id)) {
+      logger.warning("ue={}: Ignoring {} Status Transfer for {}. Cause: DRB not admitted at this target",
+                     ue->get_ue_index(),
+                     is_xn_handover() ? "SN" : "DL RAN",
+                     ngap_drb.drb_id);
+      continue;
+    }
     const up_drb_context& drb_ctx = ue->get_up_resource_manager().get_drb_context(ngap_drb.drb_id);
-    pdu_session_id_t      psi     = drb_ctx.pdu_session_id;
+    if (!drb_ctx.source_drb_id_confirmed) {
+      logger.warning("ue={}: Ignoring {} Status Transfer for {}. Cause: DRB ID at this target was not confirmed to "
+                     "match the source's bearer",
+                     ue->get_ue_index(),
+                     is_xn_handover() ? "SN" : "DL RAN",
+                     ngap_drb.drb_id);
+      continue;
+    }
+    pdu_session_id_t psi = drb_ctx.pdu_session_id;
 
     if (not pdu_sessions.contains(psi)) {
       e1ap_pdu_session_res_to_modify_item ps_item;
@@ -230,8 +259,9 @@ cu_cp_path_switch_request inter_cu_handover_execution_target_routine::fill_path_
   path_switch_req.ue_index              = target_execution_ctxt.ue_index;
   path_switch_req.source_amf_ue_ngap_id = target_execution_ctxt.amf_ue_id;
 
-  path_switch_req.user_location_info.nr_cgi = {selected_plmn, cell_context.cgi.nci};
-  path_switch_req.user_location_info.tai    = {selected_plmn, cell_context.tac};
+  path_switch_req.user_location_info.nr_cgi   = {selected_plmn, cell_context.cgi.nci};
+  path_switch_req.user_location_info.tai      = {selected_plmn, cell_context.tac};
+  path_switch_req.user_location_info.tac_list = cell_context.tac_list;
 
   path_switch_req.supported_enc_algos = security_context.supported_enc_algos;
   path_switch_req.supported_int_algos = security_context.supported_int_algos;

@@ -9,6 +9,7 @@
 #include "ocudu/ran/nr_band.h"
 #include "ocudu/ran/pdcch/coreset.h"
 #include "ocudu/ran/slot_point.h"
+#include "ocudu/ran/subcarrier_spacing.h"
 #include "ocudu/scheduler/sched_consts.h"
 #include <variant>
 
@@ -17,6 +18,11 @@ namespace ocudu {
 /// \remark See TS 38.331, "SearchSpaceId" - The number of Search Spaces per BWP is limited to 10 including the common
 /// and UE specific Search Spaces.
 constexpr size_t MAX_NOF_SEARCH_SPACE_PER_BWP = 10;
+
+/// \brief [Implementation defined] Number of SSB candidates that SearchSpace#0 holds monitoring occasions for.
+/// TODO: support the 64 SSB candidates of FR2. Sizing the per-candidate lists for FR2 would grow every
+/// UE-dedicated SearchSpace, which uses their first element only, so SearchSpace#0 needs its own storage first.
+constexpr size_t MAX_NOF_SS0_SSB_CANDIDATES = 8;
 
 /// \brief Search Space identifier. This value is UE-specific, which means that a UE can have up to
 /// "maxNrofSearchSpaces=40" Search Spaces configured. The ID space is used across BWPs of a serving cell.
@@ -166,14 +172,14 @@ struct search_space_configuration {
   void set_non_ss0_monitoring_slot_offset(unsigned slot_offset, subcarrier_spacing scs_common);
 
   /// \brief Returns the SearchSpace slot offset.
-  unsigned get_monitoring_slot_offset(uint8_t ssb_beam_idx = 0) const
+  unsigned get_monitoring_slot_offset(uint8_t ssb_idx = 0) const
   {
     if (is_search_space0()) {
-      ocudu_assert(ssb_beam_idx < monitoring_slot_offset.size(), "Invalid SSB beam index={}", ssb_beam_idx);
-      return monitoring_slot_offset[ssb_beam_idx].to_uint();
+      ocudu_assert(ssb_idx < monitoring_slot_offset.size(), "Invalid SSB index={}", ssb_idx);
+      return monitoring_slot_offset[ssb_idx].count();
     }
-    ocudu_assert(ssb_beam_idx == 0, "SSB beam index is not used for SearchSpace Id > 0");
-    return monitoring_slot_offset.back().to_uint();
+    ocudu_assert(ssb_idx == 0, "SSB index is not used for SearchSpace Id > 0");
+    return monitoring_slot_offset.back().count();
   }
 
   /// \brief Sets the duration in number of slots for non-SearchSpace#0 SearchSpaces.
@@ -191,29 +197,29 @@ struct search_space_configuration {
   void set_non_ss0_monitoring_symbols_within_slot(monitoring_symbols_within_slot_t symbols_within_slot);
 
   /// \brief Returns the PDCCH monitoring symbols within slot.
-  const monitoring_symbols_within_slot_t& get_monitoring_symbols_within_slot(uint8_t ssb_beam_idx = 0) const
+  const monitoring_symbols_within_slot_t& get_monitoring_symbols_within_slot(uint8_t ssb_idx = 0) const
   {
     if (is_search_space0()) {
       // TODO: Revise this when FR2 support is added.
       // As per TS 38.213, Table 13-11.
-      ocudu_assert(ssb_beam_idx < monitoring_symbols_within_slot.size(), "Invalid SSB beam index={}", ssb_beam_idx);
-      return monitoring_symbols_within_slot[ssb_beam_idx];
+      ocudu_assert(ssb_idx < monitoring_symbols_within_slot.size(), "Invalid SSB index={}", ssb_idx);
+      return monitoring_symbols_within_slot[ssb_idx];
     }
-    ocudu_assert(ssb_beam_idx == 0, "SSB beam index is not used for SearchSpace Id > 0");
+    ocudu_assert(ssb_idx == 0, "SSB index is not used for SearchSpace Id > 0");
     return monitoring_symbols_within_slot.back();
   }
 
   /// \brief Returns the first monitoring symbol for the current SearchSpace.
-  unsigned get_first_symbol_index(uint8_t ssb_beam_idx = 0) const
+  unsigned get_first_symbol_index(uint8_t ssb_idx = 0) const
   {
     monitoring_symbols_within_slot_t symbols_within_slot;
     if (is_search_space0()) {
       // TODO: Revise this when FR2 support is added.
       // As per TS 38.213, Table 13-11.
-      ocudu_assert(ssb_beam_idx < monitoring_symbols_within_slot.size(), "Invalid SSB beam index={}", ssb_beam_idx);
-      symbols_within_slot = monitoring_symbols_within_slot[ssb_beam_idx];
+      ocudu_assert(ssb_idx < monitoring_symbols_within_slot.size(), "Invalid SSB index={}", ssb_idx);
+      symbols_within_slot = monitoring_symbols_within_slot[ssb_idx];
     } else {
-      ocudu_assert(ssb_beam_idx == 0, "SSB beam index is not used for SearchSpace Id > 0");
+      ocudu_assert(ssb_idx == 0, "SSB index is not used for SearchSpace Id > 0");
       symbols_within_slot = monitoring_symbols_within_slot.back();
     }
     for (unsigned n = 0; n < symbols_within_slot.size(); ++n) {
@@ -250,12 +256,12 @@ private:
   /// beam of index equal to index in vector.
   /// For SearchSpace != 0, only the first element of the vector is used. Possible values:
   /// {0,...,monitoring_slot_period}.
-  static_vector<slot_point, MAX_NUM_BEAMS> monitoring_slot_offset;
+  static_vector<slot_point, MAX_NOF_SS0_SSB_CANDIDATES> monitoring_slot_offset;
   /// The first symbol(s) for PDCCH monitoring occasion(s) in the slots for PDCCH monitoring. The most
   /// significant bit represents the first OFDM in a slot.
   /// For SearchSpace == 0, each element in vector corresponds to a SSB beam of index equal to index in vector.
   /// For SearchSpace != 0, only the first element of the vector is used.
-  static_vector<monitoring_symbols_within_slot_t, MAX_NUM_BEAMS> monitoring_symbols_within_slot;
+  static_vector<monitoring_symbols_within_slot_t, MAX_NOF_SS0_SSB_CANDIDATES> monitoring_symbols_within_slot;
   /// SearchSpace#0 index of Table 13-{11, ..., 15}, TS 38.213.
   search_space0_index ss0_index = 0;
 };

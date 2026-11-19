@@ -48,6 +48,7 @@ async_task<void> mac_ul_dummy_configurer::remove_ue(const mac_ue_delete_request&
 
 async_task<void> mac_cell_dummy_controller::start()
 {
+  ++nof_starts;
   return launch_async([](coro_context<async_task<void>>& ctx) {
     CORO_BEGIN(ctx);
     CORO_RETURN();

@@ -4,6 +4,7 @@
 
 #include "ocudu/du/du_low/du_low_factory.h"
 #include "du_low_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_low/du_low_config.h"
 #include "ocudu/support/error_handling.h"
 

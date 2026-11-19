@@ -6,6 +6,7 @@
 #include "lib/f1ap/du/ue_context/f1c_du_bearer_impl.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include <gtest/gtest.h>
 

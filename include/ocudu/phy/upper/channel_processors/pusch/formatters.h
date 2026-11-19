@@ -8,7 +8,6 @@
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_processor.h"
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_processor_result_notifier.h"
 #include "ocudu/phy/upper/channel_state_information_formatters.h"
-#include "ocudu/ran/pusch/pusch_context_formatter.h"
 #include "ocudu/ran/uci/uci_formatters.h"
 #include <fmt/std.h>
 
@@ -52,6 +51,7 @@ struct formatter<ocudu::pusch_processor::codeword_description> {
     helper.format_always(ctx, "rv={}", codeword.rv);
     helper.format_if_verbose(ctx, "bg={}", fmt::underlying(codeword.ldpc_base_graph));
     helper.format_if_verbose(ctx, "new_data={}", codeword.new_data);
+    helper.format_if_verbose(ctx, "last_repetition={}", codeword.last_repetition);
 
     return ctx.out();
   }
@@ -111,10 +111,11 @@ struct formatter<ocudu::pusch_processor::pdu_t> {
   template <typename FormatContext>
   auto format(const ocudu::pusch_processor::pdu_t& pdu, FormatContext& ctx) const
   {
-    if (pdu.context.has_value()) {
-      helper.format_always(ctx, *pdu.context);
-    } else {
-      helper.format_always(ctx, "rnti=0x{:04x}", pdu.rnti);
+    helper.format_always(ctx, "rnti={}", pdu.rnti);
+    helper.format_always(ctx, "harq_id={}", underlying(pdu.harq_id));
+    if (pdu.slot_offset != 0) {
+      helper.format_always(ctx, "ue_ul_slot={}", pdu.slot - pdu.slot_offset);
+      helper.format_if_verbose(ctx, "slot_offset={}", pdu.slot_offset);
     }
     helper.format_if_verbose(ctx, "bwp=[{}, {})", pdu.bwp_start_rb, pdu.bwp_start_rb + pdu.bwp_size_rb);
     helper.format_always(ctx, "prb={}", pdu.freq_alloc);
@@ -230,21 +231,24 @@ struct formatter<ocudu::pusch_processor_result_control> {
       if (result.harq_ack.status == ocudu::uci_status::valid) {
         helper.format_always(ctx, "ack={:br}", result.harq_ack.payload);
       } else {
-        helper.format_always(ctx, "ack={:#}", ocudu::detail::uci_bad_payload(result.harq_ack.payload.size()).get());
+        helper.format_always(
+            ctx, "ack={}", fmt::join(ocudu::detail::uci_bad_payload(result.harq_ack.payload.size()).get(), ""));
       }
     }
     if ((!result.csi_part1.payload.empty())) {
       if (result.csi_part1.status == ocudu::uci_status::valid) {
         helper.format_always(ctx, "csi1={:br}", result.csi_part1.payload);
       } else {
-        helper.format_always(ctx, "csi1={:#}", ocudu::detail::uci_bad_payload(result.csi_part1.payload.size()).get());
+        helper.format_always(
+            ctx, "csi1={}", fmt::join(ocudu::detail::uci_bad_payload(result.csi_part1.payload.size()).get(), ""));
       }
     }
     if ((!result.csi_part2.payload.empty())) {
       if (result.csi_part2.status == ocudu::uci_status::valid) {
         helper.format_always(ctx, "csi2={:br}", result.csi_part2.payload);
       } else {
-        helper.format_always(ctx, "csi2={:#}", ocudu::detail::uci_bad_payload(result.csi_part2.payload.size()).get());
+        helper.format_always(
+            ctx, "csi2={}", fmt::join(ocudu::detail::uci_bad_payload(result.csi_part2.payload.size()).get(), ""));
       }
     }
     return ctx.out();

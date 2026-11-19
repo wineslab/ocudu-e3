@@ -3,12 +3,13 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
 #include "tests/unittests/cu_cp/test_helpers.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/e1ap/common/e1ap_types.h"
 #include "ocudu/f1ap/f1ap_message.h"
@@ -72,7 +73,7 @@ public:
     if (!authenticate_ue(du_idx, du_ue_id, amf_ue_id)) {
       return false;
     }
-    if (!setup_ue_security_and_ue_capabilies(du_idx, du_ue_id)) {
+    if (!setup_ue_security_and_ue_capabilities(du_idx, du_ue_id)) {
       return false;
     }
     ue_ctx = this->find_ue_context(du_idx, du_ue_id);
@@ -373,6 +374,11 @@ TEST_F(cu_cp_ue_context_release_test, when_ue_rrc_setup_fails_then_ue_is_release
   // STATUS: UE should be removed at this stage.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ues.size(), 0) << "UE should be removed";
+
+  // The UE never completed RRC Setup, so it must not have decremented the RRC connection count metrics.
+  ASSERT_EQ(report.dus.size(), 1);
+  ASSERT_EQ(report.dus[0].rrc_metrics.mean_nof_rrc_connections, 0);
+  ASSERT_EQ(report.dus[0].rrc_metrics.max_nof_rrc_connections, 0);
 
   // Wait for DL RRC message transfer. This should fail.
   ASSERT_FALSE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu, std::chrono::milliseconds{1000}));

@@ -41,7 +41,8 @@ up_config_update
 calculate_update(const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_items,
                  const up_context&                                                            context,
                  const up_resource_manager_cfg&                                               cfg,
-                 const ocudulog::basic_logger&                                                logger);
+                 const ocudulog::basic_logger&                                                logger,
+                 const up_old_drb_association&                                                old_drb_association = {});
 up_config_update calculate_update(const ngap_pdu_session_resource_modify_request& pdu,
                                   const up_context&                               context,
                                   const up_resource_manager_cfg&                  cfg,
@@ -51,12 +52,14 @@ up_config_update calculate_update(const ngap_pdu_session_resource_release_comman
                                   const up_resource_manager_cfg&                   cfg,
                                   const ocudulog::basic_logger&                    logger);
 
-// \brief Allocates a new DRB ID and returns it.
+// \brief Allocates a new DRB ID and returns it. If \c preferred_drb_id is set and still free, it is reused instead
+// of probing from DRB1, so that DRB numbering can be preserved across handover where possible.
 drb_id_t allocate_drb_id(const up_pdu_session_context_update& new_session_context,
                          const up_context&                    context,
                          const up_config_update&              config_update,
                          uint8_t                              max_nof_drbs_per_ue,
-                         const ocudulog::basic_logger&        logger);
+                         const ocudulog::basic_logger&        logger,
+                         std::optional<drb_id_t>              preferred_drb_id = std::nullopt);
 
 // \brief Returns valid RRC PDCP config for a given FiveQI
 pdcp_config   set_rrc_pdcp_config(five_qi_t                           five_qi,

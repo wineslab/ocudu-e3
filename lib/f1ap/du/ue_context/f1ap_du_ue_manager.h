@@ -30,7 +30,7 @@ public:
   f1ap_du_ue& add_ue(du_ue_index_t ue_index)
   {
     ocudu_sanity_check(f1ap_msg_notifier != nullptr, "Creating a UE before a connection to the CU-CP is established");
-    ocudu_assert(not ues.contains(ue_index), "Duplicate ueId={} detected", fmt::underlying(ue_index));
+    ocudu_assert(not ues.contains(ue_index), "Duplicate ueId={} detected", ue_index);
 
     const auto f1ap_id = static_cast<gnb_du_ue_f1ap_id_t>(next_gnb_f1ap_du_ue_id++);
     ues.emplace(ue_index,

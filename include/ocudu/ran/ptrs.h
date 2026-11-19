@@ -6,6 +6,7 @@
 
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ran/ssb/ssb_configuration.h"
+#include <optional>
 
 namespace ocudu {
 

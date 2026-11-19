@@ -214,7 +214,8 @@ class lower_phy_downlink_processor_spy : public lower_phy_downlink_processor
 {
 public:
   lower_phy_downlink_processor_spy(downlink_processor_configuration config_) :
-    config(config_), downlink_proc_baseband_spy(config.scs, config.cp, config.rate, config.nof_tx_ports)
+    config(config_),
+    downlink_proc_baseband_spy(config.scs, config.cp, config.rate, get_total_nof_ports(config.tx_ant_topology))
   {
   }
 

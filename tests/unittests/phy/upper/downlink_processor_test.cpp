@@ -11,6 +11,8 @@
 #include "signal_processors/nzp_csi_rs/nzp_csi_rs_generator_test_doubles.h"
 #include "signal_processors/prs/prs_generator_test_doubles.h"
 #include "upper_phy_rg_gateway_test_doubles.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/precoding/precoding_codebooks.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include "gtest/gtest.h"
@@ -75,7 +77,7 @@ TEST(downlinkProcessorTest, worksInOrder)
   dl_processor->process_ssb({});
 
   pdcch_processor::pdu_t pdu;
-  pdu.dci.precoding = precoding_configuration::make_wideband(make_single_port());
+  pdu.dci.precoding_and_beamforming = precoding_beamforming_configuration::make_wideband(make_single_port());
   dl_processor->process_pdcch(pdu);
 
   std::vector<uint8_t> pdsch_data = {1, 2, 3, 4};
@@ -140,7 +142,7 @@ TEST(downlinkProcessorTest, finishIsCalledBeforeProcessingPdus)
 
   dl_processor->process_ssb({});
   pdcch_processor::pdu_t pdu;
-  pdu.dci.precoding = precoding_configuration::make_wideband(make_single_port());
+  pdu.dci.precoding_and_beamforming = precoding_beamforming_configuration::make_wideband(make_single_port());
   dl_processor->process_pdcch(pdu);
   std::vector<uint8_t> data = {1, 2, 3, 4};
   dl_processor->process_pdsch({shared_transport_block(data)}, {});
@@ -198,7 +200,7 @@ TEST(downlinkProcessorTest, twoConsecutiveSlots)
 
   dl_processor->process_ssb({});
   pdcch_processor::pdu_t pdu;
-  pdu.dci.precoding = precoding_configuration::make_wideband(make_single_port());
+  pdu.dci.precoding_and_beamforming = precoding_beamforming_configuration::make_wideband(make_single_port());
   dl_processor->process_pdcch(pdu);
   std::vector<uint8_t> data = {1, 2, 3, 4};
   dl_processor->process_pdsch({shared_transport_block(data)}, {});

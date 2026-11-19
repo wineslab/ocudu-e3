@@ -2,17 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-
 add_library(sched_support STATIC
         pdcch/pdcch_type0_helpers.cpp
         pdsch/pdsch_default_time_allocation.cpp
-        pdsch/pdsch_dmrs_symbol_mask.cpp
         pdsch/pdsch_config_params.cpp
         pucch/pucch_collision.cpp
-        pucch/pucch_default_resource.cpp
-        pucch/pucch_guardbands.cpp
         pusch/pusch_default_time_allocation.cpp
-        pusch/pusch_dmrs_symbol_mask.cpp
         paging_helpers.cpp
         mcs_tbs_calculator.cpp
         prbs_calculator.cpp
@@ -23,5 +18,5 @@ add_library(sched_support STATIC
         sch_pdu_builder.cpp
         csi_report_helpers.cpp
         pusch_power_controller.cpp
-        pucch_power_controller.cpp
-        pucch/pucch_k1_helper.cpp)
+        pucch_power_controller.cpp)
+target_link_libraries(sched_support ocudu_ran)

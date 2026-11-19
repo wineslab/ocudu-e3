@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/ran/csi_rs/csi_rs_types.h"
+#include "ocudu/ran/precoding/precoding_and_beamforming_info.h"
 #include "ocudu/scheduler/config/bwp_configuration.h"
 
 namespace ocudu {
@@ -34,6 +35,9 @@ struct csi_rs_info {
   int8_t power_ctrl_offset;
   /// Ratio of NZP CSI-RS EPRE to SSB/PBCH block EPRE. Values: {-3,0,3,6}.
   int8_t power_ctrl_offset_ss;
+  /// \brief Precoding and beamforming of this CSI-RS.
+  /// \remark Nothing is transmitted in a ZP CSI-RS, which therefore ignores this field.
+  precoding_and_beamforming_info precoding_and_beamforming;
 };
 
 } // namespace ocudu

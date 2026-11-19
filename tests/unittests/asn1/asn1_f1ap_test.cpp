@@ -330,3 +330,60 @@ TEST_F(asn1_f1ap_test, when_initial_ul_rrc_message_transfer_packing_correct_then
   ASSERT_EQ(tx_buffer.length(), sizeof(rx_msg));
   ASSERT_EQ(rx_pdu, tx_buffer);
 }
+
+TEST_F(asn1_f1ap_test, when_e_cid_measurement_initiation_request_correct_then_packing_successful)
+{
+  asn1::f1ap::f1ap_pdu_c pdu;
+
+  pdu.set_init_msg();
+  pdu.init_msg().load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_INITIATION);
+
+  auto& req                                = pdu.init_msg().value.e_c_id_meas_initiation_request();
+  req->gnb_cu_ue_f1ap_id                   = 1;
+  req->gnb_du_ue_f1ap_id                   = 2;
+  req->lmf_ue_meas_id                      = 3;
+  req->ran_ue_meas_id                      = 4;
+  req->e_c_id_report_characteristics.value = asn1::f1ap::e_c_id_report_characteristics_opts::periodic;
+
+  asn1::protocol_ie_single_container_s<asn1::f1ap::e_c_id_meas_quantities_item_ies_o> quantity;
+  quantity.load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_QUANTITIES_ITEM);
+  quantity->e_c_id_meas_quantities_item().e_c_id_meas_quantities_value.value =
+      asn1::f1ap::e_c_id_meas_quantities_value_opts::angle_of_arrival_nr;
+  req->e_c_id_meas_quantities.push_back(quantity);
+
+  // NR Angle of Arrival carries its own periodicity, as per TS 38.473, Section 9.2.12.20.
+  req->pos_meas_periodicity_nr_ao_a_present = true;
+  req->pos_meas_periodicity_nr_ao_a.value   = asn1::f1ap::pos_meas_periodicity_nr_ao_a_opts::ms1280;
+
+  ocudu::byte_buffer buffer;
+  asn1::bit_ref      bref(buffer);
+  ASSERT_EQ(pdu.pack(bref), OCUDUASN_SUCCESS);
+  ASSERT_EQ(test_pack_unpack_consistency(pdu), OCUDUASN_SUCCESS);
+}
+
+TEST_F(asn1_f1ap_test, when_e_cid_measurement_initiation_response_with_ul_aoa_correct_then_packing_successful)
+{
+  asn1::f1ap::f1ap_pdu_c pdu;
+
+  pdu.set_successful_outcome();
+  pdu.successful_outcome().load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_INITIATION);
+
+  auto& resp              = pdu.successful_outcome().value.e_c_id_meas_initiation_resp();
+  resp->gnb_cu_ue_f1ap_id = 1;
+  resp->gnb_du_ue_f1ap_id = 2;
+  resp->lmf_ue_meas_id    = 3;
+  resp->ran_ue_meas_id    = 4;
+
+  resp->e_c_id_meas_result_present = true;
+  asn1::f1ap::e_c_id_measured_results_item_s item;
+  auto&                                      aoa = item.e_c_id_measured_results_value.set_value_angleof_arrival_nr();
+  aoa.azimuth_ao_a                               = 1800;
+  aoa.zenith_ao_a_present                        = true;
+  aoa.zenith_ao_a                                = 567;
+  resp->e_c_id_meas_result.measured_results_list.push_back(item);
+
+  ocudu::byte_buffer buffer;
+  asn1::bit_ref      bref(buffer);
+  ASSERT_EQ(pdu.pack(bref), OCUDUASN_SUCCESS);
+  ASSERT_EQ(test_pack_unpack_consistency(pdu), OCUDUASN_SUCCESS);
+}

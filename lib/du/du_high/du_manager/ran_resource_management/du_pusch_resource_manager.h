@@ -5,10 +5,10 @@
 #pragma once
 
 #include "du_ue_resource_config.h"
-#include "ue_capability_summary.h"
 #include "ocudu/du/du_cell_config.h"
 #include "ocudu/du/du_high/du_test_mode_config.h"
 #include "ocudu/ran/harq_id.h"
+#include "ocudu/scheduler/rrm/ue_capability_summary.h"
 #include <optional>
 
 namespace ocudu {
@@ -44,6 +44,8 @@ private:
                                       const std::optional<ue_capability_summary>& ue_caps) const;
   harq_ul_mode_mask select_harq_mode(du_cell_index_t                             cell_idx,
                                      const std::optional<ue_capability_summary>& ue_caps) const;
+  std::vector<pusch_time_domain_resource_allocation>
+  select_td_alloc_list(du_cell_index_t cell_idx, const std::optional<ue_capability_summary>& ue_caps) const;
 
   span<const du_cell_config> cell_cfg_list;
   const du_test_mode_config& test_cfg;

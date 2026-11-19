@@ -29,6 +29,15 @@ public:
   /// \param[in]  ssb_info SSB scheduling results.
   void assemble_ssb(dl_ssb_pdu& ssb_pdu, const ssb_information& ssb_info);
 
+  /// Update the MIB cellBarred flag at runtime. Invoked on the cell executor (the caller hops there), the
+  /// same executor that reads it in assemble_ssb(), so no atomicity is needed. Takes effect on the next SSB.
+  void set_cell_barred(bool value) { cell_barred = value; }
+
+  /// Update the MIB intraFreqReselection flag at runtime. Invoked on the cell executor (the caller hops
+  /// there), the same executor that reads it in assemble_ssb(), so no atomicity is needed. Takes effect on
+  /// the next SSB.
+  void set_intra_freq_reselection(bool value) { intra_freq_reselection = value; }
+
 private:
   /// Cell PCI.
   pci_t pci;
@@ -36,8 +45,11 @@ private:
   const ssb_configuration ssb_cfg;
   uint8_t                 pdcch_config_sib1;
   dmrs_typeA_position     dmrs_typeA_pos;
-  bool                    cell_barred;
-  bool                    intra_freq_reselection;
+  /// MIB cellBarred. Read in assemble_ssb() and written via set_cell_barred(), both on the cell executor.
+  bool cell_barred;
+  /// MIB intraFreqReselection. Read in assemble_ssb() and written via set_intra_freq_reselection(), both on
+  /// the cell executor.
+  bool intra_freq_reselection;
 
   /// Other derived SSB parameters.
   ssb_pattern_case ssb_case;

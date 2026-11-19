@@ -5,7 +5,6 @@
 #pragma once
 
 #include "pdxch_processor_modulator_notifier.h"
-#include "ocudu/adt/scope_exit.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_dynamic.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_reader_view.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_writer_view.h"
@@ -19,13 +18,11 @@
 #include "ocudu/phy/lower/amplitude_controller/amplitude_controller.h"
 #include "ocudu/phy/lower/lower_phy_baseband_metrics.h"
 #include "ocudu/phy/lower/modulation/ofdm_modulator.h"
-#include "ocudu/phy/lower/processors/downlink/pdxch/pdxch_processor.h"
 #include "ocudu/phy/lower/processors/downlink/pdxch/pdxch_processor_baseband.h"
-#include "ocudu/phy/lower/processors/downlink/pdxch/pdxch_processor_notifier.h"
-#include "ocudu/phy/lower/processors/downlink/pdxch/pdxch_processor_request_handler.h"
-#include "ocudu/phy/lower/processors/lower_phy_center_freq_controller.h"
 #include "ocudu/phy/lower/sampling_rate.h"
+#include "ocudu/phy/support/resource_grid_reader.h"
 #include "ocudu/phy/support/shared_resource_grid.h"
+#include "ocudu/ran/beamforming/beam_weights_codebook.h"
 #include "ocudu/support/executors/task_executor.h"
 #include "ocudu/support/math/stats.h"
 #include "ocudu/support/memory_pool/bounded_object_pool.h"
@@ -44,21 +41,33 @@ namespace ocudu {
 class pdxch_baseband_modulator
 {
 public:
-  /// Creates a physical downlink channel modulator from all the required parameters.
+  /// \brief Creates a physical downlink channel modulator from all the required parameters.
+  ///
+  /// \param[in] scs                    Subcarrier spacing.
+  /// \param[in] cp                     Cyclic prefix.
+  /// \param[in] srate                  Sampling rate.
+  /// \param[in] executor_              Task executor for processing baseband modulation.
+  /// \param[in] modulator_             OFDM Modulator, called from the executor - it must be thread safe.
+  /// \param[in] amplitude_control_     Amplitude controller, called from the executor - it must be thread safe.
+  /// \param[in] beamforming_codebook_  Beamfoming coefficient codebook. It determines the number of antenna ports and
+  ///                                   beams.
+  /// \param[in] notifier_              Reference to the interface for notifying the completion of the processing.
   pdxch_baseband_modulator(subcarrier_spacing                  scs,
                            cyclic_prefix                       cp,
                            sampling_rate                       srate,
-                           unsigned                            nof_ports_,
                            task_executor&                      executor_,
                            ofdm_symbol_modulator&              modulator_,
                            amplitude_controller&               amplitude_control_,
+                           const beam_weights_codebook&        beamforming_codebook_,
                            pdxch_processor_modulator_notifier& notifier_) :
     logger(ocudulog::fetch_basic_logger("PHY")),
-    nof_ports(nof_ports_),
+    nof_ports(beamforming_codebook_.get_nof_antennas()),
+    nof_beams(beamforming_codebook_.get_nof_beams()),
     nof_symbols_per_slot(get_nsymb_per_slot(cp)),
     executor(executor_),
     modulator(modulator_),
     amplitude_control(amplitude_control_),
+    beamforming_codebook(beamforming_codebook_),
     notifier(notifier_),
     cf_buffer({srate.to_kHz(), nof_ports})
   {
@@ -96,7 +105,14 @@ public:
   ///
   /// The shared resource grid is temporally hold in the class and released upon the completion of the modulation.
   ///
+  /// \param[in] buffer   Baseband buffer - stores the resultant modulated signal.
+  /// \param[in] grid     Resource grid - source of the frequency domain data.
+  /// \param[in] context  Processing slot context.
   /// \return True if the request is handled successfully, otherwise false.
+  /// \remark An assertion is triggered if the number of ports contained in the buffer differs from the number of
+  ///         antenna ports.
+  /// \remark An assertion is triggered if the number of ports contained in the resource grid is
+  ///         different from the number of beams.
   bool
   handle_request(baseband_gateway_buffer_ptr buffer, const shared_resource_grid& grid, resource_grid_context context)
   {
@@ -107,6 +123,10 @@ public:
 
     // Verify the number of ports match.
     ocudu_assert(buffer->get_nof_channels() == nof_ports, "The buffer number of ports do not match.");
+    ocudu_assert(grid.get_reader().get_nof_ports() == nof_beams,
+                 "The resource grid number of ports (i.e., {}) do not match with the number of beams (i.e., {})",
+                 grid.get_reader().get_nof_ports(),
+                 nof_beams);
 
     // Try transitioning to modulate plus all modulation tasks.
     uint32_t expected_state = state_idle;
@@ -152,8 +172,11 @@ public:
           // Start tracing.
           trace_point tp = ru_tracer.now();
 
+          // Obtain the beamforming coefficients for this antenna port.
+          span<const cf_t> port_weights = beamforming_codebook.get_antenna_coefficients(i_port);
+
           // OFDM modulation.
-          modulator.modulate(cf_buf, current_grid.get_reader(), i_port, i_symbol_sf);
+          modulator.modulate(cf_buf, current_grid.get_reader(), port_weights, i_symbol_sf);
 
           // Apply amplitude control.
           amplitude_control.process(cf_buf, cf_buf);
@@ -165,7 +188,7 @@ public:
                                                      cf_buf.size()};
 
           // Convert complex floating-point buffer to complex integer-based.
-          ocuduvec::convert(ci16_buf, cf_buf, scaling_factor_cf_to_ci16);
+          ocuduvec::convert(ci16_buf, cf_buf, ocuduvec::scaling_factor_cf_to_ci16);
 
           ru_tracer << trace_event("PDxCH modulation", tp);
 
@@ -227,12 +250,16 @@ private:
     current_result.metrics.clipping =
         clipping_counters{.nof_clipped_samples = nof_clipped_samples, .nof_processed_samples = total_processed_samples};
 
-    // Notify completion of the OFDM modulation.
-    notifier.on_modulation_completion(std::move(current_result), current_context);
+    // Move context and result to the stack.
+    resource_grid_context                 this_context = current_context;
+    pdxch_processor_baseband::slot_result this_result  = std::move(current_result);
 
     // Transition modulator state to idle which becomes available for the next use.
     [[maybe_unused]] uint32_t expected_mask = current_state.exchange(state_idle);
     ocudu_assert(expected_mask == state_modulate_mask, "Unexpected state 0x{:08x}.", prev);
+
+    // Notify completion of the OFDM modulation.
+    notifier.on_modulation_completion(std::move(this_result), this_context);
   }
 
   /// State value for when the modulator is not processing any transmisson request.
@@ -246,13 +273,13 @@ private:
       MAX_NSYMB_PER_SLOT * pow2(to_numerology_value(subcarrier_spacing::kHz240));
   /// Maximum number of tasks. Used for keeping record of the metrics per symbol basis.
   static constexpr unsigned max_nof_tasks = MAX_NSYMB_PER_SLOT * MAX_PORTS;
-  /// Scaling factor for converting from complex float to 16-bit complex integer.
-  static constexpr float scaling_factor_cf_to_ci16 = std::numeric_limits<int16_t>::max();
 
-  /// Physical layer logger. Used for logging when the executor cannot defer the modulation task..
+  /// Physical layer logger. Used for logging when the executor cannot defer the modulation task.
   ocudulog::basic_logger& logger;
-  /// Number of ports.
+  /// Number of physical antenna ports.
   unsigned nof_ports;
+  /// Number of beams - it must be equal to the number of the ports contained in the resource grids.
+  unsigned nof_beams;
   /// Number of symbols per slot. Depends on the cyclic prefix.
   unsigned nof_symbols_per_slot;
   /// Look-up table with the OFDM symbol sizes (including the cyclic prefix) of each OFDM symbol within a subframe.
@@ -274,6 +301,10 @@ private:
   ofdm_symbol_modulator& modulator;
   /// Amplitude controller. Its implementation must be thread safe.
   amplitude_controller& amplitude_control;
+  /// \brief Reference to the beamforming codebook.
+  ///
+  /// Provides the beamforming weights for each of the resource grid ports.
+  const beam_weights_codebook& beamforming_codebook;
   /// Notifier containing the completion notification callback.
   pdxch_processor_modulator_notifier& notifier;
   /// Buffer to hold complex floating-point based samples for processing.

@@ -5,6 +5,7 @@
 #include "ocudu/phy/lower/amplitude_controller/amplitude_controller_factories.h"
 #include "amplitude_controller_clipping_impl.h"
 #include "amplitude_controller_scaling_impl.h"
+#include <memory>
 
 using namespace ocudu;
 

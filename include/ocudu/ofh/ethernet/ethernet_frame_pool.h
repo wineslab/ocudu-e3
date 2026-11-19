@@ -15,6 +15,7 @@
 #include "ocudu/ran/frame_types.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/support/units.h"
+#include <atomic>
 #include <mutex>
 
 namespace ocudu {
@@ -203,14 +204,28 @@ public:
 
   /// \brief Enqueues buffers in \c state::pending into the given vector.
   ///
-  /// \param[in] burst_of_frames - a vector in which the pending buffers must be enqueued.
-  void enqueue_pending(static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE>& burst_of_frames)
+  /// The pending buffers reserved for a slot other than the given one are expired: they were written after their slot
+  /// was cleared, so they are freed instead of being enqueued.
+  ///
+  /// \param[out] burst_of_frames    - a vector in which the pending buffers must be enqueued.
+  /// \param[out] nof_expired_frames - incremented by the number of expired buffers freed.
+  /// \param[in]  slot               - slot being transmitted.
+  /// \return true if all pending buffers were enqueued, false if the vector is full and buffers remain pending.
+  bool enqueue_pending(static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE>& burst_of_frames,
+                       unsigned&                                              nof_expired_frames,
+                       slot_point                                             slot)
   {
     unsigned idx;
-    while (pending_list.try_pop(idx)) {
+    while (!burst_of_frames.full() && pending_list.try_pop(idx)) {
       ocudu_sanity_check(idx < entries.size(), "Ethernet frame pool: invalid buffer popped from pending list");
 
       auto& buffer = entries[idx];
+      if (OCUDU_UNLIKELY(buffer->get_slot_symbol().get_slot() != slot)) {
+        // Updating the state of a pending buffer frees it.
+        update_state(buffer);
+        ++nof_expired_frames;
+        continue;
+      }
       // Change the state to 'queued'.
       auto current_state = buffer->state.load(std::memory_order_acquire);
       ocudu_sanity_check(current_state == state::pending, "Invalid state of the buffer popped from pending list");
@@ -219,6 +234,8 @@ public:
       // Add popped buffer into the output vector.
       burst_of_frames.emplace_back(scoped_frame_buffer{&entries[idx], buffer_deleter{this}});
     }
+
+    return !burst_of_frames.full() || pending_list.empty();
   }
 
   /// \brief Enqueues buffers in \c state::pending into the given vector.
@@ -229,7 +246,7 @@ public:
   void pop_pending(static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE>& burst_of_frames)
   {
     unsigned idx;
-    while (pending_list.try_pop(idx)) {
+    while (!burst_of_frames.full() && pending_list.try_pop(idx)) {
       ocudu_sanity_check(idx < entries.size(), "Invalid buffer popped from pending list");
       burst_of_frames.emplace_back(scoped_frame_buffer{&entries[idx], buffer_deleter{this}});
     }
@@ -333,9 +350,9 @@ struct frame_pool_interval {
 class eth_frame_pool
 {
   /// Number of slots the pool can accommodate.
-  static constexpr size_t NUM_SLOTS = 20L;
+  static constexpr size_t NUM_SLOTS = 10;
 
-  /// Maximum number of entries contained by the pool (one entry per OFDM symbol), sized to accommodate 20 slots.
+  /// Maximum number of entries contained by the pool (one entry per OFDM symbol).
   static constexpr size_t NUM_ENTRIES = NOF_OFDM_SYM_PER_SLOT_NORMAL_CP * NUM_SLOTS;
 
   /// Returns pool entry for the given slot and symbol.
@@ -381,30 +398,48 @@ public:
     return p_entry.reserve(symbol_point);
   }
 
-  /// Enqueues buffers pending in the pool allocated for the given slot and symbol.
-  void enqueue_pending_into_burst(ofh::slot_symbol_point                                 symbol_point,
+  /// \brief Enqueues buffers pending in the pool allocated for the given slot and symbol.
+  ///
+  /// \return true if all pending buffers were enqueued, false if the burst is full and buffers may remain pending.
+  bool enqueue_pending_into_burst(ofh::slot_symbol_point                                 symbol_point,
                                   static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE>& burst)
   {
     auto& p_entry = get_pool_entry(symbol_point.get_slot(), symbol_point.get_symbol_index());
-    p_entry.enqueue_pending(burst);
+
+    unsigned nof_expired_frames = 0;
+    bool     all_enqueued       = p_entry.enqueue_pending(burst, nof_expired_frames, symbol_point.get_slot());
+    account_expired_frames(nof_expired_frames);
+    return all_enqueued;
   }
 
-  /// Enqueues buffers pending in the pools allocated for the given interval of symbols.
-  void enqueue_pending_into_burst(const frame_pool_interval&                             interval,
+  /// \brief Enqueues buffers pending in the pools allocated for the given interval of symbols.
+  ///
+  /// \return true if all pending buffers were enqueued, false otherwise. If the given vector fills up, the caller must
+  /// empty the burst and call this method again to enqueue the remaining buffers.
+  bool enqueue_pending_into_burst(const frame_pool_interval&                             interval,
                                   static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE>& burst)
   {
     if (interval.start > interval.end) {
-      return;
+      return true;
     }
 
     // Extra 1 is added to include the end symbol of the interval.
-    unsigned distance = (interval.end - interval.start) + 1;
+    unsigned distance           = (interval.end - interval.start) + 1;
+    unsigned nof_expired_frames = 0;
+
+    bool all_enqueued = true;
     for (unsigned i = 0; i != distance; ++i) {
       ofh::slot_symbol_point tmp_symbol = interval.start + i;
 
       auto& p_entry = get_pool_entry(tmp_symbol.get_slot(), tmp_symbol.get_symbol_index());
-      p_entry.enqueue_pending(burst);
+      if (OCUDU_UNLIKELY(!p_entry.enqueue_pending(burst, nof_expired_frames, tmp_symbol.get_slot()))) {
+        all_enqueued = false;
+        break;
+      }
     }
+    account_expired_frames(nof_expired_frames);
+
+    return all_enqueued;
   }
 
   /// Pops 'pending' buffers from the pool corresponding to the given slot and symbol and checks whether they are
@@ -414,76 +449,99 @@ public:
   {
     unsigned nof_lates = 0;
     {
-      static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE> frame_burst;
-
       auto& entry = get_pool_entry(slot, 0);
-      entry.pop_pending(frame_burst);
 
-      slot_point late_slot = {};
+      // The entry may store more pending buffers than a single 'frame_burst' can accommodate, hence 'pop_pending' is
+      // called repeatedly until the entry is fully cleared.
+      for (bool entry_cleared = false; !entry_cleared;) {
+        static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE> frame_burst;
+        entry.pop_pending(frame_burst);
+        entry_cleared = !frame_burst.full();
 
-      for (auto& scoped_buffer : frame_burst) {
-        if (scoped_buffer->get_slot_symbol().get_slot() != slot) {
-          ++nof_lates;
-          if (!late_slot.valid()) {
-            late_slot = scoped_buffer->get_slot_symbol().get_slot();
+        slot_point late_slot = {};
+
+        for (auto& scoped_buffer : frame_burst) {
+          if (scoped_buffer->get_slot_symbol().get_slot() != slot) {
+            ++nof_lates;
+            if (!late_slot.valid()) {
+              late_slot = scoped_buffer->get_slot_symbol().get_slot();
+            }
+          } else {
+            entry.return_to_pending(*scoped_buffer.get());
           }
-        } else {
-          entry.return_to_pending(*scoped_buffer.get());
         }
-      }
-      if (nof_lates) {
-        logger.info("Sector #{}: Detected {} late {} {} message(s) in the transmitter queue for slot '{}'",
-                    sector,
-                    nof_lates,
-                    pool_frames_data_direction == ofh::data_direction::downlink ? "downlink" : "uplink",
-                    pool_frames_type == ofh::message_type::control_plane ? "C-Plane" : "U-Plane",
-                    late_slot);
+        if (nof_lates) {
+          logger.info("Sector #{}: Detected {} late {} {} message(s) in the transmitter queue for slot '{}'",
+                      sector,
+                      nof_lates,
+                      pool_frames_data_direction == ofh::data_direction::downlink ? "downlink" : "uplink",
+                      pool_frames_type == ofh::message_type::control_plane ? "C-Plane" : "U-Plane",
+                      late_slot);
+        }
       }
     }
 
     // DL C-Plane is only written in the first symbol of a slot.
     if (pool_frames_type == ofh::message_type::control_plane &&
         pool_frames_data_direction == ofh::data_direction::downlink) {
-      return nof_lates;
+      return nof_lates + take_expired_frames();
     }
 
     slot_point late_slot = {};
     for (unsigned symbol = 1; symbol != NOF_OFDM_SYM_PER_SLOT_NORMAL_CP; ++symbol) {
-      static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE> frame_burst;
-
       auto& cup_entry = get_pool_entry(slot, symbol);
-      cup_entry.pop_pending(frame_burst);
 
-      for (auto& scoped_buffer : frame_burst) {
-        if (scoped_buffer->get_slot_symbol().get_slot() != slot) {
-          ++nof_lates;
-          if (!late_slot.valid()) {
-            late_slot = scoped_buffer->get_slot_symbol().get_slot();
+      // The entry may store more pending buffers than a single 'frame_burst' can accommodate, hence 'pop_pending' is
+      // called repeatedly until the entry is fully cleared.
+      for (bool entry_cleared = false; !entry_cleared;) {
+        static_vector<scoped_frame_buffer, MAX_TX_BURST_SIZE> frame_burst;
+        cup_entry.pop_pending(frame_burst);
+        entry_cleared = !frame_burst.full();
+
+        for (auto& scoped_buffer : frame_burst) {
+          if (scoped_buffer->get_slot_symbol().get_slot() != slot) {
+            ++nof_lates;
+            if (!late_slot.valid()) {
+              late_slot = scoped_buffer->get_slot_symbol().get_slot();
+            }
+          } else {
+            cup_entry.return_to_pending(*scoped_buffer.get());
           }
-        } else {
-          cup_entry.return_to_pending(*scoped_buffer.get());
+        }
+        if (nof_lates) {
+          logger.info("Sector #{}: Detected {} late {} {} message(s) in the transmitter queue for slot '{}'",
+                      sector,
+                      nof_lates,
+                      pool_frames_data_direction == ofh::data_direction::downlink ? "downlink" : "uplink",
+                      pool_frames_type == ofh::message_type::control_plane ? "C-Plane" : "U-Plane",
+                      late_slot);
         }
       }
-      if (nof_lates) {
-        logger.info("Sector #{}: Detected {} late {} {} message(s) in the transmitter queue for slot '{}'",
-                    sector,
-                    nof_lates,
-                    pool_frames_data_direction == ofh::data_direction::downlink ? "downlink" : "uplink",
-                    pool_frames_type == ofh::message_type::control_plane ? "C-Plane" : "U-Plane",
-                    late_slot);
-      }
     }
-    return nof_lates;
+    return nof_lates + take_expired_frames();
   }
 
   /// Returns number of slots the pool can accommodate.
   static size_t pool_size_in_slots() { return NUM_SLOTS; }
 
 private:
+  /// Returns the number of frames expired in the transmission path since the last call, which are also late.
+  unsigned take_expired_frames() { return nof_pending_expired_frames.exchange(0, std::memory_order_relaxed); }
+
+  /// Accumulates the given number of expired frames, reported by the next call to \ref clear_slot.
+  void account_expired_frames(unsigned nof_frames)
+  {
+    if (OCUDU_UNLIKELY(nof_frames != 0)) {
+      nof_pending_expired_frames.fetch_add(nof_frames, std::memory_order_relaxed);
+    }
+  }
+
   ocudulog::basic_logger&                         logger;
   std::vector<std::unique_ptr<frame_buffer_pool>> pool;
   ofh::message_type                               pool_frames_type;
   ofh::data_direction                             pool_frames_data_direction;
+  /// Number of frames expired in the transmission path, not yet reported by \ref clear_slot.
+  std::atomic<unsigned> nof_pending_expired_frames{0};
 };
 
 } // namespace ether

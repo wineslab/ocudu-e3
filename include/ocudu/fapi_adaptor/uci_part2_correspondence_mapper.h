@@ -6,6 +6,7 @@
 #include "ocudu/adt/span.h"
 #include "ocudu/ran/uci/uci_part2_size_description.h"
 #include <cstdint>
+#include <vector>
 
 namespace ocudu {
 

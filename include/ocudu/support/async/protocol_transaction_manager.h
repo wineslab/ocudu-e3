@@ -225,7 +225,7 @@ public:
       // Create timer, set timeout and callback, and start running it.
       unique_timer& timer = ret.first->second.timer;
       timer               = timer_service.create_timer();
-      timer.set(time_to_cancel, [this, transaction_id](timer_id_t /*unused*/) {
+      timer.set(time_to_cancel, [this, transaction_id]() {
         if (not set_transaction_outcome(transaction_id, protocol_transaction_failure::timeout)) {
           ocudulog::fetch_basic_logger("ALL").warning("Transaction id={} timeout but transaction is already completed",
                                                       transaction_id);
@@ -322,6 +322,8 @@ public:
   ~protocol_transaction_event_source()
   {
     // Automatically cancels any pending transaction.
+    // Note: This is what handles the source being destroyed before its observer, as it detaches the observer, which
+    // would otherwise be left pointing to a destroyed source. It is a no-op if the transaction already completed.
     this->set(protocol_transaction_failure::cancel);
   }
 
@@ -396,6 +398,13 @@ public:
   {
     return protocol_transaction_failed() and
            std::get<protocol_transaction_failure>(observer.result()) == protocol_transaction_failure::timeout;
+  }
+
+  /// Checks whether the transaction was cancelled, e.g. due to its event source being stopped.
+  bool cancelled() const
+  {
+    return protocol_transaction_failed() and
+           std::get<protocol_transaction_failure>(observer.result()) == protocol_transaction_failure::cancel;
   }
 
   /// Result set by event source.

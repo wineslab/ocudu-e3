@@ -5,6 +5,7 @@
 #include "test_helpers.h"
 #include "../rrc/rrc_ue_test_helpers.h"
 #include "tests/test_doubles/rrc/rrc_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/security/integrity.h"

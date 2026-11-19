@@ -5,9 +5,10 @@
 #pragma once
 
 #include "ocudu/adt/byte_buffer.h"
+#include "ocudu/asn1/nrppa/nrppa_ies.h"
 #include "ocudu/nrppa/nrppa_e_cid.h"
-#include "ocudu/nrppa/nrppa_ue_ids.h"
 #include "ocudu/ran/positioning/measurement_information.h"
+#include "ocudu/ran/positioning/positioning_ids.h"
 
 namespace ocudu::ocucp {
 
@@ -20,6 +21,12 @@ byte_buffer generate_valid_nrppa_e_cid_measurement_initiation_request(
 /// \brief Generate a valid E-CID measurement initiation request with periodic reports.
 byte_buffer
 generate_valid_nrppa_e_cid_measurement_initiation_request_with_periodic_reports(lmf_ue_meas_id_t lmf_ue_meas_id);
+
+/// \brief Generate a valid E-CID measurement initiation request asking for periodic NR Angle of Arrival reports.
+byte_buffer generate_valid_nrppa_e_cid_measurement_initiation_request_with_periodic_aoa(
+    lmf_ue_meas_id_t lmf_ue_meas_id,
+    /// Quantities the LMF requests beside the NR Angle of Arrival.
+    const std::vector<asn1::nrppa::meas_quantities_value_opts::options>& other_quantities = {});
 
 /// \brief Generate a valid E-CID measurement termination command.
 byte_buffer generate_valid_nrppa_e_cid_measurement_termination_command(lmf_ue_meas_id_t lmf_ue_meas_id,

@@ -38,7 +38,7 @@ public:
   }
 
   // See interface for documentation.
-  void demodulate(prach_buffer& buffer, span<const cf_t> input, const configuration& config) override;
+  void demodulate(prach_buffer& buffer, span<const ci16_t> input, const configuration& config) override;
 
 private:
   /// Sampling rate.

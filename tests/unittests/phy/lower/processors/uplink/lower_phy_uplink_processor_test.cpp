@@ -6,7 +6,9 @@
 #include "prach/prach_processor_test_doubles.h"
 #include "puxch/puxch_processor_notifier_test_doubles.h"
 #include "puxch/puxch_processor_test_doubles.h"
+#include "support/compare_sequences.h"
 #include "uplink_processor_notifier_test_doubles.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_dynamic.h"
 #include "ocudu/phy/lower/processors/uplink/uplink_processor_baseband.h"
 #include "ocudu/phy/lower/processors/uplink/uplink_processor_factories.h"
@@ -78,11 +80,6 @@ bool operator==(const prach_processor_baseband::symbol_context left,
 bool operator==(const lower_phy_rx_symbol_context left, const lower_phy_rx_symbol_context right)
 {
   return (left.slot == right.slot) && (left.nof_symbols == right.nof_symbols) && (left.sector == right.sector);
-}
-
-bool operator==(span<const cf_t> left, span<const cf_t> right)
-{
-  return std::equal(left.begin(), left.end(), right.begin(), right.end());
 }
 
 bool operator==(const baseband_gateway_buffer_reader& left, const baseband_gateway_buffer_reader& right)
@@ -269,7 +266,14 @@ TEST_P(LowerPhyUplinkProcessorFixture, Flow)
           ASSERT_EQ(prach_proc_entries.size(), 1);
           auto& prach_proc_entry = prach_proc_entries.back();
           ASSERT_EQ(prach_proc_entry.context, prach_context);
-          ASSERT_EQ(prach_proc_entry.samples, baseband_gateway_buffer_read_only(buffer.get_reader()));
+          {
+            baseband_gateway_buffer_read_only expected(buffer.get_reader());
+            for (unsigned channel = 0; channel != prach_proc_entry.samples.get_nof_channels(); ++channel) {
+              error_type<std::string> compare_result = compare_sequences(
+                  prach_proc_entry.samples.get_channel_buffer(channel), expected.get_channel_buffer(channel));
+              ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+            }
+          }
 
           // Assert PUxCH processor call.
           auto& puxch_proc_entries = puxch_proc_spy->get_baseband_entries();

@@ -38,6 +38,7 @@ rlc_tx_um_entity::rlc_tx_um_entity(gnb_du_id_t                          du_id,
   head_len_full(rlc_um_pdu_header_size_complete_sdu),
   head_len_first(rlc_um_pdu_header_size_no_so(cfg.sn_field_length)),
   head_len_not_first(rlc_um_pdu_header_size_with_so(cfg.sn_field_length)),
+  pdcp_sn_mask(pdcp_compute_sn_mask(cfg.pdcp_sn_len)),
   pcap_context(ue_index, rb_id_, config)
 {
   metrics_low.metrics_set_mode(rlc_mode::um_bidir);
@@ -47,7 +48,7 @@ rlc_tx_um_entity::rlc_tx_um_entity(gnb_du_id_t                          du_id,
                "Cannot create RLC TX AM, unsupported pdcp_sn_len={}. du={} ue={} {}",
                config.pdcp_sn_len,
                fmt::underlying(du_id),
-               fmt::underlying(ue_index),
+               ue_index,
                rb_id);
 
   logger.log_info("RLC UM configured. {}", cfg);
@@ -84,15 +85,39 @@ void rlc_tx_um_entity::handle_sdu(byte_buffer sdu_buf, bool is_retx)
 }
 
 // TS 38.322 v16.2.0 Sec. 5.4
-void rlc_tx_um_entity::discard_sdu(uint32_t pdcp_sn)
+void rlc_tx_um_entity::discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size)
 {
-  if (sdu_queue.try_discard(pdcp_sn)) {
-    logger.log_info("Discarded SDU. pdcp_sn={}", pdcp_sn);
-    metrics_high.metrics_add_discard(1);
-    handle_changed_buffer_state();
-  } else {
-    logger.log_info("Could not discard SDU. pdcp_sn={}", pdcp_sn);
+  if (OCUDU_UNLIKELY(block_size == 0)) {
+    logger.log_warning(
+        "Ignoring discard of empty SDU block. pdcp_sn_start={} block_size={}", pdcp_sn_start, block_size);
     metrics_high.metrics_add_discard_failure(1);
+    return;
+  }
+  if (OCUDU_UNLIKELY(pdcp_sn_start > pdcp_sn_mask)) {
+    logger.log_warning("Ignoring discard of invalid SN. pdcp_sn_start={} block_size={} pdcn_sn_len={}",
+                       pdcp_sn_start,
+                       block_size,
+                       cfg.pdcp_sn_len);
+    metrics_high.metrics_add_discard_failure(1);
+    return;
+  }
+
+  uint32_t pdcp_sn_end = (pdcp_sn_start + block_size) & pdcp_sn_mask;
+  uint32_t nof_ok      = 0;
+  uint32_t nof_fail    = 0;
+  logger.log_info("Discarding SDUs. pdcp_sn={}..{}", pdcp_sn_start, pdcp_sn_end - 1);
+  for (uint32_t pdcp_sn = pdcp_sn_start; pdcp_sn != pdcp_sn_end; pdcp_sn = (pdcp_sn + 1) & pdcp_sn_mask) {
+    if (sdu_queue.try_discard(pdcp_sn)) {
+      nof_ok++;
+    } else {
+      nof_fail++;
+      logger.log_info("Could not discard SDU. pdcp_sn={}", pdcp_sn);
+    }
+  }
+  metrics_high.metrics_add_discard(nof_ok);
+  metrics_high.metrics_add_discard_failure(nof_fail);
+  if (nof_ok > 0) {
+    handle_changed_buffer_state();
   }
 }
 
@@ -280,6 +305,7 @@ void rlc_tx_um_entity::handle_changed_buffer_state()
     // Redirect handling of status to pcell_executor
     if (not pcell_executor.defer([this]() { update_mac_buffer_state(); })) {
       logger.log_error("Failed to enqueue buffer state update");
+      pending_buffer_state.clear(std::memory_order_seq_cst);
     }
   } else {
     logger.log_debug("Avoiding redundant buffer state update to lower layer");

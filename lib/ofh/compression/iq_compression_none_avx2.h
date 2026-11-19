@@ -22,7 +22,7 @@ public:
   void compress(span<uint8_t> buffer, span<const cbf16_t> iq_data, const ru_compression_params& params) override;
 
   // See interface for the documentation.
-  void
+  bool
   decompress(span<cbf16_t> iq_data, span<const uint8_t> compressed_data, const ru_compression_params& params) override;
 };
 

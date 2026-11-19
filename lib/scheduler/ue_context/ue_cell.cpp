@@ -25,7 +25,7 @@ ue_cell::ue_cell(du_ue_index_t                ue_index_,
                  const ue_cell_configuration& ue_cell_cfg_,
                  cell_harq_manager&           cell_harq_pool,
                  ue_shared_context            shared_ctx_,
-                 const ue_cell_components&    components_,
+                 ue_cell_components&&         components_,
                  ocudulog::basic_logger&      logger_) :
   ue_index(ue_index_),
   cell_index(ue_cell_cfg_.cell_cfg_common.cell_index),
@@ -42,7 +42,7 @@ ue_cell::ue_cell(du_ue_index_t                ue_index_,
   ue_cfg(&ue_cell_cfg_),
   expert_cfg(cell_cfg.expert_cfg.ue),
   shared_ctx(shared_ctx_),
-  components(components_),
+  components(std::move(components_)),
   logger(logger_)
 {
 }
@@ -73,10 +73,14 @@ void ue_cell::handle_reconfiguration_request(const ue_cell_configuration& ue_cel
                               ? static_cast<unsigned>(ue_cell_cfg.pusch_serving_cell_cfg()->nof_harq_proc)
                               : harqs.nof_ul_harqs();
 
+  const auto*    ul_ded = ue_cell_cfg.init_bwp().ul.ded();
+  const unsigned nof_cg_reserved_harq =
+      (ul_ded != nullptr and ul_ded->cg_cfg.has_value()) ? ul_ded->cg_cfg->nof_harq_processes : 0U;
   harqs.reconfigure(new_dl_harqs,
                     new_ul_harqs,
                     ue_cell_cfg.pdsch_serving_cell_cfg()->dl_harq_feedback_disabled,
-                    ue_cell_cfg.pusch_serving_cell_cfg()->ul_harq_mode);
+                    ue_cell_cfg.pusch_serving_cell_cfg()->ul_harq_mode,
+                    nof_cg_reserved_harq);
 
   get_pusch_power_controller().reconfigure(ue_cell_cfg);
 }
@@ -88,10 +92,6 @@ std::optional<dl_harq_process_handle> ue_cell::handle_dl_ack_info(slot_point    
 {
   std::optional<dl_harq_process_handle> h_dl = harqs.find_dl_harq_waiting_ack(uci_slot, harq_bit_idx);
   if (not h_dl.has_value()) {
-    logger.warning("rnti={}: Discarding ACK info. Cause: DL HARQ for uci slot={} and HARQ-ACK bit={} not found.",
-                   rnti(),
-                   uci_slot,
-                   harq_bit_idx);
     return h_dl;
   }
 
@@ -103,9 +103,11 @@ std::optional<dl_harq_process_handle> ue_cell::handle_dl_ack_info(slot_point    
     return h_dl;
   }
 
-  // In case of NACK/DTX, extend DRX window, if needed.
+  // In case of NACK/DTX, extend DRX window, if needed. As per TS 38.321, Section 5.7, the drx-HARQ-RTT-TimerDL starts
+  // after the end of the transmission carrying the DL HARQ feedback, which, for a PUCCH with repetitions, is the last
+  // repetition of the burst.
   if (ack_value != mac_harq_ack_report_status::ack) {
-    shared_ctx.drx_ctrl.on_dl_harq_nack(uci_slot);
+    shared_ctx.drx_ctrl.on_dl_harq_nack(h_dl->last_uci_slot());
   }
 
   // If the HARQ report was DTX, do not forward the feeback to the link adaptation controller, as the issue is not
@@ -120,34 +122,67 @@ std::optional<dl_harq_process_handle> ue_cell::handle_dl_ack_info(slot_point    
   return h_dl;
 }
 
-expected<units::bytes> ue_cell::handle_crc_pdu(slot_point pusch_slot, const ul_crc_pdu_indication& crc_pdu)
+expected<std::pair<units::bytes, bool>, ue_cell::crc_not_concluded>
+ue_cell::handle_crc_pdu(slot_point pusch_slot, const ul_crc_pdu_indication& crc_pdu)
 {
   // Find UL HARQ with matching PUSCH slot.
   std::optional<ul_harq_process_handle> h_ul = harqs.find_ul_harq_waiting_ack(pusch_slot);
   if (not h_ul.has_value() or h_ul->id() != crc_pdu.harq_id) {
     if (crc_pdu.harq_id == to_harq_id(0) and get_pcell_state().conres_st == ue_conres_state::pending_cfra) {
       // CFRA UE: the UL HARQ is managed by the RA scheduler; state transition is handled by the event manager.
-      return make_unexpected(default_error_t{});
+      return make_unexpected(crc_not_concluded::unattributed);
     }
 
     logger.warning("rnti={} h_id={}: Discarding CRC. Cause: UL HARQ process is not expecting CRC for PUSCH slot {}",
                    rnti(),
-                   fmt::underlying(crc_pdu.harq_id),
+                   crc_pdu.harq_id,
                    pusch_slot);
-    return make_unexpected(default_error_t{});
+    return make_unexpected(crc_not_concluded::unattributed);
+  }
+
+  // A PUSCH repetition bundle draws one CRC report per occasion, in different slots, and the PHY keeps accumulating
+  // soft bits across them. Fold each report into the transmission's result with a logical OR and only return result at
+  // the last occasion: a success at any occasion is conclusive, a failure at a single one is not, and the HARQ process
+  // -- with its id -- must stay reserved for as long as the UE is still transmitting the bundle. When no repetitions
+  // are used, last_occasion_slot equals the PUSCH slot, so this reduces to acting on the single report.
+  const bool combined_crc_success = h_ul->accumulate_crc(crc_pdu.tb_crc_success);
+  if (pusch_slot != h_ul->last_occasion_slot()) {
+    logger.debug("rnti={} h_id={}: Holding CRC={} from PUSCH slot {}. Cause: more occasions of the same repetition "
+                 "bundle are still to be received (combined result so far: {})",
+                 rnti(),
+                 crc_pdu.harq_id,
+                 crc_pdu.tb_crc_success ? "OK" : "KO",
+                 pusch_slot,
+                 combined_crc_success ? "OK" : "KO");
+    return make_unexpected(crc_not_concluded::held_for_bundle);
   }
 
   // Update UL HARQ state.
-  auto tbs_ret = h_ul->ul_crc_info(crc_pdu.tb_crc_success);
+  auto tbs_ret = h_ul->ul_crc_info(combined_crc_success);
 
-  if (tbs_ret.has_value()) {
-    // HARQ with matching ID and UCI slot was found.
+  if (not tbs_ret.has_value()) {
+    return make_unexpected(crc_not_concluded::unattributed);
+  }
 
+  // HARQ with matching ID and UCI slot was found.
+
+  // With CG, if a CRC KO is found with SINR below threshold, we assume it's a DTX (PUSCH wasn't transmitted).
+  bool pusch_transmitted = true;
+
+  if (h_ul->is_cg() and not combined_crc_success and crc_pdu.ul_sinr_dB.has_value() and
+      crc_pdu.ul_sinr_dB.value() < expert_cfg.cg_pusch_sinr_threshold_dB) {
+    pusch_transmitted = false;
+    return std::make_pair(units::bytes(0U), pusch_transmitted);
+  }
+
+  // With CG, MCS is fixed, thus we don't want to update OLLA or channel state.
+  if (not h_ul->is_cg()) {
     // Update link adaptation controller.
-    components.ue_mcs_calculator->handle_ul_crc_info(crc_pdu.tb_crc_success,
+    components.ue_mcs_calculator->handle_ul_crc_info(combined_crc_success,
                                                      h_ul->get_grant_params().mcs,
                                                      h_ul->get_grant_params().mcs_table,
-                                                     h_ul->get_grant_params().olla_mcs);
+                                                     h_ul->get_grant_params().olla_mcs,
+                                                     crc_pdu.ul_sinr_dB);
 
     // Update PUSCH SNR reported from PHY.
     if (crc_pdu.ul_sinr_dB.has_value()) {
@@ -155,7 +190,7 @@ expected<units::bytes> ue_cell::handle_crc_pdu(slot_point pusch_slot, const ul_c
     }
   }
 
-  return tbs_ret;
+  return std::make_pair(tbs_ret.value(), pusch_transmitted);
 }
 
 void ue_cell::handle_srs_channel_matrix(const srs_channel_matrix& channel_matrix)
@@ -167,7 +202,7 @@ void ue_cell::handle_csi_report(const csi_report_data& csi_report)
 {
   apply_link_adaptation_procedures(csi_report);
   if (not components.channel_state->handle_csi_report(csi_report)) {
-    logger.warning("ue={} rnti={}: Invalid CSI report received", fmt::underlying(ue_index), rnti());
+    logger.warning("ue={} rnti={}: Invalid CSI report received", ue_index, rnti());
   }
 
   if (csi_report.valid and csi_report.first_tb_wideband_cqi == csi_report_data::wideband_cqi_type{0}) {

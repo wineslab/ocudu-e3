@@ -7,6 +7,7 @@
 #include "ocudu/adt/type_list_buffer.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/csi_report/csi_report_formatters.h"
+#include "ocudu/ran/prach/ra_helper.h"
 #include "ocudu/scheduler/result/sched_result.h"
 #include "ocudu/support/format/custom_formattable.h"
 #include "ocudu/support/format/fmt_to_c_str.h"
@@ -15,15 +16,21 @@ using namespace ocudu;
 
 static auto make_dl_dci_log_entry(const dci_dl_info& dci)
 {
-  bool                   is_formattable = true;
-  uint8_t                h_id           = 0;
-  bool                   ndi            = false;
-  uint8_t                rv             = 0;
-  uint8_t                mcs            = 0;
-  uint8_t                pucch_res_id   = 0;
-  std::optional<int8_t>  tpc_cmd;
-  std::optional<uint8_t> dai;
-  std::optional<bool>    vrb_prb;
+  bool                    is_formattable = true;
+  uint8_t                 h_id           = 0;
+  bool                    ndi            = false;
+  uint8_t                 rv             = 0;
+  uint8_t                 mcs            = 0;
+  uint8_t                 pucch_res_id   = 0;
+  std::optional<int8_t>   tpc_cmd;
+  std::optional<uint8_t>  dai;
+  std::optional<bool>     vrb_prb;
+  std::optional<unsigned> antenna_ports;
+  std::optional<unsigned> tdra_idx;
+
+  dci_1_0_p_rnti_configuration::payload_info short_messages_indicator =
+      dci_1_0_p_rnti_configuration::payload_info::scheduling_information;
+  uint8_t short_messages = 0;
 
   switch (dci.type()) {
     case dci_dl_rnti_config_type::c_rnti_f1_0: {
@@ -34,6 +41,7 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
       mcs                = dci1_0.modulation_coding_scheme;
       pucch_res_id       = dci1_0.pucch_resource_indicator;
       tpc_cmd            = dci1_0.tpc_command;
+      tdra_idx           = dci1_0.time_resource;
     } break;
     case dci_dl_rnti_config_type::tc_rnti_f1_0: {
       const auto& dci1_0 = dci.as_tc_rnti_f1_0();
@@ -42,6 +50,7 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
       rv                 = dci1_0.redundancy_version;
       mcs                = dci1_0.modulation_coding_scheme;
       pucch_res_id       = dci1_0.pucch_resource_indicator;
+      tdra_idx           = dci1_0.time_resource;
     } break;
     case dci_dl_rnti_config_type::c_rnti_f1_1: {
       const auto& dci1_1 = dci.as_c_rnti_f1_1();
@@ -52,18 +61,69 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
       pucch_res_id       = dci1_1.pucch_resource_indicator;
       tpc_cmd            = dci1_1.tpc_command;
       vrb_prb            = dci1_1.vrb_prb_mapping;
+      tdra_idx           = dci1_1.time_resource;
       if (dci.as_c_rnti_f1_1().downlink_assignment_index.has_value()) {
         dai = dci.as_c_rnti_f1_1().downlink_assignment_index;
+      }
+      antenna_ports = dci1_1.antenna_ports;
+    } break;
+    case dci_dl_rnti_config_type::p_rnti_f1_0: {
+      const auto& dci1_0       = dci.as_p_rnti_f1_0();
+      short_messages_indicator = dci1_0.short_messages_indicator;
+      short_messages           = dci1_0.short_messages;
+      // The time domain resource assignment is reserved when only the short message is carried.
+      if (short_messages_indicator != dci_1_0_p_rnti_configuration::payload_info::short_messages) {
+        tdra_idx = dci1_0.time_resource;
       }
     } break;
     default:
       is_formattable = false;
       break;
   }
-  return make_formattable([is_formattable, h_id, ndi, rv, mcs, pucch_res_id, dai, tpc_cmd, vrb_prb](auto& ctx) {
-    if (is_formattable) {
+  return make_formattable([is_formattable,
+                           dci_rnti_type = dci.type(),
+                           h_id,
+                           ndi,
+                           rv,
+                           mcs,
+                           pucch_res_id,
+                           dai,
+                           tpc_cmd,
+                           vrb_prb,
+                           tdra_idx,
+                           short_messages_indicator,
+                           short_messages,
+                           antenna_ports](auto& ctx) {
+    if (dci_rnti_type == dci_dl_rnti_config_type::p_rnti_f1_0) {
+      // Short Message bit positions, as per TS 38.331, Table 6.5-1.
+      static constexpr unsigned si_modification_short_message = 0b10000000;
+      static constexpr unsigned etws_cmas_short_message       = 0b01000000;
+
+      const bool has_paging_info =
+          short_messages_indicator != dci_1_0_p_rnti_configuration::payload_info::short_messages;
+      const bool has_short_message =
+          short_messages_indicator != dci_1_0_p_rnti_configuration::payload_info::scheduling_information;
+
+      fmt::format_to(ctx.out(),
+                     "dci: paging_ind={} short_msg_ind={}",
+                     has_paging_info ? "yes" : "no",
+                     has_short_message ? "yes" : "no");
+      if (tdra_idx.has_value()) {
+        fmt::format_to(ctx.out(), " tdra_idx={}", *tdra_idx);
+      }
+      if (has_short_message) {
+        fmt::format_to(ctx.out(),
+                       " short_msg=0x{:02x} (sysInfoMod={} etwsCmas={})",
+                       short_messages,
+                       (short_messages & si_modification_short_message) != 0 ? "yes" : "no",
+                       (short_messages & etws_cmas_short_message) != 0 ? "yes" : "no");
+      }
+    } else if (is_formattable) {
       fmt::format_to(
           ctx.out(), "dci: h_id={} ndi={} rv={} mcs={} res_ind={}", h_id, ndi ? 1 : 0, rv, mcs, pucch_res_id);
+      if (tdra_idx.has_value()) {
+        fmt::format_to(ctx.out(), " tdra_idx={}", *tdra_idx);
+      }
       if (tpc_cmd.has_value()) {
         fmt::format_to(ctx.out(), " tpc={}", *tpc_cmd);
       }
@@ -72,6 +132,9 @@ static auto make_dl_dci_log_entry(const dci_dl_info& dci)
       }
       if (vrb_prb.has_value()) {
         fmt::format_to(ctx.out(), " vrb_prb_map_used={}", vrb_prb.value() ? "yes" : "no");
+      }
+      if (antenna_ports.has_value()) {
+        fmt::format_to(ctx.out(), " ant={}", *antenna_ports);
       }
     }
     return ctx.out();
@@ -181,6 +244,7 @@ static auto make_ul_pdcch_log_entry(const pdcch_ul_information& pdcch)
 
 static auto make_sib_info_log_entry(const sib_information& sib_info)
 {
+  // SIB grants always carry exactly one codeword.
   return make_formattable([si_ind       = sib_info.si_indicator,
                            si_msg_index = sib_info.si_msg_index,
                            rbs          = sib_info.pdsch_cfg.rbs,
@@ -198,39 +262,65 @@ static auto make_sib_info_log_entry(const sib_information& sib_info)
 
 static auto make_rar_info_log_entry(const rar_information& rar_info)
 {
+  // RAR grants always carry exactly one codeword. The RNTI space disambiguates a 4-step RAR (keyed by RA-RNTI) from
+  // a 2-step MsgB (keyed by MsgB-RNTI), as per TS 38.321, Sections 5.1.3 and 5.1.4.
   return make_formattable([rnti = rar_info.pdsch_cfg.rnti,
                            rb   = rar_info.pdsch_cfg.rbs,
                            tbs  = rar_info.pdsch_cfg.codewords[0].tb_size_bytes](auto& ctx) {
-    return fmt::format_to(ctx.out(), "RAR: ra-rnti={} rb={} tbs={}", rnti, rb, tbs);
+    const bool is_msgb = ra_helper::is_valid_msgb_rnti(rnti);
+    return fmt::format_to(ctx.out(),
+                          "{}: {}={} rb={} tbs={}",
+                          is_msgb ? "MsgB" : "RAR",
+                          is_msgb ? "msgb-rnti" : "ra-rnti",
+                          rnti,
+                          rb,
+                          tbs);
   });
 }
 
 static auto make_ue_dl_msg_info_log_entry(const dl_msg_alloc& ue_msg)
 {
+  // Capture only the fields needed for formatting instead of the entire dl_msg_alloc struct, to keep the entry
+  // within the type_list_buffer_stream segment size (2048 bytes).
+  const auto& pdsch   = ue_msg.pdsch_cfg;
+  const bool  has_cw1 = pdsch.codewords.size() > 1;
+
   return make_formattable([ue_idx   = ue_msg.context.ue_index,
-                           rnti     = ue_msg.pdsch_cfg.rnti,
-                           rb       = ue_msg.pdsch_cfg.rbs,
-                           h_id     = ue_msg.pdsch_cfg.harq_id,
+                           rnti     = pdsch.rnti,
+                           h_id     = pdsch.harq_id,
                            ss_id    = ue_msg.context.ss_id,
+                           rb       = pdsch.rbs,
                            k1       = ue_msg.context.k1,
-                           new_data = ue_msg.pdsch_cfg.codewords[0].new_data,
-                           rv       = ue_msg.pdsch_cfg.codewords[0].rv_index,
-                           tbs      = ue_msg.pdsch_cfg.codewords[0].tb_size_bytes,
-                           ri       = ue_msg.pdsch_cfg.nof_layers,
-                           dl_bo    = ue_msg.context.buffer_occupancy](auto& ctx) {
+                           new_data = pdsch.codewords[0].new_data,
+                           rv       = pdsch.codewords[0].rv_index,
+                           tbs      = pdsch.codewords[0].tb_size_bytes,
+                           has_cw1,
+                           new_data_cw1   = has_cw1 && pdsch.codewords[1].new_data,
+                           rv_cw1         = has_cw1 ? pdsch.codewords[1].rv_index : uint8_t{0},
+                           tbs_cw1        = has_cw1 ? pdsch.codewords[1].tb_size_bytes : units::bytes{0},
+                           nof_layers     = pdsch.nof_layers,
+                           dl_bo          = ue_msg.context.buffer_occupancy,
+                           nof_reps       = ue_msg.context.nof_repetitions,
+                           reps_remaining = ue_msg.context.nof_remaining_repetitions](auto& ctx) {
     fmt::format_to(ctx.out(),
-                   "DL: ue={} c-rnti={} h_id={} ss_id={} rb={} k1={} newtx={} rv={} tbs={}",
-                   fmt::underlying(ue_idx),
+                   "DL: ue={} c-rnti={} h_id={} ss_id={} rb={} k1={} cw[0]: newtx={} rv={} tbs={}",
+                   ue_idx,
                    rnti,
-                   fmt::underlying(h_id),
+                   h_id,
                    fmt::underlying(ss_id),
                    rb,
                    k1,
                    new_data,
                    rv,
                    tbs);
-    if (new_data) {
-      fmt::format_to(ctx.out(), " ri={} dl_bo={}", ri, dl_bo);
+    if (has_cw1) {
+      fmt::format_to(ctx.out(), " cw[1]: newtx={} rv={} tbs={}", new_data_cw1, rv_cw1, tbs_cw1);
+    }
+    if (new_data or new_data_cw1) {
+      fmt::format_to(ctx.out(), " ri={} dl_bo={}", nof_layers, dl_bo);
+    }
+    if (nof_reps > 1) {
+      fmt::format_to(ctx.out(), " reps={} reps_remaining={}", nof_reps, reps_remaining);
     }
     return ctx.out();
   });
@@ -251,9 +341,9 @@ static auto make_ue_ul_msg_info_log_entry(const ul_sched_info& ue_msg)
                            msg3_delay = ue_msg.context.msg3_delay](auto& ctx) {
     fmt::format_to(ctx.out(),
                    "UL: ue={} rnti={} h_id={} ss_id={} rb={} newtx={} rv={} tbs={}",
-                   fmt::underlying(ue_idx),
+                   ue_idx,
                    rnti,
-                   fmt::underlying(h_id),
+                   h_id,
                    fmt::underlying(ss_id),
                    rb,
                    new_data,
@@ -270,6 +360,7 @@ static auto make_ue_ul_msg_info_log_entry(const ul_sched_info& ue_msg)
 
 static auto make_paging_info_log_entry(const dl_paging_allocation& pg_info)
 {
+  // Paging grants always carry exactly one codeword.
   return make_formattable([rb             = pg_info.pdsch_cfg.rbs,
                            tbs            = pg_info.pdsch_cfg.codewords[0].tb_size_bytes,
                            paging_ue_list = pg_info.paging_ue_list](auto& ctx) {
@@ -286,7 +377,7 @@ static auto make_paging_info_log_entry(const dl_paging_allocation& pg_info)
   });
 }
 
-static auto make_info_log_entry(const sched_result& result, bool log_broadcast)
+static auto make_info_log_entry(const sched_result& result, bool log_broadcast, bool& push_failed)
 {
   using sib_entry_t    = decltype(make_sib_info_log_entry(std::declval<sib_information>()));
   using rar_entry_t    = decltype(make_rar_info_log_entry(std::declval<rar_information>()));
@@ -298,22 +389,28 @@ static auto make_info_log_entry(const sched_result& result, bool log_broadcast)
                      get_default_fallback_byte_buffer_segment_pool())
                      .value();
 
+  auto checked_push = [&entries, &push_failed](auto&& entry) {
+    if (entries.push(std::forward<decltype(entry)>(entry)) == nullptr) {
+      push_failed = true;
+    }
+  };
+
   if (log_broadcast) {
     for (const auto& sib : result.dl.bc.sibs) {
-      entries.push(make_sib_info_log_entry(sib));
+      checked_push(make_sib_info_log_entry(sib));
     }
   }
   for (const auto& rar : result.dl.rar_grants) {
-    entries.push(make_rar_info_log_entry(rar));
+    checked_push(make_rar_info_log_entry(rar));
   }
   for (const auto& ue_msg : result.dl.ue_grants) {
-    entries.push(make_ue_dl_msg_info_log_entry(ue_msg));
+    checked_push(make_ue_dl_msg_info_log_entry(ue_msg));
   }
   for (const auto& ue_msg : result.ul.puschs) {
-    entries.push(make_ue_ul_msg_info_log_entry(ue_msg));
+    checked_push(make_ue_ul_msg_info_log_entry(ue_msg));
   }
   for (const auto& pg : result.dl.paging_grants) {
-    entries.push(make_paging_info_log_entry(pg));
+    checked_push(make_paging_info_log_entry(pg));
   }
 
   return make_formattable([entries = std::move(entries)](auto& ctx) {
@@ -375,8 +472,26 @@ static auto make_csi_rs_log_entry(const csi_rs_info& csi_rs)
   });
 }
 
+static auto make_prs_log_entry(const prs_info& prs)
+{
+  return make_formattable([crbs        = prs.crbs,
+                           symbols     = prs.symbols,
+                           n_id_prs    = prs.n_id_prs,
+                           comb_size   = prs.comb_size,
+                           comb_offset = prs.comb_offset](auto& ctx) {
+    return fmt::format_to(ctx.out(),
+                          "\n- PRS: crbs={} symb={} n_id={} comb_size={} comb_offset={}",
+                          crbs,
+                          symbols,
+                          n_id_prs,
+                          to_underlying(comb_size),
+                          comb_offset);
+  });
+}
+
 static auto make_sib_debug_log_entry(const sib_information& sib_info)
 {
+  // SIB grants always carry exactly one codeword.
   return make_formattable([si_ind       = sib_info.si_indicator,
                            si_msg_index = sib_info.si_msg_index,
                            rbs          = sib_info.pdsch_cfg.rbs,
@@ -404,9 +519,14 @@ static auto make_sib_debug_log_entry(const sib_information& sib_info)
 
 static auto make_rar_debug_log_entry(const rar_information& rar_info)
 {
+  // RAR grants always carry exactly one codeword.
   auto make_rar_grant_debug_entry = [](const rar_ul_grant& grant) {
-    const auto* ts     = std::get_if<rar_ul_grant::two_step_info>(&grant.type);
-    const auto  result = ts != nullptr ? std::optional<bool>{ts->is_success} : std::nullopt;
+    std::optional<bool> result;
+    if (std::holds_alternative<rar_ul_grant::two_step_success_info>(grant.type)) {
+      result = true;
+    } else if (std::holds_alternative<rar_ul_grant::two_step_fallback_info>(grant.type)) {
+      result = false;
+    }
     return make_formattable(
         [tcrnti = grant.temp_crnti, rapid = grant.rapid, ta = grant.ta, td = grant.time_resource_assignment, result](
             auto& ctx) {
@@ -418,6 +538,8 @@ static auto make_rar_debug_log_entry(const rar_information& rar_info)
         });
   };
 
+  // The RNTI space disambiguates a 4-step RAR (keyed by RA-RNTI) from a 2-step MsgB (keyed by MsgB-RNTI), as per
+  // TS 38.321, Sections 5.1.3 and 5.1.4.
   return make_formattable([rnti       = rar_info.pdsch_cfg.rnti,
                            rb         = rar_info.pdsch_cfg.rbs,
                            symbols    = rar_info.pdsch_cfg.symbols,
@@ -426,8 +548,11 @@ static auto make_rar_debug_log_entry(const rar_information& rar_info)
                            rv         = rar_info.pdsch_cfg.codewords[0].rv_index,
                            nof_grants = rar_info.grants.size(),
                            grants     = format_each(rar_info.grants, make_rar_grant_debug_entry)](auto& ctx) {
+    const bool is_msgb = ra_helper::is_valid_msgb_rnti(rnti);
     return fmt::format_to(ctx.out(),
-                          "\n- RAR PDSCH: ra-rnti={} rb={} symb={} tbs={} mcs={} rv={} grants ({}): {}",
+                          "\n- {} PDSCH: {}={} rb={} symb={} tbs={} mcs={} rv={} grants ({}): {}",
+                          is_msgb ? "MsgB" : "RAR",
+                          is_msgb ? "msgb-rnti" : "ra-rnti",
                           rnti,
                           rb,
                           symbols,
@@ -441,36 +566,85 @@ static auto make_rar_debug_log_entry(const rar_information& rar_info)
 
 static auto make_ue_dl_msg_debug_log_entry(const dl_msg_alloc& ue_grant)
 {
-  return make_formattable([ue_grant](auto& ctx) {
+  // Capture only the fields needed for formatting instead of the entire dl_msg_alloc struct, to keep the entry
+  // within the type_list_buffer_stream segment size (2048 bytes).
+  std::optional<precoding_matrix_indicator> first_prg;
+  // A monostate PMI selects no precoding, which carries nothing worth logging.
+  if (const auto* pmi = std::get_if<precoding_matrix_indicator>(&ue_grant.pdsch_cfg.precoding_and_beamforming);
+      pmi != nullptr and not std::holds_alternative<std::monostate>(*pmi)) {
+    first_prg = *pmi;
+  }
+
+  // Capture second codeword fields if present.
+  const bool has_cw1 = ue_grant.pdsch_cfg.codewords.size() > 1;
+
+  return make_formattable([ue_idx     = ue_grant.context.ue_index,
+                           rnti       = ue_grant.pdsch_cfg.rnti,
+                           h_id       = ue_grant.pdsch_cfg.harq_id,
+                           rb         = ue_grant.pdsch_cfg.rbs,
+                           symbols    = ue_grant.pdsch_cfg.symbols,
+                           tbs        = ue_grant.pdsch_cfg.codewords[0].tb_size_bytes,
+                           mcs        = ue_grant.pdsch_cfg.codewords[0].mcs_index,
+                           rv         = ue_grant.pdsch_cfg.codewords[0].rv_index,
+                           new_data   = ue_grant.pdsch_cfg.codewords[0].new_data,
+                           nof_retxs  = ue_grant.context.nof_retxs,
+                           k1         = ue_grant.context.k1,
+                           nof_layers = ue_grant.pdsch_cfg.nof_layers,
+                           first_prg  = std::move(first_prg),
+                           has_cw1,
+                           tbs_cw1        = has_cw1 ? ue_grant.pdsch_cfg.codewords[1].tb_size_bytes : units::bytes{0},
+                           mcs_cw1        = has_cw1 ? ue_grant.pdsch_cfg.codewords[1].mcs_index : sch_mcs_index{0},
+                           rv_cw1         = has_cw1 ? ue_grant.pdsch_cfg.codewords[1].rv_index : uint8_t{0},
+                           new_data_cw1   = has_cw1 && ue_grant.pdsch_cfg.codewords[1].new_data,
+                           dl_bo          = ue_grant.context.buffer_occupancy,
+                           olla           = ue_grant.context.olla_offset,
+                           nof_reps       = ue_grant.context.nof_repetitions,
+                           reps_remaining = ue_grant.context.nof_remaining_repetitions,
+                           lc_grants      = ue_grant.tb_list.empty() ? static_vector<dl_msg_lc_info, MAX_LC_PER_TB>{}
+                                                                     : ue_grant.tb_list[0].lc_chs_to_sched,
+                           lc_grants_cw1  = ue_grant.tb_list.size() > 1
+                                                ? ue_grant.tb_list[1].lc_chs_to_sched
+                                                : static_vector<dl_msg_lc_info, MAX_LC_PER_TB>{}](auto& ctx) {
     fmt::format_to(ctx.out(),
-                   "\n- UE PDSCH: ue={} c-rnti={} h_id={} rb={} symb={} tbs={} mcs={} rv={} nrtx={} k1={}",
-                   fmt::underlying(ue_grant.context.ue_index),
-                   ue_grant.pdsch_cfg.rnti,
-                   fmt::underlying(ue_grant.pdsch_cfg.harq_id),
-                   ue_grant.pdsch_cfg.rbs,
-                   ue_grant.pdsch_cfg.symbols,
-                   ue_grant.pdsch_cfg.codewords[0].tb_size_bytes,
-                   ue_grant.pdsch_cfg.codewords[0].mcs_index,
-                   ue_grant.pdsch_cfg.codewords[0].rv_index,
-                   ue_grant.context.nof_retxs,
-                   ue_grant.context.k1);
-    if (ue_grant.pdsch_cfg.precoding.has_value() and not ue_grant.pdsch_cfg.precoding.value().prg_infos.empty()) {
-      const auto& prg_type = ue_grant.pdsch_cfg.precoding->prg_infos[0];
-      fmt::format_to(ctx.out(), " ri={} {}", ue_grant.pdsch_cfg.nof_layers, precoding_matrix_indicator{prg_type});
+                   "\n- UE PDSCH: ue={} c-rnti={} h_id={} rb={} symb={} cw[0]: tbs={} mcs={} rv={} nrtx={} k1={}",
+                   ue_idx,
+                   rnti,
+                   h_id,
+                   rb,
+                   symbols,
+                   tbs,
+                   mcs,
+                   rv,
+                   nof_retxs,
+                   k1);
+    if (has_cw1) {
+      fmt::format_to(ctx.out(), " cw[1]: tbs={} mcs={} rv={}", tbs_cw1, mcs_cw1, rv_cw1);
     }
-    if (ue_grant.pdsch_cfg.codewords[0].new_data) {
-      fmt::format_to(ctx.out(), " dl_bo={}", ue_grant.context.buffer_occupancy);
+    if (first_prg.has_value()) {
+      fmt::format_to(ctx.out(), " ri={} {}", nof_layers, *first_prg);
     }
-    if (ue_grant.context.olla_offset.has_value()) {
-      fmt::format_to(ctx.out(), " olla={:.3}", *ue_grant.context.olla_offset);
+    if (new_data or new_data_cw1) {
+      fmt::format_to(ctx.out(), " dl_bo={}", dl_bo);
     }
-    if (not ue_grant.tb_list.empty()) {
-      for (const dl_msg_lc_info& lc : ue_grant.tb_list[0].lc_chs_to_sched) {
-        fmt::format_to(ctx.out(),
-                       "{}lcid={}: size={}",
-                       (&lc == &ue_grant.tb_list[0].lc_chs_to_sched.front()) ? " grants: " : ", ",
-                       lc.lcid,
-                       lc.sched_bytes);
+    if (olla.has_value()) {
+      fmt::format_to(ctx.out(), " olla={:.3}", *olla);
+    }
+    if (nof_reps > 1) {
+      fmt::format_to(ctx.out(), " reps={} reps_remaining={}", nof_reps, reps_remaining);
+    }
+    if (not lc_grants.empty()) {
+      for (const dl_msg_lc_info& lc : lc_grants) {
+        fmt::format_to(
+            ctx.out(), "{}lcid={}: size={}", (&lc == &lc_grants.front()) ? " grants: " : ", ", lc.lcid, lc.sched_bytes);
+      }
+      if (not lc_grants_cw1.empty()) {
+        for (const dl_msg_lc_info& lc : lc_grants_cw1) {
+          fmt::format_to(ctx.out(),
+                         "{}lcid={}: size={}",
+                         (&lc == &lc_grants_cw1.front()) ? " cw[1] grants: " : ", ",
+                         lc.lcid,
+                         lc.sched_bytes);
+        }
       }
     }
     return ctx.out();
@@ -479,19 +653,21 @@ static auto make_ue_dl_msg_debug_log_entry(const dl_msg_alloc& ue_grant)
 
 static auto make_paging_debug_log_entry(const dl_paging_allocation& pg)
 {
-  return make_formattable([pg](auto& ctx) {
-    fmt::format_to(ctx.out(),
-                   "\n- PCCH: rb={} symb={} tbs={} mcs={} rv={}",
-                   pg.pdsch_cfg.rbs,
-                   pg.pdsch_cfg.symbols,
-                   pg.pdsch_cfg.codewords[0].tb_size_bytes,
-                   pg.pdsch_cfg.codewords[0].mcs_index,
-                   pg.pdsch_cfg.codewords[0].rv_index);
+  // Capture only the fields needed for formatting instead of the entire dl_paging_allocation struct, to keep the
+  // entry within the type_list_buffer_stream segment size (2048 bytes).
+  return make_formattable([rb             = pg.pdsch_cfg.rbs,
+                           symbols        = pg.pdsch_cfg.symbols,
+                           tbs            = pg.pdsch_cfg.codewords[0].tb_size_bytes,
+                           mcs            = pg.pdsch_cfg.codewords[0].mcs_index,
+                           rv             = pg.pdsch_cfg.codewords[0].rv_index,
+                           paging_ue_list = pg.paging_ue_list](auto& ctx) {
+    // Paging grants always carry exactly one codeword.
+    fmt::format_to(ctx.out(), "\n- PCCH: rb={} symb={} tbs={} mcs={} rv={}", rb, symbols, tbs, mcs, rv);
 
-    for (const paging_ue_info& ue : pg.paging_ue_list) {
+    for (const paging_ue_info& ue : paging_ue_list) {
       fmt::format_to(ctx.out(),
                      "{}{}-pg-id={:#x}",
-                     (&ue == &pg.paging_ue_list.front()) ? " ues: " : ", ",
+                     (&ue == &paging_ue_list.front()) ? " ues: " : ", ",
                      ue.paging_type_indicator == paging_ue_info::paging_identity_type::cn_ue_paging_identity ? "cn"
                                                                                                              : "ran",
                      ue.paging_identity);
@@ -504,17 +680,18 @@ static auto make_pusch_debug_log_entry(const ul_sched_info& ul_info)
 {
   return make_formattable([ul_info](auto& ctx) {
     fmt::format_to(ctx.out(),
-                   "\n- UE PUSCH: ue={} {}c-rnti={} h_id={} rb={} symb={} tbs={} rv={} nrtx={} nof_layers={}",
-                   fmt::underlying(ul_info.context.ue_index),
+                   "\n- UE PUSCH: ue={} {}c-rnti={} h_id={} rb={} symb={} tbs={} rv={} nrtx={} nof_layers={} cg={}",
+                   ul_info.context.ue_index,
                    ul_info.context.ue_index == INVALID_DU_UE_INDEX ? "t" : "",
                    ul_info.pusch_cfg.rnti,
-                   fmt::underlying(ul_info.pusch_cfg.harq_id),
+                   ul_info.pusch_cfg.harq_id,
                    ul_info.pusch_cfg.rbs,
                    ul_info.pusch_cfg.symbols,
                    ul_info.pusch_cfg.tb_size_bytes,
                    ul_info.pusch_cfg.rv_index,
                    ul_info.context.nof_retxs,
-                   ul_info.pusch_cfg.nof_layers);
+                   ul_info.pusch_cfg.nof_layers,
+                   ul_info.pusch_cfg.is_cg ? "Yes" : "No");
     if (ul_info.context.olla_offset.has_value()) {
       fmt::format_to(ctx.out(), " olla={:.3}", ul_info.context.olla_offset.value());
     }
@@ -651,12 +828,13 @@ static auto make_prach_debug_log_entry(const prach_occasion_info& prach)
   });
 }
 
-static auto make_debug_log_entry(const sched_result& result, bool log_broadcast)
+static auto make_debug_log_entry(const sched_result& result, bool log_broadcast, bool& push_failed)
 {
   using ssb_entry_t      = decltype(make_ssb_debug_log_entry(std::declval<ssb_information>()));
   using dl_pdcch_entry_t = decltype(make_dl_pdcch_log_entry(std::declval<pdcch_dl_information>()));
   using ul_pdcch_entry_t = decltype(make_ul_pdcch_log_entry(std::declval<pdcch_ul_information>()));
   using csi_rs_entry_t   = decltype(make_csi_rs_log_entry(std::declval<csi_rs_info>()));
+  using prs_entry_t      = decltype(make_prs_log_entry(std::declval<prs_info>()));
   using sib_entry_t      = decltype(make_sib_debug_log_entry(std::declval<sib_information>()));
   using rar_entry_t      = decltype(make_rar_debug_log_entry(std::declval<rar_information>()));
   using ue_grant_entry_t = decltype(make_ue_dl_msg_debug_log_entry(std::declval<dl_msg_alloc>()));
@@ -670,6 +848,7 @@ static auto make_debug_log_entry(const sched_result& result, bool log_broadcast)
                                          dl_pdcch_entry_t,
                                          ul_pdcch_entry_t,
                                          csi_rs_entry_t,
+                                         prs_entry_t,
                                          sib_entry_t,
                                          rar_entry_t,
                                          ue_grant_entry_t,
@@ -680,46 +859,55 @@ static auto make_debug_log_entry(const sched_result& result, bool log_broadcast)
                                          prach_entry_t>::make(get_default_fallback_byte_buffer_segment_pool())
                      .value();
 
+  auto checked_push = [&entries, &push_failed](auto&& entry) {
+    if (entries.push(std::forward<decltype(entry)>(entry)) == nullptr) {
+      push_failed = true;
+    }
+  };
+
   if (log_broadcast) {
     for (const auto& ssb : result.dl.bc.ssb_info) {
-      entries.push(make_ssb_debug_log_entry(ssb));
+      checked_push(make_ssb_debug_log_entry(ssb));
     }
     for (const auto& csi : result.dl.csi_rs) {
-      entries.push(make_csi_rs_log_entry(csi));
+      checked_push(make_csi_rs_log_entry(csi));
+    }
+    for (const auto& prs : result.dl.prs) {
+      checked_push(make_prs_log_entry(prs));
     }
     for (const auto& sib : result.dl.bc.sibs) {
-      entries.push(make_sib_debug_log_entry(sib));
+      checked_push(make_sib_debug_log_entry(sib));
     }
   }
   for (const auto& pdcch : result.dl.dl_pdcchs) {
     if (log_broadcast or pdcch.ctx.rnti != rnti_t::SI_RNTI) {
-      entries.push(make_dl_pdcch_log_entry(pdcch));
+      checked_push(make_dl_pdcch_log_entry(pdcch));
     }
   }
   for (const auto& pdcch : result.dl.ul_pdcchs) {
-    entries.push(make_ul_pdcch_log_entry(pdcch));
+    checked_push(make_ul_pdcch_log_entry(pdcch));
   }
   for (const auto& rar : result.dl.rar_grants) {
-    entries.push(make_rar_debug_log_entry(rar));
+    checked_push(make_rar_debug_log_entry(rar));
   }
   for (const auto& grant : result.dl.ue_grants) {
-    entries.push(make_ue_dl_msg_debug_log_entry(grant));
+    checked_push(make_ue_dl_msg_debug_log_entry(grant));
   }
   for (const auto& pg : result.dl.paging_grants) {
-    entries.push(make_paging_debug_log_entry(pg));
+    checked_push(make_paging_debug_log_entry(pg));
   }
   for (const auto& pusch : result.ul.puschs) {
-    entries.push(make_pusch_debug_log_entry(pusch));
+    checked_push(make_pusch_debug_log_entry(pusch));
   }
   for (const auto& pucch : result.ul.pucchs) {
-    entries.push(make_pucch_debug_log_entry(pucch));
+    checked_push(make_pucch_debug_log_entry(pucch));
   }
   for (const auto& srs : result.ul.srss) {
-    entries.push(make_srs_debug_log_entry(srs));
+    checked_push(make_srs_debug_log_entry(srs));
   }
   if (log_broadcast) {
     for (const auto& prach : result.ul.prachs) {
-      entries.push(make_prach_debug_log_entry(prach));
+      checked_push(make_prach_debug_log_entry(prach));
     }
   }
 
@@ -740,7 +928,7 @@ scheduler_result_logger::scheduler_result_logger(bool log_broadcast_, pci_t pci_
 void scheduler_result_logger::log_debug(const sched_result& result, std::chrono::microseconds decision_latency)
 {
   const bool broadcast_is_empty = result.dl.bc.ssb_info.empty() and result.dl.bc.sibs.empty() and
-                                  result.dl.csi_rs.empty() and result.ul.prachs.empty();
+                                  result.dl.csi_rs.empty() and result.dl.prs.empty() and result.ul.prachs.empty();
 
   const bool non_broadcast_is_empty =
       std::none_of(result.dl.dl_pdcchs.begin(),
@@ -763,6 +951,7 @@ void scheduler_result_logger::log_debug(const sched_result& result, std::chrono:
     const unsigned nof_pucchs       = result.ul.pucchs.size();
     const unsigned nof_failed_pdcch = result.failed_attempts.dl_pdcch + result.failed_attempts.ul_pdcch;
     const unsigned nof_failed_uci   = result.failed_attempts.uci;
+    bool           push_failed      = false;
     logger.debug("Slot decisions pci={} t={}us ({} PDSCH{}, {} PUSCH{}, {} PUCCH{}, {} attempted PDCCH{}, {} attempted "
                  "UCI{}):{}",
                  pci,
@@ -777,7 +966,10 @@ void scheduler_result_logger::log_debug(const sched_result& result, std::chrono:
                  nof_failed_pdcch == 1 ? "" : "s",
                  nof_failed_uci,
                  nof_failed_uci == 1 ? "" : "s",
-                 make_debug_log_entry(result, log_broadcast));
+                 make_debug_log_entry(result, log_broadcast, push_failed));
+    if (push_failed) {
+      logger.error("Scheduler result log entry exceeded segment size and was dropped");
+    }
   }
 }
 
@@ -794,8 +986,9 @@ void scheduler_result_logger::log_info(const sched_result& result, std::chrono::
     if (log_broadcast) {
       nof_pdschs += result.dl.bc.sibs.size();
     }
-    const unsigned nof_puschs = result.ul.puschs.size();
-    const unsigned nof_pucchs = result.ul.pucchs.size();
+    const unsigned nof_puschs  = result.ul.puschs.size();
+    const unsigned nof_pucchs  = result.ul.pucchs.size();
+    bool           push_failed = false;
     logger.info("Slot decisions pci={} t={}us ({} PDSCH{}, {} PUSCH{}, {} PUCCH{}): {}",
                 pci,
                 decision_latency.count(),
@@ -805,7 +998,10 @@ void scheduler_result_logger::log_info(const sched_result& result, std::chrono::
                 nof_puschs == 1 ? "" : "s",
                 nof_pucchs,
                 nof_pucchs == 1 ? "" : "s",
-                make_info_log_entry(result, log_broadcast));
+                make_info_log_entry(result, log_broadcast, push_failed));
+    if (push_failed) {
+      logger.error("Scheduler result log entry exceeded segment size and was dropped");
+    }
   }
 }
 

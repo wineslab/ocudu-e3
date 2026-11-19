@@ -7,10 +7,12 @@
 #include "../pdcp/pdcp_pdu_generator.h"
 #include "../rrc/rrc_packed_test_messages.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
+#include "ocudu/f1ap/common/interface_management.h"
 #include "ocudu/f1ap/f1ap_message.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/ran/positioning/positioning_ids.h"
@@ -40,11 +42,11 @@ f1ap_message ocudu::test_helpers::generate_f1ap_reset_message(
       auto& conn                     = lst[i].value().ue_associated_lc_f1_conn_item();
       conn.gnb_du_ue_f1ap_id_present = ues_to_reset[i].first.has_value();
       if (conn.gnb_du_ue_f1ap_id_present) {
-        conn.gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(ues_to_reset[i].first.value());
+        conn.gnb_du_ue_f1ap_id = to_underlying(ues_to_reset[i].first.value());
       }
       conn.gnb_cu_ue_f1ap_id_present = ues_to_reset[i].second.has_value();
       if (conn.gnb_cu_ue_f1ap_id_present) {
-        conn.gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(ues_to_reset[i].second.value());
+        conn.gnb_cu_ue_f1ap_id = to_underlying(ues_to_reset[i].second.value());
       }
     }
   }
@@ -167,6 +169,67 @@ f1ap_message ocudu::test_helpers::generate_f1_setup_failure(const f1ap_message& 
   return resp;
 }
 
+f1ap_message ocudu::test_helpers::generate_gnb_du_configuration_update(
+    gnb_du_id_t                                                               gnb_du_id,
+    const std::vector<served_cell_item_info>&                                 cells_to_add,
+    const std::vector<std::pair<nr_cell_global_id_t, served_cell_item_info>>& cells_to_mod,
+    const std::vector<nr_cell_global_id_t>&                                   cells_to_rem)
+{
+  f1ap_message msg;
+  msg.pdu.set_init_msg();
+  msg.pdu.init_msg().load_info_obj(ASN1_F1AP_ID_GNB_DU_CFG_UPD);
+
+  auto& upd              = msg.pdu.init_msg().value.gnb_du_cfg_upd();
+  upd->transaction_id    = 98;
+  upd->gnb_du_id_present = true;
+  upd->gnb_du_id         = (uint64_t)gnb_du_id;
+
+  if (not cells_to_add.empty()) {
+    upd->served_cells_to_add_list_present = true;
+    upd->served_cells_to_add_list.resize(cells_to_add.size());
+    for (unsigned i = 0; i != cells_to_add.size(); ++i) {
+      upd->served_cells_to_add_list[i].load_info_obj(ASN1_F1AP_ID_SERVED_CELLS_TO_ADD_ITEM);
+      auto& item            = upd->served_cells_to_add_list[i].value().served_cells_to_add_item();
+      auto  served          = generate_served_cells_item(cells_to_add[i]);
+      item.served_cell_info = served.served_cell_info;
+      if (served.gnb_du_sys_info_present) {
+        item.gnb_du_sys_info_present = true;
+        item.gnb_du_sys_info         = served.gnb_du_sys_info;
+      }
+    }
+  }
+
+  if (not cells_to_mod.empty()) {
+    upd->served_cells_to_modify_list_present = true;
+    upd->served_cells_to_modify_list.resize(cells_to_mod.size());
+    for (unsigned i = 0; i != cells_to_mod.size(); ++i) {
+      upd->served_cells_to_modify_list[i].load_info_obj(ASN1_F1AP_ID_SERVED_CELLS_TO_MODIFY_ITEM);
+      auto& item              = upd->served_cells_to_modify_list[i].value().served_cells_to_modify_item();
+      item.old_nr_cgi.plmn_id = cells_to_mod[i].first.plmn_id.to_bytes();
+      item.old_nr_cgi.nr_cell_id.from_number(cells_to_mod[i].first.nci.value());
+      auto served           = generate_served_cells_item(cells_to_mod[i].second);
+      item.served_cell_info = served.served_cell_info;
+      if (served.gnb_du_sys_info_present) {
+        item.gnb_du_sys_info_present = true;
+        item.gnb_du_sys_info         = served.gnb_du_sys_info;
+      }
+    }
+  }
+
+  if (not cells_to_rem.empty()) {
+    upd->served_cells_to_delete_list_present = true;
+    upd->served_cells_to_delete_list.resize(cells_to_rem.size());
+    for (unsigned i = 0; i != cells_to_rem.size(); ++i) {
+      upd->served_cells_to_delete_list[i].load_info_obj(ASN1_F1AP_ID_SERVED_CELLS_TO_DELETE_ITEM);
+      auto& item              = upd->served_cells_to_delete_list[i].value().served_cells_to_delete_item();
+      item.old_nr_cgi.plmn_id = cells_to_rem[i].plmn_id.to_bytes();
+      item.old_nr_cgi.nr_cell_id.from_number(cells_to_rem[i].nci.value());
+    }
+  }
+
+  return msg;
+}
+
 f1ap_message
 ocudu::test_helpers::generate_gnb_du_configuration_update_acknowledge(const f1ap_message& gnb_du_config_update)
 {
@@ -197,7 +260,8 @@ f1ap_message ocudu::test_helpers::generate_gnb_du_configuration_update_failure(c
 f1ap_message
 ocudu::test_helpers::generate_gnb_cu_configuration_update_request(unsigned                        transaction_id,
                                                                   span<const nr_cell_global_id_t> cgis_to_activate,
-                                                                  span<const nr_cell_global_id_t> cgis_to_deactivate)
+                                                                  span<const nr_cell_global_id_t> cgis_to_deactivate,
+                                                                  span<const f1ap_cell_to_bar>    cells_to_bar)
 {
   f1ap_message msg;
 
@@ -218,6 +282,14 @@ ocudu::test_helpers::generate_gnb_cu_configuration_update_request(unsigned      
     req->cells_to_be_deactiv_list[i].value().cells_to_be_deactiv_list_item().nr_cgi =
         cgi_to_asn1(cgis_to_deactivate[i]);
   }
+  req->cells_to_be_barred_list_present = not cells_to_bar.empty();
+  req->cells_to_be_barred_list.resize(cells_to_bar.size());
+  for (unsigned i = 0, e = cells_to_bar.size(); i != e; ++i) {
+    req->cells_to_be_barred_list[i].load_info_obj(ASN1_F1AP_ID_CELLS_TO_BE_BARRED_ITEM);
+    auto& asn1_item             = req->cells_to_be_barred_list[i].value().cells_to_be_barred_item();
+    asn1_item.nr_cgi            = cgi_to_asn1(cells_to_bar[i].cgi);
+    asn1_item.cell_barred.value = cells_to_bar[i].barred ? cell_barred_opts::barred : cell_barred_opts::not_barred;
+  }
 
   return msg;
 }
@@ -232,6 +304,7 @@ f1ap_message ocudu::test_helpers::generate_gnb_cu_configuration_update_acknowled
 
   auto& gnb_cu_cfg_upd_ack = gnb_cu_configuration_update_ack.pdu.successful_outcome().value.gnb_cu_cfg_upd_ack();
 
+  gnb_cu_cfg_upd_ack->cells_failed_to_be_activ_list_present = !cells_failed_to_activate.empty();
   for (const auto& cell : cells_failed_to_activate) {
     asn1::protocol_ie_single_container_s<asn1::f1ap::cells_failed_to_be_activ_list_item_ies_o> asn1_cell_container;
     cells_failed_to_be_activ_list_item_s& asn1_cell = asn1_cell_container->cells_failed_to_be_activ_list_item();
@@ -293,7 +366,7 @@ static drbs_to_be_setup_item_s generate_drb_am_setup_item(drb_id_t drbid)
   using namespace asn1::f1ap;
 
   drbs_to_be_setup_item_s drb;
-  drb.drb_id = drb_id_to_uint(drbid);
+  drb.drb_id = to_underlying(drbid);
   drb.qos_info.set_choice_ext().load_info_obj(ASN1_F1AP_ID_DRB_INFO);
   auto& drb_info                                                 = drb.qos_info.choice_ext()->drb_info();
   drb_info.drb_qos.qos_characteristics.set_non_dyn_5qi().five_qi = 9;
@@ -402,7 +475,7 @@ f1ap_message ocudu::test_helpers::generate_ue_context_setup_response(gnb_cu_ue_f
   for (const auto& drb : drbs_setup_list) {
     ue_context_setup_resp->drbs_setup_list.push_back({});
     ue_context_setup_resp->drbs_setup_list.back().load_info_obj(ASN1_F1AP_ID_DRBS_SETUP_ITEM);
-    ue_context_setup_resp->drbs_setup_list.back().value().drbs_setup_item().drb_id = drb_id_to_uint(drb);
+    ue_context_setup_resp->drbs_setup_list.back().value().drbs_setup_item().drb_id = to_underlying(drb);
   }
 
   return ue_context_setup_response;
@@ -512,7 +585,7 @@ static asn1::f1ap::drbs_to_be_modified_item_s generate_to_modify_drb_am_mod_item
   using namespace asn1::f1ap;
 
   drbs_to_be_modified_item_s drb;
-  drb.drb_id                          = drb_id_to_uint(drbid);
+  drb.drb_id                          = to_underlying(drbid);
   drb.ie_exts_present                 = true;
   drb.ie_exts.dl_pdcp_sn_len_present  = true;
   drb.ie_exts.dl_pdcp_sn_len          = pdcp_sn_len_opts::twelve_bits;
@@ -524,7 +597,7 @@ static asn1::f1ap::drbs_to_be_setup_mod_item_s generate_drb_am_mod_item(drb_id_t
 {
   using namespace asn1::f1ap;
   drbs_to_be_setup_mod_item_s drb;
-  drb.drb_id = drb_id_to_uint(drbid);
+  drb.drb_id = to_underlying(drbid);
   drb.qos_info.set_choice_ext().load_info_obj(ASN1_F1AP_ID_DRB_INFO);
   auto& drb_info                                                 = drb.qos_info.choice_ext()->drb_info();
   drb_info.drb_qos.qos_characteristics.set_non_dyn_5qi().five_qi = 8;
@@ -567,8 +640,8 @@ ocudu::test_helpers::generate_ue_context_modification_request(gnb_du_ue_f1ap_id_
 
   msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_UE_CONTEXT_MOD);
   ue_context_mod_request_s& dl_msg = msg.pdu.init_msg().value.ue_context_mod_request();
-  dl_msg->gnb_cu_ue_f1ap_id        = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
-  dl_msg->gnb_du_ue_f1ap_id        = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  dl_msg->gnb_cu_ue_f1ap_id        = to_underlying(cu_ue_id);
+  dl_msg->gnb_du_ue_f1ap_id        = to_underlying(du_ue_id);
 
   dl_msg->drbs_to_be_setup_mod_list_present = drbs_to_setup.size() > 0;
   dl_msg->drbs_to_be_setup_mod_list.resize(drbs_to_setup.size());
@@ -584,7 +657,7 @@ ocudu::test_helpers::generate_ue_context_modification_request(gnb_du_ue_f1ap_id_
   count = 0;
   for (drb_id_t drbid : drbs_to_rem) {
     dl_msg->drbs_to_be_released_list[count].load_info_obj(ASN1_F1AP_ID_DRBS_TO_BE_RELEASED_ITEM);
-    dl_msg->drbs_to_be_released_list[count]->drbs_to_be_released_item().drb_id = drb_id_to_uint(drbid);
+    dl_msg->drbs_to_be_released_list[count]->drbs_to_be_released_item().drb_id = to_underlying(drbid);
     ++count;
   }
 
@@ -627,14 +700,14 @@ ocudu::test_helpers::generate_ue_context_modification_response(gnb_du_ue_f1ap_id
   for (const auto& drb : drbs_setup_mod_list) {
     ue_context_mod_resp->drbs_setup_mod_list.push_back({});
     ue_context_mod_resp->drbs_setup_mod_list.back().load_info_obj(ASN1_F1AP_ID_DRBS_SETUP_MOD_ITEM);
-    ue_context_mod_resp->drbs_setup_mod_list.back().value().drbs_setup_mod_item().drb_id = drb_id_to_uint(drb);
+    ue_context_mod_resp->drbs_setup_mod_list.back().value().drbs_setup_mod_item().drb_id = to_underlying(drb);
   }
 
   ue_context_mod_resp->drbs_modified_list_present = !drbs_modified_list.empty();
   for (const auto& drb : drbs_modified_list) {
     ue_context_mod_resp->drbs_modified_list.push_back({});
     ue_context_mod_resp->drbs_modified_list.back().load_info_obj(ASN1_F1AP_ID_DRBS_MODIFIED_ITEM);
-    ue_context_mod_resp->drbs_modified_list.back().value().drbs_modified_item().drb_id = drb_id_to_uint(drb);
+    ue_context_mod_resp->drbs_modified_list.back().value().drbs_modified_item().drb_id = to_underlying(drb);
   }
 
   if (!cell_group_config.empty()) {
@@ -691,7 +764,7 @@ f1ap_message ocudu::test_helpers::generate_init_ul_rrc_message_transfer(gnb_du_u
   nr_cell_identity nci = nr_cell_identity::create(gnb_id_t{411, 22}, 0).value();
   init_ul_rrc->nr_cgi.nr_cell_id.from_number(nci.value());
   init_ul_rrc->nr_cgi.plmn_id = plmn_id.to_bytes();
-  init_ul_rrc->c_rnti         = to_value(crnti);
+  init_ul_rrc->c_rnti         = to_underlying(crnti);
 
   init_ul_rrc->sul_access_ind_present = true;
   init_ul_rrc->sul_access_ind.value   = sul_access_ind_opts::options::true_value;
@@ -860,7 +933,7 @@ f1ap_message ocudu::test_helpers::generate_trp_information_response(const std::v
 
     asn1::protocol_ie_single_container_s<asn1::f1ap::trp_info_item_trp_resp_o> trp_resp_item_container;
     asn1::f1ap::trp_info_item_s& trp_info_item = trp_resp_item_container->trp_info_item();
-    trp_info_item.trp_info.trp_id              = trp_id_to_uint(trp_id);
+    trp_info_item.trp_info.trp_id              = to_underlying(trp_id);
 
     // Add PCI.
     asn1::f1ap::trp_info_type_resp_item_c trp_info_type_resp_item;
@@ -912,8 +985,8 @@ f1ap_message ocudu::test_helpers::generate_positioning_information_request(gnb_d
   pdu.pdu.init_msg().load_info_obj(ASN1_F1AP_ID_POSITIONING_INFO_EXCHANGE);
 
   auto& pos_info_req                                             = pdu.pdu.init_msg().value.positioning_info_request();
-  pos_info_req->gnb_cu_ue_f1ap_id                                = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
-  pos_info_req->gnb_du_ue_f1ap_id                                = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  pos_info_req->gnb_cu_ue_f1ap_id                                = to_underlying(cu_ue_id);
+  pos_info_req->gnb_du_ue_f1ap_id                                = to_underlying(du_ue_id);
   pos_info_req->requested_srs_tx_characteristics_present         = true;
   pos_info_req->requested_srs_tx_characteristics.nof_txs_present = true;
   pos_info_req->requested_srs_tx_characteristics.nof_txs         = 0;
@@ -960,12 +1033,15 @@ generate_srs_configuration(subcarrier_spacing scs = subcarrier_spacing::kHz15, u
       .comb_offset_n4  = 0,
       .cyclic_shift_n4 = 0,
   };
-  srs_res.start_position        = 0;
-  srs_res.nrof_symbols          = asn1::f1ap::srs_res_s::nrof_symbols_opts::options::n1;
-  srs_res.repeat_factor         = asn1::f1ap::srs_res_s::repeat_factor_opts::options::n1;
-  srs_res.freq_domain_position  = 0;
-  srs_res.freq_domain_shift     = 0;
-  srs_res.c_srs                 = 14;
+  srs_res.start_position       = 0;
+  srs_res.nrof_symbols         = asn1::f1ap::srs_res_s::nrof_symbols_opts::options::n1;
+  srs_res.repeat_factor        = asn1::f1ap::srs_res_s::repeat_factor_opts::options::n1;
+  srs_res.freq_domain_position = 0;
+  // Kept clear of the common PUCCH resources at the edges of the 52-CRB BWP configured above (CRBs [0, 4) and
+  // [48, 52)), matching the same (c_srs, freq_domain_shift) the DU's own SRS resource manager would auto-compute for
+  // this cell config; otherwise this (neighbor-cell) SRS-to-measure resource collides with the local common PUCCH.
+  srs_res.freq_domain_shift     = 6;
+  srs_res.c_srs                 = 11;
   srs_res.b_srs                 = 0;
   srs_res.b_hop                 = 0;
   srs_res.group_or_seq_hop      = asn1::f1ap::srs_res_s::group_or_seq_hop_opts::options::neither;
@@ -998,8 +1074,8 @@ f1ap_message ocudu::test_helpers::generate_positioning_information_response(gnb_
   pdu.pdu.successful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_INFO_EXCHANGE);
 
   auto& pos_info_resp              = pdu.pdu.successful_outcome().value.positioning_info_resp();
-  pos_info_resp->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
-  pos_info_resp->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  pos_info_resp->gnb_cu_ue_f1ap_id = to_underlying(cu_ue_id);
+  pos_info_resp->gnb_du_ue_f1ap_id = to_underlying(du_ue_id);
 
   pos_info_resp->srs_configuration_present = true;
   pos_info_resp->srs_configuration         = generate_srs_configuration();
@@ -1016,8 +1092,8 @@ f1ap_message ocudu::test_helpers::generate_positioning_information_failure(gnb_d
   pdu.pdu.unsuccessful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_INFO_EXCHANGE);
 
   auto& pos_info_fail                      = pdu.pdu.unsuccessful_outcome().value.positioning_info_fail();
-  pos_info_fail->gnb_cu_ue_f1ap_id         = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
-  pos_info_fail->gnb_du_ue_f1ap_id         = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  pos_info_fail->gnb_cu_ue_f1ap_id         = to_underlying(cu_ue_id);
+  pos_info_fail->gnb_du_ue_f1ap_id         = to_underlying(du_ue_id);
   pos_info_fail->cause.set_radio_network() = cause_radio_network_e::unspecified;
 
   return pdu;
@@ -1032,8 +1108,8 @@ f1ap_message ocudu::test_helpers::generate_positioning_activation_response(gnb_d
   pdu.pdu.successful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_ACTIVATION);
 
   auto& pos_info_resp              = pdu.pdu.successful_outcome().value.positioning_activation_resp();
-  pos_info_resp->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
-  pos_info_resp->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  pos_info_resp->gnb_cu_ue_f1ap_id = to_underlying(cu_ue_id);
+  pos_info_resp->gnb_du_ue_f1ap_id = to_underlying(du_ue_id);
 
   return pdu;
 }
@@ -1047,8 +1123,8 @@ f1ap_message ocudu::test_helpers::generate_positioning_activation_failure(gnb_du
   pdu.pdu.unsuccessful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_ACTIVATION);
 
   auto& pos_info_fail                      = pdu.pdu.unsuccessful_outcome().value.positioning_activation_fail();
-  pos_info_fail->gnb_cu_ue_f1ap_id         = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
-  pos_info_fail->gnb_du_ue_f1ap_id         = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  pos_info_fail->gnb_cu_ue_f1ap_id         = to_underlying(cu_ue_id);
+  pos_info_fail->gnb_du_ue_f1ap_id         = to_underlying(du_ue_id);
   pos_info_fail->cause.set_radio_network() = cause_radio_network_e::unspecified;
 
   return pdu;
@@ -1069,12 +1145,11 @@ f1ap_message ocudu::test_helpers::generate_positioning_measurement_request(
 
   auto& pos_meas_req           = pdu.pdu.init_msg().value.positioning_meas_request();
   pos_meas_req->transaction_id = 1;
-  pos_meas_req->lmf_meas_id    = lmf_meas_id_to_uint(lmf_meas_id);
-  pos_meas_req->ran_meas_id    = ran_meas_id_to_uint(ran_meas_id);
+  pos_meas_req->lmf_meas_id    = to_underlying(lmf_meas_id);
+  pos_meas_req->ran_meas_id    = to_underlying(ran_meas_id);
 
   for (const auto trp_id : trp_ids) {
-    pos_meas_req->trp_meas_request_list.push_back(
-        asn1::f1ap::trp_meas_request_item_s{.trp_id = trp_id_to_uint(trp_id)});
+    pos_meas_req->trp_meas_request_list.push_back(asn1::f1ap::trp_meas_request_item_s{.trp_id = to_underlying(trp_id)});
   }
 
   pos_meas_req->pos_report_characteristics = asn1::f1ap::pos_report_characteristics_opts::options::ondemand;
@@ -1108,13 +1183,13 @@ f1ap_message ocudu::test_helpers::generate_positioning_measurement_response(lmf_
 
   auto& pos_meas_resp           = pdu.pdu.successful_outcome().value.positioning_meas_resp();
   pos_meas_resp->transaction_id = transaction_id;
-  pos_meas_resp->lmf_meas_id    = lmf_meas_id_to_uint(lmf_meas_id);
-  pos_meas_resp->ran_meas_id    = ran_meas_id_to_uint(ran_meas_id);
+  pos_meas_resp->lmf_meas_id    = to_underlying(lmf_meas_id);
+  pos_meas_resp->ran_meas_id    = to_underlying(ran_meas_id);
 
   for (const auto& trp_id : trp_ids) {
     // Create positioning measurement result item for each TRP ID.
     asn1::f1ap::pos_meas_result_list_item_s meas_resp_item;
-    meas_resp_item.trp_id = trp_id_to_uint(trp_id);
+    meas_resp_item.trp_id = to_underlying(trp_id);
 
     // Add positioning measurement result item.
     asn1::f1ap::pos_meas_result_item_s pos_meas_result_item;
@@ -1143,6 +1218,48 @@ f1ap_message ocudu::test_helpers::generate_positioning_measurement_response(lmf_
   return pdu;
 }
 
+f1ap_message
+ocudu::test_helpers::generate_positioning_measurement_response_with_aoa(lmf_meas_id_t                lmf_meas_id,
+                                                                        ran_meas_id_t                ran_meas_id,
+                                                                        const std::vector<trp_id_t>& trp_ids,
+                                                                        uint16_t                     azimuth_ao_a,
+                                                                        unsigned                     transaction_id)
+{
+  f1ap_message pdu = {};
+
+  pdu.pdu.set_successful_outcome();
+  pdu.pdu.successful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_MEAS_EXCHANGE);
+
+  auto& pos_meas_resp           = pdu.pdu.successful_outcome().value.positioning_meas_resp();
+  pos_meas_resp->transaction_id = transaction_id;
+  pos_meas_resp->lmf_meas_id    = to_underlying(lmf_meas_id);
+  pos_meas_resp->ran_meas_id    = to_underlying(ran_meas_id);
+
+  for (const auto& trp_id : trp_ids) {
+    // Create positioning measurement result item for each TRP ID.
+    asn1::f1ap::pos_meas_result_list_item_s meas_resp_item;
+    meas_resp_item.trp_id = to_underlying(trp_id);
+
+    // Add positioning measurement result item.
+    asn1::f1ap::pos_meas_result_item_s pos_meas_result_item;
+
+    // > Add UL Angle of Arrival measurement result.
+    asn1::f1ap::ul_ao_a_s& ul_aoa = pos_meas_result_item.measured_results_value.set_ul_angle_of_arrival();
+    ul_aoa.azimuth_ao_a           = azimuth_ao_a;
+
+    // Add time stamp.
+    pos_meas_result_item.time_stamp.sys_frame_num         = 25;
+    pos_meas_result_item.time_stamp.slot_idx.set_scs_30() = 0;
+
+    meas_resp_item.pos_meas_result.push_back(pos_meas_result_item);
+
+    pos_meas_resp->pos_meas_result_list_present = true;
+    pos_meas_resp->pos_meas_result_list.push_back(meas_resp_item);
+  }
+
+  return pdu;
+}
+
 f1ap_message ocudu::test_helpers::generate_positioning_measurement_failure(lmf_meas_id_t lmf_meas_id,
                                                                            ran_meas_id_t ran_meas_id)
 {
@@ -1153,9 +1270,129 @@ f1ap_message ocudu::test_helpers::generate_positioning_measurement_failure(lmf_m
 
   auto& pos_meas_fail                      = pdu.pdu.unsuccessful_outcome().value.positioning_meas_fail();
   pos_meas_fail->transaction_id            = 1;
-  pos_meas_fail->lmf_meas_id               = lmf_meas_id_to_uint(lmf_meas_id);
-  pos_meas_fail->ran_meas_id               = ran_meas_id_to_uint(ran_meas_id);
+  pos_meas_fail->lmf_meas_id               = to_underlying(lmf_meas_id);
+  pos_meas_fail->ran_meas_id               = to_underlying(ran_meas_id);
   pos_meas_fail->cause.set_radio_network() = cause_radio_network_e::unspecified;
+
+  return pdu;
+}
+
+f1ap_message ocudu::test_helpers::generate_f1ap_write_replace_warning_request(unsigned transaction_id)
+{
+  f1ap_message pdu = {};
+
+  pdu.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_WRITE_REPLACE_WARNING);
+  auto& req = pdu.pdu.init_msg().value.write_replace_warning_request();
+
+  req->transaction_id        = transaction_id;
+  req->pws_sys_info.sib_type = 6;
+  req->pws_sys_info.sib_msg.from_string("deadbeef");
+  req->repeat_period           = 4;
+  req->numof_broadcast_request = 2;
+
+  return pdu;
+}
+
+f1ap_message ocudu::test_helpers::generate_f1ap_write_replace_warning_response(
+    unsigned                                transaction_id,
+    const std::vector<nr_cell_global_id_t>& completed_cells)
+{
+  f1ap_message pdu = {};
+
+  pdu.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_WRITE_REPLACE_WARNING);
+  auto& resp = pdu.pdu.successful_outcome().value.write_replace_warning_resp();
+
+  resp->transaction_id = transaction_id;
+
+  if (not completed_cells.empty()) {
+    resp->cells_broadcast_completed_list_present = true;
+    for (const auto& cgi : completed_cells) {
+      asn1::protocol_ie_single_container_s<cells_broadcast_completed_list_item_ies_o> item;
+      item->cells_broadcast_completed_item().nr_cgi = cgi_to_asn1(cgi);
+      resp->cells_broadcast_completed_list.push_back(item);
+    }
+  }
+
+  return pdu;
+}
+
+f1ap_message ocudu::test_helpers::generate_e_cid_measurement_initiation_request(gnb_cu_ue_f1ap_id_t cu_ue_id,
+                                                                                gnb_du_ue_f1ap_id_t du_ue_id,
+                                                                                uint16_t            lmf_ue_meas_id,
+                                                                                uint16_t            ran_ue_meas_id)
+{
+  f1ap_message pdu = {};
+
+  pdu.pdu.set_init_msg();
+  pdu.pdu.init_msg().load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_INITIATION);
+
+  auto& req                          = pdu.pdu.init_msg().value.e_c_id_meas_initiation_request();
+  req->gnb_cu_ue_f1ap_id             = to_underlying(cu_ue_id);
+  req->gnb_du_ue_f1ap_id             = to_underlying(du_ue_id);
+  req->lmf_ue_meas_id                = lmf_ue_meas_id;
+  req->ran_ue_meas_id                = ran_ue_meas_id;
+  req->e_c_id_report_characteristics = asn1::f1ap::e_c_id_report_characteristics_opts::on_demand;
+
+  asn1::protocol_ie_single_container_s<asn1::f1ap::e_c_id_meas_quantities_item_ies_o> item;
+  item.load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_QUANTITIES_ITEM);
+  item->e_c_id_meas_quantities_item().e_c_id_meas_quantities_value =
+      asn1::f1ap::e_c_id_meas_quantities_value_opts::angle_of_arrival_nr;
+  req->e_c_id_meas_quantities.push_back(item);
+
+  return pdu;
+}
+
+f1ap_message ocudu::test_helpers::generate_e_cid_measurement_initiation_response(gnb_du_ue_f1ap_id_t     du_ue_id,
+                                                                                 gnb_cu_ue_f1ap_id_t     cu_ue_id,
+                                                                                 uint16_t                lmf_ue_meas_id,
+                                                                                 uint16_t                ran_ue_meas_id,
+                                                                                 std::optional<uint16_t> azimuth_aoa,
+                                                                                 std::optional<uint16_t> zenith_aoa)
+{
+  f1ap_message pdu = {};
+
+  pdu.pdu.set_successful_outcome();
+  pdu.pdu.successful_outcome().load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_INITIATION);
+
+  auto& resp              = pdu.pdu.successful_outcome().value.e_c_id_meas_initiation_resp();
+  resp->gnb_cu_ue_f1ap_id = to_underlying(cu_ue_id);
+  resp->gnb_du_ue_f1ap_id = to_underlying(du_ue_id);
+  resp->lmf_ue_meas_id    = lmf_ue_meas_id;
+  resp->ran_ue_meas_id    = ran_ue_meas_id;
+
+  if (azimuth_aoa.has_value()) {
+    resp->e_c_id_meas_result_present = true;
+
+    asn1::f1ap::e_c_id_measured_results_item_s item;
+    auto&                                      aoa = item.e_c_id_measured_results_value.set_value_angleof_arrival_nr();
+    aoa.azimuth_ao_a                               = azimuth_aoa.value();
+    if (zenith_aoa.has_value()) {
+      aoa.zenith_ao_a_present = true;
+      aoa.zenith_ao_a         = zenith_aoa.value();
+    }
+
+    resp->e_c_id_meas_result.measured_results_list.push_back(item);
+  }
+
+  return pdu;
+}
+
+f1ap_message ocudu::test_helpers::generate_e_cid_measurement_initiation_failure(gnb_du_ue_f1ap_id_t du_ue_id,
+                                                                                gnb_cu_ue_f1ap_id_t cu_ue_id,
+                                                                                uint16_t            lmf_ue_meas_id,
+                                                                                uint16_t            ran_ue_meas_id)
+{
+  f1ap_message pdu = {};
+
+  pdu.pdu.set_unsuccessful_outcome();
+  pdu.pdu.unsuccessful_outcome().load_info_obj(ASN1_F1AP_ID_E_C_ID_MEAS_INITIATION);
+
+  auto& fail                      = pdu.pdu.unsuccessful_outcome().value.e_c_id_meas_initiation_fail();
+  fail->gnb_cu_ue_f1ap_id         = to_underlying(cu_ue_id);
+  fail->gnb_du_ue_f1ap_id         = to_underlying(du_ue_id);
+  fail->lmf_ue_meas_id            = lmf_ue_meas_id;
+  fail->ran_ue_meas_id            = ran_ue_meas_id;
+  fail->cause.set_radio_network() = asn1::f1ap::cause_radio_network_opts::unspecified;
 
   return pdu;
 }

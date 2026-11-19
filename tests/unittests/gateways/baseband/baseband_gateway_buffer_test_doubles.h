@@ -7,6 +7,7 @@
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_writer.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/support/error_handling.h"
+#include <vector>
 
 namespace ocudu {
 

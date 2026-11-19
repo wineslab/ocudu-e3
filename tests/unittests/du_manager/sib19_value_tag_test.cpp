@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "lib/du/du_high/du_high_ntn_sib19_update_handler_impl.h"
+#include "lib/du/du_high/du_manager/du_high_ntn_sib19_update_handler_impl.h"
+#include "tests/ocudu_test_requirements.h"
 #include "ocudu/du/du_high/du_manager/du_configurator.h"
 #include "ocudu/ntn/ntn_sib19_update_handler.h"
 #include "ocudu/ocudulog/ocudulog.h"
@@ -12,6 +13,7 @@
 #include "ocudu/support/async/async_no_op_task.h"
 #include <gtest/gtest.h>
 #include <optional>
+#include <utility>
 
 using namespace ocudu;
 using namespace ocudu_ntn;
@@ -39,7 +41,7 @@ public:
     return launch_no_op_task(du_param_config_response{true});
   }
 
-  void handle_ntn_param_update(const du_ntn_param_update_request& req) override { last_ntn_req = req; }
+  void handle_ntn_param_update(du_ntn_param_update_request req) override { last_ntn_req = std::move(req); }
 };
 
 // ---------------------------------------------------------------------------
@@ -51,8 +53,6 @@ static ntn_sib19_update_request make_base_request(bool si_valuetag_change)
 {
   ntn_sib19_update_request req;
   req.nr_cgi             = nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(1).value()};
-  req.si_msg_idx         = 0;
-  req.sib_idx            = 19;
   req.slot               = slot_point{subcarrier_spacing::kHz15, 0, 0};
   req.si_slot_period     = 320;
   req.si_valuetag_change = si_valuetag_change;
@@ -60,7 +60,7 @@ static ntn_sib19_update_request make_base_request(bool si_valuetag_change)
   sib19_info& sib19 = req.sib19;
   sib19.ntn_cfg.emplace();
   sib19.ntn_cfg->cell_specific_koffset.emplace(std::chrono::milliseconds(260));
-  sib19.ntn_cfg->k_mac     = 128u;
+  sib19.ntn_cfg->k_mac     = std::chrono::milliseconds{128};
   sib19.ntn_cfg->ta_report = true;
   sib19.ntn_cfg->epoch_time.emplace();
   sib19.ntn_cfg->epoch_time->sfn             = 0;
@@ -106,6 +106,8 @@ protected:
 /// the handler must set cell_req.sib19 to trigger systemInfoValueTag increment.
 TEST_F(sib19_value_tag_handler_test, first_update_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req = make_base_request(/*si_valuetag_change=*/true);
   handler.handle_sib19_msg_update(req);
 
@@ -117,6 +119,8 @@ TEST_F(sib19_value_tag_handler_test, first_update_triggers_value_tag)
 /// must NOT set cell_req.sib19 — no unnecessary systemInfoValueTag bump.
 TEST_F(sib19_value_tag_handler_test, repeat_same_tracked_fields_no_trigger)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req = make_base_request(/*si_valuetag_change=*/false);
   handler.handle_sib19_msg_update(req);
 
@@ -127,6 +131,8 @@ TEST_F(sib19_value_tag_handler_test, repeat_same_tracked_fields_no_trigger)
 /// The handler must not set cell_req.sib19.
 TEST_F(sib19_value_tag_handler_test, exempt_field_change_only_no_trigger)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req = make_base_request(/*si_valuetag_change=*/false);
   // Modify only exempt fields to simulate a purely exempt-field update.
   req.sib19.ntn_cfg->epoch_time->sfn             = 99;
@@ -144,6 +150,8 @@ TEST_F(sib19_value_tag_handler_test, exempt_field_change_only_no_trigger)
 /// The handler must set cell_req.sib19.
 TEST_F(sib19_value_tag_handler_test, tracked_koffset_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req                                 = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.ntn_cfg->cell_specific_koffset = std::chrono::milliseconds(300);
 
@@ -156,8 +164,10 @@ TEST_F(sib19_value_tag_handler_test, tracked_koffset_change_triggers_value_tag)
 
 TEST_F(sib19_value_tag_handler_test, tracked_kmac_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req                 = make_base_request(/*si_valuetag_change=*/true);
-  req.sib19.ntn_cfg->k_mac = 256u;
+  req.sib19.ntn_cfg->k_mac = std::chrono::milliseconds{256};
 
   handler.handle_sib19_msg_update(req);
 
@@ -166,6 +176,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_kmac_change_triggers_value_tag)
 
 TEST_F(sib19_value_tag_handler_test, tracked_polarization_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.ntn_cfg->polarization.emplace();
   req.sib19.ntn_cfg->polarization->dl = ntn_polarization_t::polarization_type::rhcp;
@@ -178,6 +190,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_polarization_change_triggers_value_
 
 TEST_F(sib19_value_tag_handler_test, tracked_ta_report_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req                     = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.ntn_cfg->ta_report = false;
 
@@ -188,6 +202,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_ta_report_change_triggers_value_tag
 
 TEST_F(sib19_value_tag_handler_test, tracked_t_service_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req            = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.t_service = std::chrono::system_clock::time_point(std::chrono::milliseconds(1000000));
 
@@ -198,6 +214,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_t_service_change_triggers_value_tag
 
 TEST_F(sib19_value_tag_handler_test, tracked_ref_location_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.ref_location.emplace();
   req.sib19.ref_location->latitude  = 48.1;
@@ -211,6 +229,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_ref_location_change_triggers_value_
 
 TEST_F(sib19_value_tag_handler_test, tracked_distance_thres_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req                 = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.distance_thres = 10000u;
 
@@ -221,6 +241,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_distance_thres_change_triggers_valu
 
 TEST_F(sib19_value_tag_handler_test, tracked_ncells_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2", "DU-NTN-SI-3");
+
   auto              req = make_base_request(/*si_valuetag_change=*/true);
   neighbor_ntn_cell ncell;
   ncell.phys_cell_id.emplace(100);
@@ -234,6 +256,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_ncells_change_triggers_value_tag)
 
 TEST_F(sib19_value_tag_handler_test, tracked_coverage_enhancements_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.coverage_enhancements.emplace();
   req.sib19.coverage_enhancements->nof_msg4_harq_ack_rep    = 4u;
@@ -246,6 +270,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_coverage_enhancements_change_trigge
 
 TEST_F(sib19_value_tag_handler_test, tracked_sat_switch_change_triggers_value_tag)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   auto req = make_base_request(/*si_valuetag_change=*/true);
   req.sib19.sat_switch_with_resync.emplace();
   req.sib19.sat_switch_with_resync->ntn_cfg.cell_specific_koffset.emplace(std::chrono::milliseconds(100));
@@ -264,6 +290,8 @@ TEST_F(sib19_value_tag_handler_test, tracked_sat_switch_change_triggers_value_ta
 
 TEST_F(sib19_value_tag_handler_test, two_cells_tracked_independently)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   // Cell 1: si_valuetag_change=true.
   auto req1   = make_base_request(/*si_valuetag_change=*/true);
   req1.nr_cgi = nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(1).value()};

@@ -6,6 +6,7 @@
 #include "../support/dmrs_helpers.h"
 #include "../support/pdsch/pdsch_default_time_allocation.h"
 #include "../support/prbs_calculator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/duplex_mode.h"
 #include "ocudu/ran/prach/prach_configuration.h"
@@ -214,6 +215,26 @@ static error_type<std::string> validate_sib1_cfg(const sched_cell_configuration_
       get_si_rnti_pdsch_time_domain_list(msg.ran.dl_cfg_common.init_dl_bwp.generic_params.cp, msg.ran.dmrs_typeA_pos);
   const ofdm_symbol_range sib1_symbols = pdsch_td_res_alloc_list[time_resource].symbols;
 
+  // Mapping type B is not supported yet, so a mapping type A resource must fit after CORESET#0 for every SSB beam.
+  const auto&    pdcch_common      = msg.ran.dl_cfg_common.init_dl_bwp.pdcch_common;
+  const auto&    sib1_ss_cfg       = pdcch_common.search_spaces[pdcch_common.sib1_search_space_id];
+  const unsigned coreset0_duration = pdcch_common.coreset0->duration();
+  const unsigned L_max             = msg.ran.ssb_cfg.ssb_beams.get_L_max();
+  for (unsigned ssb_idx = 0; ssb_idx != L_max; ++ssb_idx) {
+    if (not msg.ran.ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
+      continue;
+    }
+    const unsigned required_start = sib1_ss_cfg.get_first_symbol_index(ssb_idx) + coreset0_duration;
+    const bool     has_valid_resource =
+        std::any_of(pdsch_td_res_alloc_list.begin(), pdsch_td_res_alloc_list.end(), [required_start](const auto& r) {
+          return r.map_type != sch_mapping_type::typeB and r.symbols.start() >= required_start;
+        });
+    VERIFY(has_valid_resource,
+           "No valid PDSCH time-domain resource to schedule SIB1 for SSB beam {} (PDSCH mapping type B not "
+           "supported)",
+           ssb_idx);
+  }
+
   const dmrs_information dmrs_info =
       make_dmrs_info_common(pdsch_td_res_alloc_list, 0, msg.ran.pci, msg.ran.dmrs_typeA_pos);
   const sch_mcs_description mcs_descr = pdsch_mcs_get_config(mcs_table, expert_cfg.si.sib1_mcs_index);
@@ -239,6 +260,27 @@ static error_type<std::string> validate_sib1_cfg(const sched_cell_configuration_
   return {};
 }
 
+static error_type<std::string> validate_cg_cfg(const sched_cell_configuration_request_message& msg)
+{
+  if (not msg.ran.init_bwp.cg_cfg.has_value()) {
+    return {};
+  }
+
+  // Verify that the CG parameters are consistent, i.e. the number of RBs required per UE (derived from the CG grant
+  // size or bitrate and the MCS) does not exceed the maximum number of RBs reserved for CG in the cell. Otherwise, no
+  // CG resources could ever be allocated to any UE.
+  const cg_configuration default_cg_cfg = config_helpers::make_default_cell_cg_config(msg.ran);
+  const unsigned         nof_rbs_per_ue = config_helpers::compute_nof_cg_prbs_per_ue(msg.ran, default_cg_cfg);
+  const unsigned         max_cg_rbs     = msg.ran.init_bwp.cg_cfg.value().max_nof_cell_cg_rbs;
+  VERIFY(nof_rbs_per_ue <= max_cg_rbs,
+         "The Configured Grant size/bitrate requires {} RBs per UE at the configured MCS, which exceeds the maximum "
+         "of {} RBs reserved for CG in the cell. No CG resources could be allocated to any UE",
+         nof_rbs_per_ue,
+         max_cg_rbs);
+
+  return {};
+}
+
 static error_type<std::string> validate_paging_cfg(const scheduler_expert_config& expert_cfg)
 {
   static constexpr pdsch_mcs_table mcs_table = ocudu::pdsch_mcs_table::qam64;
@@ -252,12 +294,18 @@ static error_type<std::string> validate_paging_cfg(const scheduler_expert_config
 
 /// \brief Validates \c sched_cell_configuration_request_message used to add a cell.
 /// \param[in] msg scheduler cell configuration message to be validated.
+/// \param[in] expert_cfg Expert scheduler cell configuration.
 /// \return In case an invalid parameter is detected, returns a string containing an error message.
 error_type<std::string> config_validators::validate_sched_cell_configuration_request_message(
     const sched_cell_configuration_request_message& msg,
     const scheduler_expert_config&                  expert_cfg)
 {
-  VERIFY(msg.cell_index < MAX_NOF_DU_CELLS, "cell index={} is not valid", fmt::underlying(msg.cell_index));
+  VERIFY(msg.cell_index < MAX_NOF_DU_CELLS, "cell index={} is not valid", msg.cell_index);
+
+  VERIFY(msg.max_nof_ue_contexts > 0 and msg.max_nof_ue_contexts <= MAX_NOF_DU_UES_PER_CELL,
+         "Number of UE contexts={} of cell={} is not valid",
+         msg.max_nof_ue_contexts,
+         msg.cell_index);
 
   const auto& dl_lst = msg.ran.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list;
   for (const auto& pdsch : dl_lst) {
@@ -275,6 +323,8 @@ error_type<std::string> config_validators::validate_sched_cell_configuration_req
   HANDLE_CODE(validate_sib1_cfg(msg, expert_cfg));
 
   HANDLE_CODE(validate_paging_cfg(expert_cfg));
+
+  HANDLE_CODE(validate_cg_cfg(msg));
 
   if (msg.ran.init_bwp.csi.has_value()) {
     const auto csi_helper          = config_helpers::make_csi_meas_config_builder_params(msg.ran);

@@ -11,6 +11,6 @@
 namespace ocudu {
 
 /// Creates an instance of an CU-CP.
-std::unique_ptr<ocucp::cu_cp> create_cu_cp(const ocucp::cu_cp_configuration& cfg_);
+std::unique_ptr<ocucp::cu_cp> create_cu_cp(const ocucp::cu_cp_configuration& cfg);
 
 } // namespace ocudu

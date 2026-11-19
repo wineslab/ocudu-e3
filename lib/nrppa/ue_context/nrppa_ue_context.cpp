@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "nrppa_ue_context.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/support/enum_utils.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -29,7 +31,7 @@ nrppa_ue_context& nrppa_ue_context_list::add_ue(cu_cp_ue_index_t         ue_inde
                                                 task_executor&           task_exec)
 {
   logger.debug("ue={} ran_ue={} lmf_ue={}: NRPPA UE context created",
-               fmt::underlying(ue_index),
+               ue_index,
                fmt::underlying(ran_ue_meas_id),
                fmt::underlying(lmf_ue_meas_id));
   ues.emplace(std::piecewise_construct,
@@ -115,6 +117,6 @@ void nrppa_ue_context_list::increase_next_ran_ue_meas_id()
     next_ran_ue_meas_id = ran_ue_meas_id_t::min;
   } else {
     // Increase RAN UE meas ID counter.
-    next_ran_ue_meas_id = uint_to_ran_ue_meas_id(ran_ue_meas_id_to_uint(next_ran_ue_meas_id) + 1);
+    next_ran_ue_meas_id = uint_to_ran_ue_meas_id(to_underlying(next_ran_ue_meas_id) + 1);
   }
 }

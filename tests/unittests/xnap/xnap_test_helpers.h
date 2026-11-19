@@ -6,6 +6,7 @@
 
 #include "lib/cu_cp/ue_manager/ue_manager_impl.h"
 #include "lib/xnap/xnap_impl.h"
+#include "ocudu/cu_cp/cu_cp_configuration.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/cause/xnap_cause.h"
 #include "ocudu/support/async/async_no_op_task.h"
@@ -15,6 +16,8 @@
 #include "ocudu/xnap/xnap_message_notifier.h"
 #include <chrono>
 #include <gtest/gtest.h>
+#include <utility>
+#include <vector>
 
 namespace ocudu::ocucp {
 
@@ -28,10 +31,12 @@ public:
   bool on_new_message(const xnap_message& msg) override
   {
     last_msg = msg;
+    all_msgs.push_back(msg);
     return true;
   }
 
-  xnap_message& last_msg;
+  xnap_message&             last_msg;
+  std::vector<xnap_message> all_msgs;
 };
 
 /// Reusable class that stores the messages sent over XNAP for test inspection.
@@ -45,7 +50,7 @@ public:
     return launch_no_op_task(true);
   }
 
-  void attach_cu_cp(cu_cp_xnc_handler& xnc_handler_) override { logger.info("CU-CP attached to XN-C gateway"); }
+  void attach_cu_cp(cu_cp_xnc_handler& xnc_handler_) override { logger.info("CU-CP attached to Xn-C gateway"); }
 
   void stop() override {}
 
@@ -62,12 +67,25 @@ public:
 
   void set_xnap_handover_request_outcome(bool success) { ho_request_outcome = success; }
 
-  async_task<bool> on_new_rrc_handover_command(cu_cp_ue_index_t ue_index, byte_buffer command) override
+  /// Suspends the RRC Handover Command handling until \ref complete_rrc_handover_command is called. Allows a test to
+  /// run other events while the XNAP procedure is suspended.
+  void defer_rrc_handover_command() { rrc_handover_command_gate.emplace(); }
+
+  void complete_rrc_handover_command()
   {
-    logger.info("Received a new RRC Handover Command for UE index {}", ue_index);
+    ocudu_assert(rrc_handover_command_gate.has_value(), "RRC Handover Command handling was not deferred");
+    rrc_handover_command_gate->set();
+  }
+
+  async_task<bool> on_new_rrc_handover_command(cu_cp_rrc_handover_command command) override
+  {
+    logger.info("Received a new RRC Handover Command for UE index {}", command.ue_index);
     last_handover_command = std::move(command);
-    return launch_async([](coro_context<async_task<bool>>& ctx) mutable {
+    return launch_async([this](coro_context<async_task<bool>>& ctx) mutable {
       CORO_BEGIN(ctx);
+      if (rrc_handover_command_gate.has_value()) {
+        CORO_AWAIT(*rrc_handover_command_gate);
+      }
       CORO_RETURN(true);
     });
   }
@@ -98,7 +116,7 @@ public:
     ocudu_assert(ue_mng.find_ue(ue_index) != nullptr, "UE must be present\n");
     logger.info("Received a handover request");
 
-    if (!ue_mng.find_ue(ue_index)->get_security_manager().init_security_context(sec_ctxt)) {
+    if (!ue_mng.find_ue(ue_index)->get_security_manager().init_handover_security_context(sec_ctxt)) {
       logger.info("Failed to initialize security context");
       return false;
     }
@@ -146,12 +164,26 @@ public:
       response = ho_fail;
     }
 
-    return launch_async([res = std::move(response)](
+    return launch_async([this, res = std::move(response)](
                             coro_context<async_task<cu_cp_handover_resource_allocation_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
 
+      if (handover_request_gate.has_value()) {
+        CORO_AWAIT(*handover_request_gate);
+      }
+
       CORO_RETURN(res);
     });
+  }
+
+  /// Suspends the handover request handling until \ref complete_handover_request is called. Allows a test to run
+  /// other events while the XNAP procedure is suspended.
+  void defer_handover_request() { handover_request_gate.emplace(); }
+
+  void complete_handover_request()
+  {
+    ocudu_assert(handover_request_gate.has_value(), "Handover request handling was not deferred");
+    handover_request_gate->set();
   }
 
   void on_xn_handover_execution(cu_cp_ue_index_t                              ue_index,
@@ -160,7 +192,7 @@ public:
     logger.info("Requested XN handover execution for UE index {}", ue_index);
   }
 
-  void on_handover_success_received(cu_cp_ue_index_t source_ue_index, peer_xnap_ue_id_t winner_peer_xnap_ue_id) override
+  void on_handover_success_received(cu_cp_ue_index_t source_ue_index, const nr_cell_global_id_t& winner_cgi) override
   {
     logger.info("HandoverSuccess received for source UE index {}", source_ue_index);
   }
@@ -175,10 +207,44 @@ public:
     logger.info("Received a UE context release for UE index {}", ue_index);
   }
 
-  byte_buffer last_handover_command;
+  std::vector<cu_cp_served_cell_info> on_served_cells_required() override { return served_cells; }
+
+  void set_served_cells(std::vector<cu_cp_served_cell_info> served_cells_) { served_cells = std::move(served_cells_); }
+  cu_cp_ue_index_t on_xnap_ue_context_id_lookup(const xnap_ue_context_id& ue_context_id) override
+  {
+    logger.info("Received a UE Context ID lookup request");
+    return ue_context_id_lookup_result;
+  }
+
+  async_task<xnap_retrieve_ue_context_response>
+  on_xnap_retrieve_ue_context_request(const xnap_retrieve_ue_context_request& request) override
+  {
+    logger.info("Received a Retrieve UE Context Request for UE index {}", request.ue_index);
+    last_retrieve_ue_context_request = request;
+    return launch_async([res = xnap_retrieve_ue_context_response{retrieve_ue_context_response}](
+                            coro_context<async_task<xnap_retrieve_ue_context_response>>& ctx) mutable {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(std::move(res));
+    });
+  }
+
+  cu_cp_rrc_handover_command last_handover_command;
+
+  /// UE index the dummy resolves a UE Context ID to.
+  cu_cp_ue_index_t ue_context_id_lookup_result = cu_cp_ue_index_t::invalid;
+  /// Response the dummy reports for a Retrieve UE Context Request.
+  xnap_retrieve_ue_context_response               retrieve_ue_context_response;
+  std::optional<xnap_retrieve_ue_context_request> last_retrieve_ue_context_request;
 
 private:
-  bool ho_request_outcome = false;
+  bool                                ho_request_outcome = false;
+  std::vector<cu_cp_served_cell_info> served_cells;
+
+  // Gate that holds the RRC Handover Command handling suspended, when set.
+  std::optional<manual_event_flag> rrc_handover_command_gate;
+
+  // Gate that holds the handover request handling suspended, when set.
+  std::optional<manual_event_flag> handover_request_gate;
 
   ue_manager&             ue_mng;
   ocudulog::basic_logger& logger;
@@ -193,7 +259,7 @@ protected:
   void TearDown() override;
 
   /// \brief Helper method to successfully run XN setup in XNAP.
-  bool run_xn_setup(const xnap_configuration& peer_cfg);
+  bool run_xn_setup(const xnap_configuration& peer_cfg, span<const cu_cp_served_cell_info> peer_cells = {});
 
   /// \brief Helper method to successfully create UE instance in ue manager.
   cu_cp_ue_index_t create_ue(rnti_t rnti = rnti_t::MIN_CRNTI);
@@ -216,8 +282,10 @@ protected:
   timer_manager           timers;
   manual_task_worker      ctrl_worker{128};
   cu_cp_configuration     cu_cp_cfg;
+  ue_manager_config       ue_cfg;
+  ue_manager_dependencies ue_dependencies;
 
-  ue_manager                 ue_mng{cu_cp_cfg};
+  ue_manager                 ue_mng{ue_cfg, ue_dependencies};
   dummy_xnc_gateway          xnc_gw;
   dummy_xnap_cu_cp_notifier  cu_cp_notifier{ue_mng};
   std::unique_ptr<xnap_impl> xnap = nullptr;
@@ -251,6 +319,11 @@ protected:
   };
 
   xnap_message get_last_message() { return last_tx_msg; }
+
+  /// \brief Returns the messages sent since the last call, and clears the record.
+  std::vector<xnap_message> pop_sent_messages() { return std::exchange(tx_notifier_spy->all_msgs, {}); }
+
+  dummy_xnap_message_notifier* tx_notifier_spy = nullptr;
 
 private:
   xnap_message last_tx_msg;

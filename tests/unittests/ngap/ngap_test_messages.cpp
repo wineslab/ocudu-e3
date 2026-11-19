@@ -154,8 +154,8 @@ ocudu::ocucp::generate_downlink_nas_transport_message(amf_ue_id_t amf_ue_id, ran
   dl_nas_transport.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_DL_NAS_TRANSPORT);
 
   auto& dl_nas_transport_msg           = dl_nas_transport.pdu.init_msg().value.dl_nas_transport();
-  dl_nas_transport_msg->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  dl_nas_transport_msg->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  dl_nas_transport_msg->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  dl_nas_transport_msg->ran_ue_ngap_id = to_underlying(ran_ue_id);
   if (nas_pdu.empty()) {
     (void)dl_nas_transport_msg->nas_pdu.resize(nas_pdu_len);
   } else {
@@ -199,8 +199,8 @@ ngap_message ocudu::ocucp::generate_uplink_nas_transport_message(amf_ue_id_t amf
   ul_nas_transport.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_UL_NAS_TRANSPORT);
 
   auto& ul_nas_transport_msg           = ul_nas_transport.pdu.init_msg().value.ul_nas_transport();
-  ul_nas_transport_msg->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  ul_nas_transport_msg->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ul_nas_transport_msg->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  ul_nas_transport_msg->ran_ue_ngap_id = to_underlying(ran_ue_id);
   (void)ul_nas_transport_msg->nas_pdu.resize(nas_pdu_len);
 
   auto& user_loc_info_nr = ul_nas_transport_msg->user_location_info.set_user_location_info_nr();
@@ -220,8 +220,8 @@ ngap_message ocudu::ocucp::generate_initial_context_setup_request_base(amf_ue_id
   ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_INIT_CONTEXT_SETUP);
 
   auto& init_context_setup_req           = ngap_msg.pdu.init_msg().value.init_context_setup_request();
-  init_context_setup_req->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  init_context_setup_req->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  init_context_setup_req->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  init_context_setup_req->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   init_context_setup_req->guami.plmn_id.from_string("00f110");
   init_context_setup_req->guami.amf_region_id.from_number(4);
@@ -247,10 +247,10 @@ ngap_message ocudu::ocucp::generate_initial_context_setup_request_base(amf_ue_id
 }
 
 ngap_message ocudu::ocucp::generate_valid_initial_context_setup_request_message(
-    amf_ue_id_t                                               amf_ue_id,
-    ran_ue_id_t                                               ran_ue_id,
-    std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
-    std::optional<location_report_request>                    location_reporting_request)
+    amf_ue_id_t                                                amf_ue_id,
+    ran_ue_id_t                                                ran_ue_id,
+    std::optional<cu_cp_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
+    std::optional<location_report_request>                     location_reporting_request)
 {
   ngap_message ngap_msg = generate_initial_context_setup_request_base(amf_ue_id, ran_ue_id);
 
@@ -357,18 +357,18 @@ ngap_message ocudu::ocucp::generate_ue_context_modification_request_base(amf_ue_
   ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_MOD);
 
   auto& ue_ctxt_mod           = ngap_msg.pdu.init_msg().value.ue_context_mod_request();
-  ue_ctxt_mod->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  ue_ctxt_mod->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ue_ctxt_mod->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  ue_ctxt_mod->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   return ngap_msg;
 }
 
 ngap_message ocudu::ocucp::generate_valid_ue_context_modification_request_message(
-    amf_ue_id_t                                               amf_ue_id,
-    ran_ue_id_t                                               ran_ue_id,
-    std::optional<aggregate_maximum_bit_rate_t>               ue_ambr,
-    std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
-    std::optional<guami_t>                                    new_guami)
+    amf_ue_id_t                                                amf_ue_id,
+    ran_ue_id_t                                                ran_ue_id,
+    std::optional<aggregate_maximum_bit_rate_t>                ue_ambr,
+    std::optional<cu_cp_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
+    std::optional<guami_t>                                     new_guami)
 {
   ngap_message ngap_msg = generate_ue_context_modification_request_base(amf_ue_id, ran_ue_id);
 
@@ -432,7 +432,7 @@ ngap_message ocudu::ocucp::generate_valid_ue_context_release_command_with_amf_ue
   ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_RELEASE);
 
   auto& ue_context_release_cmd                             = ngap_msg.pdu.init_msg().value.ue_context_release_cmd();
-  ue_context_release_cmd->ue_ngap_ids.set_amf_ue_ngap_id() = amf_ue_id_to_uint(amf_ue_id);
+  ue_context_release_cmd->ue_ngap_ids.set_amf_ue_ngap_id() = to_underlying(amf_ue_id);
   auto& cause                                              = ue_context_release_cmd->cause.set_radio_network();
   cause = asn1::ngap::cause_radio_network_opts::options::radio_conn_with_ue_lost;
 
@@ -449,10 +449,25 @@ ngap_message ocudu::ocucp::generate_valid_ue_context_release_command_with_ue_nga
 
   auto& ue_context_release_cmd = ngap_msg.pdu.init_msg().value.ue_context_release_cmd();
   auto& ue_id_pair             = ue_context_release_cmd->ue_ngap_ids.set_ue_ngap_id_pair();
-  ue_id_pair.amf_ue_ngap_id    = amf_ue_id_to_uint(amf_ue_id);
-  ue_id_pair.ran_ue_ngap_id    = ran_ue_id_to_uint(ran_ue_id);
+  ue_id_pair.amf_ue_ngap_id    = to_underlying(amf_ue_id);
+  ue_id_pair.ran_ue_ngap_id    = to_underlying(ran_ue_id);
   auto& cause                  = ue_context_release_cmd->cause.set_radio_network();
   cause                        = asn1::ngap::cause_radio_network_opts::options::radio_conn_with_ue_lost;
+
+  return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_ue_context_release_command_with_choice_exts_ue_ngap_ids()
+{
+  ngap_message ngap_msg = {};
+
+  ngap_msg.pdu.set_init_msg();
+  ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_RELEASE);
+
+  auto& ue_context_release_cmd = ngap_msg.pdu.init_msg().value.ue_context_release_cmd();
+  ue_context_release_cmd->ue_ngap_ids.set_choice_exts();
+  auto& cause = ue_context_release_cmd->cause.set_radio_network();
+  cause       = asn1::ngap::cause_radio_network_opts::options::radio_conn_with_ue_lost;
 
   return ngap_msg;
 }
@@ -466,8 +481,8 @@ ngap_message ocudu::ocucp::generate_pdu_session_resource_setup_request_base(amf_
   ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_PDU_SESSION_RES_SETUP);
 
   auto& pdu_session_res_setup_req           = ngap_msg.pdu.init_msg().value.pdu_session_res_setup_request();
-  pdu_session_res_setup_req->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  pdu_session_res_setup_req->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  pdu_session_res_setup_req->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  pdu_session_res_setup_req->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   pdu_session_res_setup_req->ue_aggr_max_bit_rate_present                 = true;
   pdu_session_res_setup_req->ue_aggr_max_bit_rate.ue_aggr_max_bit_rate_dl = 300000000U;
@@ -489,7 +504,7 @@ ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_setup_request_mes
   for (const auto& [pdu_session_id, pdu_session_params] : pdu_sessions) {
     pdu_session_res_setup_item_su_req_s pdu_session_res_item;
 
-    pdu_session_res_item.pdu_session_id = pdu_session_id_to_uint(pdu_session_id);
+    pdu_session_res_item.pdu_session_id = to_underlying(pdu_session_id);
 
     // Fill PDU session NAS PDU.
     pdu_session_res_item.pdu_session_nas_pdu.from_string("7e02e9b0a23c027e006801006e2e0115c211000901000631310101ff08060"
@@ -523,7 +538,7 @@ ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_setup_request_mes
       // Fill QoS flow setup request list.
       for (const auto& qos_flow_test_item : pdu_session_params.qos_flows) {
         qos_flow_setup_request_item_s qos_flow_setup_req_item;
-        qos_flow_setup_req_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_test_item.qos_flow_id);
+        qos_flow_setup_req_item.qos_flow_id = to_underlying(qos_flow_test_item.qos_flow_id);
 
         // Fill QoS characteristics.
         qos_flow_setup_req_item.qos_flow_level_qos_params.qos_characteristics.set_non_dyn5qi();
@@ -626,7 +641,7 @@ ocudu::ocucp::generate_ngap_pdu_session_resource_setup_response(ngap_pdu_session
         pdu_session_setup_response_item.pdu_session_resource_setup_response_transfer.dlqos_flow_per_tnl_info;
     dlqos_flow_per_tnl_info.up_tp_layer_info = {transport_layer_address::create_from_string("0.0.0.0"),
                                                 int_to_gtpu_teid(0)};
-    ngap_associated_qos_flow assoc_qos_flow;
+    cu_cp_associated_qos_flow assoc_qos_flow;
     assoc_qos_flow.qos_flow_id = uint_to_qos_flow_id(1);
     dlqos_flow_per_tnl_info.associated_qos_flow_list.emplace(uint_to_qos_flow_id(1), assoc_qos_flow);
 
@@ -646,15 +661,16 @@ ngap_message ocudu::ocucp::generate_pdu_session_resource_release_command_base(am
   ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_PDU_SESSION_RES_RELEASE);
 
   auto& pdu_session_res_release_cmd           = ngap_msg.pdu.init_msg().value.pdu_session_res_release_cmd();
-  pdu_session_res_release_cmd->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  pdu_session_res_release_cmd->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  pdu_session_res_release_cmd->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  pdu_session_res_release_cmd->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   return ngap_msg;
 }
 
-ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_release_command(amf_ue_id_t      amf_ue_id,
-                                                                               ran_ue_id_t      ran_ue_id,
-                                                                               pdu_session_id_t pdu_session_id)
+ngap_message
+ocudu::ocucp::generate_valid_pdu_session_resource_release_command(amf_ue_id_t                          amf_ue_id,
+                                                                  ran_ue_id_t                          ran_ue_id,
+                                                                  const std::vector<pdu_session_id_t>& pdu_session_ids)
 {
   ngap_message ngap_msg = generate_pdu_session_resource_release_command_base(amf_ue_id, ran_ue_id);
 
@@ -665,13 +681,32 @@ ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_release_command(a
   pdu_session_res_release_cmd->nas_pdu         = make_byte_buffer("7e02bcb47dc1137e00680100052e01b3d3241201").value();
 
   // Fill  PDU session resource to release list.
-  asn1::ngap::pdu_session_res_to_release_item_rel_cmd_s pdu_session_res_to_release_item_rel_cmd;
-  pdu_session_res_to_release_item_rel_cmd.pdu_session_id                       = pdu_session_id_to_uint(pdu_session_id);
-  pdu_session_res_to_release_item_rel_cmd.pdu_session_res_release_cmd_transfer = make_byte_buffer("10").value();
-  pdu_session_res_release_cmd->pdu_session_res_to_release_list_rel_cmd.push_back(
-      pdu_session_res_to_release_item_rel_cmd);
+  for (pdu_session_id_t pdu_session_id : pdu_session_ids) {
+    asn1::ngap::pdu_session_res_to_release_item_rel_cmd_s pdu_session_res_to_release_item_rel_cmd;
+    pdu_session_res_to_release_item_rel_cmd.pdu_session_id                       = to_underlying(pdu_session_id);
+    pdu_session_res_to_release_item_rel_cmd.pdu_session_res_release_cmd_transfer = make_byte_buffer("10").value();
+    pdu_session_res_release_cmd->pdu_session_res_to_release_list_rel_cmd.push_back(
+        pdu_session_res_to_release_item_rel_cmd);
+  }
 
   return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_release_command(amf_ue_id_t      amf_ue_id,
+                                                                               ran_ue_id_t      ran_ue_id,
+                                                                               pdu_session_id_t pdu_session_id)
+{
+  return generate_valid_pdu_session_resource_release_command(
+      amf_ue_id, ran_ue_id, std::vector<pdu_session_id_t>{pdu_session_id});
+}
+
+ngap_message ocudu::ocucp::generate_pdu_session_resource_release_command_with_duplicate_pdu_session_id(
+    amf_ue_id_t      amf_ue_id,
+    ran_ue_id_t      ran_ue_id,
+    pdu_session_id_t pdu_session_id)
+{
+  return generate_valid_pdu_session_resource_release_command(
+      amf_ue_id, ran_ue_id, std::vector<pdu_session_id_t>{pdu_session_id, pdu_session_id});
 }
 
 ngap_message ocudu::ocucp::generate_invalid_pdu_session_resource_release_command(amf_ue_id_t amf_ue_id,
@@ -705,8 +740,8 @@ ngap_message ocudu::ocucp::generate_pdu_session_resource_modify_request_base(amf
   ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_PDU_SESSION_RES_MODIFY);
 
   auto& pdu_session_res_modify_req           = ngap_msg.pdu.init_msg().value.pdu_session_res_modify_request();
-  pdu_session_res_modify_req->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  pdu_session_res_modify_req->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  pdu_session_res_modify_req->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  pdu_session_res_modify_req->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   return ngap_msg;
 }
@@ -724,7 +759,7 @@ ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_modify_request_me
 
   pdu_session_res_modify_item_mod_req_s pdu_session_res_item;
 
-  pdu_session_res_item.pdu_session_id = pdu_session_id_to_uint(pdu_session_id);
+  pdu_session_res_item.pdu_session_id = to_underlying(pdu_session_id);
 
   // Fill PDU session resource modify request transfer.
   asn1::ngap::pdu_session_res_modify_request_transfer_s pdu_session_res_modify_request_transfer;
@@ -738,7 +773,7 @@ ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_modify_request_me
       asn1::ngap::qos_flow_add_or_modify_request_item_s qos_flow_add_item;
 
       // Fill QoS flow identifier.
-      qos_flow_add_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_id);
+      qos_flow_add_item.qos_flow_id = to_underlying(qos_flow_id);
 
       // Fill QoS characteristics.
       qos_flow_add_item.qos_flow_level_qos_params_present = true;
@@ -761,7 +796,7 @@ ngap_message ocudu::ocucp::generate_valid_pdu_session_resource_modify_request_me
       asn1::ngap::qos_flow_with_cause_item_s qos_flow_release_item;
 
       // Fill QoS flow identifier.
-      qos_flow_release_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_id);
+      qos_flow_release_item.qos_flow_id = to_underlying(qos_flow_id);
 
       // Fill cause.
       qos_flow_release_item.cause.set_radio_network();
@@ -790,7 +825,7 @@ ngap_message ocudu::ocucp::generate_invalid_pdu_session_resource_modify_request_
   for (auto it = 0; it < 2; ++it) {
     pdu_session_res_modify_item_mod_req_s pdu_session_res_item;
 
-    pdu_session_res_item.pdu_session_id = pdu_session_id_to_uint(pdu_session_id);
+    pdu_session_res_item.pdu_session_id = to_underlying(pdu_session_id);
 
     // Fill PDU session resource modify request transfer.
     pdu_session_res_modify_request_transfer_s pdu_session_res_modify_request_transfer;
@@ -826,7 +861,7 @@ ocudu::ocucp::generate_ngap_pdu_session_resource_modify_response(pdu_session_id_
   qos_flow_per_tnl_info.up_tp_layer_info = {transport_layer_address::create_from_string("127.0.0.1"),
                                             int_to_gtpu_teid(1)};
 
-  ngap_associated_qos_flow assoc_qos_flow;
+  cu_cp_associated_qos_flow assoc_qos_flow;
   assoc_qos_flow.qos_flow_id = qos_flow_id;
 
   qos_flow_per_tnl_info.associated_qos_flow_list.emplace(qos_flow_id, assoc_qos_flow);
@@ -952,10 +987,10 @@ ocudu::ocucp::generate_error_indication_message(amf_ue_id_t amf_ue_id, ran_ue_id
   auto& error_indication = ngap_msg.pdu.init_msg().value.error_ind();
 
   error_indication->amf_ue_ngap_id_present = true;
-  error_indication->amf_ue_ngap_id         = amf_ue_id_to_uint(amf_ue_id);
+  error_indication->amf_ue_ngap_id         = to_underlying(amf_ue_id);
 
   error_indication->ran_ue_ngap_id_present = true;
-  error_indication->ran_ue_ngap_id         = ran_ue_id_to_uint(ran_ue_id);
+  error_indication->ran_ue_ngap_id         = to_underlying(ran_ue_id);
 
   error_indication->cause_present = true;
   error_indication->cause         = cause_to_asn1(cause);
@@ -963,7 +998,7 @@ ocudu::ocucp::generate_error_indication_message(amf_ue_id_t amf_ue_id, ran_ue_id
   return ngap_msg;
 }
 
-ngap_message ocudu::ocucp::generate_valid_handover_request(amf_ue_id_t amf_ue_id)
+ngap_message ocudu::ocucp::generate_valid_handover_request(amf_ue_id_t amf_ue_id, const handover_request_params& params)
 {
   ngap_message ngap_msg;
 
@@ -972,7 +1007,7 @@ ngap_message ocudu::ocucp::generate_valid_handover_request(amf_ue_id_t amf_ue_id
 
   auto& ho_request = ngap_msg.pdu.init_msg().value.ho_request();
 
-  ho_request->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
+  ho_request->amf_ue_ngap_id = to_underlying(amf_ue_id);
   // Fill Handover type.
   ho_request->handov_type = asn1::ngap::handov_type_opts::options::intra5gs;
   // Fill cause.
@@ -999,6 +1034,18 @@ ngap_message ocudu::ocucp::generate_valid_handover_request(amf_ue_id_t amf_ue_id
       make_byte_buffer(
           "0000050082000a0c400000003040000000008b000a01f00a32130200001b13007f00010000860001000088000700010000091c00")
           .value();
+  {
+    // The Data Forwarding Not Possible IE decides whether the target may set up forwarding tunnels for the PDU session,
+    // so set it explicitly rather than inheriting whatever the transfer above happens to carry.
+    asn1::ngap::pdu_session_res_setup_request_transfer_s transfer;
+    asn1::cbit_ref transfer_bref({setup_item.ho_request_transfer.begin(), setup_item.ho_request_transfer.end()});
+    report_error_if_not(transfer.unpack(transfer_bref) == asn1::OCUDUASN_SUCCESS,
+                        "Failed to unpack Handover Request Transfer");
+    transfer->data_forwarding_not_possible_present = params.data_forwarding_not_possible;
+    transfer->data_forwarding_not_possible =
+        asn1::ngap::data_forwarding_not_possible_opts::data_forwarding_not_possible;
+    setup_item.ho_request_transfer = pack_into_pdu(transfer);
+  }
   ho_request->pdu_session_res_setup_list_ho_req.push_back(setup_item);
   // Fill allowed S-NSSAI.
   asn1::ngap::allowed_nssai_item_s allowed_nssai;
@@ -1019,8 +1066,21 @@ ngap_message ocudu::ocucp::generate_valid_handover_request(amf_ue_id_t amf_ue_id
   asn1::ngap::pdu_session_res_info_item_s session_item;
   session_item.pdu_session_id = 1;
   asn1::ngap::qos_flow_info_item_s flow_item;
-  flow_item.qos_flow_id = 0;
+  flow_item.qos_flow_id = 1;
+  if (params.propose_dl_data_forwarding) {
+    flow_item.dl_forwarding_present = true;
+    flow_item.dl_forwarding         = asn1::ngap::dl_forwarding_opts::dl_forwarding_proposed;
+  }
   session_item.qos_flow_info_list.push_back(flow_item);
+  if (params.include_drb_to_qos_flow_mapping) {
+    // Report this source's own DRB-to-QoS-flow mapping (DRB1 <-> QFI1, matching the admitted PDU session).
+    asn1::ngap::drbs_to_qos_flows_map_item_s drb_to_qos_flow_map_item;
+    drb_to_qos_flow_map_item.drb_id = 1;
+    asn1::ngap::associated_qos_flow_item_s assoc_qos_flow;
+    assoc_qos_flow.qos_flow_id = 1;
+    drb_to_qos_flow_map_item.associated_qos_flow_list.push_back(assoc_qos_flow);
+    session_item.drbs_to_qos_flows_map_list.push_back(drb_to_qos_flow_map_item);
+  }
   transparent_container.pdu_session_res_info_list.push_back(session_item);
   // Fill NR CGI.
   auto& cgi = transparent_container.target_cell_id.set_nr_cgi();
@@ -1062,8 +1122,8 @@ ngap_message ocudu::ocucp::generate_handover_preparation_failure(amf_ue_id_t amf
 
   auto& ho_prep_fail = ngap_msg.pdu.unsuccessful_outcome().value.ho_prep_fail();
 
-  ho_prep_fail->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  ho_prep_fail->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ho_prep_fail->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  ho_prep_fail->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   // Fill cause.
   ho_prep_fail->cause.set_radio_network() = asn1::ngap::cause_radio_network_opts::options::unspecified;
@@ -1071,7 +1131,10 @@ ngap_message ocudu::ocucp::generate_handover_preparation_failure(amf_ue_id_t amf
   return ngap_msg;
 }
 
-ngap_message ocudu::ocucp::generate_valid_handover_command(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id)
+ngap_message ocudu::ocucp::generate_valid_handover_command(amf_ue_id_t amf_ue_id,
+                                                           ran_ue_id_t ran_ue_id,
+                                                           bool        with_data_forwarding_info,
+                                                           bool        with_forwarding_tunnel)
 {
   ngap_message ngap_msg;
 
@@ -1080,8 +1143,8 @@ ngap_message ocudu::ocucp::generate_valid_handover_command(amf_ue_id_t amf_ue_id
 
   auto& ho_cmd = ngap_msg.pdu.successful_outcome().value.ho_cmd();
 
-  ho_cmd->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  ho_cmd->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ho_cmd->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  ho_cmd->ran_ue_ngap_id = to_underlying(ran_ue_id);
   // Fill handover type.
   ho_cmd->handov_type = asn1::ngap::handov_type_opts::options::intra5gs;
 
@@ -1090,6 +1153,24 @@ ngap_message ocudu::ocucp::generate_valid_handover_command(amf_ue_id_t amf_ue_id
   asn1::ngap::pdu_session_res_ho_item_s ho_item;
   ho_item.pdu_session_id  = 1;
   ho_item.ho_cmd_transfer = make_byte_buffer("00").value();
+  if (with_data_forwarding_info) {
+    // Report a PDU session level DL forwarding tunnel. Its endpoint belongs either to the handover target, when the
+    // 5GC uses a direct forwarding path, or to a UPF the 5GC inserted for indirect forwarding. The source treats both
+    // the same way.
+    asn1::ngap::ho_cmd_transfer_s ho_cmd_transfer;
+    if (with_forwarding_tunnel) {
+      ho_cmd_transfer.dl_forwarding_up_tnl_info_present = true;
+      auto& session_tunnel                              = ho_cmd_transfer.dl_forwarding_up_tnl_info.set_gtp_tunnel();
+      session_tunnel.transport_layer_address.from_number(2887058953);
+      session_tunnel.gtp_teid.from_string("20000283");
+    }
+
+    asn1::ngap::qos_flow_to_be_forwarded_item_s flow_to_be_forwarded;
+    flow_to_be_forwarded.qos_flow_id = 1;
+    ho_cmd_transfer.qos_flow_to_be_forwarded_list.push_back(flow_to_be_forwarded);
+
+    ho_item.ho_cmd_transfer = pack_into_pdu(ho_cmd_transfer);
+  }
   ho_cmd->pdu_session_res_ho_list.push_back(ho_item);
 
   // Fill target to source transparent container.
@@ -1115,28 +1196,34 @@ ngap_handover_preparation_request ocudu::ocucp::generate_handover_preparation_re
     cu_cp_ue_index_t                                          ue_index,
     const std::map<pdu_session_id_t, up_pdu_session_context>& pdu_sessions,
     nr_cell_identity                                          nci,
-    uint32_t                                                  gnb_id_bit_length)
+    uint32_t                                                  gnb_id_bit_length,
+    plmn_identity                                             target_plmn)
 {
   ngap_handover_preparation_request request = {};
   request.ue_index                          = ue_index;
   request.target_id.gnb_id                  = nci.gnb_id(gnb_id_bit_length);
-  request.target_id.plmn = plmn_identity::test_value(), request.target_id.tac = 7;
+  request.target_id.plmn = target_plmn, request.target_id.tac = 7;
   request.nci = nci;
-  // Fill create a map of all PDU sessions and their associated QoS flows.
+  // Fill create a map of all PDU sessions and their associated QoS flows, grouped by DRB.
   for (const auto& pdu_session : pdu_sessions) {
-    std::vector<qos_flow_id_t> qos_flows;
+    std::vector<cu_cp_drbs_to_qos_flows_map_item> drbs_to_qos_flows_map;
     for (const auto& drb : pdu_session.second.drbs) {
+      cu_cp_drbs_to_qos_flows_map_item drb_item;
+      drb_item.drb_id = drb.first;
       for (const auto& qos_flow : drb.second.qos_flows) {
-        qos_flows.push_back(qos_flow.first);
+        drb_item.associated_qos_flow_list.push_back(cu_cp_associated_qos_flow{qos_flow.first, std::nullopt});
       }
+      drbs_to_qos_flows_map.push_back(drb_item);
     }
-    request.pdu_sessions.insert({pdu_session.first, qos_flows});
+    request.pdu_sessions.insert({pdu_session.first, drbs_to_qos_flows_map});
   }
 
   return request;
 }
 
-ngap_message ocudu::ocucp::generate_valid_dl_ran_status_transfer(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id)
+ngap_message ocudu::ocucp::generate_valid_dl_ran_status_transfer(amf_ue_id_t                  amf_ue_id,
+                                                                 ran_ue_id_t                  ran_ue_id,
+                                                                 const std::vector<drb_id_t>& drb_ids)
 {
   ngap_message ngap_msg;
 
@@ -1145,8 +1232,18 @@ ngap_message ocudu::ocucp::generate_valid_dl_ran_status_transfer(amf_ue_id_t amf
 
   auto& dl_status = ngap_msg.pdu.init_msg().value.dl_ran_status_transfer();
 
-  dl_status->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  dl_status->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  dl_status->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  dl_status->ran_ue_ngap_id = to_underlying(ran_ue_id);
+
+  for (drb_id_t drb_id : drb_ids) {
+    asn1::ngap::drbs_subject_to_status_transfer_item_s drb_item;
+    drb_item.drb_id = static_cast<uint8_t>(drb_id);
+    drb_item.drb_status_ul.set_drb_status_ul12();
+    drb_item.drb_status_dl.set_drb_status_dl12();
+
+    dl_status->ran_status_transfer_transparent_container.drbs_subject_to_status_transfer_list.push_back(drb_item);
+  }
+
   return ngap_msg;
 }
 
@@ -1159,8 +1256,8 @@ ngap_message ocudu::ocucp::generate_handover_cancel_ack(amf_ue_id_t amf_ue_id, r
 
   auto& ho_cancel_ack = ngap_msg.pdu.successful_outcome().value.ho_cancel_ack();
 
-  ho_cancel_ack->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  ho_cancel_ack->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ho_cancel_ack->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  ho_cancel_ack->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   return ngap_msg;
 }
@@ -1189,8 +1286,8 @@ ngap_message ocudu::ocucp::generate_location_reporting_control_message(amf_ue_id
 
   auto& loc_rep_control = ngap_msg.pdu.init_msg().value.location_report_ctrl();
 
-  loc_rep_control->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  loc_rep_control->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  loc_rep_control->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  loc_rep_control->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   // Fill location reporting type.
   loc_rep_control->location_report_request_type.event_type = asn1::ngap::event_type_opts::options::direct;
@@ -1255,8 +1352,8 @@ ocudu::ocucp::generate_path_switch_request_failure(amf_ue_id_t amf_ue_id, ran_ue
   ngap_msg.pdu.unsuccessful_outcome().load_info_obj(ASN1_NGAP_ID_PATH_SWITCH_REQUEST);
   auto& path_switch_req_fail = ngap_msg.pdu.unsuccessful_outcome().value.path_switch_request_fail();
 
-  path_switch_req_fail->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  path_switch_req_fail->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  path_switch_req_fail->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  path_switch_req_fail->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   pdu_session_res_released_item_ps_fail_s pdu_session_res_released_item_ps_fail;
   pdu_session_res_released_item_ps_fail.pdu_session_id = 1;
@@ -1278,8 +1375,8 @@ ngap_message ocudu::ocucp::generate_path_switch_request_ack(amf_ue_id_t amf_ue_i
   ngap_msg.pdu.successful_outcome().load_info_obj(ASN1_NGAP_ID_PATH_SWITCH_REQUEST);
   auto& path_switch_req_ack = ngap_msg.pdu.successful_outcome().value.path_switch_request_ack();
 
-  path_switch_req_ack->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  path_switch_req_ack->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  path_switch_req_ack->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  path_switch_req_ack->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   // Fill UE security capabilities.
   path_switch_req_ack->ue_security_cap.nr_encryption_algorithms.from_number(49152);
@@ -1323,7 +1420,7 @@ ngap_message ocudu::ocucp::generate_path_switch_request_ack_with_ul_tunnel(amf_u
   path_switch_req_ack->pdu_session_res_switched_list.clear();
 
   pdu_session_res_switched_item_s switched_item;
-  switched_item.pdu_session_id = pdu_session_id_to_uint(psi);
+  switched_item.pdu_session_id = to_underlying(psi);
 
   path_switch_request_ack_transfer_s ack_transfer;
   ack_transfer.ul_ngu_up_tnl_info_present = true;
@@ -1335,4 +1432,138 @@ ngap_message ocudu::ocucp::generate_path_switch_request_ack_with_ul_tunnel(amf_u
   path_switch_req_ack->pdu_session_res_switched_list.push_back(switched_item);
 
   return msg;
+}
+
+ngap_message ocudu::ocucp::generate_write_replace_warning_request()
+{
+  ngap_message ngap_msg;
+  ngap_msg.pdu.set_init_msg();
+  ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_WRITE_REPLACE_WARNING);
+  auto& req = ngap_msg.pdu.init_msg().value.write_replace_warning_request();
+
+  req->msg_id.from_number(0x1234, 16);
+  req->serial_num.from_number(0x0001, 16);
+  req->repeat_period            = 4;
+  req->nof_broadcasts_requested = 2;
+
+  return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_write_replace_warning_request_with_optionals()
+{
+  ngap_message ngap_msg = generate_write_replace_warning_request();
+  auto&        req      = ngap_msg.pdu.init_msg().value.write_replace_warning_request();
+
+  // Warning Type: ETWS primary notification (0x0180).
+  req->warning_type_present = true;
+  req->warning_type.from_string("0180");
+
+  // Data Coding Scheme: 0x0f (GSM 7-bit default alphabet).
+  req->data_coding_scheme_present = true;
+  req->data_coding_scheme.from_number(0x0f, 8);
+
+  // Warning Message Contents (short test message).
+  req->warning_msg_contents_present = true;
+  req->warning_msg_contents.resize(3);
+  req->warning_msg_contents[0] = 0xaa;
+  req->warning_msg_contents[1] = 0xbb;
+  req->warning_msg_contents[2] = 0xcc;
+
+  // Warning Area List: one NR CGI.
+  req->warning_area_list_present   = true;
+  auto&                nr_cgi_list = req->warning_area_list.set_nr_cgi_list_for_warning();
+  asn1::ngap::nr_cgi_s asn1_cgi;
+  asn1_cgi.plmn_id.from_string("00f110");
+  asn1_cgi.nr_cell_id.from_number(0x19b01, 36);
+  nr_cgi_list.push_back(asn1_cgi);
+
+  // Concurrent Warning Message Indication.
+  req->concurrent_warning_msg_ind_present = true;
+  req->concurrent_warning_msg_ind.value   = asn1::ngap::concurrent_warning_msg_ind_opts::options::true_value;
+
+  return ngap_msg;
+}
+
+ngap_message
+ocudu::ocucp::generate_write_replace_warning_request_with_nr_cgi_list(const std::vector<nr_cell_global_id_t>& cgis)
+{
+  ngap_message ngap_msg = generate_write_replace_warning_request();
+  auto&        req      = ngap_msg.pdu.init_msg().value.write_replace_warning_request();
+
+  req->warning_area_list_present = true;
+  auto& nr_cgi_list              = req->warning_area_list.set_nr_cgi_list_for_warning();
+  for (const auto& cgi : cgis) {
+    asn1::ngap::nr_cgi_s asn1_cgi;
+    asn1_cgi.nr_cell_id.from_number(cgi.nci.value(), 36);
+    asn1_cgi.plmn_id = cgi.plmn_id.to_bytes();
+    nr_cgi_list.push_back(asn1_cgi);
+  }
+
+  return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_write_replace_warning_request_with_tai_list(const std::vector<tai_t>& tais)
+{
+  ngap_message ngap_msg = generate_write_replace_warning_request();
+  auto&        req      = ngap_msg.pdu.init_msg().value.write_replace_warning_request();
+
+  req->warning_area_list_present = true;
+  auto& tai_list                 = req->warning_area_list.set_tai_list_for_warning();
+  for (const auto& tai : tais) {
+    asn1::ngap::tai_s asn1_tai;
+    asn1_tai.plmn_id = tai.plmn_id.to_bytes();
+    asn1_tai.tac.from_number(tai.tac);
+    tai_list.push_back(asn1_tai);
+  }
+
+  return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_write_replace_warning_request_with_msg_no_dcs()
+{
+  ngap_message ngap_msg = generate_write_replace_warning_request();
+  auto&        req      = ngap_msg.pdu.init_msg().value.write_replace_warning_request();
+
+  // Warning Message Contents present but Data Coding Scheme absent.
+  req->warning_msg_contents_present = true;
+  req->warning_msg_contents.resize(3);
+  req->warning_msg_contents[0] = 0xaa;
+  req->warning_msg_contents[1] = 0xbb;
+  req->warning_msg_contents[2] = 0xcc;
+
+  return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_write_replace_warning_request_cmas()
+{
+  ngap_message ngap_msg = generate_write_replace_warning_request();
+  auto&        req      = ngap_msg.pdu.init_msg().value.write_replace_warning_request();
+
+  req->data_coding_scheme_present = true;
+  req->data_coding_scheme.from_number(0x0f, 8);
+  req->warning_msg_contents_present = true;
+  req->warning_msg_contents.resize(3);
+  req->warning_msg_contents[0] = 0xaa;
+  req->warning_msg_contents[1] = 0xbb;
+  req->warning_msg_contents[2] = 0xcc;
+
+  return ngap_msg;
+}
+
+ngap_message ocudu::ocucp::generate_write_replace_warning_request_etws_full()
+{
+  ngap_message ngap_msg = generate_write_replace_warning_request();
+  auto&        req      = ngap_msg.pdu.init_msg().value.write_replace_warning_request();
+
+  req->warning_type_present = true;
+  req->warning_type.from_string("0180");
+  req->data_coding_scheme_present = true;
+  req->data_coding_scheme.from_number(0x0f, 8);
+  req->warning_msg_contents_present = true;
+  req->warning_msg_contents.resize(3);
+  req->warning_msg_contents[0] = 0xaa;
+  req->warning_msg_contents[1] = 0xbb;
+  req->warning_msg_contents[2] = 0xcc;
+
+  return ngap_msg;
 }

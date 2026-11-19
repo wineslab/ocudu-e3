@@ -7,6 +7,7 @@
 #include "pdu_translators/pdcch.h"
 #include "pdu_translators/pdsch.h"
 #include "pdu_translators/prach.h"
+#include "pdu_translators/prs.h"
 #include "pdu_translators/pucch.h"
 #include "pdu_translators/pusch.h"
 #include "pdu_translators/srs.h"
@@ -33,7 +34,7 @@ mac_to_fapi_fastpath_translator::mac_to_fapi_fastpath_translator(
   part2_mapper(std::move(dependencies.part2_mapper)),
   fapi_logger(dependencies.fapi_logger)
 {
-  ocudu_assert(pm_mapper, "Invalid precoding matrix mapper");
+  ocudu_assert(pm_mapper, "Invalid precoding codebook mapper");
   ocudu_assert(part2_mapper, "Invalid Part2 mapper");
 }
 
@@ -50,11 +51,11 @@ void mac_to_fapi_fastpath_translator::stop()
 
 /// Adds a PDCCH PDU to the given builder.
 template <typename builder_type, typename pdu_type>
-static void add_pdcch_pdus_to_builder(builder_type&                  builder,
-                                      span<const pdu_type>           pdcch_info,
-                                      span<const dci_payload>        payloads,
-                                      const precoding_matrix_mapper& pm_mapper,
-                                      unsigned                       cell_nof_prbs)
+static void add_pdcch_pdus_to_builder(builder_type&                    builder,
+                                      span<const pdu_type>             pdcch_info,
+                                      span<const dci_payload>          payloads,
+                                      const precoding_codebook_mapper& pm_mapper,
+                                      unsigned                         cell_nof_prbs)
 {
   static_assert(std::is_same_v<builder_type, fapi::dl_tti_request_builder> ||
                     std::is_same_v<builder_type, fapi::ul_dci_request_builder>,
@@ -73,12 +74,14 @@ static void add_pdcch_pdus_to_builder(builder_type&                  builder,
   }
 }
 
-static void
-add_ssb_pdus_to_dl_request(fapi::dl_tti_request_builder& builder, span<const dl_ssb_pdu> ssb_pdus, slot_point slot)
+static void add_ssb_pdus_to_dl_request(fapi::dl_tti_request_builder& builder,
+                                       span<const dl_ssb_pdu>        ssb_pdus,
+                                       slot_point                    slot,
+                                       unsigned                      cell_nof_prbs)
 {
   for (const auto& pdu : ssb_pdus) {
     fapi::dl_ssb_pdu_builder ssb_builder = builder.add_ssb_pdu();
-    convert_ssb_mac_to_fapi(ssb_builder, pdu, slot);
+    convert_ssb_mac_to_fapi(ssb_builder, pdu, slot, cell_nof_prbs);
   }
 }
 
@@ -89,13 +92,23 @@ static void add_csi_rs_pdus_to_dl_request(fapi::dl_tti_request_builder& builder,
   }
 }
 
+static void add_prs_pdus_to_dl_request(fapi::dl_tti_request_builder&    builder,
+                                       span<const prs_info>             prs_list,
+                                       const precoding_codebook_mapper& pm_mapper,
+                                       unsigned                         cell_nof_prbs)
+{
+  for (const auto& pdu : prs_list) {
+    convert_prs_mac_to_fapi(builder, pdu, pm_mapper, cell_nof_prbs);
+  }
+}
+
 static void add_pdsch_pdus_to_dl_request(fapi::dl_tti_request_builder&    builder,
                                          span<const sib_information>      sibs,
                                          span<const rar_information>      rars,
                                          span<const dl_msg_alloc>         ue_grants,
                                          span<const dl_paging_allocation> paging,
                                          unsigned                         nof_csi_pdus,
-                                         const precoding_matrix_mapper&   pm_mapper,
+                                         const precoding_codebook_mapper& pm_mapper,
                                          unsigned                         cell_nof_prbs)
 {
   for (const auto& pdu : sibs) {
@@ -141,10 +154,13 @@ void mac_to_fapi_fastpath_translator::on_new_downlink_scheduler_results(const ma
                             cell_nof_prbs);
 
   // Add SSB PDUs to the DL_TTI.request message.
-  add_ssb_pdus_to_dl_request(builder, dl_res.ssb_pdus, dl_res.slot);
+  add_ssb_pdus_to_dl_request(builder, dl_res.ssb_pdus, dl_res.slot, cell_nof_prbs);
 
   // Add CSI-RS PDUs to the DL_TTI.request message.
   add_csi_rs_pdus_to_dl_request(builder, dl_res.dl_res->csi_rs);
+
+  // Add DL-PRS PDUs to the DL_TTI.request message.
+  add_prs_pdus_to_dl_request(builder, dl_res.dl_res->prs, *pm_mapper, cell_nof_prbs);
 
   // Add PDSCH PDUs to the DL_TTI.request message.
   add_pdsch_pdus_to_dl_request(builder,

@@ -4,6 +4,7 @@
 
 #include "upper_phy_impl.h"
 #include "upper_phy_rx_symbol_handler_printer_decorator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/upper/upper_phy_operation_controller.h"
 #include "ocudu/phy/upper/upper_phy_timing_notifier.h"
 

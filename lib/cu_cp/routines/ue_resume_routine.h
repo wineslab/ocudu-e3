@@ -42,15 +42,6 @@ private:
 
   bool add_security_context_to_bearer_context_modification(const ocudu::security::sec_as_config& security_cfg);
 
-  bool fill_rrc_resume_request_response(const std::vector<f1ap_srb_to_setup>& srbs_to_be_setup_mod_list,
-                                        const std::map<pdu_session_id_t, up_pdu_session_context_update>& pdu_sessions,
-                                        const std::vector<drb_id_t>&                                     drb_to_remove,
-                                        const f1ap_du_to_cu_rrc_info&               du_to_cu_rrc_info,
-                                        const std::optional<rrc_meas_cfg>&          rrc_meas_cfg,
-                                        bool                                        reestablish_srbs,
-                                        bool                                        reestablish_drbs,
-                                        std::optional<security::sec_selected_algos> selected_algos);
-
   const rrc_resume_request request;
 
   cu_cp_ue* ue = nullptr; // Pointer to UE in the DU

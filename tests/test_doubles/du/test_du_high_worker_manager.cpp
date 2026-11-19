@@ -4,6 +4,7 @@
 
 #include "test_du_high_worker_manager.h"
 #include "ocudu/adt/byte_buffer.h"
+#include "ocudu/du/du_high/du_high_executor_mapper.h"
 #include "ocudu/support/executors/inline_task_executor.h"
 #include "ocudu/support/executors/priority_task_worker.h"
 #include "ocudu/support/executors/strand_executor.h"

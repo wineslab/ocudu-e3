@@ -7,6 +7,7 @@
 #include "ocudu/ocudulog/logger.h"
 #include "ocudu/phy/support/time_alignment_estimator/time_alignment_estimator_factories.h"
 #include "ocudu/phy/upper/sequence_generators/sequence_generator_factories.h"
+#include "ocudu/phy/upper/signal_processors/srs/doa_estimator_factory.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator_configuration_validator.h"
 #include <memory>
@@ -34,6 +35,7 @@ public:
 std::shared_ptr<srs_estimator_factory>
 create_srs_estimator_generic_factory(std::shared_ptr<low_papr_sequence_generator_factory> sequence_generator_factory,
                                      std::shared_ptr<time_alignment_estimator_factory>    ta_estimator_factory,
+                                     std::shared_ptr<doa_estimator_factory>               doa_factory,
                                      unsigned                                             max_nof_prb);
 
 /// Creates a Sounding Reference Signal propagation channel estimator pool.

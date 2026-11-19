@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "intra_cu_handover_target_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cu_cp_types.h"
 
 using namespace ocudu;
@@ -44,7 +45,7 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
   }
   target_ue = ue_mng.find_du_ue(request.target_ue_index);
 
-  logger.debug("ue={}: \"{}\" started...", request.target_ue_index, name());
+  logger.info("ue={}: \"{}\" started...", request.target_ue_index, name());
 
   // Notify RRC UE to await ReconfigurationComplete.
   CORO_AWAIT_VALUE(reconf_result,
@@ -119,7 +120,7 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
 
   schedule_source_release_on_source_task_sched(request.source_ue_index);
 
-  logger.debug("ue={}: \"{}\" finished successfully", request.target_ue_index, name());
+  logger.info("ue={}: \"{}\" finished successfully", request.target_ue_index, name());
 
   CORO_RETURN();
 }

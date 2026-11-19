@@ -59,7 +59,7 @@ class null_sink_rlc_bearer : public rlc_tx_upper_layer_data_interface, public rl
 {
 public:
   void handle_sdu(byte_buffer sdu_buf, bool is_retx) override {}
-  void discard_sdu(uint32_t pdcp_sn) override {}
+  void discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) override {}
   void handle_pdu(byte_buffer_slice pdu) override {}
 };
 

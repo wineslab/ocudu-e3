@@ -30,14 +30,13 @@ TEST(crc_indication_builder, valid_indication_passes)
     std::optional<phy_time_unit> timing_advance_offset;
     timing_advance_offset.emplace(phy_time_unit::from_seconds(30));
 
-    std::optional<float> rssi_dB;
-    rssi_dB.emplace(-64);
+    std::optional<fapi_power_unit> rssi;
+    rssi.emplace(fapi_power_unit{-64, 0, 0});
 
-    std::optional<float> rsrp_dB;
-    rsrp_dB.emplace(-100);
-    bool use_dB = i;
+    std::optional<fapi_power_unit> rsrp;
+    rsrp.emplace(fapi_power_unit{-100, 0, 0});
 
-    builder.set_pdu(rnti, harq_id, tb_crc_status, ul_sinr_dB, timing_advance_offset, rssi_dB, rsrp_dB, use_dB);
+    builder.set_pdu(rnti, harq_id, tb_crc_status, ul_sinr_dB, timing_advance_offset, rssi, rsrp);
 
     ASSERT_EQ(slot, msg.slot);
 
@@ -45,11 +44,10 @@ TEST(crc_indication_builder, valid_indication_passes)
     ASSERT_EQ(harq_id, msg.pdu.harq_id);
     ASSERT_EQ(rnti, msg.pdu.rnti);
     ASSERT_EQ(tb_crc_status, msg.pdu.tb_crc_status_ok);
-    ASSERT_EQ(static_cast<int16_t>(ul_sinr_dB ? ul_sinr_dB.value() * 500.F : -32768), msg.pdu.ul_sinr_metric);
+    ASSERT_EQ(ul_sinr_dB, msg.pdu.ul_sinr_metric_dB);
     ASSERT_EQ(timing_advance_offset ? timing_advance_offset.value() : phy_time_unit(), msg.pdu.timing_advance_offset);
-    ASSERT_EQ(static_cast<uint16_t>(rssi_dB ? (rssi_dB.value() + 128.F) * 10.F : 65535), msg.pdu.rssi);
-    ASSERT_EQ(static_cast<uint16_t>(rsrp_dB ? (rsrp_dB.value() + (use_dB ? 140.F : 128.F)) * 10.F : 65535),
-              msg.pdu.rsrp);
+    ASSERT_EQ(rssi, msg.pdu.rssi);
+    ASSERT_EQ(rsrp, msg.pdu.rsrp);
   }
 }
 
@@ -69,12 +67,12 @@ TEST(crc_indication_builder, valid_indication_with_no_metrics_passes)
   harq_id_t harq_id       = to_harq_id(0);
   uint8_t   tb_crc_status = 0;
 
-  std::optional<float>         ul_sinr_dB;
-  std::optional<phy_time_unit> timing_advance_offset;
-  std::optional<float>         rssi_dB;
-  std::optional<float>         rsrp_dB;
+  std::optional<float>           ul_sinr_dB;
+  std::optional<phy_time_unit>   timing_advance_offset;
+  std::optional<fapi_power_unit> rssi;
+  std::optional<fapi_power_unit> rsrp;
 
-  builder.set_pdu(rnti, harq_id, tb_crc_status, ul_sinr_dB, timing_advance_offset, rssi_dB, rsrp_dB);
+  builder.set_pdu(rnti, harq_id, tb_crc_status, ul_sinr_dB, timing_advance_offset, rssi, rsrp);
 
   ASSERT_EQ(slot, msg.slot);
 
@@ -82,8 +80,22 @@ TEST(crc_indication_builder, valid_indication_with_no_metrics_passes)
   ASSERT_EQ(harq_id, msg.pdu.harq_id);
   ASSERT_EQ(rnti, msg.pdu.rnti);
   ASSERT_EQ(tb_crc_status, msg.pdu.tb_crc_status_ok);
-  ASSERT_EQ(static_cast<int16_t>(ul_sinr_dB ? ul_sinr_dB.value() * 500.F : -32768), msg.pdu.ul_sinr_metric);
+  ASSERT_EQ(ul_sinr_dB, msg.pdu.ul_sinr_metric_dB);
   ASSERT_EQ(timing_advance_offset, msg.pdu.timing_advance_offset);
-  ASSERT_EQ(static_cast<uint16_t>(rssi_dB ? (rssi_dB.value() + 128) * 10.F : 65535), msg.pdu.rssi);
-  ASSERT_EQ(static_cast<uint16_t>(ul_sinr_dB ? ul_sinr_dB.value() * 500.F : 65535), msg.pdu.rsrp);
+  ASSERT_FALSE(msg.pdu.rssi.has_value());
+  ASSERT_FALSE(msg.pdu.rsrp.has_value());
+}
+
+TEST(crc_indication_builder, valid_rapid_passes)
+{
+  crc_indication         msg;
+  crc_indication_builder builder(msg);
+
+  ASSERT_FALSE(msg.pdu.rapid.has_value());
+
+  uint8_t rapid = 10;
+
+  builder.set_rapid_parameter(rapid);
+
+  ASSERT_EQ(msg.pdu.rapid, rapid);
 }

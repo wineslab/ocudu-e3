@@ -6,6 +6,23 @@ SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 Change Log for Releases
 =======================
 
+## 26.10
+- Full compliance with ORAN TIFG End-to-End Test Specifications (validated by VALOR labs)
+- Full compliance with ORAN WG11 Security Test Specifications (validated by VALOR labs)
+- Baseline support of O-RAN Split 7.2b support in OFH (not yet tested with O-RU)
+- Baseline Type-II codebook CSI report and feedback support
+- 8T8R antenna support
+- Baseline Release 15/16 beam management for FR1/FR2 (not yet tested with O-RU)
+- Baseline Angle-based positioning and DL-PRS generation, not yet tested end-to-end
+- 2-step RA
+- UL pre-scheduling
+- UL configured grant Type-1
+- TTI bundling (PUSCH + PDSCH Aggregation/Repetition)
+- PUCCH repetition
+- DTLS support for secure communication
+- Improved Security and Resiliency
+- Release 17 NTN
+
 ## 26.04 (initial OCUDU release)
 - UL MIMO
 - NRPPa using RSRP and Sounding Reference Signals (SRS)

@@ -65,7 +65,7 @@ static bool is_pdsch_info_valid(const pdsch_information& pdsch, const std::optio
     case dci_dl_format::f1_0: {
       TRUE_OR_RETURN(pdsch.nof_layers == 1);
       TRUE_OR_RETURN(pdsch.codewords.size() == 1);
-      TRUE_OR_RETURN(pdsch.codewords[0].mcs_table == pdsch_mcs_table::qam64);
+      TRUE_OR_RETURN(pdsch.mcs_table == pdsch_mcs_table::qam64);
     } break;
     case dci_dl_format::f1_1: {
       TRUE_OR_RETURN(pdsch.coreset_cfg->get_id() != to_coreset_id(0));
@@ -161,10 +161,22 @@ static unsigned is_ulsch_tbs_valid(const ul_sched_info& grant)
 bool test_helper::is_valid_ul_sched_info(const ul_sched_info& grant)
 {
   TRUE_OR_RETURN(grant.pusch_cfg.nof_layers > 0);
-  TRUE_OR_RETURN((grant.context.nof_retxs == 0) == grant.pusch_cfg.new_data);
+  // A PDCCH-less occasion of a PUSCH repetition bundle always carries new_data=false, whatever the HARQ
+  // retransmission count: only the base occasion opens the PHY receive buffer, the later ones accumulate into it.
+  // The base occasion is the one whose repetition countdown is still untouched.
+  const bool is_later_repetition_occasion =
+      grant.pusch_cfg.repetitions.has_value() and
+      grant.pusch_cfg.repetitions->nof_remaining_repetitions + 1U < grant.pusch_cfg.repetitions->nof_repetitions;
+  if (is_later_repetition_occasion) {
+    TRUE_OR_RETURN(not grant.pusch_cfg.new_data,
+                   "rnti={}: PUSCH repetition occasion must carry new_data=false",
+                   grant.pusch_cfg.rnti);
+  } else {
+    TRUE_OR_RETURN((grant.context.nof_retxs == 0) == grant.pusch_cfg.new_data);
+  }
 
   // Check code rate.
-  const float               max_code_rate       = 0.95;
+  constexpr float           max_code_rate       = 0.95;
   const ulsch_configuration ulsch_cfg           = get_ulsch_config(grant);
   const ulsch_information   ulsch_information   = get_ulsch_information(ulsch_cfg);
   float                     effective_code_rate = ulsch_information.get_effective_code_rate();

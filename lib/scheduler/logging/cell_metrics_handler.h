@@ -119,8 +119,10 @@ class cell_metrics_handler final : public sched_metrics_ue_configurator
 
   /// Counters for scheduler cell metrics that get reset on every report.
   struct non_persistent_data {
-    // Counter for detected PRACH preambles
-    unsigned nof_prach_preambles = 0;
+    // Counter for detected PRACH preambles.
+    unsigned total_prach_preambles = 0;
+    // Counter for detected PRACH preambles for 2-step RACH (MsgA). Subset of total_prach_preambles.
+    unsigned two_step_prachs_detected = 0;
     // Counter of error indications.
     unsigned error_indication_counter = 0;
     // Tracks the sum of scheduler decision latencies.
@@ -151,12 +153,16 @@ class cell_metrics_handler final : public sched_metrics_ue_configurator
     unsigned failed_common_ul_pdcch = 0;
     // Number of failed UCI allocation attempts.
     unsigned nof_failed_uci_allocs = 0;
+    // Number of fallback DL grants dropped because the common HARQ-ACK PUCCH collided on every candidate.
+    unsigned failed_fallback_uci_allocs = 0;
     // Number of MSG3 OKs.
     unsigned nof_msg3_ok = 0;
     // Number of MSG3 KOs.
     unsigned nof_msg3_nok = 0;
     // Number of ra-ContentionResolutionTimer expiries that occurred before the ConRes CE could be scheduled.
     unsigned nof_conres_timer_expired = 0;
+    // Number of ra-ContentionResolutionTimer expiries where the ConRes CE was scheduled but never positively ACKed.
+    unsigned nof_conres_ce_never_acked = 0;
     // Total PRACH delay in slots.
     unsigned sum_prach_delay_slots = 0;
     // Number of failed PDSCH allocations due to late HARQs.
@@ -172,7 +178,7 @@ class cell_metrics_handler final : public sched_metrics_ue_configurator
   scheduler_cell_metrics_notifier& notifier;
   const cell_configuration&        cell_cfg;
 
-  /// Whether per-UE metrics are appended to the cell report.
+  /// Whether per-UE metrics should be consumed/printed by report consumers.
   const bool report_ue_metrics;
 
   // Derived values.
@@ -207,13 +213,17 @@ public:
   void handle_ue_deletion(du_ue_index_t ue_index) override;
 
   /// \brief Register detected PRACH.
-  void handle_rach_indication(const rach_indication_message& msg, slot_point sl_tx);
+  void handle_rach_indication(const rach_indication_message& msg);
 
   /// \brief Register MSG3 CRC indication.
   void handle_msg3_crc_indication(const ul_crc_pdu_indication& crc_pdu);
 
   /// \brief Register a ra-ContentionResolutionTimer expiry that occurred before the ConRes CE could be scheduled.
   void handle_conres_timer_expired();
+
+  /// \brief Register a ra-ContentionResolutionTimer expiry where the ConRes CE was scheduled but never positively
+  /// ACKed.
+  void handle_conres_ce_never_acked();
 
   /// \brief Register CRC indication.
   void handle_crc_indication(slot_point sl_rx, const ul_crc_pdu_indication& crc_pdu, units::bytes tbs);
@@ -253,6 +263,9 @@ public:
 
   /// \brief Handle late UL HARQ indication.
   void handle_late_ul_harqs();
+
+  /// \brief Handle a slot that the scheduler did not run, so that the metrics keep track of the slots that elapsed.
+  void handle_skipped_slot(slot_point_extended sl_tx);
 
   /// \brief Handle results stored in the scheduler result and push new entry.
   void push_result(slot_point_extended       sl_tx,

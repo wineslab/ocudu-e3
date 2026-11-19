@@ -15,6 +15,8 @@
 #include "ocudu/ofh/transmitter/ofh_transmitter_configuration.h"
 #include "ocudu/ran/tdd/tdd_ul_dl_config.h"
 #include "ocudu/support/synchronization/stop_event.h"
+#include <atomic>
+#include <limits>
 
 namespace ocudu {
 namespace ofh {
@@ -37,6 +39,8 @@ struct downlink_handler_impl_config {
   tx_window_timing_parameters tx_timing_params;
   /// If set to true, logs late events as warnings, otherwise as info.
   bool enable_log_warnings_for_lates;
+  /// If set to true, the downlink transmission is beamformed (Category B), otherwise it is not (Category A).
+  bool is_cat_b_enabled;
 };
 
 /// Downlink handler implementation dependencies.
@@ -82,6 +86,7 @@ private:
   const unsigned                                        sector_id;
   ocudulog::basic_logger&                               logger;
   const cyclic_prefix                                   cp;
+  const bool                                            is_cat_b_enabled;
   const std::optional<tdd_ul_dl_config_common>          tdd_config;
   const static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> dl_eaxc;
   tx_window_checker                                     window_checker;
@@ -93,6 +98,8 @@ private:
   downlink_handler_metrics_collector                    metrics_collector;
   bool                                                  enable_log_warnings_for_lates;
   rt_stop_event_source                                  stop_control;
+  /// Keeps track of the slot of the last downlink resource grid delivered by the PHY.
+  std::atomic<slot_point> last_processed_slot{slot_point{}};
 };
 
 } // namespace ofh

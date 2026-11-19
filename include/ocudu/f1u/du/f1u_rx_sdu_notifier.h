@@ -17,8 +17,15 @@ class f1u_rx_sdu_notifier
 public:
   virtual ~f1u_rx_sdu_notifier() = default;
 
+  /// \brief Interface for lower layers to pass SDUs into RLC
+  /// \param sdu_buf SDU to be handled
+  /// \param is_retx Determines wheter the SDU is a PDCP retransmission or not
   virtual void on_new_sdu(byte_buffer sdu, bool is_retx) = 0;
-  virtual void on_discard_sdu(uint32_t pdcp_sn)          = 0;
+
+  /// \brief Interface for lower layers to discard a block of SDUs from RLC queue.
+  /// \param pdcp_sn_start PDCP sequence number (SN) of the first SDU in of the block that is to be discarded.
+  /// \param block_size Number of consecutive PDCP SNs to be discarded.
+  virtual void on_discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) = 0;
 };
 
 } // namespace odu

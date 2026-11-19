@@ -7,6 +7,7 @@
 #include "ocudu/ran/resource_allocation/rb_bitmap.h"
 #include "ocudu/ran/resource_allocation/vrb_to_prb.h"
 #include "fmt/base.h"
+#include <optional>
 
 namespace ocudu {
 

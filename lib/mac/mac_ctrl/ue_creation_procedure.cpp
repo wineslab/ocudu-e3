@@ -4,6 +4,7 @@
 
 #include "ue_creation_procedure.h"
 #include "proc_logger.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/when_all.h"
 
 using namespace ocudu;

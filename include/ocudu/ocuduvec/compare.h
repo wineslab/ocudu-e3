@@ -61,6 +61,16 @@ const T* find(span<const T> input, T value)
 /// \return A pair comprising the index and the squared modulo of the maximum element.
 std::pair<unsigned, float> max_abs_element(span<const cf_t> x);
 
+/// \brief Finds the maximum absolute value in a complex 16-bit integer span.
+///
+/// The returned squared magnitude is normalized by \c scale, i.e. it matches \ref max_abs_element applied to the
+/// samples converted to complex float using the same scaling factor.
+///
+/// \param[in] x      Input samples.
+/// \param[in] scale  Conversion scaling factor.
+/// \return A pair comprising the index and the squared modulo of the maximum element.
+std::pair<unsigned, float> max_abs_element(span<const ci16_t> x, float scale);
+
 /// \brief Finds the maximum value in a real span.
 ///
 /// In case two elements have the same value, the one with lowest index is selected.
@@ -92,6 +102,17 @@ std::pair<unsigned, float> max_element(span<const float> x);
 /// \param[in] threshold Detection threshold.
 /// \return The number of samples that have a part that exceeds the threshold.
 unsigned count_if_part_abs_greater_than(span<const cf_t> x, float threshold);
+
+/// \brief Counts the number of samples that have a part that exceeds the given normalized threshold.
+///
+/// The threshold is expressed in the same normalized units as for complex float samples in \f$[-1, 1]\f$. Each sample
+/// part is compared against <tt>normalized_part_threshold * scale</tt>.
+///
+/// \param[in] x                         Samples.
+/// \param[in] normalized_part_threshold Detection threshold.
+/// \param[in] scale                     Conversion scaling factor.
+/// \return The number of samples that have a part that exceeds the threshold.
+unsigned count_if_part_abs_greater_than(span<const ci16_t> x, float normalized_part_threshold, float scale);
 
 } // namespace ocuduvec
 } // namespace ocudu

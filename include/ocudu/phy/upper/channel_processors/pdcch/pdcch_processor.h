@@ -6,10 +6,11 @@
 
 #include "ocudu/adt/expected.h"
 #include "ocudu/adt/static_vector.h"
-#include "ocudu/phy/support/precoding_configuration.h"
 #include "ocudu/ran/cyclic_prefix.h"
+#include "ocudu/ran/pdcch/aggregation_level.h"
 #include "ocudu/ran/pdcch/coreset.h"
 #include "ocudu/ran/pdcch/pdcch_context.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/slot_point.h"
 #include <string>
 
@@ -34,7 +35,7 @@ public:
   /// Describes a DCI transmission.
   struct dci_description {
     /// Parameter \f$x_{rnti, k}\f$ as per TS38.211 Section 7.3.2 {0...65535}.
-    unsigned rnti;
+    rnti_t rnti;
     /// Parameter \f$n_{ID}\f$ used for DMRS scrambling as per TS38.211 Section 7.4.1.3.1 {0...65535}.
     unsigned n_id_pdcch_dmrs;
     /// Parameter \f$n_{ID}\f$ used in data scrambling as per TS38.211 Section 7.3.2.3 {0...65535}.
@@ -44,15 +45,15 @@ public:
     /// CCE start index used to send the DCI {0, 135}.
     unsigned cce_index;
     /// Indicates the number of CCE used by the PDCCH transmission as per TS38.211 Section 7.3.2.1 {1, 2, 4, 8, 16}.
-    unsigned aggregation_level;
+    aggregation_level dci_aggregation_level;
     /// Ratio of PDCCH DM-RS EPRE to SSS EPRE in decibels.
     float dmrs_power_offset_dB;
     /// Ratio of PDCCH Data EPRE to SSS EPRE in decibels.
     float data_power_offset_dB;
     /// DCI payload as unpacked bits.
     static_vector<uint8_t, pdcch_constants::MAX_DCI_PAYLOAD_SIZE> payload;
-    /// Precoding configuration.
-    precoding_configuration precoding;
+    /// Precoding and beamforming configuration.
+    precoding_beamforming_configuration precoding_and_beamforming;
   };
 
   /// CCE-to-REG mapping types as per TS38.211 Section 7.3.2.2.

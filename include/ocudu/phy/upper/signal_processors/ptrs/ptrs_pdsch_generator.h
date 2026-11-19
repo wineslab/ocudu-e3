@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ocudu/phy/support/precoding_configuration.h"
 #include "ocudu/phy/support/re_pattern.h"
 #include "ocudu/ran/dmrs/dmrs.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/ptrs/ptrs.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/ran/slot_point.h"
@@ -51,8 +51,8 @@ public:
     ///
     /// Indicates the elements that cannot contain PT-RS as described in TS38.211 Section 7.4.1.2.2.
     re_pattern_list reserved;
-    /// PDSCH precoding configuration.
-    precoding_configuration precoding;
+    /// PDSCH precoding and beamforming configuration.
+    precoding_beamforming_configuration precoding_and_beamforming;
   };
 
   /// Default destructor.

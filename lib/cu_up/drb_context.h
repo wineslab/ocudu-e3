@@ -19,13 +19,25 @@ namespace ocuup {
 /// \brief DRB context with map to all QoS flows.
 struct drb_context {
   drb_context(const drb_id_t& drb_id_) : drb_id(drb_id_) {}
+  ~drb_context() { stop(); }
 
   void stop()
   {
-    pdcp->stop();
-    f1u->stop();
-    f1u_gw_bearer->stop();
+    if (!stopped) {
+      if (pdcp) {
+        pdcp->stop();
+      }
+      if (f1u) {
+        f1u->stop();
+      }
+      if (f1u_gw_bearer) {
+        f1u_gw_bearer->stop();
+      }
+      stopped = true;
+    }
   }
+
+  bool stopped = false;
 
   drb_id_t    drb_id;
   gtpu_teid_t f1u_ul_teid;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "uplink_processor_fsm.h"
+#include "uplink_resource_grid_controller.h"
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/phy/upper/uplink_pdu_slot_repository.h"
 #include "ocudu/ran/slot_pdu_capacity_constants.h"
@@ -17,27 +18,21 @@ namespace ocudu {
 ///
 /// It relies on a finite-state machine to decide whether new PDUs can be accepted and to know whether the registered
 /// PDUs are being processed.
-class uplink_pdu_slot_repository_impl : public unique_uplink_pdu_slot_repository::uplink_pdu_slot_repository_callback,
-                                        private shared_resource_grid::pool_interface
+class uplink_pdu_slot_repository_impl : private unique_uplink_pdu_slot_repository::uplink_pdu_slot_repository_callback
 {
 public:
   /// Creates an uplink PDU slot repository.
-  uplink_pdu_slot_repository_impl(resource_grid&                 grid_,
-                                  std::atomic<unsigned>&         grid_ref_counter_,
-                                  uplink_processor_fsm_notifier& fsm_) :
-    grid(grid_), grid_ref_counter(grid_ref_counter_), fsm_notifier(fsm_)
+  uplink_pdu_slot_repository_impl(uplink_resource_grid_controller& grid_controller_,
+                                  uplink_processor_fsm_notifier&   fsm_) :
+    grid_controller(grid_controller_), fsm_notifier(fsm_)
   {
   }
 
-  /// Uplink slot repository destructor.
-  ~uplink_pdu_slot_repository_impl() override
+  /// Creates a unique slot PDU repository in exchange for a stop token.
+  unique_uplink_pdu_slot_repository create_unique_pdu_repository(rt_stop_event_token stop_token_)
   {
-    // Wait for the resource grid to be returned to the pool.
-    for (unsigned current_grid_ref_counter = grid_ref_counter.load(std::memory_order_acquire);
-         current_grid_ref_counter != 0;
-         current_grid_ref_counter = grid_ref_counter.load(std::memory_order_acquire)) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
-    };
+    stop_token = std::move(stop_token_);
+    return unique_uplink_pdu_slot_repository(*this);
   }
 
   /// PUCCH Format 1 aggregated configuration.
@@ -150,10 +145,7 @@ public:
   {
     fsm_notifier.stop_accepting_pdu();
 
-    // Set grid reference counter to one.
-    grid_ref_counter.store(1, std::memory_order_release);
-
-    return {*this, grid_ref_counter};
+    return grid_controller.create_shared_grid(std::move(stop_token));
   }
 
   /// Returns a span that contains the PUSCH PDUs for the given slot and symbol index.
@@ -185,12 +177,6 @@ public:
   }
 
 private:
-  // See the shared_resource_grid::pool_interface interface for documentation.
-  resource_grid& get() override { return grid; }
-
-  // See the shared_resource_grid::pool_interface interface for documentation.
-  void notify_release_scope() override {}
-
   /// Repository that contains PUSCH PDUs.
   std::array<static_vector<pusch_pdu, MAX_PUSCH_PDUS_PER_SLOT>, MAX_NSYMB_PER_SLOT> pusch_repository;
   /// Repository that contains PUCCH PDUs.
@@ -199,11 +185,11 @@ private:
   std::array<static_vector<pucch_f1_collection, MAX_PUCCH_PDUS_PER_SLOT>, MAX_NSYMB_PER_SLOT> pucch_f1_repository;
   /// Repository that contains SRS PDUs.
   std::array<static_vector<srs_pdu, MAX_SRS_PDUS_PER_SLOT>, MAX_NSYMB_PER_SLOT> srs_repository;
-  /// Resource grid associated to the uplink slot.
-  resource_grid& grid;
-  /// Resource grid reference counter.
-  std::atomic<unsigned>& grid_ref_counter;
+  /// Resource grid controller associated to the uplink slot.
+  uplink_resource_grid_controller& grid_controller;
   /// Notifier for the uplink processor finite-state machine.
   uplink_processor_fsm_notifier& fsm_notifier;
+  /// Stop token
+  rt_stop_event_token stop_token;
 };
 } // namespace ocudu

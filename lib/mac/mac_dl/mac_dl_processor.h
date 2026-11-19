@@ -35,13 +35,11 @@ public:
   bool has_cell(du_cell_index_t cell_index) const;
 
   /// Adds new cell configuration to MAC DL.
-  mac_cell_controller& add_cell(const mac_cell_creation_request& cell_cfg,
-                                mac_cell_config_dependencies     dependencies) override;
+  mac_dl_cell_controller& add_cell(const mac_cell_creation_request& cell_cfg,
+                                   mac_cell_config_dependencies     dependencies) override;
 
   /// Removes cell configuration from MAC DL.
   void remove_cell(du_cell_index_t cell_index) override;
-
-  mac_cell_controller& get_cell_controller(du_cell_index_t cell_index) override { return *cells[cell_index]; }
 
   mac_subframe_time_mapper& get_subframe_time_mapper() override { return sfn_time_mapper; }
 

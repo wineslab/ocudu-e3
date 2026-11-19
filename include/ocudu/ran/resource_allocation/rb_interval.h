@@ -12,17 +12,17 @@ namespace ocudu {
 /// \brief Common Resource Block (CRB) interval.
 ///
 /// Describes a {min,...,max} range of CRB indices within a carrier.
-using crb_interval = interval<unsigned, false, crb_tag>;
+using crb_interval = interval<uint16_t, false, crb_tag>;
 
 /// \brief Physical Resource Block (PRB) bitmap.
 ///
 /// Describes a {min,...,max} range of PRB indices within a BWP.
-using prb_interval = interval<unsigned, false, prb_tag>;
+using prb_interval = interval<uint16_t, false, prb_tag>;
 
 /// \brief Virtual Resource Block (VRB) bitmap.
 ///
 /// Describes a {min,...,max} range of VRB indices within a VRB-to-PRB mapping.
-using vrb_interval = interval<unsigned, false, vrb_tag>;
+using vrb_interval = interval<uint16_t, false, vrb_tag>;
 
 /// \brief Convert CRB into PRB given the CRB assignment limits.
 /// The CRB and PRB are assumed to use the same numerology as reference.
@@ -31,10 +31,7 @@ using vrb_interval = interval<unsigned, false, vrb_tag>;
 /// \return Calculated PRB.
 inline unsigned crb_to_prb(crb_interval bwp_crb_lims, unsigned crb)
 {
-  ocudu_sanity_check(bwp_crb_lims.contains(crb) or crb == bwp_crb_lims.stop(),
-                     "CRB={} falls outside BWP limits={}",
-                     crb,
-                     bwp_crb_lims);
+  ocudu_sanity_check(bwp_crb_lims.contains(crb) or crb == bwp_crb_lims.stop(), "CRB={} falls outside BWP limits", crb);
   return crb - bwp_crb_lims.start();
 }
 

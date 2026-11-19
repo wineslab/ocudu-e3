@@ -26,7 +26,7 @@ void ngap_ue_context_modification_procedure::operator()(coro_context<async_task<
 {
   CORO_BEGIN(ctx);
 
-  logger.log_debug("\"{}\" started...", name());
+  logger.log_info("\"{}\" started...", name());
 
   CORO_AWAIT_VALUE(ue_ctxt_modification_routine_outcome,
                    cu_cp_notifier.on_new_ue_context_modification_request(request));
@@ -34,11 +34,11 @@ void ngap_ue_context_modification_procedure::operator()(coro_context<async_task<
   if (not ue_ctxt_modification_routine_outcome.has_value()) {
     send_ue_context_modification_failure(
         ue_ctxt_modification_routine_outcome.error(), ue_ids.amf_ue_id, ue_ids.ran_ue_id);
-    logger.log_debug("\"{}\" failed", name());
+    logger.log_warning("\"{}\" failed", name());
   } else {
     send_ue_context_modification_response(
         ue_ctxt_modification_routine_outcome.value(), ue_ids.amf_ue_id, ue_ids.ran_ue_id);
-    logger.log_debug("\"{}\" finished successfully", name());
+    logger.log_info("\"{}\" finished successfully", name());
   }
 
   CORO_RETURN();
@@ -54,8 +54,8 @@ void ngap_ue_context_modification_procedure::send_ue_context_modification_respon
   ngap_msg.pdu.set_successful_outcome();
   ngap_msg.pdu.successful_outcome().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_MOD);
   auto& ue_ctxt_mod_resp           = ngap_msg.pdu.successful_outcome().value.ue_context_mod_resp();
-  ue_ctxt_mod_resp->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  ue_ctxt_mod_resp->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ue_ctxt_mod_resp->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  ue_ctxt_mod_resp->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   // Fill RRC state.
   if (msg.rrc_state.has_value()) {
@@ -72,7 +72,7 @@ void ngap_ue_context_modification_procedure::send_ue_context_modification_respon
 
   // Forward message to AMF.
   if (!amf_notifier.on_new_message(ngap_msg)) {
-    logger.log_warning("AMF notifier is not set. Cannot send UEContextModificationResponse");
+    logger.log_warning("Cannot send UEContextModificationResponse");
     return;
   }
 }
@@ -87,14 +87,14 @@ void ngap_ue_context_modification_procedure::send_ue_context_modification_failur
   ngap_msg.pdu.set_unsuccessful_outcome();
   ngap_msg.pdu.unsuccessful_outcome().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_MOD);
   auto& ue_ctxt_mod_fail           = ngap_msg.pdu.unsuccessful_outcome().value.ue_context_mod_fail();
-  ue_ctxt_mod_fail->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
-  ue_ctxt_mod_fail->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ue_ctxt_mod_fail->amf_ue_ngap_id = to_underlying(amf_ue_id);
+  ue_ctxt_mod_fail->ran_ue_ngap_id = to_underlying(ran_ue_id);
 
   ue_ctxt_mod_fail->cause = cause_to_asn1(msg.cause);
 
   // Forward message to AMF.
   if (!amf_notifier.on_new_message(ngap_msg)) {
-    logger.log_warning("AMF notifier is not set. Cannot send UEContextModificationFailure");
+    logger.log_warning("Cannot send UEContextModificationFailure");
     return;
   }
 }

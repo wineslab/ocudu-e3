@@ -128,6 +128,13 @@ public:
     ue->get_security_manager().update_security_context(sec_ctxt);
   }
 
+  bool init_retrieved_security_context(const security::security_context&                  sec_ctxt,
+                                       const std::optional<security::sec_selected_algos>& algos) override
+  {
+    ocudu_assert(ue != nullptr, "CU-CP UE must not be nullptr");
+    return ue->get_security_manager().init_retrieved_security_context(sec_ctxt, algos);
+  }
+
   /// \brief Perform horizontal key derivation.
   void perform_horizontal_key_derivation(pci_t target_pci, unsigned target_ssb_arfcn) override
   {
@@ -145,17 +152,19 @@ class rrc_ue_cu_cp_adapter : public rrc_ue_context_update_notifier, public rrc_u
 public:
   rrc_ue_cu_cp_adapter(cu_cp_ue_index_t ue_index_) : ue_index(ue_index_) {}
 
-  void connect_cu_cp(cu_cp_rrc_ue_interface&        cu_cp_rrc_ue_,
-                     cu_cp_ue_removal_handler&      ue_removal_handler_,
-                     cu_cp_ue_admission_controller& ctrl_,
-                     up_resource_manager&           up_mng_,
-                     cu_cp_measurement_handler&     meas_handler_)
+  void connect_cu_cp(cu_cp_rrc_ue_interface&         cu_cp_rrc_ue_,
+                     cu_cp_ue_removal_handler&       ue_removal_handler_,
+                     cu_cp_ue_admission_controller&  ctrl_,
+                     up_resource_manager&            up_mng_,
+                     cu_cp_measurement_handler&      meas_handler_,
+                     cu_cp_location_manager_handler& location_handler_)
   {
     cu_cp_rrc_ue_handler = &cu_cp_rrc_ue_;
     ue_removal_handler   = &ue_removal_handler_;
     controller           = &ctrl_;
     up_mng               = &up_mng_;
     meas_handler         = &meas_handler_;
+    location_handler     = &location_handler_;
   }
 
   bool on_ue_setup_request() override
@@ -176,10 +185,23 @@ public:
     return cu_cp_rrc_ue_handler->handle_rrc_reestablishment_request(old_pci, old_c_rnti, ue_index);
   }
 
+  async_task<rrc_ue_context_retrieval_response>
+  on_ue_context_retrieval_required(const rrc_ue_context_retrieval_request& request) override
+  {
+    ocudu_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
+    return cu_cp_rrc_ue_handler->handle_ue_context_retrieval_required(ue_index, request);
+  }
+
   async_task<bool> on_rrc_reestablishment_context_modification_required() override
   {
     ocudu_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
     return cu_cp_rrc_ue_handler->handle_rrc_reestablishment_context_modification_required(ue_index);
+  }
+
+  async_task<bool> on_retrieved_context_path_switch_required() override
+  {
+    ocudu_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
+    return cu_cp_rrc_ue_handler->handle_retrieved_context_path_switch_required(ue_index);
   }
 
   void on_rrc_reestablishment_failure(const cu_cp_ue_context_release_request& request) override
@@ -210,6 +232,12 @@ public:
   {
     ocudu_assert(up_mng != nullptr, "UP resource manager must not be nullptr");
     up_mng->set_up_context(ctxt);
+  }
+
+  void on_ue_location_update() override
+  {
+    ocudu_assert(location_handler != nullptr, "Location manager handler must not be nullptr");
+    location_handler->handle_location_update(ue_index);
   }
 
   up_context on_up_context_required() override
@@ -254,12 +282,13 @@ public:
   }
 
 private:
-  cu_cp_rrc_ue_interface*        cu_cp_rrc_ue_handler = nullptr;
-  cu_cp_ue_removal_handler*      ue_removal_handler   = nullptr;
-  up_resource_manager*           up_mng               = nullptr;
-  cu_cp_ue_admission_controller* controller           = nullptr;
-  cu_cp_measurement_handler*     meas_handler         = nullptr;
-  cu_cp_ue_index_t               ue_index;
+  cu_cp_rrc_ue_interface*         cu_cp_rrc_ue_handler = nullptr;
+  cu_cp_ue_removal_handler*       ue_removal_handler   = nullptr;
+  up_resource_manager*            up_mng               = nullptr;
+  cu_cp_ue_admission_controller*  controller           = nullptr;
+  cu_cp_measurement_handler*      meas_handler         = nullptr;
+  cu_cp_location_manager_handler* location_handler     = nullptr;
+  cu_cp_ue_index_t                ue_index;
 };
 
 } // namespace ocudu::ocucp

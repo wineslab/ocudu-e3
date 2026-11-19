@@ -4,6 +4,7 @@
 
 #include "ocudu/phy/upper/equalization/equalization_factories.h"
 #include "channel_equalizer_generic_impl.h"
+#include <memory>
 
 using namespace ocudu;
 

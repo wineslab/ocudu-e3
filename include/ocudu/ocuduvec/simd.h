@@ -137,6 +137,12 @@ inline bool        SIMD_IS_ALIGNED(const void* ptr)
 #define OCUDU_SIMD_C16_SIZE 0
 #endif /* ENABLE_C16 */
 
+#if OCUDU_SIMD_S_SIZE
+#define OCUDU_SIMD_CI16_SIZE (OCUDU_SIMD_S_SIZE / 2)
+#else
+#define OCUDU_SIMD_CI16_SIZE 0
+#endif
+
 #if OCUDU_SIMD_F_SIZE
 
 ///
@@ -1706,27 +1712,109 @@ inline simd_i_t ocudu_simd_i_select(simd_i_t a, simd_i_t b, simd_sel_t selector)
 #endif /* __AVX512F__ */
 }
 
+#if OCUDU_SIMD_CI16_SIZE
+
+#ifdef __AVX512F__
+using simd_u64_t = __m512i;
+#elif defined(__AVX2__)
+using simd_u64_t = __m256i;
+#elif defined(__SSE4_1__)
+using simd_u64_t = __m128i;
+#elif defined(__ARM_NEON)
+using simd_u64_t = uint64x2_t;
+#endif
+
+#if defined(__AVX512F__) || defined(__AVX2__)
+
+/// \brief Horizontally sums four 64-bit unsigned integer lanes within an AVX2 register into a scalar.
+inline uint64_t ocudu_simd_u64_hsum_avx2(__m256i v)
+{
+  __m128i sum128 = _mm_add_epi64(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1));
+  return static_cast<uint64_t>(_mm_cvtsi128_si64(sum128)) + static_cast<uint64_t>(_mm_extract_epi64(sum128, 1));
+}
+#endif /* __AVX512F__ || __AVX2__ */
+
+inline simd_u64_t ocudu_simd_u64_zero()
+{
+#ifdef __AVX512F__
+  return _mm512_setzero_si512();
+#elif defined(__AVX2__)
+  return _mm256_setzero_si256();
+#elif defined(__SSE4_1__)
+  return _mm_setzero_si128();
+#elif defined(__ARM_NEON)
+  return vdupq_n_u64(0);
+#endif
+}
+
+/// \brief Widens unsigned 32-bit lanes in \c v to 64-bit and adds them to \c accum.
+///
+/// This function is intended to be used together with \ref ocudu_simd_u64_accum_reduce for reducing the sum to a
+/// single value. Both \c unpacklo and \c unpackhi widened lane groups are summed element-wise before accumulation.
+inline simd_u64_t ocudu_simd_u64_accumulate_i(simd_u64_t accum, simd_i_t v)
+{
+#ifdef __AVX512F__
+  return _mm512_add_epi64(_mm512_unpackhi_epi32(v, _mm512_setzero_si512()),
+                          _mm512_add_epi64(accum, _mm512_unpacklo_epi32(v, _mm512_setzero_si512())));
+#elif defined(__AVX2__)
+  return _mm256_add_epi64(_mm256_unpackhi_epi32(v, _mm256_setzero_si256()),
+                          _mm256_add_epi64(accum, _mm256_unpacklo_epi32(v, _mm256_setzero_si256())));
+#elif defined(__SSE4_1__)
+  return _mm_add_epi64(_mm_unpackhi_epi32(v, _mm_setzero_si128()),
+                       _mm_add_epi64(accum, _mm_unpacklo_epi32(v, _mm_setzero_si128())));
+#elif defined(__ARM_NEON)
+  const uint32x4_t lanes = vreinterpretq_u32_s32(v);
+  return vaddq_u64(vmovl_u32(vget_high_u32(lanes)), vaddq_u64(accum, vmovl_u32(vget_low_u32(lanes))));
+#endif
+}
+
+/// \brief Reduces all unsigned 64-bit values into a scalar 64-bit unsigned integer sum.
+inline uint64_t ocudu_simd_u64_accum_reduce(simd_u64_t accum)
+{
+#ifdef __AVX512F__
+  return ocudu_simd_u64_hsum_avx2(_mm512_castsi512_si256(accum)) +
+         ocudu_simd_u64_hsum_avx2(_mm512_extracti64x4_epi64(accum, 1));
+#elif defined(__AVX2__)
+  return ocudu_simd_u64_hsum_avx2(accum);
+#elif defined(__SSE4_1__)
+  return static_cast<uint64_t>(_mm_cvtsi128_si64(accum)) + static_cast<uint64_t>(_mm_extract_epi64(accum, 1));
+#elif defined(__ARM_NEON)
+  return vgetq_lane_u64(accum, 0) + vgetq_lane_u64(accum, 1);
+#endif
+}
+
+#endif /* OCUDU_SIMD_CI16_SIZE */
+
 #endif /* OCUDU_SIMD_I_SIZE */
 
 #if OCUDU_SIMD_S_SIZE
 
 #ifdef __AVX512F__
-using simd_s_t = __m512i;
+using simd_i16_t = __m512i;
 #else /* __AVX512F__ */
 #ifdef __AVX2__
-using simd_s_t = __m256i;
+using simd_i16_t = __m256i;
 #else /* __AVX2__ */
 #ifdef __SSE4_1__
-using simd_s_t = __m128i;
+using simd_i16_t = __m128i;
 #else /* __SSE4_1__ */
 #ifdef __ARM_NEON
-using simd_s_t = int16x8_t;
+using simd_i16_t = int16x8_t;
 #endif /* __ARM_NEON */
 #endif /* __SSE4_1__ */
 #endif /* __AVX2__ */
 #endif /* __AVX512F__ */
 
-inline simd_s_t ocudu_simd_s_load(const int16_t* ptr)
+#ifdef __ARM_NEON
+using simd_ci16_t = int16x8x2_t;
+#else
+struct simd_ci16_t {
+  simd_i16_t re;
+  simd_i16_t im;
+};
+#endif
+
+inline simd_i16_t ocudu_simd_s_load(const int16_t* ptr)
 {
 #ifdef __AVX512F__
   return _mm512_load_si512(ptr);
@@ -1745,7 +1833,7 @@ inline simd_s_t ocudu_simd_s_load(const int16_t* ptr)
 #endif /* __AVX512F__ */
 }
 
-inline simd_s_t ocudu_simd_s_loadu(const int16_t* ptr)
+inline simd_i16_t ocudu_simd_s_loadu(const int16_t* ptr)
 {
 #ifdef __AVX512F__
   return _mm512_loadu_si512(ptr);
@@ -1764,7 +1852,185 @@ inline simd_s_t ocudu_simd_s_loadu(const int16_t* ptr)
 #endif /* __AVX512F__ */
 }
 
-inline void ocudu_simd_s_store(int16_t* ptr, simd_s_t simdreg)
+/// \brief Loads and converts signed 16-bit bit complex integers into a complex SIMD register in single-precision
+/// floating point.
+/// \param[in] ptr Input pointer to the signed 16-bit complex integer data.
+/// \return A floating point SIMD register.
+inline simd_cf_t ocudu_simd_loadu(const ci16_t* ptr)
+{
+  simd_cf_t ret;
+
+#ifdef __AVX512F__
+  // Load 16 int16-based complex numbers.
+  __m512i in = _mm512_loadu_si512(ptr);
+
+  // Mask to deinterleave real and imaginary parts, applied to each 128-bit lane.
+  const __m512i mask = _mm512_broadcast_i32x4(_mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15));
+
+  // Deinterleave bytes to have, within each 128-bit lane, the real parts in the lower 64 bits and the imaginary parts
+  // in the higher 64 bits.
+  __m512i s = _mm512_shuffle_epi8(in, mask);
+
+  // Gather the 64-bit groups to have the real parts in the lower half and the imaginary parts in the higher half.
+  // i0 i1 ... i15 | q0 q1 ... q15
+  __m512i d = _mm512_permutexvar_epi64(_mm512_setr_epi64(0, 2, 4, 6, 1, 3, 5, 7), s);
+
+  // Expand the int16 elements to int32, while preserving the sign.
+  __m512i re = _mm512_cvtepi16_epi32(_mm512_castsi512_si256(d));
+  __m512i im = _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(d, 1));
+
+  // Convert int32 elements to float.
+  ret.re = _mm512_cvtepi32_ps(re);
+  ret.im = _mm512_cvtepi32_ps(im);
+#else /* __AVX512F__ */
+#ifdef __AVX2__
+  // Load 4 int16-based complex numbers.
+  __m128i in1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr));
+  // Load 4 int16-based complex numbers.
+  __m128i in2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + 4));
+
+  // Mask to deinterleave real and imaginary parts.
+  const __m128i mask = _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15);
+
+  // Deinterleave bytes to have real part in the lower 64 bits, and imaginary part in the higher 64 bits.
+  __m128i s1 = _mm_shuffle_epi8(in1, mask);
+  __m128i s2 = _mm_shuffle_epi8(in2, mask);
+
+  // Expand the int16-based complex numbers to int32-based, while preserving the sign.
+  __m256i e1 = _mm256_cvtepi16_epi32(s1);
+  __m256i e2 = _mm256_cvtepi16_epi32(s2);
+
+  // Unpack and permute lanes to have different vectors for the real and the imaginary parts.
+  __m256i re = _mm256_permute2x128_si256(e1, e2, 0x20);
+  __m256i im = _mm256_permute2x128_si256(e1, e2, 0x31);
+
+  // Convert int32 elements to float.
+  ret.re = _mm256_cvtepi32_ps(re);
+  ret.im = _mm256_cvtepi32_ps(im);
+#else /* __AVX2__ */
+#ifdef __SSE4_1__
+  // Load 4 int16-based complex numbers.
+  __m128i in = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr));
+
+  // Mask to deinterleave real and imaginary parts.
+  const __m128i mask = _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15);
+
+  // Deinterleave bytes to have the real parts in the lower 64 bits, and the imaginary parts in the higher 64 bits.
+  __m128i s = _mm_shuffle_epi8(in, mask);
+
+  // Expand the int16 elements to int32, while preserving the sign.
+  __m128i re = _mm_cvtepi16_epi32(s);
+  __m128i im = _mm_cvtepi16_epi32(_mm_unpackhi_epi64(s, s));
+
+  // Convert int32 elements to float.
+  ret.re = _mm_cvtepi32_ps(re);
+  ret.im = _mm_cvtepi32_ps(im);
+#else /* __SSE4_1__ */
+#ifdef __ARM_NEON
+  // Load and deinterleave 4 int16-based complex numbers.
+  int16x4x2_t in = vld2_s16(reinterpret_cast<const int16_t*>(ptr));
+
+  // Expand the int16 elements to int32 while preserving the sign and convert to float.
+  ret.val[0] = vcvtq_f32_s32(vmovl_s16(in.val[0]));
+  ret.val[1] = vcvtq_f32_s32(vmovl_s16(in.val[1]));
+#endif /* __ARM_NEON */
+#endif /* __SSE4_1__ */
+#endif /* __AVX2__ */
+#endif /* __AVX512F__ */
+
+  return ret;
+}
+
+/// \brief Converts a single-precision floating point complex register into signed 16-bit complex integers and stores
+/// the result.
+/// \param[out] ptr Output pointer to the signed 16-bit complex integer data.
+/// \param[in]  simdreg SIMD register holding single-precision floating point complex values.
+inline void ocudu_simd_storeu(ci16_t* ptr, simd_cf_t simdreg)
+{
+#ifdef __AVX512F__
+  // Interleave the real and imaginary parts within each 128-bit lane.
+  __m512 lo = _mm512_unpacklo_ps(simdreg.re, simdreg.im);
+  __m512 hi = _mm512_unpackhi_ps(simdreg.re, simdreg.im);
+
+  // Convert float elements to int32.
+  __m512i lo_i = _mm512_cvtps_epi32(lo);
+  __m512i hi_i = _mm512_cvtps_epi32(hi);
+
+  // Narrow the int32 elements to int16 with saturation. As the packing is performed within each 128-bit lane, the 16
+  // int16-based complex numbers result in the original order.
+  __m512i out = _mm512_packs_epi32(lo_i, hi_i);
+
+  // Store 16 int16-based complex numbers.
+  _mm512_storeu_si512(ptr, out);
+#else /* __AVX512F__ */
+#ifdef __AVX2__
+  // Interleave the real and imaginary parts within each 128-bit lane.
+  __m256 lo = _mm256_unpacklo_ps(simdreg.re, simdreg.im);
+  __m256 hi = _mm256_unpackhi_ps(simdreg.re, simdreg.im);
+
+  // Convert float elements to int32.
+  __m256i lo_i = _mm256_cvtps_epi32(lo);
+  __m256i hi_i = _mm256_cvtps_epi32(hi);
+
+  // Narrow the int32 elements to int16 with saturation. As the packing is performed within each 128-bit lane, the eight
+  // int16-based complex numbers result in the original order.
+  __m256i out = _mm256_packs_epi32(lo_i, hi_i);
+
+  // Store 8 int16-based complex numbers.
+  _mm256_storeu_si256(reinterpret_cast<__m256i*>(ptr), out);
+#else /* __AVX2__ */
+#ifdef __SSE4_1__
+  // Interleave the real and imaginary parts.
+  __m128 lo = _mm_unpacklo_ps(simdreg.re, simdreg.im);
+  // hi:   i2 q2 i3 q3
+  __m128 hi = _mm_unpackhi_ps(simdreg.re, simdreg.im);
+
+  // Convert float elements to int32 and narrow them to int16 with saturation.
+  __m128i out = _mm_packs_epi32(_mm_cvtps_epi32(lo), _mm_cvtps_epi32(hi));
+
+  // Store 4 int16-based complex numbers.
+  _mm_storeu_si128(reinterpret_cast<__m128i*>(ptr), out);
+#else /* __SSE4_1__ */
+#ifdef __ARM_NEON
+  // Convert to int32 and narrow to int16 with saturation.
+  int16x4x2_t out;
+  out.val[0] = vqmovn_s32(vcvtnq_s32_f32(simdreg.val[0]));
+  out.val[1] = vqmovn_s32(vcvtnq_s32_f32(simdreg.val[1]));
+
+  // Interleave and store 4 int16-based complex numbers.
+  vst2_s16(reinterpret_cast<int16_t*>(ptr), out);
+#endif /* __ARM_NEON */
+#endif /* __SSE4_1__ */
+#endif /* __AVX2__ */
+#endif /* __AVX512F__ */
+}
+
+inline simd_ci16_t ocudu_simd_ci16_set1(ci16_t x)
+{
+  simd_ci16_t ret;
+#ifdef __AVX512F__
+  ret.re = _mm512_set1_epi16(x.real());
+  ret.im = _mm512_set1_epi16(x.imag());
+#else /* __AVX512F__ */
+#ifdef __AVX2__
+  ret.re = _mm256_set1_epi16(x.real());
+  ret.im = _mm256_set1_epi16(x.imag());
+#else /* __AVX2__ */
+#ifdef __SSE4_1__
+  ret.re = _mm_set1_epi16(x.real());
+  ret.im = _mm_set1_epi16(x.imag());
+#else /* __SSE4_1__ */
+#ifdef __ARM_NEON
+  ret.val[0] = vdupq_n_s16(x.real());
+  ret.val[1] = vdupq_n_s16(x.imag());
+#endif /* __ARM_NEON */
+#endif /* __SSE4_1__ */
+#endif /* __AVX2__ */
+#endif /* __AVX512F__ */
+  return ret;
+}
+
+inline void ocudu_simd_s_store(int16_t* ptr, simd_i16_t simdreg)
 {
 #ifdef __AVX512F__
   _mm512_store_si512(ptr, simdreg);
@@ -1783,7 +2049,7 @@ inline void ocudu_simd_s_store(int16_t* ptr, simd_s_t simdreg)
 #endif /* __AVX512F__ */
 }
 
-inline void ocudu_simd_s_storeu(int16_t* ptr, simd_s_t simdreg)
+inline void ocudu_simd_s_storeu(int16_t* ptr, simd_i16_t simdreg)
 {
 #ifdef __AVX512F__
   _mm512_storeu_si512(ptr, simdreg);
@@ -1801,7 +2067,7 @@ inline void ocudu_simd_s_storeu(int16_t* ptr, simd_s_t simdreg)
 #endif /* __AVX2__ */
 #endif /* __AVX512F__ */
 }
-inline simd_s_t ocudu_simd_s_zero()
+inline simd_i16_t ocudu_simd_s_zero()
 {
 #ifdef __AVX512F__
   return _mm512_setzero_si512();
@@ -1820,7 +2086,7 @@ inline simd_s_t ocudu_simd_s_zero()
 #endif /* __AVX512F__ */
 }
 
-inline simd_s_t ocudu_simd_s_mul(simd_s_t a, simd_s_t b)
+inline simd_i16_t ocudu_simd_s_mul(simd_i16_t a, simd_i16_t b)
 {
 #ifdef __AVX512F__
   return _mm512_mullo_epi16(a, b);
@@ -1839,7 +2105,7 @@ inline simd_s_t ocudu_simd_s_mul(simd_s_t a, simd_s_t b)
 #endif /* __AVX512F__ */
 }
 
-inline simd_s_t ocudu_simd_s_neg(simd_s_t a, simd_s_t b)
+inline simd_i16_t ocudu_simd_s_neg(simd_i16_t a, simd_i16_t b)
 {
 #ifdef __AVX512F__
   __m256i a0 = _mm512_extracti64x4_epi64(a, 0);
@@ -1878,7 +2144,7 @@ inline simd_s_t ocudu_simd_s_neg(simd_s_t a, simd_s_t b)
 #endif /* __AVX512F__ */
 }
 
-inline simd_s_t ocudu_simd_s_add(simd_s_t a, simd_s_t b)
+inline simd_i16_t ocudu_simd_s_add(simd_i16_t a, simd_i16_t b)
 {
 #ifdef __AVX512F__
   return _mm512_add_epi16(a, b);
@@ -1897,7 +2163,7 @@ inline simd_s_t ocudu_simd_s_add(simd_s_t a, simd_s_t b)
 #endif /* __AVX512F__ */
 }
 
-inline simd_s_t ocudu_simd_s_sub(simd_s_t a, simd_s_t b)
+inline simd_i16_t ocudu_simd_s_sub(simd_i16_t a, simd_i16_t b)
 {
 #ifdef __AVX512F__
   return _mm512_sub_epi16(a, b);
@@ -1916,7 +2182,7 @@ inline simd_s_t ocudu_simd_s_sub(simd_s_t a, simd_s_t b)
 #endif /* __AVX512F__ */
 }
 
-inline simd_s_t ocudu_simd_s_set1(int16_t x)
+inline simd_i16_t ocudu_simd_s_set1(int16_t x)
 {
 #ifdef __AVX512F__
   return _mm512_set1_epi16(x);
@@ -1934,6 +2200,78 @@ inline simd_s_t ocudu_simd_s_set1(int16_t x)
 #endif /* __AVX2__ */
 #endif /* __AVX512F__ */
 }
+
+#if OCUDU_SIMD_CI16_SIZE && OCUDU_SIMD_I_SIZE
+
+inline simd_i16_t ocudu_simd_ci16_loadu(const ci16_t* ptr)
+{
+  return ocudu_simd_s_loadu(reinterpret_cast<const int16_t*>(ptr));
+}
+
+/// \brief Calculates the normal square of complex 16-bit integers in a SIMD register.
+///
+/// The function expects that 16-bit integer real and imaginary parts are interleaved within the input SIMD register.
+///
+/// \param[in] v Input SIMD register containing 16-bit integers.
+/// \return A SIMD register containing an unsigned 32-bit integer value for each 16-bit integer pair.
+inline simd_i_t ocudu_simd_ci16_norm_sq(simd_i16_t v)
+{
+#ifdef __AVX512F__
+  return _mm512_madd_epi16(v, v);
+#else /* __AVX512F__ */
+#ifdef __AVX2__
+  return _mm256_madd_epi16(v, v);
+#else /* __AVX2__ */
+#ifdef __SSE4_1__
+  return _mm_madd_epi16(v, v);
+#else /* __SSE4_1__ */
+#ifdef __ARM_NEON
+  uint16x8_t v_abs  = vreinterpretq_u16_s16(vabsq_s16(v));
+  uint32x4_t sq_lo  = vmull_u16(vget_low_u16(v_abs), vget_low_u16(v_abs));
+  uint32x4_t sq_hi  = vmull_u16(vget_high_u16(v_abs), vget_high_u16(v_abs));
+  uint32x2_t sum_lo = vpadd_u32(vget_low_u32(sq_lo), vget_high_u32(sq_lo));
+  uint32x2_t sum_hi = vpadd_u32(vget_low_u32(sq_hi), vget_high_u32(sq_hi));
+  return vreinterpretq_s32_u32(vcombine_u32(sum_lo, sum_hi));
+#endif /* __ARM_NEON */
+#endif /* __SSE4_1__ */
+#endif /* __AVX2__ */
+#endif /* __AVX512F__ */
+}
+
+/// \brief Selects the maximum unsigned 32-bit integer value among two SIMD registers.
+///
+/// SSE and AVX instructions sets do not have an intrinsics for unsigned integers. In these cases, the comparison is
+/// signed, it shifts the range to [-2^31, 2^31) to avoid an overflow.
+///
+/// \param[in] a First SIMD register.
+/// \param[in] b Second SIMD register.
+/// \return A SIMD selector register for 32-bit integers.
+inline simd_sel_t ocudu_simd_u32_max(simd_i_t a, simd_i_t b)
+{
+#ifdef __AVX512F__
+  return _mm512_cmpgt_epu32_mask(a, b);
+#else /* __AVX512F__ */
+#ifdef __AVX2__
+  // The complex norm squared produces an unsigned 32-bit integer with range [0, 2^32).
+  __m256i unsigned_bias = _mm256_set1_epi32(INT32_MIN);
+
+  return _mm256_castsi256_ps(
+      _mm256_cmpgt_epi32(_mm256_add_epi32(a, unsigned_bias), _mm256_add_epi32(b, unsigned_bias)));
+#else /* __AVX2__ */
+#ifdef __SSE4_1__
+  __m128i unsigned_bias = _mm_set1_epi32(INT32_MIN);
+  return (simd_sel_t)_mm_castsi128_ps(
+      _mm_cmpgt_epi32(_mm_add_epi32(a, unsigned_bias), _mm_add_epi32(b, unsigned_bias)));
+#else /* __SSE4_1__ */
+#ifdef __ARM_NEON
+  return vcgtq_u32(vreinterpretq_u32_s32(a), vreinterpretq_u32_s32(b));
+#endif /* __ARM_NEON */
+#endif /* __SSE4_1__ */
+#endif /* __AVX2__ */
+#endif /* __AVX512F__ */
+}
+
+#endif /* OCUDU_SIMD_CI16_SIZE && OCUDU_SIMD_I_SIZE */
 
 #endif /* OCUDU_SIMD_S_SIZE */
 
@@ -2185,7 +2523,7 @@ inline simd_c16_t ocudu_simd_c16_zero()
 
 #if OCUDU_SIMD_F_SIZE && OCUDU_SIMD_S_SIZE
 
-inline simd_s_t ocudu_simd_convert_2f_s(simd_f_t a, simd_f_t b)
+inline simd_i16_t ocudu_simd_convert_2f_s(simd_f_t a, simd_f_t b)
 {
 #ifdef __AVX512F__
   __m512 aa = _mm512_permutex2var_ps(
@@ -2217,7 +2555,7 @@ inline simd_s_t ocudu_simd_convert_2f_s(simd_f_t a, simd_f_t b)
 #ifdef __ARM_NEON
   int32x4_t ai = vcvtnq_s32_f32(a);
   int32x4_t bi = vcvtnq_s32_f32(b);
-  return (simd_s_t)vcombine_s16(vqmovn_s32(ai), vqmovn_s32(bi));
+  return (simd_i16_t)vcombine_s16(vqmovn_s32(ai), vqmovn_s32(bi));
 #endif /* __ARM_NEON */
 #endif /* __SSE4_1__ */
 #endif /* __AVX2__ */
@@ -2226,7 +2564,7 @@ inline simd_s_t ocudu_simd_convert_2f_s(simd_f_t a, simd_f_t b)
 
 // Converts 2 vectors of single-precision floats to a vector of int16_t, given that input vectors contain values of the
 // interleaved data read from memory.
-inline simd_s_t ocudu_simd_convert_2f_interleaved_s(simd_f_t a, simd_f_t b)
+inline simd_i16_t ocudu_simd_convert_2f_interleaved_s(simd_f_t a, simd_f_t b)
 {
 #ifdef __AVX512F__
   __m512  aa = _mm512_unpacklo_ps(a, b);
@@ -2253,7 +2591,7 @@ inline simd_s_t ocudu_simd_convert_2f_interleaved_s(simd_f_t a, simd_f_t b)
   int32x4_t   ai                 = vcvtnq_s32_f32(a);
   int32x4_t   bi                 = vcvtnq_s32_f32(b);
   int16x4x2_t ab_s16_interleaved = vzip_s16(vqmovn_s32(ai), vqmovn_s32(bi));
-  return (simd_s_t)vcombine_s16(ab_s16_interleaved.val[0], ab_s16_interleaved.val[1]);
+  return (simd_i16_t)vcombine_s16(ab_s16_interleaved.val[0], ab_s16_interleaved.val[1]);
 #endif /* __ARM_NEON */
 #endif /* __SSE4_1__ */
 #endif /* __AVX2__ */
@@ -2261,9 +2599,9 @@ inline simd_s_t ocudu_simd_convert_2f_interleaved_s(simd_f_t a, simd_f_t b)
 }
 
 #ifdef __AVX512F__
-inline simd_s_t ocudu_simd_convert_1f_bf16(simd_f_t a)
+inline simd_i16_t ocudu_simd_convert_1f_bf16(simd_f_t a)
 {
-  simd_s_t ret;
+  simd_i16_t ret;
 
   const __m512i  bias      = _mm512_set1_epi32(0x7fff);
   const __m512i  one       = _mm512_set1_epi32(0x1);
@@ -2305,9 +2643,9 @@ inline simd_s_t ocudu_simd_convert_1f_bf16(simd_f_t a)
 }
 #endif // __AVX512F__
 
-inline simd_s_t ocudu_simd_convert_2f_bf16(simd_f_t a, simd_f_t b)
+inline simd_i16_t ocudu_simd_convert_2f_bf16(simd_f_t a, simd_f_t b)
 {
-  simd_s_t ret;
+  simd_i16_t ret;
 #ifdef __AVX512F__
   const __m512i bias = _mm512_set1_epi32(0x7fff);
   const __m512i one  = _mm512_set1_epi32(0x1);
@@ -2451,7 +2789,7 @@ inline simd_s_t ocudu_simd_convert_2f_bf16(simd_f_t a, simd_f_t b)
 
 // Converts 2 vectors of single-precision floats to a vector of bf16_t, given that input vectors contain values of the
 // interleaved data read from memory.
-inline simd_s_t ocudu_simd_convert_2f_interleaved_bf16(simd_f_t a, simd_f_t b)
+inline simd_i16_t ocudu_simd_convert_2f_interleaved_bf16(simd_f_t a, simd_f_t b)
 {
 #ifdef __AVX512F__
   const __m512i bias = _mm512_set1_epi32(0x7fff);
@@ -2545,6 +2883,17 @@ inline void ocudu_simd_bf16_loadu(simd_f_t& even, simd_f_t& odd, const bf16_t* p
 }
 
 #ifdef OCUDU_SIMD_CF_SIZE
+inline simd_cf_t ocudu_simd_load(const cbf16_t* ptr)
+{
+  simd_cf_t ret;
+#ifdef __ARM_NEON
+  ocudu_simd_bf16_loadu(ret.val[0], ret.val[1], reinterpret_cast<const bf16_t*>(ptr));
+#else // __ARM_NEON
+  ocudu_simd_bf16_loadu(ret.re, ret.im, reinterpret_cast<const bf16_t*>(ptr));
+#endif
+  return ret;
+}
+
 inline simd_cf_t ocudu_simd_loadu(const cbf16_t* ptr)
 {
   simd_cf_t ret;
@@ -2559,7 +2908,7 @@ inline simd_cf_t ocudu_simd_loadu(const cbf16_t* ptr)
 
 inline void ocudu_simd_bf16_storeu(bf16_t* ptr, simd_f_t a, simd_f_t b)
 {
-  simd_s_t bf16_vec = ocudu_simd_convert_2f_bf16(a, b);
+  simd_i16_t bf16_vec = ocudu_simd_convert_2f_bf16(a, b);
 #ifdef __AVX512F__
   _mm512_storeu_si512(reinterpret_cast<__m512i*>(ptr), bf16_vec);
 #else /* __AVX512F__ */
@@ -2580,7 +2929,7 @@ inline void ocudu_simd_bf16_storeu(bf16_t* ptr, simd_f_t a, simd_f_t b)
 #ifdef OCUDU_SIMD_CF_SIZE
 inline void ocudu_simd_store(cbf16_t* ptr, simd_cf_t simdreg)
 {
-  simd_s_t packed_iq_bf16 =
+  simd_i16_t packed_iq_bf16 =
       ocudu_simd_convert_2f_interleaved_bf16(ocudu_simd_cf_re(simdreg), ocudu_simd_cf_im(simdreg));
 
 #ifdef __AVX512F__
@@ -2602,7 +2951,7 @@ inline void ocudu_simd_store(cbf16_t* ptr, simd_cf_t simdreg)
 
 inline void ocudu_simd_storeu(cbf16_t* ptr, simd_cf_t simdreg)
 {
-  simd_s_t packed_iq_bf16 =
+  simd_i16_t packed_iq_bf16 =
       ocudu_simd_convert_2f_interleaved_bf16(ocudu_simd_cf_re(simdreg), ocudu_simd_cf_im(simdreg));
 
 #ifdef __AVX512F__

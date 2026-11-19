@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-
 set_directory_properties(PROPERTIES LABELS "du_high;integrationtest")
 
 add_library(du_high_worker_manager
@@ -29,6 +28,7 @@ target_link_libraries(du_high_test
         ocudu_du_high
         du_high_worker_manager
         ocudu_du_high_unit_helpers
+        du_high_test_doubles
         ocudu_gateway
         gtest
         ocudu_gtest_main)

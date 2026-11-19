@@ -5,27 +5,12 @@
 #include "du_low_config_cli11_schema.h"
 #include "apps/helpers/logger/logger_appconfig_cli11_utils.h"
 #include "apps/helpers/metrics/metrics_config_cli11_schema.h"
-#include "apps/services/worker_manager/cli11_cpu_affinities_parser_helper.h"
 #include "du_low_config.h"
 #include "ocudu/adt/expected.h"
-#include "ocudu/ran/slot_point.h"
-#include "ocudu/ran/slot_point_extended.h"
 #include "ocudu/support/cli11_utils.h"
-#include "ocudu/support/config_parsers.h"
+#include "ocudu/support/string_parsing_utils.h"
 
 using namespace ocudu;
-
-template <typename Integer>
-static expected<Integer, std::string> parse_int(const std::string& value)
-{
-  try {
-    return std::stoi(value);
-  } catch (const std::invalid_argument& e) {
-    return make_unexpected(e.what());
-  } catch (const std::out_of_range& e) {
-    return make_unexpected(e.what());
-  }
-}
 
 static void configure_cli11_log_args(CLI::App& app, du_low_unit_logger_config& log_params)
 {
@@ -38,26 +23,43 @@ static void configure_cli11_log_args(CLI::App& app, du_low_unit_logger_config& l
              "Enable logging in the physical and MAC layer of broadcast messages and all PRACH opportunities")
       ->always_capture_default();
   app.add_option("--phy_rx_symbols_filename",
-                 log_params.phy_rx_symbols_filename,
+                 log_params.phy_rx_symbol_printer.filename,
                  "Set to a valid file path to print the received symbols.")
       ->always_capture_default();
   app.add_option_function<std::string>(
          "--phy_rx_symbols_port",
          [&log_params](const std::string& value) {
            if (value == "all") {
-             log_params.phy_rx_symbols_port = std::nullopt;
+             log_params.phy_rx_symbol_printer.port = std::nullopt;
            } else {
-             log_params.phy_rx_symbols_port = parse_int<unsigned>(value).value();
+             log_params.phy_rx_symbol_printer.port = parse_int<unsigned>(value).value();
            }
          },
          "Set to a valid receive port number to dump the IQ symbols from that port only, or set to \"all\" to dump the "
          "IQ symbols from all UL receive ports. Only works if \"phy_rx_symbols_filename\" is set.")
       ->default_str("0")
       ->check(CLI::NonNegativeNumber | CLI::IsMember({"all"}));
-  app.add_option("--phy_rx_symbols_prach",
-                 log_params.phy_rx_symbols_prach,
-                 "Set to true to dump the IQ symbols from all the PRACH ports. Only works if "
+  app.add_option(
+         "--phy_rx_symbols_prach_threshold_rssi_dB",
+         log_params.phy_rx_symbol_printer.triggers.prach_threshold_rssi_dB,
+         "Set to a minimum RSSI value in decibels to dump the IQ symbols from all the PRACH ports. Only works if "
+         "\"phy_rx_symbols_filename\" is set.")
+      ->capture_default_str();
+  app.add_option("--phy_rx_symbols_pusch_on_ko",
+                 log_params.phy_rx_symbol_printer.triggers.pusch_on_ko,
+                 "Set to true to dump the uplink resource grid IQ symbols when a PUSCH CRC check fails. Only works if "
                  "\"phy_rx_symbols_filename\" is set.")
+      ->capture_default_str();
+  app.add_option(
+         "--phy_rx_symbols_pusch_threshold_sinr_dB",
+         log_params.phy_rx_symbol_printer.triggers.pusch_threshold_sinr_dB,
+         "Set to a SINR threshold in dB to dump the uplink resource grid IQ symbols when the PUSCH SINR is below this "
+         "value. Only works if \"phy_rx_symbols_filename\" is set.")
+      ->capture_default_str();
+  app.add_option("--phy_rx_symbols_pusch_threshold_iter",
+                 log_params.phy_rx_symbol_printer.triggers.pusch_threshold_iter,
+                 "Minimum number of PUSCH decoder iterations to dump the uplink resource grid IQ symbols. Only works "
+                 "if \"phy_rx_symbols_filename\" is set.")
       ->capture_default_str();
 
   add_option(app,
@@ -92,13 +94,29 @@ static void configure_cli11_upper_phy_threads_args(CLI::App& app, du_low_unit_ex
     } else if (value == "synchronous") {
       pdsch_cb_batch_length = du_low_unit_expert_threads_config::synchronous_cb_batch_length;
     } else {
-      char* val             = nullptr;
-      pdsch_cb_batch_length = std::strtol(value.c_str(), &val, 10);
-      if (val != value.c_str() + value.length()) {
+      expected<unsigned, std::string> parsed_int = parse_int<unsigned>(value);
+      if (!parsed_int.has_value()) {
         return fmt::format("Invalid PDSCH CB batch size '{}'. Set to auto, synchronous, or an integer number.", value);
       }
+      pdsch_cb_batch_length = parsed_int.value();
     }
     return std::to_string(pdsch_cb_batch_length);
+  };
+
+  auto concurrency_transform = [](const std::string& value) -> std::string {
+    unsigned concurrency;
+    if (value == "unlimited") {
+      concurrency = du_low_unit_expert_threads_config::concurrency_unlimited;
+    } else if (value == "auto") {
+      concurrency = du_low_unit_expert_threads_config::concurrency_auto;
+    } else {
+      expected<unsigned, std::string> parsed_int = parse_int<unsigned>(value);
+      if (!parsed_int.has_value()) {
+        return fmt::format("Invalid concurrency value '{}'. Set to unlimited, auto, or an integer number.", value);
+      }
+      concurrency = parsed_int.value();
+    }
+    return std::to_string(concurrency);
   };
 
   add_option(
@@ -119,27 +137,28 @@ static void configure_cli11_upper_phy_threads_args(CLI::App& app, du_low_unit_ex
              config.max_pucch_concurrency,
              "Maximum PUCCH processing concurrency for all cells.\n"
              "Limits the maximum number of threads that can concurrently process Physical Uplink Control Channel\n"
-             "(PUCCH). Set it to zero for no limit of threads.")
+             "(PUCCH). Set it to 'unlimited' for no limit of threads.")
       ->capture_default_str()
-      ->check(CLI::Number);
+      ->transform(concurrency_transform);
   add_option(app,
              "--max_pusch_and_srs_concurrency",
              config.max_pusch_and_srs_concurrency,
              "Maximum PUSCH and SRS processing concurrency for all cells.\n"
              "Limits the maximum number of threads that can concurrently process Physical Uplink Shared Channel \n"
-             "(PUSCH) and Sounding Reference Signals (SRS). Set it to zero for no limitation. If hardware \n"
-             "acceleration is enabled, this parameter is set to the number of the accelerator queues.")
+             "(PUSCH) and Sounding Reference Signals (SRS). Set it to 'unlimited' for no limitation, or 'auto' to\n"
+             "automatically derive it from the cell bandwidth, number of cells and maximum number of layers. If\n"
+             "hardware acceleration is enabled, this parameter is set to the number of the accelerator queues.")
       ->capture_default_str()
-      ->check(CLI::Number);
+      ->transform(concurrency_transform);
   add_option(app,
              "--max_pdsch_concurrency",
              config.max_pdsch_concurrency,
              "Maximum concurrency level for PDSCH processing for all cells.\n"
              "Limits the number of threads that can concurrently process Physical Downlink Shared Channel (PDSCH).\n"
-             "Set to zero for no limitation. If hardware acceleration is enabled, this parameter is set to the\n"
-             "number of the accelerator queues.")
+             "Set to 'unlimited' for no limitation. If hardware acceleration is enabled, this parameter is set to\n"
+             "the number of the accelerator queues.")
       ->capture_default_str()
-      ->check(CLI::Number);
+      ->transform(concurrency_transform);
 }
 
 static void configure_cli11_expert_execution_args(CLI::App& app, du_low_unit_expert_execution_config& config)
@@ -185,7 +204,13 @@ static void configure_cli11_expert_phy_args(CLI::App& app, du_low_unit_expert_up
              expert_phy_params.max_processing_delay_slots,
              "Maximum allowed DL processing delay in slots.")
       ->capture_default_str()
-      ->check(CLI::Range(1, 30));
+      ->range(1, 30);
+  add_option(app,
+             "--prach_th_correction_factor",
+             expert_phy_params.prach_th_correction_factor,
+             "Correction factor of the PRACH detection threshold")
+      ->capture_default_str()
+      ->non_negative();
   add_option(app,
              "--pusch_dec_max_iterations",
              expert_phy_params.pusch_decoder_max_iterations,
@@ -231,12 +256,27 @@ static void configure_cli11_expert_phy_args(CLI::App& app, du_low_unit_expert_up
              "PUSCH channel equalizer algorithm: zf and mmse.")
       ->capture_default_str()
       ->check(pusch_channel_equalizer_algorithm_method_check);
+  add_option(app, "--doa_enabled", expert_phy_params.doa_enabled, "Set to true to enable DOA features (default false).")
+      ->capture_default_str();
+  add_option(app,
+             "--doa_antenna_distance_over_wavelength",
+             expert_phy_params.doa_antenna_distance_over_wavelength,
+             "Distance between antenna elements, normalized with respect to the wavelength. Only meaningful if "
+             "doa_enabled is set to true.")
+      ->capture_default_str()
+      ->check(CLI::NonNegativeNumber);
+  add_option(app,
+             "--doa_cross_polarized",
+             expert_phy_params.doa_cross_polarized,
+             "Cross-polarization flag: set to true if the array elements consist of two collocated antennas with "
+             "orthogonal polarizations. Only meaningful if doa_enable is set to true.")
+      ->capture_default_str();
   add_option(app,
              "--max_request_headroom_slots",
              expert_phy_params.nof_slots_request_headroom,
              "Maximum request headroom size in slots.")
       ->capture_default_str()
-      ->check(CLI::Range(0, 30));
+      ->range(0, 30);
   add_option(app,
              "--allow_request_on_empty_uplink_slot",
              expert_phy_params.allow_request_on_empty_uplink_slot,
@@ -259,35 +299,38 @@ static void configure_cli11_hwacc_pdsch_enc_args(CLI::App& app, std::optional<hw
 {
   config.emplace();
 
-  app.add_option("--nof_hwacc", config->nof_hwacc, "Number of hardware-accelerated PDSCH encoding functions")
+  add_option(app, "--nof_hwacc", config->nof_hwacc, "Number of hardware-accelerated PDSCH encoding functions")
       ->capture_default_str()
-      ->check(CLI::Range(0, 64));
-  app.add_option("--cb_mode", config->cb_mode, "Operation mode of the PDSCH encoder (CB = true, TB = false [default])")
+      ->range(0, 64);
+  add_option(app, "--cb_mode", config->cb_mode, "Operation mode of the PDSCH encoder (CB = true, TB = false [default])")
       ->capture_default_str();
-  app.add_option("--max_buffer_size",
-                 config->max_buffer_size,
-                 "Maximum supported buffer size in bytes (CB mode will be forced for larger TBs)")
+  add_option(app,
+             "--max_buffer_size",
+             config->max_buffer_size,
+             "Maximum supported buffer size in bytes (CB mode will be forced for larger TBs)")
       ->capture_default_str();
-  app.add_option("--dedicated_queue",
-                 config->dedicated_queue,
-                 "Hardware queue use for the PDSCH encoder (dedicated = true [default], shared = false)")
+  add_option(app,
+             "--dedicated_queue",
+             config->dedicated_queue,
+             "Hardware queue use for the PDSCH encoder (dedicated = true [default], shared = false)")
       ->capture_default_str();
 }
 static void configure_cli11_hwacc_pusch_dec_args(CLI::App& app, std::optional<hwacc_pusch_appconfig>& config)
 {
   config.emplace();
 
-  app.add_option("--nof_hwacc", config->nof_hwacc, "Number of hardware-accelerated PDSCH encoding functions")
+  add_option(app, "--nof_hwacc", config->nof_hwacc, "Number of hardware-accelerated PDSCH encoding functions")
       ->capture_default_str()
-      ->check(CLI::Range(0, 64));
-  app.add_option("--harq_context_size", config->harq_context_size, "Size of the HARQ context repository")
+      ->range(0, 64);
+  add_option(app, "--harq_context_size", config->harq_context_size, "Size of the HARQ context repository")
       ->capture_default_str();
-  app.add_option(
-         "--force_local_harq", config->force_local_harq, "Force using the host memory to implement the HARQ buffer")
+  add_option(
+      app, "--force_local_harq", config->force_local_harq, "Force using the host memory to implement the HARQ buffer")
       ->capture_default_str();
-  app.add_option("--dedicated_queue",
-                 config->dedicated_queue,
-                 "Hardware queue use for the PUSCH decoder (dedicated = true [default], shared = false)")
+  add_option(app,
+             "--dedicated_queue",
+             config->dedicated_queue,
+             "Hardware queue use for the PUSCH decoder (dedicated = true [default], shared = false)")
       ->capture_default_str();
 }
 
@@ -302,34 +345,36 @@ static void configure_cli11_bbdev_hwacc_args(CLI::App& app, std::optional<bbdev_
 
   config.emplace();
 
-  app.add_option("--hwacc_type", config->hwacc_type, "Type of BBDEV hardware-accelerator")
+  add_option(app, "--hwacc_type", config->hwacc_type, "Type of BBDEV hardware-accelerator")
       ->capture_default_str()
       ->check(hwacc_type_check);
-  app.add_option("--id", config->id, "ID of the BBDEV-based hardware-accelerator.")
+  add_option(app, "--id", config->id, "ID of the BBDEV-based hardware-accelerator.")
       ->capture_default_str()
-      ->check(CLI::Range(0, 65535));
+      ->range(0, 65535);
 
   // (Optional) Hardware-accelerated PDSCH encoding functions configuration.
   CLI::App* hwacc_pdsch_enc_subcmd =
-      app.add_subcommand("pdsch_enc", "Hardware-accelerated PDSCH encoding functions configuration");
+      add_subcommand(app, "pdsch_enc", "Hardware-accelerated PDSCH encoding functions configuration");
   configure_cli11_hwacc_pdsch_enc_args(*hwacc_pdsch_enc_subcmd, config->pdsch_enc);
 
   // (Optional) Hardware-accelerated PUSCH decoding functions configuration.
   CLI::App* hwacc_pusch_dec_subcmd =
-      app.add_subcommand("pusch_dec", "Hardware-accelerated PUSCH decoding functions configuration");
+      add_subcommand(app, "pusch_dec", "Hardware-accelerated PUSCH decoding functions configuration");
   configure_cli11_hwacc_pusch_dec_args(*hwacc_pusch_dec_subcmd, config->pusch_dec);
 
-  app.add_option("--msg_mbuf_size",
-                 config->msg_mbuf_size,
-                 "Size of the mbufs storing unencoded and unrate-matched messages (in bytes)")
+  add_option(app,
+             "--msg_mbuf_size",
+             config->msg_mbuf_size,
+             "Size of the mbufs storing unencoded and unrate-matched messages (in bytes)")
       ->capture_default_str()
-      ->check(CLI::Range(0, 64000));
-  app.add_option("--rm_mbuf_size",
-                 config->rm_mbuf_size,
-                 "Size of the mbufs storing encoded and rate-matched messages (in bytes)")
+      ->range(0, 64000);
+  add_option(app,
+             "--rm_mbuf_size",
+             config->rm_mbuf_size,
+             "Size of the mbufs storing encoded and rate-matched messages (in bytes)")
       ->capture_default_str()
-      ->check(CLI::Range(0, 64000));
-  app.add_option("--nof_mbuf", config->nof_mbuf, "Number of mbufs in the memory pool")->capture_default_str();
+      ->range(0, 64000);
+  add_option(app, "--nof_mbuf", config->nof_mbuf, "Number of mbufs in the memory pool")->capture_default_str();
 }
 
 static void configure_cli11_hal_args(CLI::App& app, std::optional<du_low_unit_hal_config>& config)
@@ -368,6 +413,24 @@ static void configure_cli11_metrics_args(CLI::App& app, du_low_unit_metrics_conf
       ->capture_default_str();
 }
 
+static void configure_cli11_power_calibration_args(CLI::App& app, du_low_unit_config& power_calibration_params)
+{
+  add_option(app,
+             "--dbfs_to_dbm_conversion_factor",
+             power_calibration_params.power_calibration.dbfs_to_dbm_conversion_factor,
+             "Value in dBm at the antenna connector equivalent to 0 dBFS for a configured rx_gain_dB "
+             "of 0 dB. When using an SDR Radio Unit, the configured radio receive gain is subtracted "
+             "automatically; for Open Fronthaul, the receive gain applied by the O-RU is not visible to this "
+             "application unit and must be accounted for manually.")
+      ->check(CLI::Range(-std::numeric_limits<float>::infinity(), 0.0F));
+  add_option(app,
+             "--db_to_dbfs_conversion_factor",
+             power_calibration_params.power_calibration.db_to_dbfs_conversion_factor,
+             "Value in dB relative to Full Scale (dBFS) equivalent to 0 dB in normalized units, i.e., as coming from "
+             "the physical layer.")
+      ->check(CLI::Range(-std::numeric_limits<float>::infinity(), 0.0F));
+}
+
 void ocudu::configure_cli11_with_du_low_config_schema(CLI::App& app, du_low_unit_config& parsed_cfg)
 {
   // Loggers section.
@@ -397,6 +460,11 @@ void ocudu::configure_cli11_with_du_low_config_schema(CLI::App& app, du_low_unit
   app_helpers::configure_cli11_with_metrics_appconfig_schema(app, parsed_cfg.metrics_cfg.common_metrics_cfg);
   CLI::App* metrics_subcmd = add_subcommand(app, "metrics", "Metrics configuration")->configurable();
   configure_cli11_metrics_args(*metrics_subcmd, parsed_cfg.metrics_cfg);
+
+  // Power calibration section.
+  CLI::App* power_calibration_subcmd =
+      add_subcommand(app, "power_calibration", "Power calibration configuration")->configurable();
+  configure_cli11_power_calibration_args(*power_calibration_subcmd, parsed_cfg);
 }
 
 void ocudu::autoderive_du_low_parameters_after_parsing(CLI::App& app, du_low_unit_config& parsed_cfg, duplex_mode mode)

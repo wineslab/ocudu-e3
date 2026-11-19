@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "o_du_high_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi_adaptor/mac/mac_fapi_sector_fastpath_adaptor.h"
 #include "ocudu/fapi_adaptor/mac/p7/mac_fapi_p7_sector_fastpath_adaptor.h"
 #include "ocudu/mac/mac_cell_result.h"

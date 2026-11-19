@@ -7,6 +7,7 @@
 #include "ocudu/fapi/p7/messages/uci_pucch_pdu_format_0_1.h"
 #include "ocudu/ran/pucch/pucch_mapping.h"
 #include "ocudu/ran/rnti.h"
+#include "fmt/format.h"
 
 namespace ocudu {
 namespace fapi {
@@ -63,48 +64,13 @@ public:
   /// \brief Sets the UCI PUCCH PDU Format 0 and Format 1 power parameters and returns a reference to the builder.
   ///
   /// These parameters are specified in SCF-222 v4.0 Section 3.4.9.2 in Table UCI PUCCH Format 0 or Format 1 PDU.
-  uci_pucch_pdu_format_0_1_builder& set_metrics_parameters(std::optional<float> ul_sinr_metric,
-                                                           std::optional<float> rssi,
-                                                           std::optional<float> rsrp,
-                                                           bool                 rsrp_use_dBm = false)
+  uci_pucch_pdu_format_0_1_builder& set_metrics_parameters(std::optional<float>           ul_sinr_metric_dB,
+                                                           std::optional<fapi_power_unit> rssi,
+                                                           std::optional<fapi_power_unit> rsrp)
   {
-    // SINR.
-    int sinr =
-        (ul_sinr_metric) ? static_cast<int>(ul_sinr_metric.value() * 500.F) : std::numeric_limits<int16_t>::min();
-
-    ocudu_assert(sinr <= std::numeric_limits<int16_t>::max(),
-                 "UL SINR metric ({}) exceeds the maximum ({}).",
-                 sinr,
-                 std::numeric_limits<int16_t>::max());
-
-    ocudu_assert(sinr >= std::numeric_limits<int16_t>::min(),
-                 "UL SINR metric ({}) is under the minimum ({}).",
-                 sinr,
-                 std::numeric_limits<int16_t>::min());
-
-    pdu.ul_sinr_metric = static_cast<int16_t>(sinr);
-
-    // RSSI.
-    unsigned rssi_value =
-        (rssi) ? static_cast<unsigned>((rssi.value() + 128.F) * 10.F) : std::numeric_limits<uint16_t>::max();
-
-    ocudu_assert(rssi_value <= std::numeric_limits<uint16_t>::max(),
-                 "RSSI metric ({}) exceeds the maximum ({}).",
-                 rssi_value,
-                 std::numeric_limits<uint16_t>::max());
-
-    pdu.rssi = static_cast<uint16_t>(rssi_value);
-
-    // RSRP.
-    unsigned rsrp_value = (rsrp) ? static_cast<unsigned>((rsrp.value() + ((rsrp_use_dBm) ? 140.F : 128.F)) * 10.F)
-                                 : std::numeric_limits<uint16_t>::max();
-
-    ocudu_assert(rsrp_value <= std::numeric_limits<uint16_t>::max(),
-                 "RSRP metric ({}) exceeds the maximum ({}).",
-                 rsrp_value,
-                 std::numeric_limits<uint16_t>::max());
-
-    pdu.rsrp = static_cast<uint16_t>(rsrp_value);
+    pdu.ul_sinr_metric_dB = ul_sinr_metric_dB;
+    pdu.rssi              = rssi;
+    pdu.rsrp              = rsrp;
 
     return *this;
   }

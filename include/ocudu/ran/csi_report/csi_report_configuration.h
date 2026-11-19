@@ -7,6 +7,7 @@
 #include "ocudu/adt/bounded_bitset.h"
 #include "ocudu/adt/bounded_integer.h"
 #include "ocudu/ran/precoding/precoding_codebook_configuration.h"
+#include <optional>
 
 namespace ocudu {
 

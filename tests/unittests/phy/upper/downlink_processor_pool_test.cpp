@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "downlink_processor_test_doubles.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/upper/upper_phy_factories.h"
 #include <gtest/gtest.h>
 

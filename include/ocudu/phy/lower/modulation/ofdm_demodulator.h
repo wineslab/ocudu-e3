@@ -63,7 +63,7 @@ public:
   /// \note The input size must be equal to the the symbol size including the cyclic prefix.
   /// \note The output size must be consistent with the configured bandwidth.
   virtual void
-  demodulate(resource_grid_writer& grid, span<const cf_t> input, unsigned port_index, unsigned symbol_index) = 0;
+  demodulate(resource_grid_writer& grid, span<const ci16_t> input, unsigned port_index, unsigned symbol_index) = 0;
 };
 
 /// \brief Describes an OFDM demodulator with slot granularity.
@@ -91,7 +91,7 @@ public:
   /// \note The input size must be must be equal to the slot size including the cyclic prefixes.
   /// \note The output size consistent with the configured bandwidth.
   virtual void
-  demodulate(resource_grid_writer& grid, span<const cf_t> input, unsigned port_index, unsigned slot_index) = 0;
+  demodulate(resource_grid_writer& grid, span<const ci16_t> input, unsigned port_index, unsigned slot_index) = 0;
 };
 
 } // namespace ocudu

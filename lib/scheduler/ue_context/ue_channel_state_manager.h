@@ -49,19 +49,21 @@ public:
   unsigned get_recommended_pusch_tpmi(unsigned nof_layers) const;
 
   /// \brief Fetches the precoding codebook to be used in DL based on reported PMI and the chosen nof layers.
-  std::optional<pdsch_precoding_info> get_precoding(unsigned chosen_nof_layers, unsigned nof_rbs) const
+  precoding_and_beamforming_info get_precoding(unsigned chosen_nof_layers) const
   {
     ocudu_assert(chosen_nof_layers <= nof_dl_ports, "Invalid number of layers chosen");
-    std::optional<pdsch_precoding_info> precoding_info;
     if (nof_dl_ports <= 1) {
       // In case of 1 DL port, no precoding is used.
-      return precoding_info;
+      return make_default_precoding();
     }
-    precoding_info.emplace();
-    precoding_info->nof_rbs_per_prg = nof_rbs;
-    precoding_info->prg_infos.emplace_back(recommended_prg_info[nof_layers_to_index(chosen_nof_layers)]);
-    return precoding_info;
+    return precoding_and_beamforming_info{recommended_prg_info[nof_layers_to_index(chosen_nof_layers)]};
   }
+
+  /// Gets the beam that the UE reached the cell on, if it is known.
+  std::optional<beam_identifier> get_recommended_beam() const { return recommended_beam; }
+
+  /// Sets the beam that the UE reached the cell on.
+  void set_recommended_beam(beam_identifier beam_id) { recommended_beam = beam_id; }
 
   /// Update UE with the latest CSI report for a given cell.
   bool handle_csi_report(const csi_report_data& csi_report);
@@ -112,7 +114,10 @@ private:
   unsigned recommended_dl_layers = 1;
 
   /// \brief List of Recommended PMIs for different number of active layers. Position n is for layer n+1.
-  static_vector<pdsch_precoding_info::prg_info, NOF_LAYER_CHOICES> recommended_prg_info;
+  static_vector<precoding_matrix_indicator, NOF_LAYER_CHOICES> recommended_prg_info;
+
+  /// Beam that the UE reached the cell on.
+  std::optional<beam_identifier> recommended_beam;
 
   /// Latest CSI report received from the UE.
   std::optional<csi_report_data> latest_csi_report;

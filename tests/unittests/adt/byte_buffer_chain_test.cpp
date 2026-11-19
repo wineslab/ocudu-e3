@@ -3,6 +3,7 @@
 
 #include "ocudu/adt/byte_buffer_chain.h"
 #include "ocudu/adt/detail/byte_buffer_segment_pool.h"
+#include "ocudu/adt/format.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;

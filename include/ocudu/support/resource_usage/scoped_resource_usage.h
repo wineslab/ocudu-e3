@@ -18,7 +18,7 @@ public:
   scoped_resource_usage(measurements& measurements_, rusage_measurement_type type_ = rusage_measurement_type::NONE) :
     meas(measurements_), type(type_)
   {
-    start_tp = std::chrono::high_resolution_clock::now();
+    start_tp = rusage_meas_clock::now();
 
     if (type != rusage_measurement_type::NONE) {
       start_snapshot = cpu_usage_now(type);
@@ -32,7 +32,7 @@ public:
   /// Destructor saves measurements in the stored object.
   ~scoped_resource_usage()
   {
-    rusage_meas_time_point end_tp = std::chrono::high_resolution_clock::now();
+    rusage_meas_time_point end_tp = rusage_meas_clock::now();
     meas.duration                 = std::chrono::duration_cast<rusage_meas_duration>(end_tp - start_tp);
 
     if (type == rusage_measurement_type::NONE) {
@@ -52,7 +52,7 @@ public:
     }
     meas.user_time   = (current_snapshot.value().user_time - start_snapshot.value().user_time);
     meas.system_time = (current_snapshot.value().system_time - start_snapshot.value().system_time);
-    meas.max_rss     = current_snapshot.value().max_rss;
+    meas.current_rss = current_snapshot.value().current_rss;
   }
 
 private:

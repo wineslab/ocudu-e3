@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
-
 add_subdirectory(units)
+add_subdirectory(helpers)
 
 # Schema-agnostic YAML round-trip tests for application configurations. See yaml_roundtrip_test_helpers.h
 # for what they verify.

@@ -6,6 +6,7 @@
 
 #include "apps/helpers/f1u/f1u_appconfig.h"
 #include "apps/helpers/logger/logger_appconfig.h"
+#include "apps/helpers/network/dtls_appconfig.h"
 #include "apps/helpers/network/sctp_appconfig.h"
 #include "apps/helpers/tracing/tracer_appconfig.h"
 #include "apps/services/app_execution_metrics/executor_metrics_config.h"
@@ -27,6 +28,8 @@ struct e1ap_appconfig {
   std::vector<std::string> bind_addresses = {"127.0.20.2"};
   /// SCTP socket options.
   sctp_appconfig sctp;
+  /// DTLS options.
+  dtls_appconfig dtls;
 };
 
 /// Configuration of the E1AP interface(s) of the CU-UP.

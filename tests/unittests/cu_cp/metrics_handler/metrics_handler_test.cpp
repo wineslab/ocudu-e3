@@ -5,6 +5,7 @@
 #include "lib/cu_cp/metrics_handler/metrics_handler_impl.h"
 #include "lib/cu_cp/mobility_manager/mobility_manager_impl.h"
 #include "lib/cu_cp/ngap_repository.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cause/ngap_cause.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include <gtest/gtest.h>
@@ -48,7 +49,13 @@ TEST(metrics_handler_test, get_periodic_metrics_report_while_session_is_active)
   manual_task_worker       worker{16};
   timer_manager            timers{2};
   dummy_ue_metrics_handler metrics_hdlr;
-  metrics_handler_impl     metrics{worker, timers, metrics_hdlr, metrics_hdlr, metrics_hdlr, metrics_hdlr};
+  metrics_handler_impl     metrics{metrics_handler_impl_dependencies{.cu_cp_exec       = worker,
+                                                                     .timers           = timers,
+                                                                     .ue_handler       = metrics_hdlr,
+                                                                     .du_handler       = metrics_hdlr,
+                                                                     .ngap_handler     = metrics_hdlr,
+                                                                     .mobility_handler = metrics_hdlr,
+                                                                     .logger = ocudulog::fetch_basic_logger("TEST")}};
 
   std::chrono::milliseconds period{5};
   dummy_metrics_notifier    metrics_notifier;

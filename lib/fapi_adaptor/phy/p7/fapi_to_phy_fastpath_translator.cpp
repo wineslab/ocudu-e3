@@ -13,6 +13,7 @@
 #include "pdu_translators/srs.h"
 #include "pdu_translators/ssb.h"
 #include "ocudu/adt/expected.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi/common/error_indication_builder.h"
 #include "ocudu/instrumentation/traces/critical_traces.h"
 #include "ocudu/instrumentation/traces/du_traces.h"
@@ -64,9 +65,10 @@ fapi_to_phy_fastpath_translator::fapi_to_phy_fastpath_translator(
   scs_common(config.scs_common),
   prach_cfg(config.prach_cfg),
   carrier_cfg(config.carrier_cfg),
-  prach_ports(config.prach_ports.begin(), config.prach_ports.end())
+  prach_ports(config.prach_ports.begin(), config.prach_ports.end()),
+  ntn_k_mac_slots(config.ntn_k_mac_slots)
 {
-  ocudu_assert(pm_repo, "Invalid precoding matrix repository");
+  ocudu_assert(pm_repo, "Invalid precoding codebook repository");
   ocudu_assert(part2_repo, "Invalid UCI Part2 repository");
   ocudu_assert(!prach_ports.empty(), "The PRACH ports must not be empty.");
 }
@@ -168,13 +170,13 @@ generate_csi_re_pattern_list(const fapi::dl_tti_request& msg, uint16_t cell_band
 
 /// \brief Translates, validates and returns the FAPI PDUs to PHY PDUs.
 /// \note If a PDU fails the validation, the whole DL_TTI.request message is dropped.
-static expected<downlink_pdus> translate_dl_tti_pdus_to_phy_pdus(const fapi::dl_tti_request&        msg,
-                                                                 const downlink_pdu_validator&      dl_pdu_validator,
-                                                                 ocudulog::basic_logger&            logger,
-                                                                 subcarrier_spacing                 scs_common,
-                                                                 uint16_t                           cell_bandwidth_prb,
-                                                                 const precoding_matrix_repository& pm_repo,
-                                                                 unsigned                           sector_id)
+static expected<downlink_pdus> translate_dl_tti_pdus_to_phy_pdus(const fapi::dl_tti_request&   msg,
+                                                                 const downlink_pdu_validator& dl_pdu_validator,
+                                                                 ocudulog::basic_logger&       logger,
+                                                                 subcarrier_spacing            scs_common,
+                                                                 uint16_t                      cell_bandwidth_prb,
+                                                                 const precoding_codebook_repository& pm_repo,
+                                                                 unsigned                             sector_id)
 {
   downlink_pdus pdus;
   const auto&   csi_re_patterns = generate_csi_re_pattern_list(msg, cell_bandwidth_prb);
@@ -394,7 +396,8 @@ static expected<uplink_pdus> translate_ul_tti_pdus_to_phy_pdus(const fapi::ul_tt
                                                                ocudulog::basic_logger&              logger,
                                                                uci_part2_correspondence_repository& part2_repo,
                                                                unsigned                             sector_id,
-                                                               subcarrier_spacing                   scs)
+                                                               subcarrier_spacing                   scs,
+                                                               unsigned                             ntn_k_mac_slots)
 {
   uplink_pdus pdus;
   for (const auto& pdu : msg.pdus) {
@@ -418,7 +421,7 @@ static expected<uplink_pdus> translate_ul_tti_pdus_to_phy_pdus(const fapi::ul_tt
 
     if (const auto* pucch_pdu = std::get_if<fapi::ul_pucch_pdu>(&pdu.pdu)) {
       uplink_pdu_slot_repository::pucch_pdu& ul_pdu = pdus.pucch.emplace_back();
-      convert_pucch_fapi_to_phy(ul_pdu, *pucch_pdu, msg.slot, carrier_cfg.num_rx_ant);
+      convert_pucch_fapi_to_phy(ul_pdu, *pucch_pdu, msg.slot, carrier_cfg.num_rx_ant, ntn_k_mac_slots);
       if (error_type<std::string> phy_pucch_validation = is_pucch_pdu_valid(ul_pdu_validator, ul_pdu);
           !phy_pucch_validation.has_value()) {
         logger.warning("Sector#{}: Skipping UL_TTI.request: PUCCH PDU flagged as invalid by the Upper PHY with the "
@@ -434,7 +437,7 @@ static expected<uplink_pdus> translate_ul_tti_pdus_to_phy_pdus(const fapi::ul_tt
 
     if (const auto* pusch_pdu = std::get_if<fapi::ul_pusch_pdu>(&pdu.pdu)) {
       uplink_pdu_slot_repository::pusch_pdu& ul_pdu = pdus.pusch.emplace_back();
-      convert_pusch_fapi_to_phy(ul_pdu, *pusch_pdu, msg.slot, carrier_cfg.num_rx_ant, part2_repo);
+      convert_pusch_fapi_to_phy(ul_pdu, *pusch_pdu, msg.slot, carrier_cfg.num_rx_ant, part2_repo, ntn_k_mac_slots);
       if (error_type<std::string> phy_pusch_validator = ul_pdu_validator.is_valid(ul_pdu.pdu);
           !phy_pusch_validator.has_value()) {
         logger.warning("Sector#{}: Skipping UL_TTI.request: PUSCH PDU flagged as invalid by the Upper PHY with the "
@@ -449,7 +452,7 @@ static expected<uplink_pdus> translate_ul_tti_pdus_to_phy_pdus(const fapi::ul_tt
 
     if (const auto* srs_pdu = std::get_if<fapi::ul_srs_pdu>(&pdu.pdu)) {
       uplink_pdu_slot_repository::srs_pdu& ul_pdu = pdus.srs.emplace_back();
-      convert_srs_fapi_to_phy(ul_pdu, *srs_pdu, sector_id, carrier_cfg.num_rx_ant, msg.slot);
+      convert_srs_fapi_to_phy(ul_pdu, *srs_pdu, sector_id, carrier_cfg.num_rx_ant, msg.slot, ntn_k_mac_slots);
       if (error_type<std::string> srs_validation = ul_pdu_validator.is_valid(ul_pdu.config);
           !srs_validation.has_value()) {
         logger.warning(
@@ -510,8 +513,16 @@ void fapi_to_phy_fastpath_translator::send_ul_tti_request(const fapi::ul_tti_req
     return;
   }
 
-  expected<uplink_pdus> pdus = translate_ul_tti_pdus_to_phy_pdus(
-      msg, ul_pdu_validator, prach_cfg, carrier_cfg, prach_ports, logger, *part2_repo, sector_id, scs_common);
+  expected<uplink_pdus> pdus = translate_ul_tti_pdus_to_phy_pdus(msg,
+                                                                 ul_pdu_validator,
+                                                                 prach_cfg,
+                                                                 carrier_cfg,
+                                                                 prach_ports,
+                                                                 logger,
+                                                                 *part2_repo,
+                                                                 sector_id,
+                                                                 scs_common,
+                                                                 ntn_k_mac_slots);
 
   // Raise invalid format error.
   if (!pdus.has_value()) {
@@ -587,7 +598,7 @@ void fapi_to_phy_fastpath_translator::send_ul_dci_request(const fapi::ul_dci_req
     return;
   }
 
-  static_vector<pdcch_processor::pdu_t, MAX_PUCCH_PDUS_PER_SLOT> pdus;
+  static_vector<pdcch_processor::pdu_t, MAX_UL_PDCCH_PDUS_PER_SLOT> pdus;
   for (const auto& pdu : msg.pdus) {
     // Create a pdcch_processor::pdu_t for the DCI in the PDCCH PDU.
     pdcch_processor::pdu_t& pdcch_pdu = pdus.emplace_back();

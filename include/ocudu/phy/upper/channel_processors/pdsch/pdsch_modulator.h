@@ -5,12 +5,13 @@
 #pragma once
 
 #include "ocudu/adt/bit_buffer.h"
-#include "ocudu/phy/support/precoding_configuration.h"
 #include "ocudu/phy/support/rb_allocation.h"
 #include "ocudu/phy/support/re_pattern.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
 #include "ocudu/ran/dmrs/dmrs.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
+#include "ocudu/ran/rnti.h"
 #include "ocudu/ran/sch/modulation_scheme.h"
 
 namespace ocudu {
@@ -29,16 +30,16 @@ public:
   /// Describes the necessary parameters to modulate a PDSCH transmission.
   struct config_t {
     /// Provides \f$n_{RNTI}\f$ from TS38.211 Section 7.3.1.1 Scrambling.
-    uint16_t rnti;
+    rnti_t rnti;
     /// \brief Bandwidth part location within the resource grid.
     ///
     /// The BWP start common resource block index is relative to Point A and must be in the range {0, ..., 274}. The BWP
     /// length is expressed as a number of contiguous common resource blocks and must be in the range {1, ..., 275}.
     crb_interval bwp;
-    /// Modulation of codeword 1 (q = 0).
+    /// Modulation of the first codeword (q = 0).
     modulation_scheme modulation1;
-    /// Modulation of codeword 2 ( q = 1).
-    modulation_scheme modulation2;
+    /// Modulation of the second codeword (q = 1).
+    std::optional<modulation_scheme> modulation2;
     /// Frequency domain allocation.
     rb_allocation freq_allocation;
     /// \brief Time-domain allocation within a slot.
@@ -60,8 +61,8 @@ public:
     float scaling;
     /// Reserved RE pattern where PDSCH is not mapped.
     re_pattern_list reserved;
-    /// Precoding information for the PDSCH transmission.
-    precoding_configuration precoding;
+    /// Precoding and beamforming configuration.
+    std::reference_wrapper<const precoding_beamforming_configuration> precoding_and_beamforming;
   };
 
   /// Default destructor.

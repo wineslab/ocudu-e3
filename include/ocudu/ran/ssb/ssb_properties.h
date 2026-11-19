@@ -7,6 +7,7 @@
 #include "ocudu/adt/bounded_integer.h"
 #include "ocudu/ran/resource_block.h"
 #include "ocudu/ran/subcarrier_spacing.h"
+#include <cmath>
 
 namespace ocudu {
 

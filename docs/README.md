@@ -1,35 +1,9 @@
 # OCUDU Documentation
 
-This directory contains the automated API documentation generation (Doxygen) for OCUDU code.
+In this directory, we add documentation that does not belong next to the code of the project.
 
-## Structure
+## Contents
 
-```txt
-docs/
-├── .env                     # env file for docker-compose
-├── docker-compose.yml       # Docker services for documentation
-├── doxygen/                 # Doxygen project
-└── README.md                # This file
-```
-
-## Docker Services
-
-### Usage
-
-Builds doxygen locally with
-
-```bash
-docker compose -f docs/docker-compose.yml up
-```
-
-You can select another doxygen target using the environmental variable
-
-```bash
-DOXYGEN_TARGET=doxygen-support docker compose -f docs/docker-compose.yml up
-```
-
-### Environment Variables
-
-To run the docker-compose, you may need to adjust the variables defined in the .env file.
-
-- `UID`/`GID`: Your user/group IDs for file permissions in Docker
+- [agents/](agents/README.md): reference documentation aimed at AI coding agents.
+- [doxygen/](doxygen/README.md): Doxygen project and the Docker Compose setup that builds the API documentation.
+- [nvidia_cuda_build.md](nvidia_cuda_build.md): build prerequisites and CMake options for CUDA acceleration.

@@ -4,11 +4,8 @@
 
 #pragma once
 
-#include "ocudu/adt/span.h"
-#include "ocudu/adt/strong_type.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/resource_block.h"
-#include "ocudu/support/ocudu_assert.h"
 
 namespace ocudu {
 

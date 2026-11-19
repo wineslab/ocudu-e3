@@ -10,11 +10,11 @@
 #include "apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_factories.h"
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_config_validator.h"
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_factories.h"
-#include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_helpers.h"
 #include "apps/units/flexible_o_du/split_helpers/flexible_o_du_configs.h"
 #include "external/fmt/include/fmt/chrono.h"
 #include "split6_constants.h"
 #include "split6_flexible_o_du_low_session.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_low/o_du_low_config.h"
 #include "ocudu/fapi/cell_config.h"
 #include "ocudu/fapi_adaptor/phy/p7/phy_fapi_p7_sector_fastpath_adaptor.h"
@@ -24,6 +24,18 @@
 #include "ocudu/ran/slot_pdu_capacity_constants.h"
 
 using namespace ocudu;
+
+/// \brief Returns the topology of the given number of transmit antennas.
+///
+/// Split 6 has no DU high, so this process derives the topology of the carrier that it receives.
+static antenna_topology get_tx_antenna_topology(unsigned nof_tx_antennas)
+{
+  std::optional<antenna_topology> topology = get_single_panel_antenna_topology(nof_tx_antennas);
+  report_fatal_error_if_not(
+      topology.has_value(), "No antenna topology is defined for {} transmit antennas.", nof_tx_antennas);
+
+  return *topology;
+}
 
 std::optional<std::chrono::system_clock::time_point>
 split6_flexible_o_du_low_session_factory::start_time_calculator::calculate_start_time() const
@@ -142,6 +154,11 @@ split6_flexible_o_du_low_session_factory::create_o_du_low(const fapi::cell_confi
 
   o_du_low_unit_config odu_low_cfg = {unit_config.du_low_cfg, {}, {}};
 
+  // The SDR Radio Unit gain is known to this application unit, so it is subtracted from the configured receive gain is
+  // applied by the external O-RU and is not visible here, so no correction is applied.
+  const auto* sdr_cfg    = std::get_if<ru_sdr_unit_config>(&unit_config.ru_cfg);
+  float       rx_gain_dB = sdr_cfg ? static_cast<float>(sdr_cfg->rx_gain_dB) : 0.0F;
+
   fapi_adaptor::phy_fapi_p7_sector_fastpath_adaptor_config p7_cfg = {
       .sector_id                     = 0,
       .nof_slots_request_headroom    = unit_config.du_low_cfg.expert_phy_cfg.nof_slots_request_headroom,
@@ -151,13 +168,9 @@ split6_flexible_o_du_low_session_factory::create_o_du_low(const fapi::cell_confi
       .carrier_cfg                   = config.carrier_cfg,
       .prach_cfg                     = config.prach_cfg,
       .prach_ports                   = prach_ports,
-      // When the sampling rate is provided, calculate the dBFS calibration value as sqrt(sampling rate / subcarrier
-      // spacing). This factor is the magnitude of a single subcarrier in normalized PHY linear units equivalent to
-      // a constant signal with a power of 0 dBFS.
-      .dBFS_calibration_value =
-          (sampling_rate_MHz) ? calculate_dBFS_calibration_value(*sampling_rate_MHz, config.scs_common) : 1.F,
-
-  };
+      .dbfs_to_dbm_conversion_factor =
+          unit_config.du_low_cfg.power_calibration.dbfs_to_dbm_conversion_factor - rx_gain_dB,
+      .db_to_dbfs_conversion_factor = unit_config.du_low_cfg.power_calibration.db_to_dbfs_conversion_factor};
 
   odu_low_cfg.fapi_cfg.sectors.push_back({.p5_config = {.sector_id = 0}, .p7_config = p7_cfg});
 
@@ -168,6 +181,7 @@ split6_flexible_o_du_low_session_factory::create_o_du_low(const fapi::cell_confi
   du_low_cell.bw_rb                = config.carrier_cfg.dl_grid_size;
   du_low_cell.nof_rx_antennas      = config.carrier_cfg.num_rx_ant;
   du_low_cell.nof_tx_antennas      = config.carrier_cfg.num_tx_ant;
+  du_low_cell.tx_ant_topology      = get_tx_antenna_topology(config.carrier_cfg.num_tx_ant);
   du_low_cell.prach_ports          = prach_ports;
   du_low_cell.scs_common           = config.scs_common;
   du_low_cell.prach_config_index   = config.prach_cfg.rach_cfg_generic.prach_config_index;
@@ -200,6 +214,7 @@ generate_o_du_ru_config(const fapi::cell_configuration& config, unsigned expecte
   auto& out_cell           = out_cfg.cells.emplace_back();
   out_cell.nof_rx_antennas = config.carrier_cfg.num_rx_ant;
   out_cell.nof_tx_antennas = config.carrier_cfg.num_tx_ant;
+  out_cell.tx_ant_topology = get_tx_antenna_topology(config.carrier_cfg.num_tx_ant);
   out_cell.scs             = config.scs_common;
   out_cell.dl_arfcn        = config.carrier_cfg.dl_f_ref_arfcn;
   out_cell.ul_arfcn        = config.carrier_cfg.ul_f_ref_arfcn;
@@ -289,7 +304,8 @@ split6_flexible_o_du_low_session_factory::create_radio_unit(split6_flexible_o_du
       return nullptr;
     }
 
-    return create_ofh_radio_unit(cfg->config, ru_config, ru_dependencies);
+    return create_ofh_radio_unit(
+        cfg->config, ru_config, ru_dependencies, unit_config.du_low_cfg.hal_config.has_value());
   }
 
   if (const auto* cfg = std::get_if<ru_sdr_unit_config>(&ru_cfg)) {
@@ -297,7 +313,6 @@ split6_flexible_o_du_low_session_factory::create_radio_unit(split6_flexible_o_du
 
     // Update the sampling rate.
     updated_srate_config.srate_MHz = derive_srate_MHz_from_bandwith(config.carrier_cfg.dl_bandwidth);
-    sampling_rate_MHz.emplace(updated_srate_config.srate_MHz);
 
     // Update the start time of the radio.
     updated_srate_config.start_time = start_time_calc.calculate_start_time();

@@ -5,7 +5,6 @@
 
 #include "ocudu/adt/ring_buffer.h"
 #include "ocudu/support/async/coroutine.h"
-#include "ocudu/support/async/manual_event.h"
 
 namespace ocudu {
 

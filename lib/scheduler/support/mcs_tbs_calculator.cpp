@@ -7,6 +7,7 @@
 #include "sch_pdu_builder.h"
 #include "ocudu/ran/pdsch/dlsch_info.h"
 #include "ocudu/ran/pusch/pusch_mcs.h"
+#include "ocudu/ran/pusch/pusch_uci_beta_offset.h"
 #include "ocudu/ran/pusch/ulsch_info.h"
 #include "ocudu/ran/sch/tbs_calculator.h"
 #include "ocudu/ran/uci/uci_info.h"
@@ -82,7 +83,7 @@ static ulsch_configuration build_ulsch_info(const pusch_config_params& pusch_cfg
     const auto& beta_offsets = std::get<uci_on_pusch::beta_offsets_semi_static>(uci_cfg->beta_offsets_cfg.value());
 
     // Use \c betaOffsetCSI-Part1-Index1 for up to 11 bits CSI Part 1 reporting.
-    if (pusch_cfg.nof_csi_part1_bits < 12) {
+    if (pusch_cfg.nof_csi_part1_bits <= MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1) {
       ulsch_info.beta_offset_csi_part1 = beta_csi_to_float(beta_offsets.beta_offset_csi_p1_idx_1.value());
     }
     // Use \c betaOffsetCSI-Part1-Index2 for more than 11 bits CSI Part 1 reporting.
@@ -100,7 +101,7 @@ static ulsch_configuration build_ulsch_info(const pusch_config_params& pusch_cfg
     const auto& beta_offsets = std::get<uci_on_pusch::beta_offsets_semi_static>(uci_cfg->beta_offsets_cfg.value());
 
     // Use \c betaOffsetCSI-Part2-Index1 for up to 11 bits CSI Part 2 reporting.
-    if (pusch_cfg.max_nof_csi_part2_bits < 12) {
+    if (pusch_cfg.max_nof_csi_part2_bits <= MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1) {
       ulsch_info.beta_offset_csi_part2 = beta_csi_to_float(beta_offsets.beta_offset_csi_p2_idx_1.value());
     }
     // Use \c betaOffsetCSI-Part2-Index2 for more than 11 bits CSI Part 2 reporting.

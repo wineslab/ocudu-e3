@@ -53,25 +53,10 @@ public:
                                       cell_resources.get_ded(res_params.harq_res_id<0>(res_set_cfg_id, 0)),
                                       {.harq_ack_nof_bits = 1U});
 
-    pucch_expected_res_set_0_with_common =
-        test_helpers::make_pucch_info(t_bench.cell_cfg,
-                                      cell_resources.get_ded(res_params.harq_res_id<0>(res_set_cfg_id, 1)),
-                                      {.harq_ack_nof_bits = 1U});
-
-    pucch_expected_res_set_0_with_common_and_sr =
-        test_helpers::make_pucch_info(t_bench.cell_cfg,
-                                      cell_resources.get_ded(res_params.harq_res_id<0>(res_set_cfg_id, 2)),
-                                      {.harq_ack_nof_bits = 1U});
-
     // Set the expected Resource Set ID 1 HARQ-ACK grant to the first resource in Resource Set ID 1.
     pucch_expected_res_set_1 =
         test_helpers::make_pucch_info(t_bench.cell_cfg,
                                       cell_resources.get_ded(res_params.harq_res_id<1>(res_set_cfg_id, 0)),
-                                      {.harq_ack_nof_bits = 3U});
-
-    pucch_expected_res_set_1_with_common =
-        test_helpers::make_pucch_info(t_bench.cell_cfg,
-                                      cell_resources.get_ded(res_params.harq_res_id<1>(res_set_cfg_id, 1)),
                                       {.harq_ack_nof_bits = 3U});
 
     // Set the expected HARQ CSI grant to the CSI resource.
@@ -90,10 +75,7 @@ protected:
   // Parameters that are passed by the routine to run the tests.
   pucch_info pucch_expected_sr;
   pucch_info pucch_expected_res_set_0;
-  pucch_info pucch_expected_res_set_0_with_common;
-  pucch_info pucch_expected_res_set_0_with_common_and_sr;
   pucch_info pucch_expected_res_set_1;
-  pucch_info pucch_expected_res_set_1_with_common;
   pucch_info pucch_expected_csi;
 };
 
@@ -101,35 +83,22 @@ protected:
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_sr_opportunity_succeeds)
 {
-  alloc_sr_opportunity(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
 
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(
-      find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_sr](const pucch_info& pdu) {
-        return pucch_info_match(expected, pdu);
-      }));
+  ASSERT_TRUE(find_pucch_pdu(
+      default_slot_grid.result.ul.pucchs.unsorted(),
+      [&expected = pucch_expected_sr](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
 }
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_sr_opportunity_fails_when_no_free_sr_resources)
 {
   t_bench.add_ue();
-  alloc_sr_opportunity(t_bench.get_ue(t_bench.last_added_ue_idx));
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_ue(t_bench.last_added_ue_idx)));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 
   // Try to allocate SR for the main UE, which should fail as there are no more free SR resources.
-  alloc_sr_opportunity(t_bench.get_main_ue());
-  ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-}
-
-TEST_P(pucch_alloc_ded_resources_test, alloc_sr_opportunity_fails_when_existing_common_harq)
-{
-  auto pri = alloc_common_harq_ack(t_bench.get_main_ue());
-  ASSERT_TRUE(pri.has_value());
-  ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-
-  // The SR won't be allocated if there is an existing PUCCH common grant.
-  // It is possible to have both SR and HARQ if the SR is scheduled first.
-  alloc_sr_opportunity(t_bench.get_main_ue());
+  ASSERT_FALSE(alloc_sr_opportunity(t_bench.get_main_ue()));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 }
 
@@ -137,14 +106,13 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_sr_opportunity_fails_when_existing_
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_csi_opportunity_succeeds)
 {
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
 
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(
-      find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_csi](const pucch_info& pdu) {
-        return pucch_info_match(expected, pdu);
-      }));
-  ASSERT_TRUE(default_slot_grid.result.ul.pucchs[0].csi_rep_cfg.has_value());
+  ASSERT_TRUE(find_pucch_pdu(
+      default_slot_grid.result.ul.pucchs.unsorted(),
+      [&expected = pucch_expected_csi](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
+  ASSERT_TRUE(default_slot_grid.result.ul.pucchs.begin()->csi_rep_cfg.has_value());
 }
 
 TEST_P(pucch_alloc_ded_resources_test,
@@ -152,38 +120,25 @@ TEST_P(pucch_alloc_ded_resources_test,
 {
   pucch_expected_csi.uci_bits.sr_bits = sr_nof_bits::one;
 
-  alloc_sr_opportunity(t_bench.get_main_ue());
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
 
   // The CSI and SR should be multiplexed into the CSI resource.
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(
-      find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_csi](const pucch_info& pdu) {
-        return pucch_info_match(expected, pdu);
-      }));
-  ASSERT_TRUE(default_slot_grid.result.ul.pucchs[0].csi_rep_cfg.has_value());
+  ASSERT_TRUE(find_pucch_pdu(
+      default_slot_grid.result.ul.pucchs.unsorted(),
+      [&expected = pucch_expected_csi](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
+  ASSERT_TRUE(default_slot_grid.result.ul.pucchs.begin()->csi_rep_cfg.has_value());
 }
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_csi_opportunity_fails_when_no_free_csi_resources)
 {
   t_bench.add_ue();
-  alloc_csi_opportunity(t_bench.get_ue(t_bench.last_added_ue_idx), default_csi_part1_bits);
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_ue(t_bench.last_added_ue_idx)));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 
   // Try to allocate CSI for the main UE, which should fail as there are no more free CSI resources.
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
-  ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-}
-
-TEST_P(pucch_alloc_ded_resources_test, alloc_csi_opportunity_fails_when_existing_common_harq)
-{
-  auto pri = alloc_common_harq_ack(t_bench.get_main_ue());
-  ASSERT_TRUE(pri.has_value());
-  ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-
-  // The CSI won't be allocated if there is an existing PUCCH common grant.
-  // It is only possible to have both CSI and HARQ if the CSI is scheduled first.
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  ASSERT_FALSE(alloc_csi_opportunity(t_bench.get_main_ue()));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 }
 
@@ -196,15 +151,14 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_succeeds)
   ASSERT_TRUE(pri.has_value());
   ASSERT_EQ(0U, pri);
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(
-      find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_res_set_0](const pucch_info& pdu) {
-        return pucch_info_match(expected, pdu);
-      }));
+  ASSERT_TRUE(find_pucch_pdu(
+      default_slot_grid.result.ul.pucchs.unsorted(),
+      [&expected = pucch_expected_res_set_0](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
 }
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_sr_succeeds)
 {
-  alloc_sr_opportunity(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
   for (unsigned i = 0; i != 2U; ++i) {
     pucch_expected_sr.uci_bits.harq_ack_nof_bits        = i + 1;
     pucch_expected_res_set_0.uci_bits.harq_ack_nof_bits = i + 1;
@@ -215,12 +169,11 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_sr_succe
 
     // Expect 2 PUCCH grants, one for SR and one for HARQ.
     ASSERT_EQ(2U, default_slot_grid.result.ul.pucchs.size());
-    ASSERT_TRUE(
-        find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_sr](const pucch_info& pdu) {
-          return pucch_info_match(expected, pdu);
-        }));
     ASSERT_TRUE(find_pucch_pdu(
-        default_slot_grid.result.ul.pucchs,
+        default_slot_grid.result.ul.pucchs.unsorted(),
+        [&expected = pucch_expected_sr](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
+    ASSERT_TRUE(find_pucch_pdu(
+        default_slot_grid.result.ul.pucchs.unsorted(),
         [&expected = pucch_expected_res_set_0](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
   }
 
@@ -233,10 +186,9 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_sr_succe
   ASSERT_TRUE(pri.has_value());
   ASSERT_EQ(0U, pri.value());
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(
-      find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_res_set_1](const pucch_info& pdu) {
-        return pucch_info_match(expected, pdu);
-      }));
+  ASSERT_TRUE(find_pucch_pdu(
+      default_slot_grid.result.ul.pucchs.unsorted(),
+      [&expected = pucch_expected_res_set_1](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
 }
 
 // TODO: add the same test but with existing CSI/SR grants.
@@ -257,12 +209,12 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_succeeds_until_max_pay
     if (harq_ack_nof_bits <= 2U) {
       pucch_expected_res_set_0.uci_bits.harq_ack_nof_bits = harq_ack_nof_bits;
       ASSERT_TRUE(find_pucch_pdu(
-          default_slot_grid.result.ul.pucchs,
+          default_slot_grid.result.ul.pucchs.unsorted(),
           [&expected = pucch_expected_res_set_0](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
     } else {
       pucch_expected_res_set_1.uci_bits.harq_ack_nof_bits = harq_ack_nof_bits;
       ASSERT_TRUE(find_pucch_pdu(
-          default_slot_grid.result.ul.pucchs,
+          default_slot_grid.result.ul.pucchs.unsorted(),
           [&expected = pucch_expected_res_set_1](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
     }
   }
@@ -277,7 +229,7 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_sr_succe
   const unsigned max_payload_f2_f3_f4 = t_bench.params.pucch_ded_params.max_payload_234();
 
   // Add HARQ grants to reach the max_payload.
-  alloc_sr_opportunity(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
   for (unsigned n = 0; n != (max_payload_f2_f3_f4 - 1); ++n) {
     // These grants should be allocated successfully, as we are below the max payload.
     auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
@@ -289,19 +241,18 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_sr_succe
       ASSERT_EQ(2U, default_slot_grid.result.ul.pucchs.size());
       pucch_expected_res_set_0.uci_bits.harq_ack_nof_bits = harq_ack_nof_bits;
       ASSERT_TRUE(find_pucch_pdu(
-          default_slot_grid.result.ul.pucchs,
+          default_slot_grid.result.ul.pucchs.unsorted(),
           [&expected = pucch_expected_res_set_0](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
       pucch_expected_sr.uci_bits.harq_ack_nof_bits = harq_ack_nof_bits;
-      ASSERT_TRUE(
-          find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_sr](const pucch_info& pdu) {
-            return pucch_info_match(expected, pdu);
-          }));
+      ASSERT_TRUE(find_pucch_pdu(
+          default_slot_grid.result.ul.pucchs.unsorted(),
+          [&expected = pucch_expected_sr](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
     } else {
       ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
       pucch_expected_res_set_1.uci_bits.harq_ack_nof_bits = harq_ack_nof_bits;
       pucch_expected_res_set_1.uci_bits.sr_bits           = sr_nof_bits::one;
       ASSERT_TRUE(find_pucch_pdu(
-          default_slot_grid.result.ul.pucchs,
+          default_slot_grid.result.ul.pucchs.unsorted(),
           [&expected = pucch_expected_res_set_1](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
     }
   }
@@ -323,7 +274,9 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_succeeds_until_no_free
     ASSERT_TRUE(pri.has_value());
     ASSERT_EQ(i, pri.value());
     ASSERT_EQ(i + 1, default_slot_grid.result.ul.pucchs.size());
-    ASSERT_EQ(t_bench.last_added_ue_rnti, default_slot_grid.result.ul.pucchs.back().crnti);
+    ASSERT_EQ(
+        1,
+        test_helpers::find_ue_pucchs(default_slot_grid.result.ul.pucchs.unsorted(), t_bench.last_added_ue_rnti).size());
   }
 
   // Try to allocate HARQ for the main UE, which should fail as there are no more free resources in Resource Set ID 0.
@@ -342,13 +295,13 @@ TEST_P(pucch_alloc_ded_resources_test,
   pucch_expected_res_set_1.uci_bits.harq_ack_nof_bits  = 1U;
   pucch_expected_res_set_1.uci_bits.csi_part1_nof_bits = default_csi_part1_bits;
 
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
   auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri.has_value());
   ASSERT_EQ(0U, pri.value());
 
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  const auto& pucch_pdus = default_slot_grid.result.ul.pucchs;
+  span<const pucch_info> pucch_pdus = default_slot_grid.result.ul.pucchs.unsorted();
   ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [&expected = pucch_expected_res_set_1](const pucch_info& pdu) {
     return pucch_info_match(expected, pdu) and pdu.csi_rep_cfg.has_value();
   }));
@@ -365,41 +318,6 @@ TEST_P(pucch_alloc_ded_resources_test,
 }
 
 TEST_P(pucch_alloc_ded_resources_test,
-       alloc_ded_harq_ack_3bits_with_existing_csi_succeeds_with_separate_or_multiplexed_resources)
-{
-  // We don't know a-priori whether CSI and HARQ will be multiplexed within the same resource; we need to consider
-  // both possibilities, (i) 2 separate PUCCH resources HARQ + CSI, and (ii) 1 PUCCH resource with both HARQ and CSI.
-  pucch_expected_res_set_1.uci_bits.harq_ack_nof_bits   = 3U;
-  pucch_expected_csi.uci_bits.csi_part1_nof_bits        = 4U;
-  pucch_info pucch_f2_harq_csi_mplexed                  = pucch_expected_res_set_1;
-  pucch_f2_harq_csi_mplexed.uci_bits.csi_part1_nof_bits = 4U;
-
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
-  alloc_ded_harq_ack(t_bench.get_main_ue());
-  alloc_ded_harq_ack(t_bench.get_main_ue());
-  auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
-  ASSERT_TRUE(pri.has_value());
-  ASSERT_EQ(0U, pri.value());
-
-  const auto& pucch_pdus = default_slot_grid.result.ul.pucchs;
-  ASSERT_TRUE(pucch_pdus.size() == 1U or pucch_pdus.size() == 2U);
-  if (default_slot_grid.result.ul.pucchs.size() == 2U) {
-    // Separate resources.
-    ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [&expected = pucch_expected_res_set_1](const pucch_info& pdu) {
-      return pucch_info_match(expected, pdu) and not pdu.csi_rep_cfg.has_value();
-    }));
-    ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [&expected = pucch_expected_csi](const pucch_info& pdu) {
-      return pucch_info_match(expected, pdu) and pdu.csi_rep_cfg.has_value();
-    }));
-  } else {
-    // Multiplexed.
-    ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [&expected = pucch_f2_harq_csi_mplexed](const pucch_info& pdu) {
-      return pucch_info_match(expected, pdu) and pdu.csi_rep_cfg.has_value();
-    }));
-  }
-}
-
-TEST_P(pucch_alloc_ded_resources_test,
        alloc_ded_harq_ack_3bits_with_existing_csi_and_sr_succeeds_and_all_grants_are_multiplexed)
 {
   // With SR and with PUCCH Format 1 it is guaranteed that the resources will be multiplexed, as PUCCH Format 1 for SR
@@ -408,19 +326,19 @@ TEST_P(pucch_alloc_ded_resources_test,
   pucch_expected_res_set_1.uci_bits.sr_bits            = sr_nof_bits::one;
   pucch_expected_res_set_1.uci_bits.csi_part1_nof_bits = 4;
 
-  alloc_sr_opportunity(t_bench.get_main_ue());
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
-  alloc_ded_harq_ack(t_bench.get_main_ue());
-  alloc_ded_harq_ack(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_main_ue()));
   auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri.has_value());
   ASSERT_EQ(0U, pri.value());
 
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(
-      find_pucch_pdu(default_slot_grid.result.ul.pucchs, [&expected = pucch_expected_res_set_1](const pucch_info& pdu) {
-        return pucch_info_match(expected, pdu) and pdu.csi_rep_cfg.has_value();
-      }));
+  ASSERT_TRUE(find_pucch_pdu(default_slot_grid.result.ul.pucchs.unsorted(),
+                             [&expected = pucch_expected_res_set_1](const pucch_info& pdu) {
+                               return pucch_info_match(expected, pdu) and pdu.csi_rep_cfg.has_value();
+                             }));
 }
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_csi_and_sr_fails_when_max_payload_reached)
@@ -428,8 +346,8 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_csi_and_
   const unsigned max_payload_f2_f3_f4 = t_bench.params.pucch_ded_params.max_payload_234();
   ASSERT_TRUE(max_payload_f2_f3_f4 > default_csi_part1_bits + 1U);
 
-  alloc_sr_opportunity(t_bench.get_main_ue());
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
   for (unsigned n = 0; n != max_payload_f2_f3_f4 - (default_csi_part1_bits + 1U); ++n) {
     // These grants should be allocated successfully, as we are below the max payload.
     auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
@@ -441,39 +359,39 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_csi_and_
   ASSERT_FALSE(pri.has_value());
 }
 
-TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_csi_res_set_promotion_preserves_res_indicator)
+TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_csi_selects_free_res_set_1_indicator)
 {
-  // This makes PUCCH resource indicator 0 busy for PUCCH Resource Set ID 0.
+  // This makes PUCCH resource indicator 0 busy for PUCCH Resource Set ID 0 (irrelevant here, since the HARQ-ACK
+  // grant ends up using a Resource Set ID 1 resource to be able to carry the CSI bits).
   t_bench.add_ue();
   alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
 
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  alloc_csi_opportunity(t_bench.get_main_ue());
   auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri.has_value());
-  ASSERT_EQ(1U, pri.value());
+  ASSERT_EQ(0U, pri.value());
 }
 
-TEST_P(pucch_alloc_ded_resources_test,
-       alloc_ded_harq_ack_with_existing_csi_and_sr_res_set_promotion_preserves_res_indicator)
+TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_with_existing_csi_and_sr_selects_free_res_set_1_indicator)
 {
-  // This makes PUCCH resource indicator 0 busy for PUCCH Resource Set ID 0.
+  // This makes PUCCH resource indicator 0 busy for PUCCH Resource Set ID 0 (irrelevant here, since the HARQ-ACK
+  // grant ends up using a Resource Set ID 1 resource to be able to carry the CSI bits).
   t_bench.add_ue();
   alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
 
-  alloc_sr_opportunity(t_bench.get_main_ue());
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
   auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri.has_value());
-  ASSERT_EQ(1U, pri.value());
+  ASSERT_EQ(0U, pri.value());
 }
 
-TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_res_set_1_adding_extra_bit_preserves_res_indicator)
+TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_res_set_1_adding_extra_bit_promotion_selects_free_pri)
 {
   // This makes PUCCH resource indicator 0 busy for PUCCH Resource Set ID 0.
   t_bench.add_ue();
   alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
 
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
   auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri.has_value());
   ASSERT_EQ(1U, pri.value());
@@ -481,6 +399,12 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_res_set_1_adding_extra
   auto pri_new = alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri_new.has_value());
   ASSERT_EQ(pri.value(), pri_new.value());
+
+  // With 3 HARQ-ACK bits, the PUCCH resource is promoted to Resource Set ID 1; the PRI is selected independently of
+  // the Resource Set ID 0 PRI, so it is the first available PRI in Resource Set ID 1 (PRI 0, still unused there).
+  pri_new = alloc_ded_harq_ack(t_bench.get_main_ue());
+  ASSERT_TRUE(pri_new.has_value());
+  ASSERT_EQ(0U, pri_new.value());
 }
 
 ///////   Test allocation of common + dedicated resources.    ///////
@@ -488,41 +412,42 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_res_set_1_adding_extra
 TEST_P(pucch_alloc_ded_resources_test, alloc_common_and_ded_harq_ack_succeeds)
 {
   auto pri = alloc_common_and_ded_harq_ack(t_bench.get_main_ue());
-  ASSERT_TRUE(pri.has_value());
+  ASSERT_EQ(0, pri.value());
   ASSERT_EQ(2U, default_slot_grid.result.ul.pucchs.size());
 
   // PUCCH dedicated resource.
-  ASSERT_TRUE(find_pucch_pdu(default_slot_grid.result.ul.pucchs,
-                             [&expected = pucch_expected_res_set_0_with_common](const pucch_info& pdu) {
-                               return pucch_info_match(expected, pdu);
-                             }));
+  ASSERT_TRUE(find_pucch_pdu(
+      default_slot_grid.result.ul.pucchs.unsorted(),
+      [&expected = pucch_expected_res_set_0](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
+
   // PUCCH common resource.
-  ASSERT_EQ(pucch_format::FORMAT_1, default_slot_grid.result.ul.pucchs[1].format());
-  ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs[1].uci_bits.harq_ack_nof_bits);
-  ASSERT_EQ(sr_nof_bits::no_sr, default_slot_grid.result.ul.pucchs[1].uci_bits.sr_bits);
-  ASSERT_TRUE(default_slot_grid.result.ul.pucchs[1].res->second_hop_prb.has_value());
+  const auto& common_pdu = default_slot_grid.result.ul.pucchs.unsorted()[1];
+  ASSERT_TRUE(common_pdu.res->res_id.is_cmn());
+  ASSERT_EQ(pucch_format::FORMAT_1, common_pdu.format());
+  ASSERT_EQ(1U, common_pdu.uci_bits.harq_ack_nof_bits);
+  ASSERT_EQ(sr_nof_bits::no_sr, common_pdu.uci_bits.sr_bits);
+  ASSERT_TRUE(common_pdu.res->second_hop_prb.has_value());
 }
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_common_and_ded_harq_ack_with_existing_sr_succeeds)
 {
   pucch_expected_sr.uci_bits.harq_ack_nof_bits = 1U;
 
-  alloc_sr_opportunity(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
 
   auto pri = alloc_common_and_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri.has_value());
 
-  const auto& pucch_pdus = default_slot_grid.result.ul.pucchs;
+  span<const pucch_info> pucch_pdus = default_slot_grid.result.ul.pucchs.unsorted();
   ASSERT_EQ(3U, default_slot_grid.result.ul.pucchs.size());
   // All resources are Format 1.
   ASSERT_TRUE(std::all_of(pucch_pdus.begin(), pucch_pdus.end(), [](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1;
   }));
   // We expect 2 PUCCH dedicated resource with HARQ-ACK and SR bits.
-  ASSERT_TRUE(
-      find_pucch_pdu(pucch_pdus, [&expected = pucch_expected_res_set_0_with_common_and_sr](const pucch_info& pdu) {
-        return pucch_info_match(expected, pdu);
-      }));
+  ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [&expected = pucch_expected_res_set_0](const pucch_info& pdu) {
+    return pucch_info_match(expected, pdu);
+  }));
   ASSERT_TRUE(find_pucch_pdu(
       pucch_pdus, [&expected = pucch_expected_sr](const pucch_info& pdu) { return pucch_info_match(expected, pdu); }));
   // PUCCH common resource.
@@ -534,18 +459,18 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_common_and_ded_harq_ack_with_existi
 
 TEST_P(pucch_alloc_ded_resources_test, alloc_common_and_ded_harq_ack_with_existing_csi_succeeds)
 {
-  pucch_expected_res_set_1_with_common.uci_bits.harq_ack_nof_bits  = 1U;
-  pucch_expected_res_set_1_with_common.uci_bits.csi_part1_nof_bits = 4U;
+  pucch_expected_res_set_1.uci_bits.harq_ack_nof_bits  = 1U;
+  pucch_expected_res_set_1.uci_bits.csi_part1_nof_bits = 4U;
 
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  alloc_csi_opportunity(t_bench.get_main_ue());
 
   auto pri = alloc_common_and_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_TRUE(pri.has_value());
 
-  const auto& pucch_pdus = default_slot_grid.result.ul.pucchs;
+  span<const pucch_info> pucch_pdus = default_slot_grid.result.ul.pucchs.unsorted();
   ASSERT_EQ(2, pucch_pdus.size());
   // PUCCH dedicated resource for HARQ-ACK.
-  ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [&expected = pucch_expected_res_set_1_with_common](const pucch_info& pdu) {
+  ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [&expected = pucch_expected_res_set_1](const pucch_info& pdu) {
     return pucch_info_match(expected, pdu);
   }));
   // PUCCH common resource.
@@ -574,7 +499,7 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_common_and_ded_harq_ack_fails_when_
 TEST_P(pucch_alloc_ded_resources_test,
        alloc_common_and_ded_harq_ack_fails_when_existing_sr_and_no_free_res_set_0_resources)
 {
-  alloc_sr_opportunity(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
   const unsigned res_set_size = t_bench.params.pucch_ded_params.res_set_size.value();
   for (unsigned i = 0; i != res_set_size; ++i) {
     t_bench.add_ue();
@@ -592,7 +517,7 @@ TEST_P(pucch_alloc_ded_resources_test,
 TEST_P(pucch_alloc_ded_resources_test,
        alloc_common_and_ded_harq_ack_fails_when_existing_csi_and_no_free_res_set_1_resources)
 {
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  alloc_csi_opportunity(t_bench.get_main_ue());
   const unsigned res_set_size = t_bench.params.pucch_ded_params.res_set_size.value();
   for (unsigned i = 0; i != res_set_size; ++i) {
     t_bench.add_ue();
@@ -632,12 +557,12 @@ TEST_P(pucch_alloc_ded_resources_test, if_ded_common_alloc_fails_no_harq_grants_
 
   for (unsigned i = 0; i != t_bench.params.pucch_ded_params.res_set_size.value(); ++i) {
     t_bench.add_ue();
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
+    ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
+    ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
+    ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
   }
 
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  alloc_csi_opportunity(t_bench.get_main_ue());
 
   auto pri = alloc_common_and_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_FALSE(pri.has_value());
@@ -661,39 +586,16 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_fails_when_existing_co
 
 ///////  Test HARQ-ACK allocation on ded. resources - Resource Set ID 1  - Multi UEs ///////
 
-TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_succeeds_until_no_free_res_set_1_resources)
-{
-  // Fill all resources in Resource Set ID 1 with UEs having their own HARQ grants.
-  const unsigned res_set_size = t_bench.params.pucch_ded_params.res_set_size.value();
-  for (unsigned i = 0; i != res_set_size; ++i) {
-    t_bench.add_ue();
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-    auto pri = alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-    ASSERT_TRUE(pri.has_value());
-    ASSERT_EQ(i, pri.value());
-    ASSERT_EQ(i + 1, default_slot_grid.result.ul.pucchs.size());
-    ASSERT_EQ(t_bench.last_added_ue_rnti, default_slot_grid.result.ul.pucchs.back().crnti);
-  }
-
-  // Try to allocate HARQ for the main UE, which should fail as there are no more free resources in Resource Set ID 0.
-  alloc_ded_harq_ack(t_bench.get_main_ue());
-  alloc_ded_harq_ack(t_bench.get_main_ue());
-  auto pri = alloc_ded_harq_ack(t_bench.get_main_ue());
-  ASSERT_FALSE(pri.has_value());
-
-  // The main UE will still have a HARQ grant allocated, but from Resource Set ID 0.
-  ASSERT_EQ(res_set_size + 1, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_EQ(pucch_format::FORMAT_1, default_slot_grid.result.ul.pucchs.back().format());
-}
-
 TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_res_set_1_over_csi_from_other_ue_succeeds)
 {
   // Allocate a CSI grant for UE 0x4601.
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  alloc_csi_opportunity(t_bench.get_main_ue());
   ASSERT_EQ(1, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_EQ(GetParam(), default_slot_grid.result.ul.pucchs.back().format());
-  ASSERT_EQ(default_csi_part1_bits, default_slot_grid.result.ul.pucchs.back().uci_bits.csi_part1_nof_bits);
+  const auto ue_pucchs =
+      test_helpers::find_ue_pucchs(default_slot_grid.result.ul.pucchs.unsorted(), t_bench.get_main_ue().crnti);
+  ASSERT_EQ(1, ue_pucchs.size());
+  ASSERT_EQ(GetParam(), ue_pucchs[0]->format());
+  ASSERT_EQ(default_csi_part1_bits, ue_pucchs[0]->uci_bits.csi_part1_nof_bits);
 
   const unsigned res_set_size = t_bench.params.pucch_ded_params.res_set_size.value();
   for (unsigned i = 0; i < res_set_size; ++i) {
@@ -705,37 +607,41 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_res_set_1_over_csi_fro
   ASSERT_EQ(res_set_size + 1, default_slot_grid.result.ul.pucchs.size());
 }
 
-TEST_P(pucch_alloc_ded_resources_test,
-       alloc_ded_harq_ack_res_set_1_with_existing_sr_succeeds_until_no_free_res_set_1_resources)
+TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_res_set_1_promotion_fails_if_no_free_res_set_1_resources)
 {
-  // Allocate an HARQ-ACK grant from Resource Set ID 1 for 6 UEs.
   const unsigned res_set_size = t_bench.params.pucch_ded_params.res_set_size.value();
-  for (unsigned i = 0; i < res_set_size - 1; ++i) {
+  for (unsigned i = 0; i != res_set_size; ++i) {
+    // Allocate a HARQ-ACK grant from Resource Set ID 1 for each UE.
     t_bench.add_ue();
-    alloc_sr_opportunity(t_bench.get_ue(t_bench.last_added_ue_idx));
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-    alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
+    ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
+    ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
+    ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
     ASSERT_EQ(i + 1, default_slot_grid.result.ul.pucchs.size());
-    ASSERT_EQ(GetParam(), default_slot_grid.result.ul.pucchs.back().format());
-    ASSERT_EQ(3U, default_slot_grid.result.ul.pucchs.back().uci_bits.harq_ack_nof_bits);
-    ASSERT_EQ(sr_nof_bits::one, default_slot_grid.result.ul.pucchs.back().uci_bits.sr_bits);
+    const auto ue_pucchs =
+        test_helpers::find_ue_pucchs(default_slot_grid.result.ul.pucchs.unsorted(), t_bench.last_added_ue_rnti);
+    ASSERT_EQ(1, ue_pucchs.size());
+    ASSERT_EQ(GetParam(), ue_pucchs[0]->format());
+    ASSERT_EQ(pucch_uci_bits{.harq_ack_nof_bits = 3U}, ue_pucchs[0]->uci_bits);
   }
-  ASSERT_EQ(res_set_size - 1, default_slot_grid.result.ul.pucchs.size());
-
-  t_bench.add_ue();
-  alloc_sr_opportunity(t_bench.get_ue(t_bench.last_added_ue_idx));
-  alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-  alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
-  alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx));
   ASSERT_EQ(res_set_size, default_slot_grid.result.ul.pucchs.size());
+
+  // A new UE's initial HARQ-ACK allocation only checks Resource Set ID 0, which is entirely free, so it succeeds
+  // (using a Resource Set ID 0 grant, hence no extra PUCCH PDU is added on top of the res_set_size Set ID 1 grants).
+  t_bench.add_ue();
+  ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
+  ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)).has_value());
+  ASSERT_EQ(res_set_size + 1, default_slot_grid.result.ul.pucchs.size());
+
+  // Promoting to Resource Set ID 1 on the 3rd HARQ-ACK bit fails, as there are no more free resources there.
+  ASSERT_FALSE(alloc_ded_harq_ack(t_bench.get_ue(t_bench.last_added_ue_idx)));
+  ASSERT_EQ(res_set_size + 1, default_slot_grid.result.ul.pucchs.size());
 }
 
 ///////   Test removal of dedicated PUCCH resources    ///////
 
 TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_sr)
 {
-  alloc_sr_opportunity(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 
   pucch_uci_bits removed_bits = remove_ue_uci_from_pucch(t_bench.get_main_ue());
@@ -748,7 +654,7 @@ TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_sr
 
 TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_csi)
 {
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 
   pucch_uci_bits removed_bits = remove_ue_uci_from_pucch(t_bench.get_main_ue());
@@ -761,7 +667,7 @@ TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_cs
 
 TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_harq_res_set_0)
 {
-  alloc_ded_harq_ack(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_main_ue()));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 
   pucch_uci_bits removed_bits = remove_ue_uci_from_pucch(t_bench.get_main_ue());
@@ -774,8 +680,8 @@ TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_ha
 
 TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_sr_and_harq_res_set_0)
 {
-  alloc_sr_opportunity(t_bench.get_main_ue());
-  alloc_ded_harq_ack(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_sr_opportunity(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_main_ue()));
   ASSERT_EQ(2U, default_slot_grid.result.ul.pucchs.size());
 
   pucch_uci_bits removed_bits = remove_ue_uci_from_pucch(t_bench.get_main_ue());
@@ -788,8 +694,8 @@ TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_sr
 
 TEST_P(pucch_alloc_ded_resources_test, remove_ue_uci_from_pucch_with_existing_csi_and_harq_res_set_0)
 {
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
-  alloc_ded_harq_ack(t_bench.get_main_ue());
+  ASSERT_TRUE(alloc_csi_opportunity(t_bench.get_main_ue()));
+  ASSERT_TRUE(alloc_ded_harq_ack(t_bench.get_main_ue()));
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
 
   pucch_uci_bits removed_bits = remove_ue_uci_from_pucch(t_bench.get_main_ue());
@@ -807,23 +713,25 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_ded_harq_ack_over_multiple_slots_in
 {
   // All the allocation allocate a HARQ-ACK grant at slot 5.
   // t_bench.sl_tx = 0; k0 = 0; k1 = 5  =>  t_bench.sl_tx + k0 + k1 = 5.
-  unsigned k1          = 5;
-  auto&    slot_grid_1 = t_bench.res_grid[t_bench.k0 + k1];
+  unsigned k1 = 5;
 
   for (unsigned i = 0; i < 5; ++i) {
     auto pri = t_bench.pucch_alloc.alloc_ded_harq_ack(
-        t_bench.res_grid, t_bench.get_main_ue().crnti, t_bench.get_main_ue().get_pcell().cfg(), t_bench.k0, k1);
+        t_bench.res_grid, t_bench.get_main_ue().get_pcell().cfg(), t_bench.k0, k1);
     ASSERT_TRUE(pri.has_value());
     ASSERT_EQ(0U, pri.value());
 
     const auto& slot_grid = t_bench.res_grid[t_bench.k0 + k1];
     ASSERT_EQ(1U, slot_grid.result.ul.pucchs.size());
+    const auto ue_pucchs =
+        test_helpers::find_ue_pucchs(slot_grid.result.ul.pucchs.unsorted(), t_bench.get_main_ue().crnti);
+    ASSERT_EQ(1U, ue_pucchs.size());
     if (i < 2) {
-      ASSERT_EQ(pucch_format::FORMAT_1, slot_grid_1.result.ul.pucchs.back().format());
+      ASSERT_EQ(pucch_format::FORMAT_1, ue_pucchs[0]->format());
     } else {
-      ASSERT_EQ(GetParam(), slot_grid_1.result.ul.pucchs.back().format());
+      ASSERT_EQ(GetParam(), ue_pucchs[0]->format());
     }
-    ASSERT_EQ(i + 1, slot_grid.result.ul.pucchs.back().uci_bits.harq_ack_nof_bits);
+    ASSERT_EQ(i + 1, ue_pucchs[0]->uci_bits.harq_ack_nof_bits);
 
     // Advance by 1 slot and decrease k1 accordingly to keep targeting the same slot for the next allocation.
     t_bench.slot_indication(++t_bench.sl_tx);
@@ -858,41 +766,46 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
   // - 1 PUCCH common HARQ-ACK   - RNTI = UE0 - HARQ-BITS = 1.
   // - 1 PUCCH Resource Set ID 0 - RNTI = UE2 - HARQ-BITS = 1.
   auto pri_ue1 = t_bench.pucch_alloc.alloc_ded_harq_ack(
-      t_bench.res_grid, t_bench.get_ue(ue1_idx).crnti, t_bench.get_ue(ue1_idx).get_pcell().cfg(), t_bench.k0, k1);
+      t_bench.res_grid, t_bench.get_ue(ue1_idx).get_pcell().cfg(), t_bench.k0, k1);
 
   ASSERT_TRUE(pri_ue1.has_value());
   ASSERT_EQ(0U, pri_ue1.value());
   ASSERT_EQ(1U, slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue1_idx).crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
-  }));
+  ASSERT_TRUE(find_pucch_pdu(
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_ue(ue1_idx).crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
+      }));
 
   auto pri_ue0 = t_bench.pucch_alloc.alloc_common_harq_ack(
       t_bench.res_grid, t_bench.get_main_ue().crnti, t_bench.k0, k1, t_bench.dci_info);
   ASSERT_TRUE(pri_ue0.has_value());
   ASSERT_EQ(1U, pri_ue0.value());
   ASSERT_EQ(2U, slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.res->res_id.is_cmn();
-  }));
+  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs.unsorted(),
+                             [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
+                               return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and
+                                      pdu.uci_bits.harq_ack_nof_bits == 1U and pdu.res->res_id.is_cmn();
+                             }));
 
   auto pri_ue2 = t_bench.pucch_alloc.alloc_ded_harq_ack(
-      t_bench.res_grid, t_bench.get_ue(ue2_idx).crnti, t_bench.get_ue(ue2_idx).get_pcell().cfg(), t_bench.k0, k1);
+      t_bench.res_grid, t_bench.get_ue(ue2_idx).get_pcell().cfg(), t_bench.k0, k1);
   ASSERT_TRUE(pri_ue2.has_value());
   ASSERT_EQ(1U, pri_ue2.value());
   ASSERT_EQ(3U, slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
-  }));
+  ASSERT_TRUE(find_pucch_pdu(
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
+      }));
   // Test now that the previous allocations have not been messed up.
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue1_idx).crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
-  }));
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.res->res_id.is_cmn();
-  }));
+  ASSERT_TRUE(find_pucch_pdu(
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_ue(ue1_idx).crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
+      }));
+  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs.unsorted(),
+                             [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
+                               return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and
+                                      pdu.uci_bits.harq_ack_nof_bits == 1U and pdu.res->res_id.is_cmn();
+                             }));
 
   // Advance by 1 slot. Allocate:
   // - 1 PUCCH ded with 1 HARQ-ACK bit to UE 1 (Resource Set ID 0).
@@ -906,20 +819,23 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
   ASSERT_EQ(pucch_slot, slot_grid.slot);
 
   pri_ue1 = t_bench.pucch_alloc.alloc_ded_harq_ack(
-      t_bench.res_grid, t_bench.get_ue(ue1_idx).crnti, t_bench.get_ue(ue1_idx).get_pcell().cfg(), t_bench.k0, k1);
+      t_bench.res_grid, t_bench.get_ue(ue1_idx).get_pcell().cfg(), t_bench.k0, k1);
   ASSERT_TRUE(pri_ue1.has_value());
   ASSERT_EQ(0U, pri_ue1.value());
   ASSERT_EQ(3U, slot_grid.result.ul.pucchs.size());
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue1_idx).crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 2U;
-  }));
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.res->res_id.is_cmn();
-  }));
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
-  }));
+  ASSERT_TRUE(find_pucch_pdu(
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_ue(ue1_idx).crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 2U;
+      }));
+  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs.unsorted(),
+                             [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
+                               return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and
+                                      pdu.uci_bits.harq_ack_nof_bits == 1U and pdu.res->res_id.is_cmn();
+                             }));
+  ASSERT_TRUE(find_pucch_pdu(
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
+      }));
 
   // Advance by 1 slot. Allocate:
   // - 1 PUCCH ded with 1 HARQ-ACK bit to UE 1 (Convert to Resource Set ID 1).
@@ -935,21 +851,24 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
   //  auto& slot_grid_3 = t_bench.res_grid[t_bench.k0 + --k1];
 
   pri_ue1 = t_bench.pucch_alloc.alloc_ded_harq_ack(
-      t_bench.res_grid, t_bench.get_ue(ue1_idx).crnti, t_bench.get_ue(ue1_idx).get_pcell().cfg(), t_bench.k0, k1);
+      t_bench.res_grid, t_bench.get_ue(ue1_idx).get_pcell().cfg(), t_bench.k0, k1);
   ASSERT_TRUE(pri_ue1.has_value());
   ASSERT_EQ(0U, pri_ue1.value());
   ASSERT_EQ(3U, slot_grid.result.ul.pucchs.size());
+  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs.unsorted(),
+                             [rnti = t_bench.get_ue(ue1_idx).crnti, format = GetParam()](const pucch_info& pdu) {
+                               return pdu.format() == format and pdu.crnti == rnti and
+                                      pdu.uci_bits.harq_ack_nof_bits == 3U;
+                             }));
+  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs.unsorted(),
+                             [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
+                               return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and
+                                      pdu.uci_bits.harq_ack_nof_bits == 1U and pdu.res->res_id.is_cmn();
+                             }));
   ASSERT_TRUE(find_pucch_pdu(
-      slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue1_idx).crnti, format = GetParam()](const pucch_info& pdu) {
-        return pdu.format() == format and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 3U;
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
       }));
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.res->res_id.is_cmn();
-  }));
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
-  }));
 
   // Advance by 1 slot. Allocate:
   // - 1 PUCCH ded with 1 HARQ-ACK bit to UE 2 (Multiplex on existing Resource Set ID 0).
@@ -965,21 +884,24 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
   //  auto& slot_grid_4 = t_bench.res_grid[t_bench.k0 + --k1];
 
   pri_ue2 = t_bench.pucch_alloc.alloc_ded_harq_ack(
-      t_bench.res_grid, t_bench.get_ue(ue2_idx).crnti, t_bench.get_ue(ue2_idx).get_pcell().cfg(), t_bench.k0, k1);
+      t_bench.res_grid, t_bench.get_ue(ue2_idx).get_pcell().cfg(), t_bench.k0, k1);
   ASSERT_TRUE(pri_ue2.has_value());
   ASSERT_EQ(1U, pri_ue2.value());
   ASSERT_EQ(3U, slot_grid.result.ul.pucchs.size());
 
+  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs.unsorted(),
+                             [rnti = t_bench.get_ue(ue1_idx).crnti, format = GetParam()](const pucch_info& pdu) {
+                               return pdu.format() == format and pdu.crnti == rnti and
+                                      pdu.uci_bits.harq_ack_nof_bits == 3U;
+                             }));
   ASSERT_TRUE(find_pucch_pdu(
-      slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue1_idx).crnti, format = GetParam()](const pucch_info& pdu) {
-        return pdu.format() == format and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 3U;
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
       }));
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
-  }));
-  ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
-    return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 2U;
-  }));
+  ASSERT_TRUE(find_pucch_pdu(
+      slot_grid.result.ul.pucchs.unsorted(), [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
+        return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 2U;
+      }));
 }
 
 INSTANTIATE_TEST_SUITE_P(,
@@ -1003,15 +925,20 @@ protected:
 
 TEST_F(pucch_alloc_small_code_rate_test, with_4_bits_payload_csi_plus_harq_mplex_not_allowed)
 {
-  alloc_csi_opportunity(t_bench.get_main_ue(), default_csi_part1_bits);
+  alloc_csi_opportunity(t_bench.get_main_ue());
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_EQ(default_csi_part1_bits, default_slot_grid.result.ul.pucchs.front().uci_bits.csi_part1_nof_bits);
+  auto ue_pucchs =
+      test_helpers::find_ue_pucchs(default_slot_grid.result.ul.pucchs.unsorted(), t_bench.get_main_ue().crnti);
+  ASSERT_EQ(1U, ue_pucchs.size());
+  ASSERT_EQ(default_csi_part1_bits, ue_pucchs[0]->uci_bits.csi_part1_nof_bits);
 
   // HARQ-ACK grant is expected NOT to be multiplexed with CSI grants.
   alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_EQ(default_csi_part1_bits, default_slot_grid.result.ul.pucchs.front().uci_bits.csi_part1_nof_bits);
-  ASSERT_EQ(0U, default_slot_grid.result.ul.pucchs.front().uci_bits.harq_ack_nof_bits);
+  ue_pucchs = test_helpers::find_ue_pucchs(default_slot_grid.result.ul.pucchs.unsorted(), t_bench.get_main_ue().crnti);
+  ASSERT_EQ(1U, ue_pucchs.size());
+  ASSERT_EQ(default_csi_part1_bits, ue_pucchs[0]->uci_bits.csi_part1_nof_bits);
+  ASSERT_EQ(0U, ue_pucchs[0]->uci_bits.harq_ack_nof_bits);
 }
 
 class pucch_alloc_16bit_payload_test : public ::testing::Test, public pucch_allocator_base_test
@@ -1035,14 +962,19 @@ protected:
 
 TEST_F(pucch_alloc_16bit_payload_test, with_16_bits_payload_csi_plus_harq_mplex_allowed_in_mimo_4x4)
 {
-  alloc_csi_opportunity(t_bench.get_main_ue(), csi_report_size);
+  alloc_csi_opportunity(t_bench.get_main_ue());
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_EQ(csi_report_size, default_slot_grid.result.ul.pucchs.front().uci_bits.csi_part1_nof_bits);
+  auto ue_pucchs =
+      test_helpers::find_ue_pucchs(default_slot_grid.result.ul.pucchs.unsorted(), t_bench.get_main_ue().crnti);
+  ASSERT_EQ(1U, ue_pucchs.size());
+  ASSERT_EQ(csi_report_size, ue_pucchs[0]->uci_bits.csi_part1_nof_bits);
 
   // HARQ-ACK grants are expected to be multiplexed with CSI grants.
   alloc_ded_harq_ack(t_bench.get_main_ue());
   alloc_ded_harq_ack(t_bench.get_main_ue());
   ASSERT_EQ(1U, default_slot_grid.result.ul.pucchs.size());
-  ASSERT_EQ(csi_report_size, default_slot_grid.result.ul.pucchs.front().uci_bits.csi_part1_nof_bits);
-  ASSERT_EQ(2U, default_slot_grid.result.ul.pucchs.front().uci_bits.harq_ack_nof_bits);
+  ue_pucchs = test_helpers::find_ue_pucchs(default_slot_grid.result.ul.pucchs.unsorted(), t_bench.get_main_ue().crnti);
+  ASSERT_EQ(1U, ue_pucchs.size());
+  ASSERT_EQ(csi_report_size, ue_pucchs[0]->uci_bits.csi_part1_nof_bits);
+  ASSERT_EQ(2U, ue_pucchs[0]->uci_bits.harq_ack_nof_bits);
 }

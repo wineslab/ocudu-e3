@@ -5,8 +5,8 @@
 #include "rrc_ue_test_helpers.h"
 #include "rrc_ue_test_messages.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/dl_dcch_msg.h"
-#include "ocudu/rrc/meas_types.h"
 #include "ocudu/support/async/async_test_utils.h"
 #include <gtest/gtest.h>
 

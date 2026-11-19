@@ -9,6 +9,7 @@
 #include "ocudu/ru/ofh/ru_ofh_executor_mapper_factory.h"
 #include "ocudu/support/executors/executor_decoration_factory.h"
 #include "ocudu/support/executors/inline_task_executor.h"
+#include "ocudu/support/executors/metrics/executor_metrics_channel_registry.h"
 #include "ocudu/support/executors/strand_executor.h"
 
 using namespace ocudu;
@@ -51,8 +52,8 @@ public:
           make_task_strand_ptr<concurrent_queue_policy::lockfree_mpmc>(pool_task_exec, task_worker_queue_size);
     }
 
-    if (config.is_n3_enabled) {
-      n3_exec = make_task_strand_ptr<concurrent_queue_policy::lockfree_mpmc>(pool_task_exec, task_worker_queue_size);
+    if (config.is_ngu_enabled) {
+      ngu_exec = make_task_strand_ptr<concurrent_queue_policy::lockfree_mpmc>(pool_task_exec, task_worker_queue_size);
     }
     if (config.is_f1u_enabled) {
       f1u_exec = make_task_strand_ptr<concurrent_queue_policy::lockfree_mpmc>(pool_task_exec, task_worker_queue_size);
@@ -70,14 +71,14 @@ public:
   task_executor& get_xnap_executor() override { return *common_exec; }
   task_executor& get_e1ap_executor() override { return *common_exec; }
   task_executor& get_e2ap_executor() override { return *common_exec; }
-  task_executor& get_n3_executor() override { return *n3_exec; }
+  task_executor& get_ngu_executor() override { return *ngu_exec; }
   task_executor& get_f1u_executor() override { return *f1u_exec; }
   task_executor& get_mac_executor() override { return *mac_exec; }
   task_executor& get_rlc_executor() override { return *rlc_exec; }
 
 private:
   std::unique_ptr<task_executor> common_exec;
-  std::unique_ptr<task_executor> n3_exec;
+  std::unique_ptr<task_executor> ngu_exec;
   std::unique_ptr<task_executor> f1u_exec;
   std::unique_ptr<task_executor> mac_exec;
   std::unique_ptr<task_executor> rlc_exec;
@@ -414,6 +415,12 @@ void worker_manager::create_du_low_executors(const worker_manager_config::du_low
   } else {
     // RF case.
 
+    // A concurrency larger than the pool size is not achievable. Note that a zero value means unlimited concurrency.
+    unsigned max_pusch_and_srs_concurrency = du_low.max_pusch_and_srs_concurrency;
+    if (max_pusch_and_srs_concurrency != 0) {
+      max_pusch_and_srs_concurrency = std::min(max_pusch_and_srs_concurrency, nof_workers_general_pool);
+    }
+
     // Fill the task executors for each cell.
     du_low_exec_mapper_config.executors = odu::du_low_executor_mapper_flexible_exec_config{
         .rt_hi_prio_exec               = {rt_hi_prio_exec, nof_workers_general_pool},
@@ -421,7 +428,7 @@ void worker_manager::create_du_low_executors(const worker_manager_config::du_low
         .non_rt_medium_prio_exec       = {non_rt_medium_prio_exec, nof_workers_general_pool},
         .non_rt_low_prio_exec          = {non_rt_low_prio_exec, nof_workers_general_pool},
         .max_pucch_concurrency         = du_low.max_pucch_concurrency,
-        .max_pusch_and_srs_concurrency = du_low.max_pusch_and_srs_concurrency,
+        .max_pusch_and_srs_concurrency = max_pusch_and_srs_concurrency,
         .max_pdsch_concurrency         = du_low.max_pdsch_concurrency};
 
     // Propagate metrics channel registry.
@@ -485,7 +492,7 @@ void worker_manager::create_ofh_executors(const worker_manager_config::ru_ofh_co
     }
   }
 
-  exec_mapper_config.nof_sectors = config.nof_cells;
+  exec_mapper_config.dl_eaxc_per_sector = config.dl_eaxc_per_sector;
 
   // Create executor mapper.
   ofh_exec_mapper = create_ofh_ru_executor_mapper(exec_mapper_config);
@@ -552,17 +559,21 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
       task_executor* phy_exec  = exec_mng.executors().at(exec_name);
 
       ru_sdr_executor_mapper_sequential_configuration ru_sdr_exec_map_config;
-      ru_sdr_exec_map_config.asynchronous_exec = exec_mng.executors().at("radio_exec");
-      ru_sdr_exec_map_config.common_exec       = phy_exec;
-      ru_sdr_exec_map_config.nof_sectors       = config.nof_cells;
-      sdr_exec_mapper                          = create_ru_sdr_executor_mapper(ru_sdr_exec_map_config);
+      ru_sdr_exec_map_config.asynchronous_exec             = exec_mng.executors().at("radio_exec");
+      ru_sdr_exec_map_config.common_exec                   = phy_exec;
+      ru_sdr_exec_map_config.nof_sectors                   = config.nof_cells;
+      ru_sdr_exec_map_config.exec_metrics_channel_registry = exec_metrics_channel_registry;
+      ru_sdr_exec_map_config.executor_tracing_enable       = config.executor_tracing_enable;
+      sdr_exec_mapper                                      = create_ru_sdr_executor_mapper(ru_sdr_exec_map_config);
       break;
     }
     case worker_manager_config::ru_sdr_config::lower_phy_thread_profile::single: {
       fmt::print("Lower PHY in single baseband executor mode.\n");
       ru_sdr_executor_mapper_single_configuration ru_sdr_exec_map_config;
-      ru_sdr_exec_map_config.radio_exec         = exec_mng.executors().at("radio_exec");
-      ru_sdr_exec_map_config.high_prio_executor = rt_hi_prio_exec;
+      ru_sdr_exec_map_config.radio_exec                    = exec_mng.executors().at("radio_exec");
+      ru_sdr_exec_map_config.high_prio_executor            = rt_hi_prio_exec;
+      ru_sdr_exec_map_config.exec_metrics_channel_registry = exec_metrics_channel_registry;
+      ru_sdr_exec_map_config.executor_tracing_enable       = config.executor_tracing_enable;
 
       for (unsigned cell_id = 0; cell_id != config.nof_cells; ++cell_id) {
         const std::string name      = "lower_phy#" + std::to_string(cell_id);
@@ -585,8 +596,10 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
     case worker_manager_config::ru_sdr_config::lower_phy_thread_profile::dual: {
       fmt::print("Lower PHY in dual baseband executor mode.\n");
       ru_sdr_executor_mapper_dual_configuration ru_sdr_exec_map_config;
-      ru_sdr_exec_map_config.radio_exec         = exec_mng.executors().at("radio_exec");
-      ru_sdr_exec_map_config.high_prio_executor = rt_hi_prio_exec;
+      ru_sdr_exec_map_config.radio_exec                    = exec_mng.executors().at("radio_exec");
+      ru_sdr_exec_map_config.high_prio_executor            = rt_hi_prio_exec;
+      ru_sdr_exec_map_config.exec_metrics_channel_registry = exec_metrics_channel_registry;
+      ru_sdr_exec_map_config.executor_tracing_enable       = config.executor_tracing_enable;
 
       for (unsigned cell_id = 0; cell_id != config.nof_cells; ++cell_id) {
         const std::string name_tx = "lower_phy_tx#" + std::to_string(cell_id);
@@ -618,8 +631,10 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
     case worker_manager_config::ru_sdr_config::lower_phy_thread_profile::triple: {
       fmt::print("Lower PHY in triple executor mode.\n");
       ru_sdr_executor_mapper_triple_configuration ru_sdr_exec_map_config;
-      ru_sdr_exec_map_config.radio_exec         = exec_mng.executors().at("radio_exec");
-      ru_sdr_exec_map_config.high_prio_executor = rt_hi_prio_exec;
+      ru_sdr_exec_map_config.radio_exec                    = exec_mng.executors().at("radio_exec");
+      ru_sdr_exec_map_config.high_prio_executor            = rt_hi_prio_exec;
+      ru_sdr_exec_map_config.exec_metrics_channel_registry = exec_metrics_channel_registry;
+      ru_sdr_exec_map_config.executor_tracing_enable       = config.executor_tracing_enable;
 
       for (unsigned cell_id = 0; cell_id != config.nof_cells; ++cell_id) {
         const std::string name_tx = "lower_phy_tx#" + std::to_string(cell_id);
@@ -668,10 +683,9 @@ void worker_manager::create_ru_dummy_executors()
 {
   create_prio_worker("ru_dummy",
                      "ru_dummy_exec",
-                     task_worker_queue_size,
-                     concurrent_queue_policy::lockfree_spsc,
-                     // The RU dummy implementation already sleeps between calls.
-                     std::chrono::microseconds{0},
+                     4,
+                     concurrent_queue_policy::locking_mpsc,
+                     std::nullopt,
                      // Use the first cell of the affinity manager for the dummy RU.
                      affinity_mng.front().calcute_affinity_mask(sched_affinity_mask_types::ru),
                      os_thread_realtime_priority::max());

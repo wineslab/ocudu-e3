@@ -4,20 +4,28 @@
 
 #pragma once
 
-#include "mbedtls/cipher.h"
-#include "mbedtls/cmac.h" // Nested include of MBEDTLS_CMAC_C from either config.h (v2) or mbedtls_config.h (v3)
+#include "mbedtls/version.h"
 #include "ocudu/security/integrity_engine.h"
 #include "ocudu/security/security.h"
+#include "ocudu/security/ssl.h"
 
-namespace ocudu {
-namespace security {
+#if !OCUDU_MBEDTLS_PSA
+#include "mbedtls/cipher.h"
+#include "mbedtls/cmac.h" // Nested include of MBEDTLS_CMAC_C from either config.h (v2) or mbedtls_config.h (v3)
+#endif
 
+namespace ocudu::security {
+
+#if !OCUDU_MBEDTLS_PSA
 #ifdef MBEDTLS_CMAC_C
 
 class integrity_engine_nia2_cmac final : public integrity_engine
 {
 public:
-  integrity_engine_nia2_cmac(sec_128_key k_128_int_, uint8_t bearer_id_, security_direction direction_);
+  integrity_engine_nia2_cmac(sec_128_key        k_128_int_,
+                             uint8_t            bearer_id_,
+                             security_direction direction_,
+                             bool               allow_unprotected_);
   ~integrity_engine_nia2_cmac();
 
   security_status protect_integrity(byte_buffer& buf, uint32_t count) override;
@@ -30,12 +38,14 @@ private:
   uint8_t            bearer_id;
   security_direction direction;
 
-  ocudulog::basic_logger&      logger;
+  ocudulog::basic_logger& logger;
+  bool                    allow_unprotected = false;
+
   const mbedtls_cipher_info_t* cipher_info;
   mbedtls_cipher_context_t     ctx;
 };
 
 #endif // MBEDTLS_CMAC_C
+#endif
 
-} // namespace security
-} // namespace ocudu
+} // namespace ocudu::security

@@ -3,7 +3,9 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "lib/xnap/procedures/ngran_node_cfg_update_asn1_helpers.h"
 #include "lib/xnap/procedures/xn_setup_procedure_asn1_helpers.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
@@ -12,8 +14,9 @@
 #include "tests/test_doubles/xnap/xnap_test_message_validators.h"
 #include "tests/unittests/cu_cp/test_doubles/mock_cu_up.h"
 #include "tests/unittests/cu_cp/test_helpers.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "tests/unittests/xnap/xnap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
@@ -45,8 +48,6 @@ public:
   std::unique_ptr<task_executor> exec{std::make_unique<task_worker_executor>(worker)};
 };
 
-// ////
-
 cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   params(std::move(params_)),
   cu_cp_workers(std::make_unique<worker_manager>()),
@@ -73,9 +74,11 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   cu_cp_cfg.admission.max_nof_ues         = params.max_nof_ues;
   cu_cp_cfg.admission.max_nof_drbs_per_ue = params.max_nof_drbs_per_ue;
   cu_cp_cfg.bearers.drb_config            = config_helpers::make_default_cu_cp_qos_config_list();
+  cu_cp_cfg.ntn_location_mappings         = params.ntn_location_mappings;
   // Fill NGAP config.
   for (const auto& [amf_index, amf_config] : amf_configs) {
-    cu_cp_cfg.ngap.ngaps.push_back(cu_cp_configuration::ngap_config{&*amf_config.amf_stub, amf_config.supported_tas});
+    cu_cp_cfg.ngap.n2_gws.push_back(&*amf_config.amf_stub);
+    cu_cp_cfg.ngap.ngaps.push_back(cu_cp_configuration::ngap_config{amf_config.supported_tas, amf_addr});
   }
   // Fill XNAP config. Each peer test stub becomes its own XnAP gateway; record the peer-gateway mapping.
   for (const auto& [_, peer] : xnc_peers) {
@@ -98,17 +101,20 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
                                            security::ciphering_algorithm::nea1,
                                            security::ciphering_algorithm::nea3};
 
+  // Fill PWS config.
+  cu_cp_cfg.pws.max_warning_message_segment_size = params.pws_max_warning_message_segment_size;
+
   // Fill logging and metrics config.
-  cu_cp_cfg.f1ap.json_log_enabled          = true;
-  cu_cp_cfg.e1ap.json_log_enabled          = true;
-  cu_cp_cfg.metrics.layers_cfg.enable_ngap = true;
-  cu_cp_cfg.metrics.layers_cfg.enable_rrc  = true;
+  cu_cp_cfg.f1ap.json_log_enabled                  = true;
+  cu_cp_cfg.e1ap.json_log_enabled                  = true;
+  cu_cp_cfg.metrics.layers_cfg.enable_ngap_metrics = true;
+  cu_cp_cfg.metrics.layers_cfg.enable_rrc_metrics  = true;
 
   // Fill mobility config.
-  cu_cp_cfg.mobility.mobility_manager_config.trigger_handover_from_measurements = params.trigger_ho_from_measurements;
+  cu_cp_cfg.mobility.mobility_mgr_config.trigger_handover_from_measurements = params.trigger_ho_from_measurements;
   {
     // Fill meas manager config.
-    cell_meas_manager_cfg meas_mng_cfg;
+    cell_meas_manager_config meas_mng_cfg;
     {
       // Generate NCIs.
       gnb_id_t         gnb_id1 = cu_cp_cfg.node.gnb_id;
@@ -125,11 +131,17 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
         cell_cfg_1.periodic_report_cfg_id             = uint_to_report_cfg_id(1);
         cell_cfg_1.serving_cell_cfg.gnb_id_bit_length = gnb_id1.bit_length;
         cell_cfg_1.serving_cell_cfg.nci               = nci1;
-        cell_cfg_1.ncells.push_back({nci2, {uint_to_report_cfg_id(2)}});
+        // A neighbour that is both a measurement-report neighbour and a CHO candidate carries the regular
+        // event-triggered report config plus the conditional trigger used by condExecutionCond.
+        std::vector<report_cfg_id_t> ncell_report_cfg_ids = {uint_to_report_cfg_id(2)};
+        if (params.add_cho_cond_trigger) {
+          ncell_report_cfg_ids.push_back(uint_to_report_cfg_id(3));
+        }
+        cell_cfg_1.ncells.push_back({nci2, ncell_report_cfg_ids});
         // Add external cells (for inter CU handover tests).
-        cell_cfg_1.ncells.push_back({nci3, {uint_to_report_cfg_id(2)}});
+        cell_cfg_1.ncells.push_back({nci3, ncell_report_cfg_ids});
         if (!xnc_peers.empty()) {
-          cell_cfg_1.ncells.push_back({nci4, {uint_to_report_cfg_id(2)}});
+          cell_cfg_1.ncells.push_back({nci4, ncell_report_cfg_ids});
         }
         meas_mng_cfg.cells.emplace(nci1, cell_cfg_1);
       }
@@ -163,7 +175,7 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
       }
 
       if (!xnc_peers.empty()) {
-        // Create an external XN-C cell.
+        // Create an external Xn-C cell.
         {
           cell_meas_config cell_cfg_4;
           cell_cfg_4.periodic_report_cfg_id             = uint_to_report_cfg_id(1);
@@ -228,13 +240,32 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
 
         meas_mng_cfg.report_config_ids.emplace(uint_to_report_cfg_id(2), rrc_report_cfg_nr{event_trigger_cfg});
       }
+
+      // Add CHO conditional trigger (event A3).
+      if (params.add_cho_cond_trigger) {
+        rrc_cond_trigger_cfg cond_trigger;
+
+        rrc_event_id& cond_event_a3 = cond_trigger.cond_event_id;
+        cond_event_a3.id            = rrc_event_id::event_id_t::a3;
+        cond_event_a3.meas_trigger_quant_thres_or_offset.emplace();
+        cond_event_a3.meas_trigger_quant_thres_or_offset.value().rsrp.emplace() = 6;
+        cond_event_a3.hysteresis                                                = 0;
+        cond_event_a3.time_to_trigger                                           = 100;
+
+        cond_trigger.rs_type = ocucp::rrc_nr_rs_type::ssb;
+
+        meas_mng_cfg.report_config_ids.emplace(uint_to_report_cfg_id(3), rrc_report_cfg_nr{cond_trigger});
+      }
     }
-    cu_cp_cfg.mobility.meas_manager_config = meas_mng_cfg;
+    cu_cp_cfg.mobility.meas_mgr_config = meas_mng_cfg;
   }
 
   // Fill RRC config.
   cu_cp_cfg.rrc.rrc_procedure_guard_time_ms =
       std::chrono::milliseconds(10000); // procedure timeouts should only occur intentionally
+
+  // Fill RRC Reject waitTime value.
+  cu_cp_cfg.rrc.rrc_reject_wait_time = params.rrc_reject_wait_time;
 
   // Fill F1AP config.
   cu_cp_cfg.f1ap.proc_timeout = std::chrono::milliseconds(10000); // procedure timeouts should only occur intentionally
@@ -246,6 +277,9 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   cu_cp_cfg.ue.request_pdu_session_timeout =
       std::chrono::seconds(10); // procedure timeouts should only occur intentionally
   cu_cp_cfg.ue.enable_rrc_inactive = params.enable_rrc_inactive;
+
+  // Fill declared logical cells.
+  cu_cp_cfg.cells = params.logical_cells;
 
   // Create CU-CP instance.
   cu_cp_inst = create_cu_cp(cu_cp_cfg);
@@ -288,7 +322,7 @@ bool cu_cp_test_environment::tick_until(std::chrono::milliseconds    timeout,
       // Need to tick the clock.
       tick();
 
-      std::lock_guard<std::mutex> lock(mutex);
+      std::scoped_lock lock(mutex);
       done = true;
       cvar.notify_one();
     });
@@ -304,6 +338,48 @@ bool cu_cp_test_environment::tick_until(std::chrono::milliseconds    timeout,
   }
 
   return stop_condition();
+}
+
+void cu_cp_test_environment::run_on_cu_cp_worker(const std::function<void()>& task)
+{
+  std::mutex              mutex;
+  std::condition_variable cvar;
+  bool                    done = false;
+
+  cu_cp_workers->worker.push_task_blocking([&]() {
+    task();
+
+    std::lock_guard<std::mutex> lock(mutex);
+    done = true;
+    cvar.notify_one();
+  });
+
+  std::unique_lock<std::mutex> lock(mutex);
+  cvar.wait(lock, [&done]() { return done; });
+}
+
+bool cu_cp_test_environment::wait_ready_on_cu_cp_worker(std::chrono::milliseconds    timeout,
+                                                        const std::function<bool()>& is_ready)
+{
+  bool ready = false;
+
+  // is_ready is evaluated on the CU-CP worker, alongside the clock tick, so that reading state mutated by the
+  // CU-CP worker (e.g. an async task's completion flag) is properly synchronized.
+  for (unsigned i = 0; i != timeout.count(); ++i) {
+    run_on_cu_cp_worker([&]() {
+      ready = is_ready();
+      if (not ready) {
+        // Already running on the CU-CP worker; tick the clock directly rather than via \c tick(), which
+        // would try to (and fail to) push a blocking task to this same worker.
+        timers.tick();
+      }
+    });
+    if (ready) {
+      return true;
+    }
+  }
+
+  return ready;
 }
 
 bool cu_cp_test_environment::wait_for_ngap_tx_pdu(ngap_message&             pdu,
@@ -356,15 +432,18 @@ void cu_cp_test_environment::enqueue_procedure_outcome_pdus_and_start_cu_cp()
     get_amf(amf_index).enqueue_next_tx_pdu(ocucp::generate_ng_setup_response());
   }
 
-  // Enqueue XN Setup responses.
+  // Enqueue XN Setup responses. Each peer advertises one served cell, so that tests can resolve it by PCI the way a
+  // UE context retrieval does.
   for (const auto& [xnc_peer_idx, xnc_peer] : xnc_peers) {
     get_xnc_cu_cp(xnc_peer_idx)
-        .enqueue_next_tx_pdu(generate_asn1_xn_setup_response(
-            xnap_configuration{.gnb_id = gnb_id_t{cu_cp_cfg.node.gnb_id.id + 2, cu_cp_cfg.node.gnb_id.bit_length},
-                               .tai_support_list = amf_configs.begin()->second.supported_tas}));
+        .enqueue_next_tx_pdu(generate_xn_setup_response_with_served_cell(
+            xnap_configuration{.gnb_id           = get_xnc_peer_gnb_id(),
+                               .tai_support_list = amf_configs.begin()->second.supported_tas},
+            xnc_peer_served_pci,
+            nr_cell_global_id_t{plmn_identity::test_value(), xnc_peer_served_nci()}));
   }
 
-  // Attach XN-C handler before starting CU-CP (matching real app startup order).
+  // Attach Xn-C handler before starting CU-CP (matching real app startup order).
   for (auto* gateway : cu_cp_cfg.xnap.xnc_gws) {
     gateway->attach_cu_cp(get_cu_cp().get_xnc_handler());
   }
@@ -422,11 +501,49 @@ void cu_cp_test_environment::run_xn_setup()
   xnap_message xnap_pdu;
   for (const auto& [xnc_peer_idx, xnc_peer] : xnc_peers) {
     report_fatal_error_if_not(wait_for_xnap_tx_pdu(xnc_peer_idx, xnap_pdu),
-                              "CU-CP did not send the XN Setup Request to the XN-C peer CU-CP {}",
+                              "CU-CP did not send the XN Setup Request to the Xn-C peer CU-CP {}",
                               xnc_peer_idx);
     report_fatal_error_if_not(
         test_helpers::is_pdu_type(xnap_pdu, asn1::xnap::xnap_elem_procs_o::init_msg_c::types::xn_setup_request),
-        "CU-CP did not setup the XN-C connection");
+        "CU-CP did not setup the Xn-C connection");
+  }
+}
+
+void cu_cp_test_environment::run_ngran_node_cfg_update(span<const test_helpers::served_cell_item_info> added_cells)
+{
+  xnap_message xnap_pdu;
+  for (const auto& [xnc_peer_idx, xnc_peer] : xnc_peers) {
+    report_fatal_error_if_not(wait_for_xnap_tx_pdu(xnc_peer_idx, xnap_pdu),
+                              "CU-CP did not send the NG-RAN Node Configuration Update to the Xn-C peer CU-CP {}",
+                              xnc_peer_idx);
+    report_fatal_error_if_not(
+        test_helpers::is_pdu_type(xnap_pdu, asn1::xnap::xnap_elem_procs_o::init_msg_c::types::ngran_node_cfg_upd),
+        "CU-CP did not report its served cells to the Xn-C peer CU-CP {}",
+        xnc_peer_idx);
+
+    const auto& asn1_cells_to_add = xnap_pdu.pdu.init_msg()
+                                        .value.ngran_node_cfg_upd()
+                                        ->cfg_upd_init_node_choice.gnb()
+                                        .served_cells_to_upd_nr.served_cells_to_add_nr;
+    report_fatal_error_if_not(asn1_cells_to_add.size() == added_cells.size(),
+                              "CU-CP reported {} added cells to the Xn-C peer CU-CP {}, expected {}",
+                              asn1_cells_to_add.size(),
+                              xnc_peer_idx,
+                              added_cells.size());
+    for (unsigned i = 0; i != added_cells.size(); ++i) {
+      const auto& asn1_cell_info = asn1_cells_to_add[i].served_cell_info_nr;
+      report_fatal_error_if_not(asn1_cell_info.nr_pci == added_cells[i].pci,
+                                "CU-CP reported pci={} for the cell nci={}, expected pci={}",
+                                asn1_cell_info.nr_pci,
+                                added_cells[i].nci,
+                                added_cells[i].pci);
+      report_fatal_error_if_not(asn1_cell_info.cell_id.nr_ci.to_number() == added_cells[i].nci.value(),
+                                "CU-CP reported an unexpected cell to the Xn-C peer CU-CP {}",
+                                xnc_peer_idx);
+    }
+
+    last_ngran_node_cfg_update = xnap_pdu;
+    get_xnc_cu_cp(xnc_peer_idx).push_tx_pdu(generate_asn1_ngran_node_cfg_update_ack());
   }
 }
 
@@ -458,10 +575,14 @@ bool cu_cp_test_environment::run_f1_setup(unsigned                              
                                           const std::vector<test_helpers::served_cell_item_info>& cells)
 {
   f1ap_message f1_setup_req = test_helpers::generate_f1_setup_request(gnb_du_id, cells);
-  rrc_test_timer_values     = get_timers(f1_setup_req.pdu.init_msg().value.f1_setup_request());
+  rrc_test_timer_values     = ocucp::get_timers(f1_setup_req.pdu.init_msg().value.f1_setup_request());
   get_du(du_idx).push_ul_pdu(f1_setup_req);
   f1ap_message f1ap_pdu;
   bool         result = this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu);
+
+  // The cells of the DU are reported to the Xn-C peers.
+  run_ngran_node_cfg_update(cells);
+
   return result;
 }
 
@@ -614,12 +735,12 @@ bool cu_cp_test_environment::authenticate_ue(unsigned du_idx, gnb_du_ue_f1ap_id_
   return result;
 }
 
-bool cu_cp_test_environment::setup_ue_security_and_ue_capabilies(
-    unsigned                                                  du_idx,
-    gnb_du_ue_f1ap_id_t                                       du_ue_id,
-    std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
-    bool                                                      rrc_inactive_supported,
-    std::optional<location_report_request>                    location_reporting_request)
+bool cu_cp_test_environment::setup_ue_security_and_ue_capabilities(
+    unsigned                                                   du_idx,
+    gnb_du_ue_f1ap_id_t                                        du_ue_id,
+    std::optional<cu_cp_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
+    bool                                                       rrc_inactive_supported,
+    std::optional<location_report_request>                     location_reporting_request)
 {
   ngap_message ngap_pdu;
   ocudu_assert(not this->get_amf().try_pop_rx_pdu(ngap_pdu), "there are still NGAP messages to pop from AMF");
@@ -702,9 +823,8 @@ bool cu_cp_test_environment::setup_ue_security_and_ue_capabilies(
 }
 
 std::optional<ngap_message> cu_cp_test_environment::get_location_report_if_required(
-    std::optional<location_report_request> location_reporting_request)
+    const std::optional<location_report_request>& location_reporting_request)
 {
-  ngap_message ngap_pdu;
   // Wait for location report, if required.
   if (location_reporting_request.has_value()) {
     using event_type = location_report_request::event_type;
@@ -712,7 +832,8 @@ std::optional<ngap_message> cu_cp_test_environment::get_location_report_if_requi
         location_reporting_request->location_reporting_type == event_type::change_of_serve_cell ||
         location_reporting_request->location_reporting_type ==
             event_type::change_of_serving_cell_and_ue_presence_in_the_area_of_interest) {
-      bool result = this->wait_for_ngap_tx_pdu(ngap_pdu);
+      ngap_message ngap_pdu;
+      bool         result = this->wait_for_ngap_tx_pdu(ngap_pdu);
       report_fatal_error_if_not(result, "Failed to transmit Location Report");
       report_fatal_error_if_not(test_helpers::is_valid_location_report(ngap_pdu), "Invalid Location Report");
 
@@ -1029,21 +1150,21 @@ bool cu_cp_test_environment::setup_pdu_session(unsigned                         
 }
 
 bool cu_cp_test_environment::attach_ue(
-    unsigned                                                  du_idx,
-    unsigned                                                  cu_up_idx,
-    gnb_du_ue_f1ap_id_t                                       du_ue_id,
-    rnti_t                                                    crnti,
-    amf_ue_id_t                                               amf_ue_id,
-    gnb_cu_up_ue_e1ap_id_t                                    cu_up_e1ap_id,
-    pdu_session_id_t                                          psi,
-    drb_id_t                                                  drb_id,
-    qos_flow_id_t                                             qfi,
-    byte_buffer                                               rrc_setup_complete,
-    byte_buffer                                               rrc_reconfiguration_complete,
-    std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
-    bool                                                      rrc_inactive_supported,
-    std::optional<location_report_request>                    location_reporting_request,
-    std::optional<security_indication_t>                      security_indication)
+    unsigned                                                   du_idx,
+    unsigned                                                   cu_up_idx,
+    gnb_du_ue_f1ap_id_t                                        du_ue_id,
+    rnti_t                                                     crnti,
+    amf_ue_id_t                                                amf_ue_id,
+    gnb_cu_up_ue_e1ap_id_t                                     cu_up_e1ap_id,
+    pdu_session_id_t                                           psi,
+    drb_id_t                                                   drb_id,
+    qos_flow_id_t                                              qfi,
+    byte_buffer                                                rrc_setup_complete,
+    byte_buffer                                                rrc_reconfiguration_complete,
+    std::optional<cu_cp_core_network_assist_info_for_inactive> cn_assist_info_for_inactive,
+    bool                                                       rrc_inactive_supported,
+    std::optional<location_report_request>                     location_reporting_request,
+    std::optional<security_indication_t>                       security_indication)
 {
   if (not connect_new_ue(du_idx, du_ue_id, crnti, plmn_identity::test_value(), std::move(rrc_setup_complete))) {
     return false;
@@ -1051,11 +1172,11 @@ bool cu_cp_test_environment::attach_ue(
   if (not authenticate_ue(du_idx, du_ue_id, amf_ue_id)) {
     return false;
   }
-  if (not setup_ue_security_and_ue_capabilies(du_idx,
-                                              du_ue_id,
-                                              std::move(cn_assist_info_for_inactive),
-                                              rrc_inactive_supported,
-                                              std::move(location_reporting_request))) {
+  if (not setup_ue_security_and_ue_capabilities(du_idx,
+                                                du_ue_id,
+                                                std::move(cn_assist_info_for_inactive),
+                                                rrc_inactive_supported,
+                                                std::move(location_reporting_request))) {
     return false;
   }
 

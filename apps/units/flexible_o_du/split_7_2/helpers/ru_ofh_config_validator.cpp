@@ -3,6 +3,9 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ru_ofh_config_validator.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ofh/compression/compression_params.h"
+#include "ocudu/ofh/compression/compression_validator.h"
 #include "ocudu/ran/cyclic_prefix.h"
 
 using namespace ocudu;
@@ -60,6 +63,20 @@ static bool validate_scaling_params(
   return true;
 }
 
+/// Validates the given downlink beamforming configuration. Returns true on success, otherwise false.
+static bool validate_beamforming_config(const ru_ofh_beamforming_config& bf_cfg)
+{
+  if (auto result = ofh::validate_compression_params(ofh::ru_compression_params{
+          .type = ofh::to_compression_type(bf_cfg.compression_method), .data_width = bf_cfg.compression_bitwidth});
+      !result.has_value()) {
+    fmt::println("Beamforming weights {}", result.error());
+
+    return false;
+  }
+
+  return true;
+}
+
 /// Validates the given Open Fronthaul Radio Unit application configuration. Returns true on success, otherwise
 /// false.
 static bool validate_ru_ofh_unit_config(span<const ru_ofh_unit_cell_config>       ofh_cells,
@@ -68,6 +85,37 @@ static bool validate_ru_ofh_unit_config(span<const ru_ofh_unit_cell_config>     
   for (unsigned i = 0, e = ofh_cells.size(); i != e; ++i) {
     const ru_ofh_unit_cell_config&       ofh_cell = ofh_cells[i];
     const ru_ofh_cell_validation_config& cell_cfg = cell_config[i];
+
+    if (auto result = ofh::validate_compression_params(
+            ofh::ru_compression_params{.type       = ofh::to_compression_type(ofh_cell.cell.compression_method_ul),
+                                       .data_width = ofh_cell.cell.compression_bitwidth_ul});
+        !result.has_value()) {
+      fmt::println("Uplink {}", result.error());
+
+      return false;
+    }
+
+    if (auto result = ofh::validate_compression_params(
+            ofh::ru_compression_params{.type       = ofh::to_compression_type(ofh_cell.cell.compression_method_dl),
+                                       .data_width = ofh_cell.cell.compression_bitwidth_dl});
+        !result.has_value()) {
+      fmt::println("Downlink {}", result.error());
+
+      return false;
+    }
+
+    if (auto result = ofh::validate_compression_params(
+            ofh::ru_compression_params{.type       = ofh::to_compression_type(ofh_cell.cell.compression_method_prach),
+                                       .data_width = ofh_cell.cell.compression_bitwidth_prach});
+        !result.has_value()) {
+      fmt::println("PRACH {}", result.error());
+
+      return false;
+    }
+
+    if (ofh_cell.cell.dl_beamforming.has_value() && !validate_beamforming_config(*ofh_cell.cell.dl_beamforming)) {
+      return false;
+    }
 
     const std::chrono::duration<double, std::micro> symbol_duration(
         (1e3 / (get_nsymb_per_slot(cyclic_prefix::NORMAL) * get_nof_slots_per_subframe(cell_cfg.scs))));
@@ -143,22 +191,35 @@ static bool validate_ru_ofh_unit_config(span<const ru_ofh_unit_cell_config>     
       return false;
     }
 
+    if (ofh_cell.ru_dl_port_id.size() > ofh::MAX_NOF_SUPPORTED_EAXC) {
+      fmt::println("RU number of downlink ports={} is bigger than supported={}",
+                   ofh_cell.ru_dl_port_id.size(),
+                   ofh::MAX_NOF_SUPPORTED_EAXC);
+
+      return false;
+    }
+
+    if (ofh_cell.ru_ul_port_id.size() > ofh::MAX_NOF_SUPPORTED_EAXC) {
+      fmt::println("RU number of uplink ports={} is bigger than supported={}",
+                   ofh_cell.ru_ul_port_id.size(),
+                   ofh::MAX_NOF_SUPPORTED_EAXC);
+
+      return false;
+    }
+
+    if (ofh_cell.ru_prach_port_id.size() > ofh::MAX_NOF_SUPPORTED_EAXC) {
+      fmt::println("RU number of PRACH ports={} is bigger than supported={}",
+                   ofh_cell.ru_prach_port_id.size(),
+                   ofh::MAX_NOF_SUPPORTED_EAXC);
+
+      return false;
+    }
+
     if (!validate_scaling_params(ofh_cell.cell.iq_scaling_config)) {
       return false;
     }
   }
 
-  return true;
-}
-
-static bool validate_hal_config(const std::optional<ru_ofh_unit_hal_config>& config)
-{
-#ifdef DPDK_FOUND
-  if (config && config->eal_args.empty()) {
-    fmt::print("It is mandatory to fill the EAL configuration arguments to initialize DPDK correctly\n");
-    return false;
-  }
-#endif
   return true;
 }
 
@@ -192,10 +253,6 @@ bool ocudu::validate_ru_ofh_config(const ru_ofh_unit_config&                 con
   }
 
   if (!validate_ru_ofh_unit_config(config.cells, cell_config)) {
-    return false;
-  }
-
-  if (!validate_hal_config(config.hal_config)) {
     return false;
   }
 

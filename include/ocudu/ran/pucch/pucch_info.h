@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ocudu/adt/bounded_integer.h"
-#include "ocudu/adt/to_array.h"
 #include "ocudu/ran/pucch/pucch_configuration.h"
 #include "ocudu/ran/pucch/pucch_constants.h"
 #include "ocudu/ran/resource_block.h"
@@ -232,11 +231,12 @@ unsigned get_pucch_format4_max_payload(unsigned         nof_symbols,
                                        bool             pi2_bpsk,
                                        pucch_f4_occ_len occ_length);
 
-/// Returns the number of possible spreading factors which is a function of the number of symbols.
-inline unsigned format1_symb_to_spreading_factor(bounded_integer<unsigned, 4, 14> f1_symbols)
+/// Returns the number of time-domain OCC indices that are valid for a PUCCH Format 1 transmission.
+inline unsigned format1_nof_td_occs(bounded_integer<unsigned, 4, 14> f1_symbols, bool intraslot_freq_hopping)
 {
-  // As per Table 6.3.2.4.1-1, TS 38.211.
-  return f1_symbols.value() / 2;
+  // As per Table 6.3.2.4.1-1, TS 38.211, the OCC index must be lower than the spreading factor of every hop. With
+  // intra-slot frequency hopping, the first hop has the lowest spreading factor.
+  return intraslot_freq_hopping ? f1_symbols.value() / 4 : f1_symbols.value() / 2;
 }
 
 } // namespace ocudu

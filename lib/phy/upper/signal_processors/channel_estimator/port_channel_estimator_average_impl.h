@@ -9,6 +9,7 @@
 #include "ocudu/phy/support/time_alignment_estimator/time_alignment_estimator.h"
 #include "ocudu/phy/upper/signal_processors/channel_estimator/port_channel_estimator.h"
 #include "ocudu/phy/upper/signal_processors/channel_estimator/port_channel_estimator_parameters.h"
+#include <optional>
 
 namespace ocudu {
 

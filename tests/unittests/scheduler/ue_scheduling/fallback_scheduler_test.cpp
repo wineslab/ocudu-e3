@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/common_scheduling/csi_rs_scheduler.h"
+#include "lib/scheduler/common_scheduling/ra_ue_repository.h"
 #include "lib/scheduler/config/sched_config_manager.h"
 #include "lib/scheduler/logging/cell_metrics_handler.h"
 #include "lib/scheduler/logging/scheduler_result_logger.h"
@@ -10,8 +11,10 @@
 #include "lib/scheduler/pucch_scheduling/pucch_allocator_impl.h"
 #include "lib/scheduler/support/csi_rs_helpers.h"
 #include "lib/scheduler/uci_scheduling/uci_allocator_impl.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
 #include "lib/scheduler/ue_scheduling/ue_cell_grid_allocator.h"
 #include "lib/scheduler/ue_scheduling/ue_fallback_scheduler.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/cell_config_builder_profiles.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/utils/test_rng.h"
@@ -45,9 +48,10 @@ struct test_bench {
   pdcch_resource_allocator_impl pdcch_sch{cell_cfg};
   pucch_allocator_impl          pucch_alloc{cell_cfg, 31U, 32U};
   uci_allocator_impl            uci_alloc{cell_cfg, pucch_alloc};
+  ue_cell_repository            ue_cell_db{cell_cfg, nullptr};
   ue_repository                 ue_db;
-  ue_cell_repository&           ue_cell_db;
   cell_metrics_handler          metrics_hdlr{cell_cfg, std::nullopt};
+  ra_ue_repository              ra_ue_repo{cell_cfg, ocudulog::fetch_basic_logger("SCHED")};
   ue_fallback_scheduler         fallback_sched;
   csi_rs_scheduler              csi_rs_sched;
 
@@ -58,10 +62,10 @@ struct test_bench {
     builder_params{builder_params_},
     cell_cfg{*[&]() { return cfg_mng.add_cell(cell_req); }()},
     ue_db(cell_cfg.expert_cfg.ue),
-    ue_cell_db(ue_db.add_cell(cell_cfg, nullptr)),
-    fallback_sched(expert_cfg, cell_cfg, pdcch_sch, pucch_alloc, uci_alloc, ue_db, metrics_hdlr),
+    fallback_sched(expert_cfg, cell_cfg, pdcch_sch, pucch_alloc, uci_alloc, ue_db, ra_ue_repo, metrics_hdlr),
     csi_rs_sched(cell_cfg)
   {
+    ue_db.register_cell(ue_cell_db);
     ocudulog::fetch_basic_logger("SCHED", true).set_level(ocudulog::basic_levels::debug);
     ocudulog::fetch_basic_logger("TEST").set_level(ocudulog::basic_levels::info);
     ocudulog::init();
@@ -79,7 +83,7 @@ struct test_bench {
       // UE already exists.
       return false;
     }
-    ue_db.add_ue(ev.next_config(), create_req.starts_in_fallback, create_req.ul_ccch_slot_rx, create_req.cfra_enabled);
+    ue_db.add_ue(ev.next_config(), {sched_config_helper::to_ue_creation_mode(create_req), create_req.ul_ccch_slot_rx});
     if (not create_req.ul_ccch_slot_rx.has_value() and not create_req.starts_in_fallback) {
       ue_db.crnti_ce_received(create_req.ue_index);
     }
@@ -240,9 +244,8 @@ protected:
 
   bool ue_is_allocated_pucch(const ue& u)
   {
-    return std::any_of(bench->res_grid[0].result.ul.pucchs.begin(),
-                       bench->res_grid[0].result.ul.pucchs.end(),
-                       [&u](const auto& pucch) { return pucch.crnti == u.crnti; });
+    span<const pucch_info> pucchs = bench->res_grid[0].result.ul.pucchs.unsorted();
+    return std::any_of(pucchs.begin(), pucchs.end(), [&u](const auto& pucch) { return pucch.crnti == u.crnti; });
   }
 
   bool tbs_scheduled_bytes_matches_given_size(const ue& u, unsigned exp_size)
@@ -345,11 +348,21 @@ struct srb0_test_params {
   duplex_mode duplx_mode;
 };
 
+void PrintTo(const srb0_test_params& p, std::ostream* os)
+{
+  *os << fmt::format("k0={} duplex={}", p.k0, to_string(p.duplx_mode));
+}
+
 // Parameters to be passed to test.
 struct fallback_sched_test_params {
   bool        is_srb0;
   duplex_mode duplx_mode;
 };
+
+void PrintTo(const fallback_sched_test_params& p, std::ostream* os)
+{
+  *os << fmt::format("is_srb0={} duplex={}", p.is_srb0, to_string(p.duplx_mode));
+}
 
 class fallback_scheduler_tester : public base_fallback_tester, public ::testing::TestWithParam<srb0_test_params>
 {
@@ -423,12 +436,11 @@ TEST_P(fallback_scheduler_tester, successfully_allocated_resources_for_srb1_pdu_
   for (unsigned sl_idx = 0; sl_idx < bench->max_test_run_slots_per_ue * (1U << current_slot.numerology()); sl_idx++) {
     run_slot();
     // If the UE is allocated a PUCCH, then assume it has acked the ConRes.
-    if (std::any_of(bench->res_grid[0].result.ul.pucchs.begin(),
-                    bench->res_grid[0].result.ul.pucchs.end(),
-                    [&test_ue](const pucch_info& pucch) {
-                      return pucch.crnti == test_ue.crnti and pucch.uci_bits.harq_ack_nof_bits != 0 and
-                             pucch.format() == ocudu::pucch_format::FORMAT_1;
-                    })) {
+    span<const pucch_info> pucchs = bench->res_grid[0].result.ul.pucchs.unsorted();
+    if (std::any_of(pucchs.begin(), pucchs.end(), [&test_ue](const pucch_info& pucch) {
+          return pucch.crnti == test_ue.crnti and pucch.uci_bits.harq_ack_nof_bits != 0 and
+                 pucch.format() == ocudu::pucch_format::FORMAT_1;
+        })) {
       bench->handle_conres_completed(test_ue.ue_index);
     }
 
@@ -485,6 +497,8 @@ TEST_P(fallback_scheduler_tester, failed_allocating_resources)
 
 TEST_P(fallback_scheduler_tester, when_conres_and_msg4_scheduled_separately_msg4_not_scheduled_until_conres_acked)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
+
   setup_sched(create_expert_config(1), create_custom_cell_config_request(params.k0));
 
   // Add UE 1.
@@ -532,6 +546,8 @@ TEST_P(fallback_scheduler_tester, when_conres_and_msg4_scheduled_separately_msg4
 
 TEST_P(fallback_scheduler_tester, conres_and_msg4_scheduled_scheduled_over_different_slots_if_they_dont_fit_together)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
+
   setup_sched(create_expert_config(1), create_custom_cell_config_request(params.k0));
 
   // Add UE 1.
@@ -549,12 +565,10 @@ TEST_P(fallback_scheduler_tester, conres_and_msg4_scheduled_scheduled_over_diffe
     run_slot();
 
     // If PUCCH is allocated, set the Contention Resolution complete for the UE.
-    bool con_res_pucch_allocated =
-        std::any_of(bench->res_grid[0].result.ul.pucchs.begin(),
-                    bench->res_grid[0].result.ul.pucchs.end(),
-                    [&test_ue](const pucch_info& pucch) {
-                      return pucch.crnti == test_ue.crnti and pucch.uci_bits.harq_ack_nof_bits == 1U;
-                    });
+    span<const pucch_info> pucchs = bench->res_grid[0].result.ul.pucchs.unsorted();
+    bool con_res_pucch_allocated  = std::any_of(pucchs.begin(), pucchs.end(), [&test_ue](const pucch_info& pucch) {
+      return pucch.crnti == test_ue.crnti and pucch.uci_bits.harq_ack_nof_bits == 1U;
+    });
     if (con_res_pucch_allocated) {
       // Set ConRes complete for the UE.
       bench->handle_conres_completed(test_ue.ue_index);
@@ -576,6 +590,8 @@ TEST_P(fallback_scheduler_tester, conres_and_msg4_scheduled_scheduled_over_diffe
 
 TEST_P(fallback_scheduler_tester, when_conres_and_msg4_srb1_scheduled_separately_msg4_not_scheduled_until_conres_acked)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
+
   setup_sched(create_expert_config(1), create_custom_cell_config_request(params.k0));
 
   // Add UE 1.
@@ -592,7 +608,7 @@ TEST_P(fallback_scheduler_tester, when_conres_and_msg4_srb1_scheduled_separately
   const unsigned            max_test_run_slots = 10U * (1U << current_slot.numerology());
   for (; sl_idx != max_test_run_slots; ++sl_idx) {
     // Set DL grid at slot 1 (the first slot, where the PDSCH will be allocated) busy from RB 3 until the end of the bw;
-    // this will force the scheduler to allocate Conres in isolation. Avoid the first symbols of teh slot to allow the
+    // this will force the scheduler to allocate Conres in isolation. Avoid the first symbols of the slot to allow the
     // PDCCH to be allocated.
     static constexpr unsigned first_dl_allocable_slot = 1U;
     bench->res_grid[first_dl_allocable_slot].dl_res_grid.fill(
@@ -630,6 +646,8 @@ TEST_P(fallback_scheduler_tester, when_conres_and_msg4_srb1_scheduled_separately
 
 TEST_P(fallback_scheduler_tester, when_ra_conres_timer_expires_ue_doesnt_get_allocated)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
+
   setup_sched(create_expert_config(1), create_custom_cell_config_request(params.k0));
 
   // Set MSG3 rx slot to 0 (it wouldn't be correct for TDD, but this is not relevant for this test).
@@ -677,6 +695,48 @@ TEST_P(fallback_scheduler_tester, when_ra_conres_timer_expires_ue_doesnt_get_all
   }
 
   ASSERT_FALSE(conres_pdcch.has_value());
+}
+
+TEST_P(fallback_scheduler_tester, when_msgb_ack_not_yet_sent_ue_doesnt_get_allocated_until_msgb_ack_slot_passes)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-2", "DU-GEN-2-a");
+
+  setup_sched(create_expert_config(1), create_custom_cell_config_request(params.k0));
+
+  const rnti_t     tc_rnti          = to_rnti(0x4601);
+  const slot_point prach_slot       = current_slot;
+  const slot_point msgb_slot_tx     = current_slot + 3;
+  const slot_point msgb_ack_slot_tx = msgb_slot_tx + 4;
+
+  // Simulate the RA scheduler having committed the MsgB PDSCH a few slots ahead.
+  rach_indication_message::preamble preamble{};
+  preamble.tc_rnti = tc_rnti;
+  ASSERT_NE(bench->ra_ue_repo.add_msgb_pending(preamble, prach_slot, ssb_id_t{0}), nullptr);
+  ASSERT_TRUE(bench->ra_ue_repo.set_msgb_scheduled(tc_rnti, msgb_slot_tx, msgb_ack_slot_tx));
+
+  // UE created right after the successRAR was scheduled, before its PDSCH is transmitted.
+  add_ue(tc_rnti, to_du_ue_index(0));
+  const auto& test_ue = get_ue(to_du_ue_index(0));
+
+  // Notify about SRB0 message in DL of size 99 bytes.
+  push_buffer_state_to_dl_ue(to_du_ue_index(0), current_slot, 99, false);
+
+  // While the current slot has not passed the MsgB HARQ-ACK PUCCH slot, nothing should be scheduled for this UE.
+  do {
+    run_slot();
+    ASSERT_FALSE(ue_is_allocated_pdcch(test_ue));
+  } while (current_slot < msgb_ack_slot_tx);
+
+  // Once the MsgB HARQ-ACK PUCCH slot has passed, the fallback scheduler is free to schedule ConRes for this UE.
+  std::optional<slot_point> conres_pdcch;
+  for (unsigned i = 0; i != 20 and not conres_pdcch.has_value(); ++i) {
+    run_slot();
+    const pdcch_dl_information* pdcch_it = get_ue_allocated_pdcch(test_ue);
+    if (pdcch_it != nullptr and pdcch_it->dci.type() == dci_dl_rnti_config_type::tc_rnti_f1_0) {
+      conres_pdcch = current_slot;
+    }
+  }
+  ASSERT_TRUE(conres_pdcch.has_value());
 }
 
 TEST_P(fallback_scheduler_tester, in_ul_and_dl_allocation_pucch_cannot_collide_with_pusch_for_same_ue)
@@ -989,7 +1049,7 @@ TEST_P(fallback_scheduler_head_scheduling, test_ahead_scheduling_for_srb_allocat
 
       // Mark resource grid as occupied.
       fill_resource_grid(current_slot,
-                         check_alloc_slot.to_uint() - current_slot.to_uint(),
+                         check_alloc_slot.count() - current_slot.count(),
                          bench->cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.crbs);
     }
 
@@ -1258,7 +1318,7 @@ protected:
           test_logger.debug("rnti={}, slot={}: RLC buffer state update for h_id={} with {} bytes",
                             test_ue.crnti,
                             sl,
-                            fmt::underlying(to_harq_id(h_dl->id())),
+                            to_harq_id(h_dl->id()),
                             pending_srb1_bytes);
           parent->push_buffer_state_to_dl_ue(test_ue.ue_index, sl, pending_srb1_bytes, false, false);
           latest_rlc_update_slot.emplace(sl);
@@ -1294,7 +1354,7 @@ protected:
           test_logger.debug("rnti={}, slot={}: RLC buffer state update for h_id={} with {} bytes",
                             test_ue.crnti,
                             sl,
-                            fmt::underlying(to_harq_id(h_dl->id())),
+                            to_harq_id(h_dl->id()),
                             pending_srb1_bytes);
           parent->push_buffer_state_to_dl_ue(test_ue.ue_index, sl, pending_srb1_bytes, false, false);
         }
@@ -1334,7 +1394,7 @@ protected:
         test_logger.debug("Slot={}, rnti={}: acking process h_id={} with {}",
                           sl,
                           test_ue.crnti,
-                          fmt::underlying(to_harq_id(dl_harq->id())),
+                          to_harq_id(dl_harq->id()),
                           ack ? "ACK" : "NACK");
       }
     }
@@ -1394,7 +1454,7 @@ TEST_P(fallback_scheduler_srb1_segmentation, test_scheduling_srb1_segmentation)
   for (auto& tester : ues_testers) {
     ASSERT_EQ(0, tester.missing_retx);
     ASSERT_FALSE(tester.test_ue.logical_channels().has_dl_pending_bytes())
-        << fmt::format("UE {} has still pending DL bytes", fmt::underlying(tester.test_ue.ue_index));
+        << fmt::format("UE {} has still pending DL bytes", tester.test_ue.ue_index);
   }
 }
 
@@ -1409,6 +1469,12 @@ struct ul_fallback_sched_test_params {
   duplex_mode duplx_mode;
   bool        enable_pusch_transform_precoding;
 };
+
+void PrintTo(const ul_fallback_sched_test_params& p, std::ostream* os)
+{
+  *os << fmt::format(
+      "duplex={} pusch_transform_precoding={}", to_string(p.duplx_mode), p.enable_pusch_transform_precoding);
+}
 
 class ul_fallback_scheduler_tester : public base_fallback_tester,
                                      public ::testing::TestWithParam<ul_fallback_sched_test_params>
@@ -1468,7 +1534,7 @@ protected:
       test_logger.info("Slot={}, rnti={}: ACKing process h_id={} with {}",
                        sl,
                        test_ue.crnti,
-                       fmt::underlying(to_harq_id(h_ul.id())),
+                       to_harq_id(h_ul.id()),
                        ack ? "ACK" : "NACK");
       return ack;
     }
@@ -1511,9 +1577,8 @@ TEST_P(ul_fallback_scheduler_tester, all_ul_ue_are_served_and_buffer_gets_emptie
 
   for (auto& tester : ues_testers) {
     ASSERT_TRUE(tester.initied_with_ul_traffic)
-        << fmt::format("No UL traffic generated for UE {}", fmt::underlying(tester.test_ue.ue_index));
-    ASSERT_FALSE(tester.buffer_bytes > 0)
-        << fmt::format("UE {} has still pending UL bytes", fmt::underlying(tester.test_ue.ue_index));
+        << fmt::format("No UL traffic generated for UE {}", tester.test_ue.ue_index);
+    ASSERT_FALSE(tester.buffer_bytes > 0) << fmt::format("UE {} has still pending UL bytes", tester.test_ue.ue_index);
   }
 }
 
@@ -1620,10 +1685,10 @@ TEST_F(fallback_sched_ue_w_out_pucch_cfg, when_srb0_is_retx_ed_only_pucch_common
     }
 
     // If PUCCH is detected, then it must be 1 grant only (PUCCH common).
-    auto& pucchs = bench->res_grid[0].result.ul.pucchs;
+    span<const pucch_info> pucchs = bench->res_grid[0].result.ul.pucchs.unsorted();
     if (not pucchs.empty()) {
-      srb_transmitted        = true;
-      const auto* pucch_srb0 = std::find_if(
+      srb_transmitted              = true;
+      const auto* const pucch_srb0 = std::find_if(
           pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) { return pucch.crnti == rnti; });
       ASSERT_TRUE(pucch_srb0 != pucchs.end());
       ASSERT_TRUE(not pucch_srb0->res->res_id.is_ded());
@@ -1647,6 +1712,8 @@ TEST_F(fallback_sched_ue_w_out_pucch_cfg, when_srb0_is_retx_ed_only_pucch_common
 
 TEST_F(fallback_sched_ue_w_out_pucch_cfg, when_reconf_is_after_reest_both_common_and_ded_pucch_are_scheduled)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   const auto rnti        = to_rnti(0x4601);
   const auto du_ue_index = to_du_ue_index(0);
   ASSERT_TRUE(add_ue(rnti, du_ue_index, false, current_slot));
@@ -1658,8 +1725,8 @@ TEST_F(fallback_sched_ue_w_out_pucch_cfg, when_reconf_is_after_reest_both_common
   bench->fallback_sched.handle_conres_indication(u.ue_index);
   for (unsigned i = 0; i != MAX_TEST_RUN_SLOTS; ++i) {
     run_slot();
-    auto&       pucchs       = bench->res_grid[0].result.ul.pucchs;
-    const auto* pucch_common = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
+    span<const pucch_info> pucchs = bench->res_grid[0].result.ul.pucchs.unsorted();
+    const auto pucch_common = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
       return pucch.crnti == rnti and pucch.uci_bits.harq_ack_nof_bits > 0;
     });
     if (pucch_common != pucchs.end()) {
@@ -1688,19 +1755,19 @@ TEST_F(fallback_sched_ue_w_out_pucch_cfg, when_reconf_is_after_reest_both_common
     }
 
     // If PUCCH is detected, then it must be 1 grant only (PUCCH common).
-    auto& pucchs = bench->res_grid[0].result.ul.pucchs;
+    span<const pucch_info> pucchs = bench->res_grid[0].result.ul.pucchs.unsorted();
     if (not pucchs.empty()) {
       srb_transmitted = true;
       ASSERT_EQ(2, std::count_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
                   return pucch.crnti == rnti;
                 }));
 
-      const auto* pucch_common = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
+      const auto pucch_common = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
         return pucch.crnti == rnti and pucch.res->res_id.is_cmn();
       });
       ASSERT_TRUE(pucch_common != pucchs.end());
 
-      const auto* pucch_ded = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
+      const auto pucch_ded = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
         return pucch.crnti == rnti and pucch.res->res_id.is_ded();
       });
       ASSERT_TRUE(pucch_ded != pucchs.end());
@@ -1742,19 +1809,19 @@ TEST_F(fallback_sched_ue_w_out_pucch_cfg, when_srb1_is_scheduled_with_crnti_both
     }
 
     // If PUCCH is detected, then it must be 1 grant only (PUCCH common).
-    auto& pucchs = bench->res_grid[0].result.ul.pucchs;
+    span<const pucch_info> pucchs = bench->res_grid[0].result.ul.pucchs.unsorted();
     if (not pucchs.empty()) {
       srb_transmitted = true;
       ASSERT_EQ(2, std::count_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
                   return pucch.crnti == rnti;
                 }));
 
-      const auto* pucch_common = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
+      const auto pucch_common = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
         return pucch.crnti == rnti and pucch.res->res_id.is_cmn();
       });
       ASSERT_TRUE(pucch_common != pucchs.end());
 
-      const auto* pucch_ded = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
+      const auto pucch_ded = std::find_if(pucchs.begin(), pucchs.end(), [rnti = u.crnti](const pucch_info& pucch) {
         return pucch.crnti == rnti and pucch.res->res_id.is_ded();
       });
       ASSERT_TRUE(pucch_ded != pucchs.end());
@@ -1771,4 +1838,93 @@ TEST_F(fallback_sched_ue_w_out_pucch_cfg, when_srb1_is_scheduled_with_crnti_both
   }
 
   ASSERT_TRUE(srb_transmitted);
+}
+
+/// Beam that the test cell maps its SS/PBCH block onto.
+constexpr beam_identifier test_ssb_beam = static_cast<beam_identifier>(3);
+
+/// Beam that a transmission is mapped onto, or \c beam_identifier::invalid if it is not beamformed.
+static beam_identifier beam_of(const precoding_and_beamforming_info& info)
+{
+  const beam_identifier* beam = std::get_if<beam_identifier>(&info);
+  return beam != nullptr ? *beam : beam_identifier::invalid;
+}
+
+/// \brief Test suite for the beam that the fallback scheduler maps the ConRes CE transmissions onto.
+///
+/// The cell transmits a single SS/PBCH block on \c test_ssb_beam, so that every UE reaches the cell on that beam and
+/// its ConRes CE is expected to be carried by it.
+class fallback_sched_beam_test : public base_fallback_tester, public ::testing::Test
+{
+protected:
+  fallback_sched_beam_test() : base_fallback_tester(duplex_mode::FDD, false)
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-MIMO-16-12");
+
+    const unsigned k0       = 0;
+    auto           cell_req = create_custom_cell_config_request(k0);
+    // A beam other than the first one, so that the assertions discriminate against a hardcoded default.
+    cell_req.ran.ssb_cfg.ssb_beams.reset();
+    cell_req.ran.ssb_cfg.ssb_beams.set_beam(0, test_ssb_beam);
+    setup_sched(create_expert_config(max_msg4_mcs_index), cell_req);
+  }
+
+  // Seeds the RA attempt that the UE is created out of, as the RA scheduler would have.
+  void add_ra_ue(rnti_t tc_rnti, ssb_id_t ssb_index)
+  {
+    rach_indication_message::preamble preamble{};
+    preamble.tc_rnti = tc_rnti;
+    ASSERT_NE(bench->ra_ue_repo.add(preamble, current_slot, ssb_index), nullptr);
+  }
+
+  // Runs slots until the UE is allocated a PDSCH, and returns it.
+  const dl_msg_alloc* run_until_pdsch(const ue& u)
+  {
+    for (unsigned i = 0; i != MAX_TEST_RUN_SLOTS; ++i) {
+      run_slot();
+      const dl_msg_alloc* pdsch = get_ue_allocated_pdsch(u);
+      if (pdsch != nullptr) {
+        return pdsch;
+      }
+    }
+    return nullptr;
+  }
+
+  static constexpr sch_mcs_index max_msg4_mcs_index = 8;
+  static constexpr unsigned      MAC_SRB0_SDU_SIZE  = 101;
+  static constexpr unsigned      MAX_TEST_RUN_SLOTS = 50;
+};
+
+TEST_F(fallback_sched_beam_test, conres_pdsch_and_pdcch_use_the_beam_of_the_ssb)
+{
+  const rnti_t tc_rnti = to_rnti(0x4601);
+  ASSERT_NO_FATAL_FAILURE(add_ra_ue(tc_rnti, ssb_id_t{0}));
+  ASSERT_TRUE(add_ue(tc_rnti, to_du_ue_index(0)));
+  push_buffer_state_to_dl_ue(to_du_ue_index(0), current_slot, MAC_SRB0_SDU_SIZE, true);
+
+  const ue&           test_ue = get_ue(to_du_ue_index(0));
+  const dl_msg_alloc* pdsch   = run_until_pdsch(test_ue);
+  ASSERT_NE(pdsch, nullptr) << "No ConRes CE PDSCH was scheduled";
+  ASSERT_EQ(beam_of(pdsch->pdsch_cfg.precoding_and_beamforming), test_ssb_beam);
+
+  const pdcch_dl_information* pdcch = get_ue_allocated_pdcch(test_ue);
+  ASSERT_NE(pdcch, nullptr) << "No PDCCH scheduling the ConRes CE was found";
+  ASSERT_EQ(beam_of(pdcch->ctx.precoding_and_beamforming), test_ssb_beam);
+}
+
+/// Verifies that a UE that the RA scheduler no longer tracks falls back to the default beams, which the cell
+/// transmits on all the time.
+TEST_F(fallback_sched_beam_test, ue_not_tracked_by_the_ra_scheduler_uses_the_default_beams)
+{
+  ASSERT_TRUE(add_ue(to_rnti(0x4601), to_du_ue_index(0)));
+  push_buffer_state_to_dl_ue(to_du_ue_index(0), current_slot, MAC_SRB0_SDU_SIZE, true);
+
+  const ue&           test_ue = get_ue(to_du_ue_index(0));
+  const dl_msg_alloc* pdsch   = run_until_pdsch(test_ue);
+  ASSERT_NE(pdsch, nullptr) << "No ConRes CE PDSCH was scheduled";
+  ASSERT_FALSE(std::holds_alternative<beam_identifier>(pdsch->pdsch_cfg.precoding_and_beamforming));
+
+  const pdcch_dl_information* pdcch = get_ue_allocated_pdcch(test_ue);
+  ASSERT_NE(pdcch, nullptr) << "No PDCCH scheduling the ConRes CE was found";
+  ASSERT_FALSE(std::holds_alternative<beam_identifier>(pdcch->ctx.precoding_and_beamforming));
 }

@@ -5,9 +5,9 @@
 #pragma once
 
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
-#include "ocudu/ran/csi_rs/csi_meas_config.h"
 
 namespace ocudu {
+struct csi_meas_config;
 
 /// \brief Returns the Channel State Information (CSI) report configuration parameters based on CSI-MeasConfig.
 /// \param csi_meas CSI-RS measurement configuration.

@@ -551,13 +551,13 @@ struct dci_0_0_c_rnti_configuration {
   /// Frequency hopping flag - 1 bit as per TS38.214 Section 6.3 and Table 7.3.1.1.1-3.
   unsigned frequency_hopping_flag;
   /// Modulation and coding scheme - 5 bits as per TS38.214 Section 6.1.4.1.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// New data indicator - 1 bit.
-  unsigned new_data_indicator;
+  bool new_data_indicator;
   /// Redundancy version - 2 bits as per TS38.212 Table 7.3.1.1.1-2.
-  unsigned redundancy_version;
+  uint8_t redundancy_version;
   /// HARQ process number - 4 bits.
-  unsigned harq_process_number;
+  uint8_t harq_process_number;
   /// TPC command for scheduled PUSCH - 2 bits as per TS38.213 Section 7.1.1.
   unsigned tpc_command;
   /// UL/SUL indicator - 1 bit if present, as per TS38.212 Section 7.3.1.1.1 and Table 7.3.1.1.1-1.
@@ -599,9 +599,9 @@ struct dci_0_0_tc_rnti_configuration {
   /// Frequency hopping flag - 1 bit as per TS38.214 Section 6.3 and Table 7.3.1.1.1-3.
   unsigned frequency_hopping_flag;
   /// Modulation and coding scheme - 5 bits as per TS38.214 Section 6.1.4.1.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// Redundancy version - 2 bits as per TS38.212 Table 7.3.1.1.1-2.
-  unsigned redundancy_version;
+  uint8_t redundancy_version;
   /// TPC command for scheduled PUSCH - 2 bits as per TS38.213 Section 7.1.1.
   unsigned tpc_command;
 };
@@ -626,19 +626,19 @@ struct dci_1_0_c_rnti_configuration {
   /// VRB-to-PRB mapping - 1 bit as per TS38.212 Table 7.3.1.2.2-5.
   bool interleaved_vrb_prb_mapping;
   /// Modulation and coding scheme - 5 bits as per TS38.214 Section 5.1.3.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// New data indicator - 1 bit.
-  unsigned new_data_indicator;
+  bool new_data_indicator;
   /// Redundancy version - 2 bits as per TS38.212 Table 7.3.1.1.1-2.
-  unsigned redundancy_version;
+  uint8_t redundancy_version;
   /// HARQ process number - 4 bits.
-  unsigned harq_process_number;
+  uint8_t harq_process_number;
   /// Downlink assignment index - 2 bits as per TS38.213 Section 9.1.3.
   unsigned dl_assignment_index;
   /// TPC command for scheduled PUCCH - 2 bits as per TS38.213 Section 7.2.1.
   unsigned tpc_command;
   /// PUCCH resource indicator - 3 bits as per TS38.213 Section 9.2.3.
-  unsigned pucch_resource_indicator;
+  uint8_t pucch_resource_indicator;
   /// PDSCH to HARQ feedback timing indicator - 3 bits as per TS38.213 Section 9.2.3.
   unsigned pdsch_harq_fb_timing_indicator;
 };
@@ -650,7 +650,7 @@ dci_payload dci_1_0_c_rnti_pack(const dci_1_0_c_rnti_configuration& config);
 /// \remark Defined in TS38.212 Section 7.3.1.2.1.
 struct dci_1_0_p_rnti_configuration {
   /// Indicates the content of the DCI format 1_0 payload when scrambled by P-RNTI.
-  enum class payload_info {
+  enum class payload_info : uint8_t {
     /// Indicates that only scheduling information for paging is present in the DCI.
     scheduling_information = 1,
     /// Indicates that only short message is present in the DCI.
@@ -664,7 +664,7 @@ struct dci_1_0_p_rnti_configuration {
   payload_info short_messages_indicator;
   /// \brief Short Messages - 8 bits as per TS38.331 Section 6.5 and Table 6.5-1.
   /// \remark If only the scheduling information for paging is carried, this bit field is reserved.
-  unsigned short_messages;
+  uint8_t short_messages;
   /// \brief Frequency domain resource assignment - \f$\Bigl \lceil \log_2(N_{RB}^{DL,BWP}(N_{RB}^{DL,BWP}+1)/2) \Bigr
   /// \rceil\f$ bits as per TS38.214 Section 5.1.2.2.2.
   /// \remark If only the short message is carried, this bit field is reserved.
@@ -677,7 +677,7 @@ struct dci_1_0_p_rnti_configuration {
   bool interleaved_vrb_prb_mapping;
   /// \brief Modulation and coding scheme - 5 bits as per TS38.214 Section 5.1.3 and Table 5.1.3.1-1.
   /// \remark If only the short message is carried, this bit field is reserved.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// \brief Transport Block scaling - 2 bits as per TS38.214 Section 5.1.3 and Table 5.1.3.2-2.
   /// \remark The value \c 0b11 is reserved.
   /// \remark If only the short message is carried, this bit field is reserved.
@@ -701,9 +701,9 @@ struct dci_1_0_si_rnti_configuration {
   /// VRB-to-PRB mapping - 1 bit as per TS38.212 Table 7.3.1.2.2-5.
   bool interleaved_vrb_prb_mapping;
   /// Modulation coding scheme - 5 bits as per TS38.214 Section 5.1.3 and Table 5.1.3.1-1.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// Redundancy version - 2 bits as per TS38.212 Table 7.3.1.1.1-2.
-  unsigned redundancy_version;
+  uint8_t redundancy_version;
   /// System information indicator - 1 bit as per TS38.212 Table 7.3.1.2.1-2.
   unsigned system_information_indicator;
   // Reserved bits - 15 bits.
@@ -729,11 +729,16 @@ struct dci_1_0_ra_rnti_configuration {
   /// VRB-to-PRB mapping - 1 bit as per to TS38.212 Table 7.3.1.2.2-5.
   bool interleaved_vrb_prb_mapping;
   /// Modulation and coding scheme - 5 bits as per TS38.214 Section 5.1.3 and Table 5.1.3.1-1.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// \brief Transport Block scaling - 2 bits as per TS38.214 Section 5.1.3 and Table 5.1.3.2-2.
   /// \remark The value \c 0b11 is reserved.
   unsigned tb_scaling;
-  // Reserved bits - 16 bits.
+  /// \brief LSBs of SFN - 2 bits as per TS38.213 Section 8.2A.
+  /// \remark Only applicable for CRC scrambled by MsgB-RNTI with msgB-ResponseWindow configured larger than 10 msec,
+  /// or for CRC scrambled by RA-RNTI in a shared spectrum channel access cell; \c 0 otherwise, in which case these
+  /// bits are just reserved.
+  uint8_t lsb_sfn = 0;
+  // Reserved bits - 14 bits.
 };
 
 /// Packs a DCI format 1_0 scrambled by RA-RNTI.
@@ -752,17 +757,17 @@ struct dci_1_0_tc_rnti_configuration {
   /// VRB-to-PRB mapping - 1 bit as per TS38.212 Table 7.3.1.2.2-5.
   bool interleaved_vrb_prb_mapping;
   /// Modulation and coding scheme - 5 bits as per TS38.214 Table 5.1.3.1-1.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// New data indicator - 1 bit.
-  unsigned new_data_indicator;
+  bool new_data_indicator;
   /// Redundancy version - 2 bits as per TS38.212 Table 7.3.1.1.1-2.
-  unsigned redundancy_version;
+  uint8_t redundancy_version;
   /// HARQ process number - 4 bits.
-  unsigned harq_process_number;
+  uint8_t harq_process_number;
   /// TPC command for scheduled PUCCH - 2 bits as per TS38.213 Section 7.2.1.
   unsigned tpc_command;
   /// PUCCH resource indicator - 3 bits as per TS38.213 Section 9.2.3.
-  unsigned pucch_resource_indicator;
+  uint8_t pucch_resource_indicator;
   /// PDSCH to HARQ feedback timing indicator - 3 bits as per TS38.213 Section 9.2.3.
   unsigned pdsch_harq_fb_timing_indicator;
 };
@@ -858,13 +863,13 @@ struct dci_0_1_configuration {
   /// sizes. Otherwise, leave it unset.
   std::optional<unsigned> frequency_hopping_flag;
   /// Modulation and coding scheme - 5 bits as per TS38.214 Section 6.1.4.1.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// New data indicator - 1 bit.
-  unsigned new_data_indicator;
+  bool new_data_indicator;
   /// Redundancy version - 2 bits as per TS38.212 Table 7.3.1.1.1-2.
-  unsigned redundancy_version;
+  uint8_t redundancy_version;
   /// HARQ process number - 4 or 5 bits.
-  unsigned harq_process_number;
+  uint8_t harq_process_number;
   /// \brief 1st downlink assignment index - 1 or 2 bits.
   ///
   /// It occupies 1 bit for semi-static HARQ-ACK codebook and 2 bits for dynamic HARQ-ACK codebook (see
@@ -1024,28 +1029,28 @@ struct dci_1_1_configuration {
   /// dci_size_config::nof_aperiodic_zp_csi is not set to 0 when computing the DCI sizes. Otherwise, leave it unset.
   std::optional<unsigned> zp_csi_rs_trigger;
   /// Modulation and coding scheme for TB 1 - 5 bits as per TS38.214 Section 5.1.3.1.
-  unsigned tb1_modulation_coding_scheme;
+  uint8_t tb1_modulation_coding_scheme;
   /// New data indicator for TB 1 - 1 bit.
-  unsigned tb1_new_data_indicator;
+  bool tb1_new_data_indicator;
   /// Redundancy version for TB 1 - 2 bits as per TS38.212 Table 7.3.1.1.1-2.
-  unsigned tb1_redundancy_version;
+  uint8_t tb1_redundancy_version;
   /// \brief Modulation and coding scheme for TB 2 - 5 bits if present.
   ///
   /// Set as per TS38.214 Section 5.1.3.1 if DCI is configured to schedule two codewords, i.e., if \ref
   /// dci_size_config::pdsch_two_codewords is set to \c true when computing the DCI sizes.
-  std::optional<unsigned> tb2_modulation_coding_scheme;
+  std::optional<uint8_t> tb2_modulation_coding_scheme;
   /// \brief New data indicator for TB 2 - 1 bit if present.
   ///
   /// Set if DCI is configured to schedule two codewords, i.e., if \ref dci_size_config::pdsch_two_codewords is set to
   /// \c true when computing the DCI sizes.
-  std::optional<unsigned> tb2_new_data_indicator;
+  std::optional<bool> tb2_new_data_indicator;
   /// \brief Redundancy version for TB 2 - 2 bits if present.
   ///
   /// Set as per TS38.212 Table 7.3.1.1.1-2 if DCI is configured to schedule two codewords, i.e., if \ref
   /// dci_size_config::pdsch_two_codewords is set to \c true when computing the DCI sizes.
-  std::optional<unsigned> tb2_redundancy_version;
+  std::optional<uint8_t> tb2_redundancy_version;
   /// HARQ process number - 4 or 5 bits.
-  unsigned harq_process_number;
+  uint8_t harq_process_number;
   /// \brief Downlink Assignment Index (DAI) - 0, 2 or 4 bits.
   ///
   /// This parameter occupies:
@@ -1059,7 +1064,7 @@ struct dci_1_1_configuration {
   /// TPC command for scheduled PUCCH - 2 bits as per TS38.213 Section 7.2.1.
   unsigned tpc_command;
   /// PUCCH resource indicator - 3 bits as per TS38.213 Section 9.2.3.
-  unsigned pucch_resource_indicator;
+  uint8_t pucch_resource_indicator;
   /// \brief PDSCH to HARQ feedback timing indicator - 0, 1, 2 or 3 bits.
   ///
   ///
@@ -1122,7 +1127,7 @@ struct dci_rar_configuration {
   /// PUSCH time resource allocation - 4 bits.
   unsigned time_resource;
   /// Modulation and coding scheme - 4 bits.
-  unsigned modulation_coding_scheme;
+  uint8_t modulation_coding_scheme;
   /// Transmission power control for PUSCH - 3 bits.
   unsigned tpc;
   /// CSI request - 1 bit.

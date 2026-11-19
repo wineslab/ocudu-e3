@@ -6,6 +6,7 @@
 #include "../pdu_session_routine_helpers.h"
 #include "handover_reconfiguration_routine.h"
 #include "mobility_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cu_cp_types.h"
 
 using namespace ocudu;
@@ -32,7 +33,7 @@ static bool verify_ho_request(const cu_cp_intra_cu_handover_request& request,
   }
 
   if (!ue_mng.find_du_ue(request.source_ue_index)) {
-    logger.warning("Can't find source ue={}");
+    logger.warning("Can't find source ue={}", request.source_ue_index);
     return false;
   }
 

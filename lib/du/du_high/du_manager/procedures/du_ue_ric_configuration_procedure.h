@@ -29,6 +29,13 @@ private:
   // Task run from within the UE task loop.
   async_task<mac_ue_reconfiguration_response> handle_mac_config();
 
+  /// \brief Checks whether the RRM Policy Member(s) indicated in a RRM Policy match a slice actually in use by the UE.
+  /// \remark A RRM Policy Member identifies a slice by PLMN and S-NSSAI, so a member only matches if its PLMN is the
+  /// one of the UE serving cell and its S-NSSAI is the one of a DRB of the UE.
+  /// \remark If the policy does not indicate any RRM Policy Member, there is nothing to validate against, and the
+  /// check passes.
+  bool ue_uses_requested_slice(const rrm_policy_ratio_group& policy) const;
+
   const du_mac_sched_control_config request;
   du_ue_manager_repository&         ue_mng;
   const du_manager_params&          du_params;

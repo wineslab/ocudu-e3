@@ -140,7 +140,7 @@ struct circular_map_storage<std::vector<T>, true> : public circular_map_storage<
 template <typename K, typename V, typename Container, bool ForcePower2Size>
 class circular_map_impl
 {
-  static_assert(std::is_integral_v<K> and std::is_unsigned_v<K>, "Container key must be an unsigned integer");
+  static_assert(std::is_unsigned_v<K>, "Container key must be an unsigned integer");
 
   static constexpr bool has_static_size = detail::is_std_array<Container>::value;
 

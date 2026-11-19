@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "resource_grid.h"
+#include "ocudu/ran/slot_pdu_capacity_constants.h"
 #include "ocudu/scheduler/resource_grid_util.h"
 #include "ocudu/support/compiler.h"
 #include <algorithm>
@@ -90,12 +91,11 @@ bool carrier_subslot_resource_grid::collides(ofdm_symbol_range                  
   crbs.displace_by(-static_cast<int>(offset()));
   for (unsigned sym = symbols.start(), sym_stop = symbols.stop(); sym != sym_stop; ++sym) {
     if (ignore_rg != nullptr) {
-      // Check RB by RB for collision, ignoring RBs set in ignore_rg.
-      for (unsigned crb = crbs.start(), crb_stop = crbs.stop(); crb != crb_stop; ++crb) {
-        size_t pos = crb + sym * nof_rbs();
-        if (slot_rbs.test(pos) and (not ignore_rg->slot_rbs.test(pos))) {
-          return true;
-        }
+      // Collision if some RB is set in this grid but not in ignore_rg, within the given range.
+      const size_t start_pos = crbs.start() + sym * nof_rbs();
+      const size_t stop_pos  = crbs.stop() + sym * nof_rbs();
+      if (not slot_rbs.is_subset_of(ignore_rg->slot_rbs, start_pos, stop_pos)) {
+        return true;
       }
       continue;
     }
@@ -328,6 +328,7 @@ cell_slot_resource_allocator::cell_slot_resource_allocator(const cell_configurat
                                                            span<scs_specific_carrier> ul_scs_carriers) :
   cfg(cfg_), dl_res_grid(dl_scs_carriers), ul_res_grid(ul_scs_carriers)
 {
+  result.ul.pucchs.reserve(MAX_PUCCH_PDUS_PER_SLOT);
 }
 
 void cell_slot_resource_allocator::slot_indication(slot_point sl)
@@ -352,15 +353,17 @@ void cell_slot_resource_allocator::clear()
   result.dl.paging_grants.clear();
   result.dl.ue_grants.clear();
   result.dl.csi_rs.clear();
+  result.dl.prs.clear();
   result.ul.puschs.clear();
   result.ul.prachs.clear();
   result.ul.pucchs.clear();
   result.ul.srss.clear();
-  result.failed_attempts.dl_pdcch        = 0;
-  result.failed_attempts.ul_pdcch        = 0;
-  result.failed_attempts.common_dl_pdcch = 0;
-  result.failed_attempts.common_ul_pdcch = 0;
-  result.failed_attempts.uci             = 0;
+  result.failed_attempts.dl_pdcch            = 0;
+  result.failed_attempts.ul_pdcch            = 0;
+  result.failed_attempts.common_dl_pdcch     = 0;
+  result.failed_attempts.common_ul_pdcch     = 0;
+  result.failed_attempts.uci                 = 0;
+  result.failed_attempts.fallback_uci_allocs = 0;
   dl_res_grid.clear();
   ul_res_grid.clear();
   result.success = false;

@@ -4,20 +4,51 @@
 #include "ofh_downlink_handler_impl.h"
 #include "../support/logger_utils.h"
 #include "helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
 #include "ocudu/ofh/ofh_error_notifier.h"
 #include "ocudu/phy/support/resource_grid_context.h"
 #include "ocudu/phy/support/resource_grid_reader.h"
 #include "ocudu/phy/support/shared_resource_grid.h"
+#include "ocudu/ran/beamforming/beam_identifier.h"
 
 using namespace ocudu;
 using namespace ofh;
+
+/// \brief Returns the number of eAxCs that the transmission of the given resource grid requires.
+///
+/// The resource grid is sized to the total number of beams that the antenna topology defines.
+static unsigned get_nof_required_eaxc(const resource_grid_reader& reader, bool is_beamforming_enabled)
+{
+  // Category B maps the k-th non-empty beam-port onto the k-th eAxC.
+  if (is_beamforming_enabled) {
+    unsigned nof_active_ports = 0;
+    for (unsigned port = 0, e = reader.get_nof_ports(); port != e; ++port) {
+      nof_active_ports += reader.is_empty(port) ? 0 : 1;
+    }
+
+    return nof_active_ports;
+  }
+
+  // Category A maps each beam-port onto the eAxC with the same index, hence all data must be contained in the first K
+  // beam-ports, where K is the number of antenna ports of the configured topology. Returning the highest non-empty
+  // port detects a transmission mapped beyond them.
+  unsigned nof_required_eaxc = 0;
+  for (unsigned port = 0, e = reader.get_nof_ports(); port != e; ++port) {
+    if (!reader.is_empty(port)) {
+      nof_required_eaxc = port + 1;
+    }
+  }
+
+  return nof_required_eaxc;
+}
 
 downlink_handler_impl::downlink_handler_impl(const downlink_handler_impl_config&  config,
                                              downlink_handler_impl_dependencies&& dependencies) :
   sector_id(config.sector),
   logger(dependencies.logger),
   cp(config.cp),
+  is_cat_b_enabled(config.is_cat_b_enabled),
   tdd_config(config.tdd_config),
   dl_eaxc(config.dl_eaxc),
   window_checker(
@@ -65,11 +96,31 @@ void downlink_handler_impl::handle_dl_data(const resource_grid_context& context,
     return;
   }
 
+  // Detect resource grids delivered by the PHY out of slot order.
+  // If the slot N+1 is delivered before slot N, the eCPRI sequence identifiers of the transmitted messages will show a
+  // jump forward and then backward.
+  if (slot_point prev_slot = last_processed_slot.exchange(context.slot, std::memory_order_relaxed); prev_slot.valid()) {
+    if (OCUDU_UNLIKELY(context.slot < prev_slot)) {
+      logger.info("Sector#{}: received out-of-order downlink resource grid for slot '{}' after slot '{}' - "
+                  "eCPRI sequence identifiers may be non-monotonic",
+                  sector_id,
+                  context.slot,
+                  prev_slot);
+    }
+  }
+
   const resource_grid_reader& reader = grid.get_reader();
-  ocudu_assert(reader.get_nof_ports() <= dl_eaxc.size(),
-               "Number of RU ports is '{}' and must be equal or greater than the number of cell ports which is '{}'",
-               dl_eaxc.size(),
-               reader.get_nof_ports());
+
+  ocudu_assert(dl_eaxc.size() <= reader.get_nof_ports(),
+               "Resource grid has '{}' beam-ports, but at least '{}' are required, one per configured downlink eAxC",
+               reader.get_nof_ports(),
+               dl_eaxc.size());
+
+  unsigned nof_required_eaxc = get_nof_required_eaxc(reader, is_cat_b_enabled);
+  report_error_if_not(nof_required_eaxc <= dl_eaxc.size(),
+                      "Resource grid needs '{}' downlink eAxCs and only '{}' are configured",
+                      nof_required_eaxc,
+                      dl_eaxc.size());
 
   trace_point tp = ofh_tracer.now();
 
@@ -80,6 +131,10 @@ void downlink_handler_impl::handle_dl_data(const resource_grid_context& context,
   // Nothing to do on empty resource grids.
   if (reader.is_empty()) {
     return;
+  }
+
+  if (OCUDU_UNLIKELY(logger.debug.enabled())) {
+    logger.debug("Sector#{}: received downlink resource grid for slot {}", sector_id, context.slot);
   }
 
   if (window_checker.is_late(context.slot)) {
@@ -107,14 +162,26 @@ void downlink_handler_impl::handle_dl_data(const resource_grid_context& context,
   uplane_context.sector       = context.sector;
   uplane_context.symbol_range = cplane_context.symbol_range;
 
-  for (unsigned cell_port_id = 0, e = reader.get_nof_ports(); cell_port_id != e; ++cell_port_id) {
-    cplane_context.eaxc = dl_eaxc[cell_port_id];
+  // For backward compatibility, Category A transmits every configured eAxC, regardless of whether its beam-port is
+  // empty, whilst Category B scans every beam-port and transmits the non-empty ones.
+  unsigned nof_scanned_beams = is_cat_b_enabled ? reader.get_nof_ports() : dl_eaxc.size();
+
+  for (unsigned eaxc_index = 0, i_beam = 0; i_beam != nof_scanned_beams; ++i_beam) {
+    if (is_cat_b_enabled && reader.is_empty(i_beam)) {
+      continue;
+    }
+
+    unsigned eaxc = dl_eaxc[eaxc_index++];
+
     // Control-Plane data flow.
+    cplane_context.eaxc    = eaxc;
+    cplane_context.beam_id = to_beam_id(i_beam);
     data_flow_cplane->enqueue_section_type_1_message(cplane_context);
 
-    // User-Plane data flow.
-    uplane_context.port = cell_port_id;
-    uplane_context.eaxc = dl_eaxc[cell_port_id];
+    // User-Plane data flow. Note that the port of the resource grid is a beam-port, which in Category A, where no
+    // beamforming is applied, coincides with the antenna port.
+    uplane_context.port = i_beam;
+    uplane_context.eaxc = eaxc;
     data_flow_uplane->enqueue_section_type_1_message(uplane_context, grid);
   }
 

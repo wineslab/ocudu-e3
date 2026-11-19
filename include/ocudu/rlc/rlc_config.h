@@ -21,6 +21,10 @@ constexpr uint16_t to_number(rlc_um_sn_size sn_size)
 {
   return static_cast<uint16_t>(sn_size);
 }
+constexpr uint16_t format_as(rlc_um_sn_size sn_size)
+{
+  return to_number(sn_size);
+}
 inline bool from_number(rlc_um_sn_size& sn_size, uint16_t num)
 {
   if (num == 6) {
@@ -43,6 +47,10 @@ enum class rlc_am_sn_size : uint16_t { size12bits = 12, size18bits = 18 };
 constexpr uint16_t to_number(rlc_am_sn_size sn_size)
 {
   return static_cast<uint16_t>(sn_size);
+}
+constexpr uint16_t format_as(rlc_am_sn_size sn_size)
+{
+  return to_number(sn_size);
 }
 inline bool from_number(rlc_am_sn_size& sn_size, uint16_t num)
 {
@@ -603,6 +611,11 @@ constexpr unsigned to_number(rlc_dc_field dc)
 {
   return static_cast<unsigned>(dc);
 }
+inline const char* format_as(rlc_dc_field dc)
+{
+  static constexpr const char* options[] = {"ctrl", "data"};
+  return options[to_number(dc)];
+}
 
 /// RLC AM NR segmentation info
 enum class rlc_si_field : unsigned {
@@ -616,11 +629,20 @@ constexpr uint16_t to_number(rlc_si_field si_field)
 {
   return static_cast<uint16_t>(si_field);
 }
+inline const char* format_as(rlc_si_field si)
+{
+  static constexpr const char* options[] = {"full", "first", "last", "mid"};
+  return options[to_number(si)];
+}
 
 enum class rlc_control_pdu_type : unsigned { status_pdu = 0b000 };
 constexpr uint16_t to_number(rlc_control_pdu_type type)
 {
   return static_cast<uint16_t>(type);
+}
+constexpr uint16_t format_as(rlc_control_pdu_type type)
+{
+  return to_number(type);
 }
 
 /// \brief Configurable Rx parameters for RLC AM
@@ -736,83 +758,6 @@ struct rlc_config {
 } // namespace ocudu
 
 namespace fmt {
-
-template <>
-struct formatter<ocudu::rlc_um_sn_size> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::rlc_um_sn_size sn_size, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", to_number(sn_size));
-  }
-};
-
-template <>
-struct formatter<ocudu::rlc_am_sn_size> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::rlc_am_sn_size& sn_size, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", to_number(sn_size));
-  }
-};
-
-template <>
-struct formatter<ocudu::rlc_dc_field> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::rlc_dc_field dc, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"ctrl", "data"};
-    return format_to(ctx.out(), "{}", options[to_number(dc)]);
-  }
-};
-
-template <>
-struct formatter<ocudu::rlc_si_field> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::rlc_si_field si, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"full", "first", "last", "mid"};
-    return format_to(ctx.out(), "{}", options[to_number(si)]);
-  }
-};
-
-template <>
-struct formatter<ocudu::rlc_control_pdu_type> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::rlc_control_pdu_type cpt, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", to_number(cpt));
-  }
-};
 
 // RLC TM TX config formatter
 template <>

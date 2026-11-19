@@ -11,6 +11,13 @@ resource "gitlab_pipeline_schedule" "this" {
   cron_timezone  = each.value.timezone
   active         = coalesce(try(each.value.active, null), true)
   take_ownership = true
+
+  inputs = length(coalesce(each.value.inputs, {})) == 0 ? null : [
+    for k, v in each.value.inputs : {
+      name  = k
+      value = v
+    }
+  ]
 }
 
 resource "gitlab_pipeline_schedule_variable" "vars" {

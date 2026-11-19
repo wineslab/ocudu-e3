@@ -4,6 +4,7 @@
 
 #include "ocudu/du/du_high/du_high_factory.h"
 #include "du_high_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace odu;

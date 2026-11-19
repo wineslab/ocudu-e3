@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_capability_manager.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/rrc_nr.h" // for ho_prep_info_s
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg_ies.h"
 #include "ocudu/du/du_cell_config.h"
@@ -25,8 +26,8 @@ static const asn1::rrc_nr::ntn_params_r17_s* get_ntn_params_r17(const asn1::rrc_
 }
 
 /// Helper function to convert advanced UE NR capabilities.
-static expected<ue_capability_summary, std::string>
-decode_advanced_ue_nr_caps(odu::ue_capability_summary& ue_capability, const asn1::rrc_nr::ue_nr_cap_s& ue_cap)
+static expected<ue_capability_summary, std::string> decode_advanced_ue_nr_caps(ue_capability_summary& ue_capability,
+                                                                               const asn1::rrc_nr::ue_nr_cap_s& ue_cap)
 {
   for (const auto& band : ue_cap.rf_params.supported_band_list_nr) {
     // Select band.
@@ -54,6 +55,31 @@ decode_advanced_ue_nr_caps(odu::ue_capability_summary& ue_capability, const asn1
       }
     }
     band_cap.pusch_tx_coherence = pusch_tx_coherence;
+
+    if (band.mimo_params_per_band_present) {
+      const asn1::rrc_nr::mimo_params_per_band_s& mimo_params = band.mimo_params_per_band;
+
+      // Convert PDSCH TDRA repetition capability.
+      if (mimo_params.support_inter_slot_tdm_r16.is_present()) {
+        band_cap.max_pdsch_tdra_rep_number =
+            mimo_params.support_inter_slot_tdm_r16->support_rep_num_pdsch_tdra_r16.to_number();
+      }
+
+      // Convert Type-II codebook capability.
+      if (mimo_params.codebook_params.is_present() and mimo_params.codebook_params->type2_present) {
+        const auto& asn1_type2 = mimo_params.codebook_params->type2;
+
+        ue_capability_summary::type2_codebook_params& type2_cap = band_cap.type2_codebook.emplace();
+        type2_cap.max_nof_beams                                 = asn1_type2.param_lx;
+        type2_cap.subband_amplitude_supported =
+            asn1_type2.amplitude_scaling_type.value ==
+            asn1::rrc_nr::codebook_params_s::type2_s_::amplitude_scaling_type_opts::wideband_and_subband;
+        for (const auto& csi_rs_res : asn1_type2.supported_csi_rs_res_list) {
+          type2_cap.max_nof_tx_ports_per_resource =
+              std::max(type2_cap.max_nof_tx_ports_per_resource, csi_rs_res.max_num_tx_ports_per_res.to_number());
+        }
+      }
+    }
   }
 
   for (const auto& band_combination : ue_cap.rf_params.supported_band_combination_list) {
@@ -240,11 +266,21 @@ expected<ue_capability_summary, std::string> odu::decode_ue_nr_cap_container(con
   if (ue_cap.phy_params.phy_params_common_present) {
     ue_caps.pdsch_interleaving_vrb_to_prb_supported =
         ue_cap.phy_params.phy_params_common.interleaving_vrb_to_prb_pdsch_present;
+    if (ue_cap.phy_params.phy_params_common.pusch_repeat_type_a_r16.is_present()) {
+      ue_caps.pusch_rep_type_a_supported =
+          ue_cap.phy_params.phy_params_common.pusch_repeat_type_a_r16->non_shared_spec_ch_access_r16_present;
+    }
+    ue_caps.pucch_repeat_f1_3_4_supported = ue_cap.phy_params.phy_params_common.pucch_repeat_f1_3_4_present;
+    ue_caps.slot_based_dyn_pucch_rep_r17_supported =
+        ue_cap.phy_params.phy_params_common.slot_based_dyn_pucch_rep_r17_present;
   }
   for (const auto& band : ue_cap.rf_params.supported_band_list_nr) {
     // Create and convert band capability.
     ue_capability_summary::supported_band band_cap;
-    band_cap.pusch_qam256_supported = band.pusch_256_qam_present;
+    band_cap.pusch_qam256_supported                = band.pusch_256_qam_present;
+    band_cap.pusch_rep_type_a_avail_slot_supported = band.pusch_type_a_repeats_avail_slot_r17_present;
+    band_cap.pusch_qam256_supported                = band.pusch_256_qam_present;
+    band_cap.pucch_repeat_f0_2_r17_supported       = band.pucch_repeat_f0_2_r17_present;
 
     // Emplace the band capability in the map.
     ue_caps.bands.emplace(static_cast<nr_band>(band.band_nr), band_cap);
@@ -252,6 +288,17 @@ expected<ue_capability_summary, std::string> odu::decode_ue_nr_cap_container(con
   if (ue_cap.mac_params_present and ue_cap.mac_params.mac_params_xdd_diff_present) {
     ue_caps.long_drx_cycle_supported  = ue_cap.mac_params.mac_params_xdd_diff.long_drx_cycle_present;
     ue_caps.short_drx_cycle_supported = ue_cap.mac_params.mac_params_xdd_diff.short_drx_cycle_present;
+  }
+  if (ue_cap.mac_params_present and ue_cap.mac_params.mac_params_common_present) {
+    ue_caps.sr_triggered_by_ta_report_supported =
+        ue_cap.mac_params.mac_params_common.sr_triggered_by_ta_report_r17_present;
+  }
+  if (ue_cap.meas_and_mob_params_present and ue_cap.meas_and_mob_params.meas_and_mob_params_common_present) {
+    const auto& meas_common = ue_cap.meas_and_mob_params.meas_and_mob_params_common;
+    if (meas_common.supported_gap_pattern_present) {
+      ue_caps.supported_meas_gaps = supported_meas_gap_patterns{meas_common.supported_gap_pattern};
+    }
+    // The R16 gap patterns are ignored.
   }
 
   // Convert advanced UE NR capabilities.

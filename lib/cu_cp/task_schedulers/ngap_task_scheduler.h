@@ -13,28 +13,40 @@
 
 namespace ocudu::ocucp {
 
+/// NGAP task scheduler configuration.
+struct ngap_task_scheduler_config {
+  uint16_t max_nof_amfs;
+};
+
+/// NGAP task scheduler dependencies.
+struct ngap_task_scheduler_dependencies {
+  timer_manager&          timers;
+  task_executor&          exec;
+  ocudulog::basic_logger& logger;
+};
+
 /// \brief Service provided by CU-CP to schedule async tasks for a given AMF.
 class ngap_task_scheduler
 {
 public:
-  explicit ngap_task_scheduler(timer_manager&          timers_,
-                               task_executor&          exec_,
-                               uint16_t                max_nof_amfs,
-                               ocudulog::basic_logger& logger_);
+  ngap_task_scheduler(const ngap_task_scheduler_config& cfg, const ngap_task_scheduler_dependencies& dependencies);
   ~ngap_task_scheduler() = default;
 
-  // CU-UP task scheduler
-  void handle_amf_async_task(cu_cp_amf_index_t amf_index, async_task<void>&& task);
+  /// CU-UP task scheduler.
+  bool handle_amf_async_task(cu_cp_amf_index_t amf_index, async_task<void>&& task);
 
-  unique_timer   make_unique_timer();
-  timer_manager& get_timer_manager();
+  /// Makes a unique timer and returns it.
+  unique_timer make_unique_timer() const;
+
+  /// Gets the timer manager.
+  timer_manager& get_timer_manager() const;
 
 private:
   timer_manager&          timers;
   task_executor&          exec;
   ocudulog::basic_logger& logger;
 
-  // task event loops indexed by amf_index
+  // Task event loops indexed by amf_index.
   std::map<cu_cp_amf_index_t, fifo_async_task_scheduler> amf_ctrl_loop;
 };
 

@@ -5,13 +5,13 @@
 #pragma once
 
 #include "apps/services/cmdline/cmdline_command.h"
-#include "apps/services/cmdline/cmdline_command_dispatcher_utils.h"
 #include "cu_cp_unit_config_helpers.h"
 #include "ocudu/cu_cp/cu_cp_command_handler.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/ran/tac.h"
+#include "ocudu/support/string_parsing_utils.h"
 #include <chrono>
 #include <optional>
 #include <vector>
@@ -46,21 +46,21 @@ public:
     }
 
     const auto*                     arg         = args.begin();
-    expected<unsigned, std::string> serving_pci = app_services::parse_int<unsigned>(*arg);
+    expected<unsigned, std::string> serving_pci = parse_int<unsigned>(*arg);
     if (not serving_pci.has_value()) {
-      fmt::print("Invalid serving PCI.\n");
+      fmt::print("Invalid serving PCI. Reason: {}\n", serving_pci.error());
       return;
     }
     ++arg;
-    expected<unsigned, std::string> rnti = app_services::parse_unsigned_hex<unsigned>(*arg);
+    expected<unsigned, std::string> rnti = parse_unsigned_hex<unsigned>(*arg);
     if (not rnti.has_value()) {
       fmt::print("Invalid UE RNTI.\n");
       return;
     }
     ++arg;
-    expected<unsigned, std::string> target_pci = app_services::parse_int<unsigned>(*arg);
+    expected<unsigned, std::string> target_pci = parse_int<unsigned>(*arg);
     if (not target_pci.has_value()) {
-      fmt::print("Invalid target PCI.\n");
+      fmt::print("Invalid target PCI. Reason: {}\n", target_pci.error());
       return;
     }
     ++arg;
@@ -72,7 +72,7 @@ public:
     }
     ++arg;
 
-    expected<unsigned, std::string> target_tac = app_services::parse_int<unsigned>(*arg);
+    expected<unsigned, std::string> target_tac = parse_int<unsigned>(*arg);
     if (not target_tac.has_value()) {
       fmt::print("Invalid target TAC '{}'.\n", *arg);
       return;
@@ -86,11 +86,16 @@ public:
       return;
     }
 
-    cu_cp.get_mobility_command_handler().trigger_handover(static_cast<pci_t>(serving_pci.value()),
-                                                          static_cast<rnti_t>(rnti.value()),
-                                                          static_cast<pci_t>(target_pci.value()),
-                                                          target_plmn.value(),
-                                                          static_cast<tac_t>(target_tac.value()));
+    if (not cu_cp.get_mobility_command_handler().trigger_handover(static_cast<pci_t>(serving_pci.value()),
+                                                                  static_cast<rnti_t>(rnti.value()),
+                                                                  static_cast<pci_t>(target_pci.value()),
+                                                                  target_plmn.value(),
+                                                                  static_cast<tac_t>(target_tac.value()))) {
+      fmt::print("Handover not triggered for UE with pci={} rnti={} (see CU-CP log for the cause).\n",
+                 serving_pci.value(),
+                 static_cast<rnti_t>(rnti.value()));
+      return;
+    }
     fmt::print("Handover triggered for UE with pci={} rnti={} to pci={} plmn={} tac={}.\n",
                serving_pci.value(),
                static_cast<rnti_t>(rnti.value()),
@@ -136,15 +141,15 @@ public:
     const auto* arg = args.begin();
 
     // Parse serving PCI
-    expected<unsigned, std::string> serving_pci = app_services::parse_int<unsigned>(*arg);
+    expected<unsigned, std::string> serving_pci = parse_int<unsigned>(*arg);
     if (not serving_pci.has_value()) {
-      fmt::print("Invalid serving PCI.\n");
+      fmt::print("Invalid serving PCI. Reason: {}\n", serving_pci.error());
       return;
     }
     ++arg;
 
     // Parse RNTI
-    expected<unsigned, std::string> rnti = app_services::parse_unsigned_hex<unsigned>(*arg);
+    expected<unsigned, std::string> rnti = parse_unsigned_hex<unsigned>(*arg);
     if (not rnti.has_value()) {
       fmt::print("Invalid UE RNTI.\n");
       return;
@@ -167,9 +172,9 @@ public:
           fmt::print("Missing timeout value after 'timeout' keyword.\n");
           return;
         }
-        expected<unsigned, std::string> timeout_s = app_services::parse_int<unsigned>(*arg);
+        expected<unsigned, std::string> timeout_s = parse_int<unsigned>(*arg);
         if (not timeout_s.has_value()) {
-          fmt::print("Invalid timeout value: {}.\n", *arg);
+          fmt::print("Invalid timeout value: {}. Reason: {}\n", *arg, timeout_s.error());
           return;
         }
         timeout = std::chrono::seconds{timeout_s.value()};
@@ -193,9 +198,9 @@ public:
         continue;
       }
 
-      expected<unsigned, std::string> target_pci = app_services::parse_int<unsigned>(*arg);
+      expected<unsigned, std::string> target_pci = parse_int<unsigned>(*arg);
       if (not target_pci.has_value()) {
-        fmt::print("Invalid target PCI: {}.\n", *arg);
+        fmt::print("Invalid target PCI: {}. Reason: {}\n", *arg, target_pci.error());
         return;
       }
       target_pcis.push_back(static_cast<pci_t>(target_pci.value()));
@@ -211,11 +216,16 @@ public:
       return;
     }
 
-    cu_cp.get_mobility_command_handler().trigger_conditional_handover(static_cast<pci_t>(serving_pci.value()),
-                                                                      static_cast<rnti_t>(rnti.value()),
-                                                                      target_pcis,
-                                                                      timeout,
-                                                                      t1_thres_override);
+    if (not cu_cp.get_mobility_command_handler().trigger_conditional_handover(static_cast<pci_t>(serving_pci.value()),
+                                                                              static_cast<rnti_t>(rnti.value()),
+                                                                              target_pcis,
+                                                                              timeout,
+                                                                              t1_thres_override)) {
+      fmt::print("CHO not triggered for UE with pci={} rnti={} (see CU-CP log for the cause).\n",
+                 serving_pci.value(),
+                 static_cast<rnti_t>(rnti.value()));
+      return;
+    }
     fmt::print("CHO triggered for UE with pci={} rnti={} to {} target(s) with timeout={}s.\n",
                serving_pci.value(),
                static_cast<rnti_t>(rnti.value()),
@@ -251,14 +261,14 @@ public:
 
     const auto* arg = args.begin();
 
-    expected<unsigned, std::string> serving_pci = app_services::parse_int<unsigned>(*arg);
+    expected<unsigned, std::string> serving_pci = parse_int<unsigned>(*arg);
     if (not serving_pci.has_value()) {
-      fmt::print("Invalid serving PCI.\n");
+      fmt::print("Invalid serving PCI. Reason: {}\n", serving_pci.error());
       return;
     }
     ++arg;
 
-    expected<unsigned, std::string> rnti = app_services::parse_unsigned_hex<unsigned>(*arg);
+    expected<unsigned, std::string> rnti = parse_unsigned_hex<unsigned>(*arg);
     if (not rnti.has_value()) {
       fmt::print("Invalid UE RNTI.\n");
       return;
@@ -268,9 +278,9 @@ public:
     std::optional<ocucp::cu_cp_release_redirect_nr_info> redirect_info;
 
     if (arg != args.end()) {
-      expected<unsigned, std::string> arfcn = app_services::parse_int<unsigned>(*arg);
+      expected<unsigned, std::string> arfcn = parse_int<unsigned>(*arg);
       if (not arfcn.has_value()) {
-        fmt::print("Invalid target ARFCN.\n");
+        fmt::print("Invalid target ARFCN. Reason: {}\n", arfcn.error());
         return;
       }
       ++arg;
@@ -283,7 +293,7 @@ public:
             fmt::print("Missing SCS value after 'scs' keyword.\n");
             return;
           }
-          expected<unsigned, std::string> scs_khz = app_services::parse_int<unsigned>(*arg);
+          expected<unsigned, std::string> scs_khz = parse_int<unsigned>(*arg);
           if (not scs_khz.has_value()) {
             fmt::print("Invalid SCS value: {}.\n", *arg);
             return;

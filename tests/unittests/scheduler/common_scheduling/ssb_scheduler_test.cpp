@@ -7,6 +7,7 @@
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "ocudu/ran/frame_types.h"
+#include "ocudu/ran/ssb/ssb_mapping.h"
 #include "ocudu/support/enum_utils.h"
 #include "fmt/ostream.h"
 #include <gtest/gtest.h>
@@ -25,7 +26,7 @@ struct ssb_params {
 
 std::ostream& operator<<(std::ostream& os, const ssb_params& params)
 {
-  os << "p_" << static_cast<unsigned>(to_value(params.periodicity));
+  os << "p_" << static_cast<unsigned>(to_underlying(params.periodicity));
   os << "_n" << fmt::underlying(params.band);
   os << "_arfnc_" << params.freq_arfcn.value();
   // Apply cast to avoid fmt:: complains.
@@ -100,7 +101,9 @@ static sched_cell_configuration_request_message make_cell_cfg_req_msg(const ssb_
   msg.ran.dl_cfg_common.freq_info_dl.offset_to_point_a = offset_to_point_A;
   msg.ran.dl_cfg_common.init_dl_bwp.generic_params.scs = params.ssb_scs;
   msg.ran.ssb_cfg.scs                                  = params.ssb_scs;
-  msg.ran.ssb_cfg.ssb_bitmap        = ssb_bitmap_t(test_rng::uniform_int<uint8_t>(1, params.L_max - 1), params.L_max);
+  const uint64_t max_ssb_bitmap = (params.L_max == 64U) ? ~uint64_t{0} : (uint64_t{1} << params.L_max) - 1;
+  msg.ran.ssb_cfg.ssb_beams =
+      ssb_beam_mapping(ssb_bitmap_t(test_rng::uniform_int<uint64_t>(1, max_ssb_bitmap), params.L_max));
   msg.ran.ssb_cfg.ssb_period        = params.periodicity;
   msg.ran.ssb_cfg.offset_to_point_A = offset_to_point_A;
   msg.ran.ssb_cfg.k_ssb             = k_ssb;
@@ -136,7 +139,7 @@ protected:
   {
   }
 
-  void do_run_slot() override { ssb_sched.run_slot(res_grid, next_slot); }
+  void do_run_slot() override { ssb_sched.run_slot(res_grid, next_slot.without_hyper_sfn()); }
 
   static arfcn_t compute_cutoff_freq(ssb_pattern_case ssb_case, nr_band band)
   {
@@ -210,6 +213,95 @@ private:
   ssb_scheduler ssb_sched;
 };
 
+namespace {
+
+/// SSB candidates that an FR2 cell transmits in this test. SearchSpace#0 holds the Type0-PDCCH monitoring occasions of
+/// the first MAX_NOF_SS0_SSB_CANDIDATES candidates only.
+constexpr unsigned NOF_FR2_SSB_CANDIDATES = MAX_NOF_SS0_SSB_CANDIDATES;
+
+/// Slot within the SSB burst and starting OFDM symbol of an SSB candidate.
+struct ssb_case_D_occasion {
+  unsigned slot_idx;
+  uint8_t  start_symbol;
+};
+
+/// \brief Occasions of the first NOF_FR2_SSB_CANDIDATES candidates of case D, as per TS 38.213 Section 4.1.
+///
+/// The candidate symbols are {4, 8, 16, 20} + 28 * n, which for n = 0 and n = 1 fall on the first four slots, two
+/// candidates per slot: symbols 4 and 8 on the even slots, symbols 2 and 6 on the odd ones.
+constexpr std::array<ssb_case_D_occasion, NOF_FR2_SSB_CANDIDATES> ssb_case_D_occasions = {
+    {{0, 4}, {0, 8}, {1, 2}, {1, 6}, {2, 4}, {2, 8}, {3, 2}, {3, 6}}};
+
+static sched_cell_configuration_request_message make_fr2_cell_cfg_req_msg()
+{
+  // Band n257 with 120kHz SSB SCS gives SSB pattern case D and L_max 64.
+  cell_config_builder_params params;
+  params.scs_common = subcarrier_spacing::kHz120;
+  params.dl_carrier = carrier_configuration{bs_channel_bandwidth::MHz100, 2070001, nr_band::n257, 1};
+
+  sched_cell_configuration_request_message msg =
+      sched_config_helper::make_default_sched_cell_configuration_request(params);
+
+  msg.ran.ssb_cfg.ssb_beams =
+      ssb_beam_mapping(ssb_get_L_max(msg.ran.ssb_cfg.scs, params.dl_carrier.arfcn_f_ref, params.dl_carrier.band));
+  for (unsigned ssb_idx = 0; ssb_idx != NOF_FR2_SSB_CANDIDATES; ++ssb_idx) {
+    msg.ran.ssb_cfg.ssb_beams.set_beam(ssb_idx, to_beam_id(ssb_idx));
+  }
+  msg.ran.ssb_cfg.ssb_period = ssb_periodicity::ms10;
+
+  return msg;
+}
+
+} // namespace
+
+class ssb_scheduler_fr2_test : public sub_scheduler_test_environment, public ::testing::Test
+{
+protected:
+  ssb_scheduler_fr2_test() : sub_scheduler_test_environment(make_fr2_cell_cfg_req_msg()), ssb_sched(cell_cfg) {}
+
+  void do_run_slot() override { ssb_sched.run_slot(res_grid, next_slot.without_hyper_sfn()); }
+
+private:
+  ssb_scheduler ssb_sched;
+};
+
+TEST_F(ssb_scheduler_fr2_test, transmitted_candidates_are_allocated_in_their_case_D_occasions)
+{
+  ASSERT_EQ(cell_cfg.params.ssb_cfg.ssb_beams.get_L_max(), 64U) << "Case D defines 64 SSB candidates";
+
+  // Collect the allocated candidates of one SSB period, keyed by the slot they were allocated in.
+  std::map<unsigned, std::vector<ssb_information>> allocated_ssbs;
+
+  const unsigned ssb_period_slots =
+      to_underlying(cell_cfg.params.ssb_cfg.ssb_period) * get_nof_slots_per_subframe(cell_cfg.scs_common());
+  for (unsigned i = 0; i != ssb_period_slots; ++i) {
+    run_slot();
+    const slot_point sl = res_grid[0].slot;
+    for (const ssb_information& ssb : res_grid[0].result.dl.bc.ssb_info) {
+      allocated_ssbs[sl.count() % ssb_period_slots].push_back(ssb);
+    }
+  }
+
+  // Every transmitted candidate is allocated exactly once, in its own occasion.
+  std::vector<bool> candidate_seen(NOF_FR2_SSB_CANDIDATES, false);
+  for (const auto& [slot_idx, ssbs] : allocated_ssbs) {
+    for (const ssb_information& ssb : ssbs) {
+      ASSERT_LT(ssb.ssb_index, NOF_FR2_SSB_CANDIDATES) << fmt::format("SSB index {} is not transmitted", ssb.ssb_index);
+      const ssb_case_D_occasion& expected = ssb_case_D_occasions[ssb.ssb_index];
+      ASSERT_EQ(slot_idx, expected.slot_idx) << fmt::format("SSB index {} in the wrong slot", ssb.ssb_index);
+      ASSERT_EQ(ssb.symbols, ofdm_symbol_range(expected.start_symbol, expected.start_symbol + 4U))
+          << fmt::format("SSB index {} on the wrong symbols", ssb.ssb_index);
+      ASSERT_FALSE(candidate_seen[ssb.ssb_index])
+          << fmt::format("SSB index {} allocated more than once", ssb.ssb_index);
+      candidate_seen[ssb.ssb_index] = true;
+    }
+  }
+
+  for (unsigned ssb_idx = 0; ssb_idx != NOF_FR2_SSB_CANDIDATES; ++ssb_idx) {
+    ASSERT_TRUE(candidate_seen[ssb_idx]) << fmt::format("SSB index {} was not allocated", ssb_idx);
+  }
+}
+
 class ssb_scheduler_test : public ssb_scheduler_setup, public ::testing::TestWithParam<ssb_params>
 {
 protected:
@@ -221,24 +313,25 @@ TEST_P(ssb_scheduler_test, test_time_dom_allocation)
   test_logger.info("{}", GetParam());
 
   // Get the SSB period in half radio frames
-  const unsigned ssb_period_half_sfn = to_value(cell_cfg.params.ssb_cfg.ssb_period) * 2U / 10U;
+  const unsigned ssb_period_half_sfn = to_underlying(cell_cfg.params.ssb_cfg.ssb_period) * 2U / 10U;
 
   for (unsigned i = 0; i != 1000; ++i) {
     run_slot();
     const slot_point sl = res_grid[0].slot;
 
     if (const bool is_ssb_half_sfn = sl.half_sfn() % ssb_period_half_sfn == 0U; is_ssb_half_sfn) {
-      // Check whether the L_max matches the ssb_bitmap length.
-      const uint8_t expected_l_max = cell_cfg.params.dl_carrier.arfcn_f_ref <= cutoff_freq ? 4U : 8U;
-      ASSERT_EQ(cell_cfg.params.ssb_cfg.ssb_bitmap.get_L_max(), expected_l_max);
+      // Check whether the L_max matches the SSB beam mapping size.
+      const ssb_bitmap_t ssb_bitmap     = cell_cfg.params.ssb_cfg.ssb_beams.get_ssb_bitmap();
+      const uint8_t      expected_l_max = cell_cfg.params.dl_carrier.arfcn_f_ref <= cutoff_freq ? 4U : 8U;
+      ASSERT_EQ(ssb_bitmap.get_L_max(), expected_l_max);
 
       const bool is_ssb_slot =
           cell_cfg.params.dl_carrier.arfcn_f_ref <= cutoff_freq ? sl.hrf_slot_index() <= 1U : sl.hrf_slot_index() <= 3U;
       if (is_ssb_slot) {
-        static constexpr unsigned NOF_SSB_BEAMS_PER_SLOT_FR1 = 2U;
-        const auto                slot_bitmap = cell_cfg.params.ssb_cfg.ssb_bitmap.slice<NOF_SSB_BEAMS_PER_SLOT_FR1>(
-            sl.hrf_slot_index() * NOF_SSB_BEAMS_PER_SLOT_FR1,
-            sl.hrf_slot_index() * NOF_SSB_BEAMS_PER_SLOT_FR1 + NOF_SSB_BEAMS_PER_SLOT_FR1);
+        static constexpr unsigned NOF_SSB_CANDIDATES_PER_SLOT_FR1 = 2U;
+        const auto                slot_bitmap                     = ssb_bitmap.slice<NOF_SSB_CANDIDATES_PER_SLOT_FR1>(
+            sl.hrf_slot_index() * NOF_SSB_CANDIDATES_PER_SLOT_FR1,
+            sl.hrf_slot_index() * NOF_SSB_CANDIDATES_PER_SLOT_FR1 + NOF_SSB_CANDIDATES_PER_SLOT_FR1);
 
         ASSERT_EQ(res_grid[0].result.dl.bc.ssb_info.size(), slot_bitmap.count())
             << fmt::format("Number of SSB PDUs not as expected at slot={}", sl);
@@ -251,7 +344,7 @@ TEST_P(ssb_scheduler_test, test_time_dom_allocation)
           }
           // Test the correctness of SSB PDU fields.
           const ssb_information ssb_info = *ssb_pdu_it;
-          ASSERT_EQ(ssb_info.ssb_index, sl.hrf_slot_index() * NOF_SSB_BEAMS_PER_SLOT_FR1 + j);
+          ASSERT_EQ(ssb_info.ssb_index, sl.hrf_slot_index() * NOF_SSB_CANDIDATES_PER_SLOT_FR1 + j);
           const crb_interval expected_ssb_crbs = get_ssb_crbs();
           ASSERT_EQ(expected_ssb_crbs, ssb_info.crbs);
           ASSERT_EQ(ofdm_symbol_range(starting_symbs[j], starting_symbs[j] + NOF_SYMB_PER_SSB), ssb_info.symbols);

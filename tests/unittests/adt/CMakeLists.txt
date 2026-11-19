@@ -9,6 +9,10 @@ add_executable(bounded_bitset_test bounded_bitset_test.cpp)
 target_link_libraries(bounded_bitset_test ocudulog GTest::gtest ocudu_gtest_main)
 add_test(bounded_bitset_test bounded_bitset_test)
 
+add_executable(fixed_bitset_test fixed_bitset_test.cpp)
+target_link_libraries(fixed_bitset_test ocudulog GTest::gtest ocudu_gtest_main)
+add_test(fixed_bitset_test fixed_bitset_test)
+
 add_executable(interval_test interval_test.cpp)
 target_link_libraries(interval_test ocudulog GTest::gtest GTest::gtest_main)
 add_test(interval_test interval_test)
@@ -29,9 +33,13 @@ add_executable(circular_map_test circular_map_test.cpp)
 target_link_libraries(circular_map_test ocudulog GTest::gtest GTest::gtest_main)
 gtest_discover_tests(circular_map_test)
 
+add_executable(segmented_circular_map_test segmented_circular_map_test.cpp)
+target_link_libraries(segmented_circular_map_test ocudulog GTest::gtest GTest::gtest_main)
+gtest_discover_tests(segmented_circular_map_test)
+
 add_executable(expected_test expected_test.cpp)
-target_link_libraries(expected_test ocudulog)
-add_test(expected_test expected_test)
+target_link_libraries(expected_test ocudulog GTest::gtest ocudu_gtest_main)
+gtest_discover_tests(expected_test)
 
 add_executable(tiny_optional_test tiny_optional_test.cpp)
 target_link_libraries(tiny_optional_test ocudulog GTest::gtest GTest::gtest_main)
@@ -42,15 +50,15 @@ target_link_libraries(slotted_array_test ocudulog GTest::gtest GTest::gtest_main
 add_test(slotted_array_test slotted_array_test)
 
 add_executable(span_formatter_test span_formatter_test.cpp)
-target_link_libraries(span_formatter_test ocudulog)
-add_test(span_formatter_test span_formatter_test)
+target_link_libraries(span_formatter_test ocudulog GTest::gtest ocudu_gtest_main)
+gtest_discover_tests(span_formatter_test)
 
 add_executable(static_vector_test static_vector_test.cpp)
 target_link_libraries(static_vector_test ocudulog GTest::gtest ocudu_gtest_main)
 add_test(static_vector_test static_vector_test)
 
 add_executable(unique_function_test unique_function_test.cpp)
-target_link_libraries(unique_function_test ocudulog)
+target_link_libraries(unique_function_test ocudulog GTest::gtest ocudu_gtest_main)
 add_test(unique_function_test unique_function_test)
 
 add_executable(transform_view_test transform_view_test.cpp)

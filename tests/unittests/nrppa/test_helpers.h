@@ -61,6 +61,8 @@ public:
   /// \brief Get the DU index of the UE.
   cu_cp_du_index_t get_du_index() const override { return du_index.value(); }
 
+  std::optional<nr_cell_global_id_t> get_serving_cell_id() const override { return serving_cell_id; }
+
   std::optional<cell_measurement_positioning_info>& on_measurement_results_required() override { return meas_results; }
 
   /// \brief Schedule an async task for the UE.
@@ -68,6 +70,7 @@ public:
 
   std::optional<cu_cp_ue_index_t>                  ue_index;
   std::optional<cu_cp_du_index_t>                  du_index;
+  std::optional<nr_cell_global_id_t>               serving_cell_id;
   std::optional<cell_measurement_positioning_info> meas_results;
 };
 

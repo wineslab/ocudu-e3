@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lower_phy_baseband_processor.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include "ocudu/instrumentation/traces/ru_traces.h"
 #include "ocudu/ran/slot_point_extended.h"
@@ -95,8 +96,8 @@ void lower_phy_baseband_processor::dl_process(baseband_gateway_timestamp timesta
   // Throttling mechanism to slow down the baseband processing.
   if ((system_time_throttling_ratio > 0.0) && (last_tx_time.has_value()) && (last_tx_buffer_size != 0)) {
     // Get current time and calculate the elapsed time since the last call.
-    std::chrono::time_point<std::chrono::high_resolution_clock> now     = std::chrono::high_resolution_clock::now();
-    std::chrono::nanoseconds                                    elapsed = now - *last_tx_time;
+    std::chrono::time_point<std::chrono::steady_clock> now     = std::chrono::steady_clock::now();
+    std::chrono::nanoseconds                           elapsed = now - *last_tx_time;
 
     // Calculate the number of samples from the previous transmission to the next one and convert it seconds.
     float expected_elapsed_s = static_cast<double>(last_tx_buffer_size) / srate.to_Hz<float>();
@@ -109,7 +110,7 @@ void lower_phy_baseband_processor::dl_process(baseband_gateway_timestamp timesta
       std::this_thread::sleep_until(*last_tx_time + minimum_elapsed);
     }
   }
-  last_tx_time.emplace(std::chrono::high_resolution_clock::now());
+  last_tx_time.emplace(std::chrono::steady_clock::now());
 
   // Process downlink buffer.
   downlink_processor_baseband::processing_result result =

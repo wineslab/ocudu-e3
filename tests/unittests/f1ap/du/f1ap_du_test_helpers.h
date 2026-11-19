@@ -17,6 +17,7 @@
 #include "ocudu/support/async/async_no_op_task.h"
 #include "ocudu/support/async/fifo_async_task_scheduler.h"
 #include "ocudu/support/executors/manual_task_worker.h"
+#include "ocudu/support/ocudu_assert.h"
 #include <gtest/gtest.h>
 #include <queue>
 
@@ -51,6 +52,7 @@ public:
   std::optional<f1ap_ue_configuration_response>          last_ue_cfg_response;
   std::optional<std::pair<du_ue_index_t, du_ue_index_t>> last_reestablishment_ue_indexes;
   du_positioning_info_response                           next_positioning_info_response;
+  du_positioning_meas_response                           next_positioning_meas_response;
 
   // F1AP procedures.
   std::optional<gnbcu_config_update_request>      last_cu_upd_req;
@@ -134,10 +136,25 @@ public:
 
   du_trp_info_response request_trp_info() override
   {
+    ng_ran_access_point_position_t position;
+    position.latitude_sign             = latitude_sign_t::north;
+    position.latitude                  = 6791812;
+    position.longitude                 = 1288490;
+    position.direction_of_altitude     = direction_of_altitude_t::height;
+    position.altitude                  = 35;
+    position.uncertainty_semi_major    = 10;
+    position.uncertainty_semi_minor    = 8;
+    position.orientation_of_major_axis = 45;
+    position.uncertainty_altitude      = 5;
+    position.confidence                = 90;
+    geographical_coordinates_t geo_coords;
+    geo_coords.trp_position_definition_type = trp_position_direct_t{position};
+
     return du_trp_info_response{
         {{.trp_id = trp_id_t{1}, .pci = MIN_PCI},
          {.trp_id = trp_id_t{1}, .cgi = nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::min()}},
-         {.trp_id = trp_id_t{1}, .arfcn = 368500}}};
+         {.trp_id = trp_id_t{1}, .arfcn = 368500},
+         {.trp_id = trp_id_t{1}, .geo_coords = geo_coords}}};
   }
 
   async_task<du_positioning_info_response> request_positioning_info(const du_positioning_info_request& req) override
@@ -150,11 +167,22 @@ public:
   request_positioning_measurement(const du_positioning_meas_request& req) override
   {
     last_positioning_meas_request = req;
-    return launch_no_op_task(du_positioning_meas_response{});
+    return launch_no_op_task(du_positioning_meas_response{next_positioning_meas_response});
   }
 
   /// \brief Retrieve task scheduler specific to a given UE.
   f1ap_ue_task_scheduler& get_ue_handler(du_ue_index_t ue_index) override { return ue_sched; }
+
+  void connect_time_provider(f1ap_du_time_provider& tp) { time_provider = &tp; }
+
+  f1ap_du_time_provider& get_time_provider() override
+  {
+    ocudu_assert(time_provider != nullptr, "F1AP time provider not set in test double");
+    return *time_provider;
+  }
+
+private:
+  f1ap_du_time_provider* time_provider = nullptr;
 };
 
 class dummy_ue_executor_mapper : public f1ap_ue_executor_mapper
@@ -220,9 +248,8 @@ public:
 class dummy_f1u_rx_sdu_notifier : public f1u_rx_sdu_notifier
 {
 public:
-  byte_buffer             last_pdu;
-  bool                    last_pdu_is_retx;
-  std::optional<uint32_t> last_discard_sn;
+  byte_buffer last_pdu;
+  bool        last_pdu_is_retx;
 
   void on_new_sdu(byte_buffer sdu, bool is_retx) override
   {
@@ -230,7 +257,7 @@ public:
     last_pdu_is_retx = is_retx;
   }
 
-  void on_discard_sdu(uint32_t pdcp_sn) override { last_discard_sn = pdcp_sn; }
+  void on_discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) override {}
 };
 
 class dummy_mac_f1ap_paging_handler : public f1ap_du_paging_notifier
@@ -250,6 +277,20 @@ public:
 
 private:
   mac_paging_information_handler* mac = nullptr;
+};
+
+class dummy_du_manager_f1ap_pws_handler : public f1ap_du_pws_notifier
+{
+public:
+  std::optional<write_replace_warning_information> last_pws_info;
+  std::vector<du_cell_index_t>                     cells_to_accept;
+
+  async_task<std::vector<du_cell_index_t>>
+  on_write_replace_warning_received(const write_replace_warning_information& msg) override
+  {
+    last_pws_info.emplace(msg);
+    return launch_no_op_task(cells_to_accept);
+  }
 };
 
 /// Fixture class for F1AP
@@ -308,13 +349,14 @@ protected:
   /// Dummy F1-C gateway to connect to CU-CP and send F1AP PDUs.
   dummy_f1c_connection_client f1c_gw;
 
-  timer_manager                 timer_service;
-  timer_factory                 f1ap_timers{timer_service, ctrl_worker};
-  dummy_f1ap_du_configurator    f1ap_du_cfg_handler{f1ap_timers};
-  manual_task_worker            ctrl_worker{128};
-  dummy_ue_executor_mapper      ue_exec_mapper{ctrl_worker};
-  dummy_mac_f1ap_paging_handler paging_handler;
-  std::unique_ptr<f1ap_du>      f1ap;
+  timer_manager                     timer_service;
+  timer_factory                     f1ap_timers{timer_service, ctrl_worker};
+  dummy_f1ap_du_configurator        f1ap_du_cfg_handler{f1ap_timers};
+  manual_task_worker                ctrl_worker{128};
+  dummy_ue_executor_mapper          ue_exec_mapper{ctrl_worker};
+  dummy_mac_f1ap_paging_handler     paging_handler;
+  dummy_du_manager_f1ap_pws_handler pws_handler;
+  std::unique_ptr<f1ap_du>          f1ap;
 
   /// Storage of UE context related to the current unit test.
   slotted_array<ue_test_context, MAX_NOF_DU_UES> test_ues;

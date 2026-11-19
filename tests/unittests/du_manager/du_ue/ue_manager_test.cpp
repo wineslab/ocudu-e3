@@ -3,10 +3,12 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/du/du_high/du_manager/du_cell_manager.h"
+#include "lib/du/du_high/du_manager/du_manager_mem_resources_factory.h"
 #include "lib/du/du_high/du_manager/du_ue/du_ue_manager.h"
 #include "lib/du/du_high/du_manager/metrics/du_procedure_metrics_collector.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/du_manager/du_manager_test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/mac/mac_pdu_handler.h"
 #include "ocudu/support/executors/manual_task_worker.h"
@@ -28,9 +30,13 @@ protected:
     ocudulog::fetch_basic_logger("TEST").set_level(ocudulog::basic_levels::debug);
     ocudulog::init();
 
-    // Add cells to cell manager.
-    for (const auto& cell : cells) {
-      cell_mng.add_cell(cell);
+    // Add and start cells, so that they accept UEs.
+    mac_dummy.mac_cell.wait_start.ready_ev.set();
+    for (unsigned i = 0; i != cells.size(); ++i) {
+      cell_mng.add_cell(cells[i]);
+      async_task<bool>         t = cell_mng.start(to_du_cell_index(i));
+      lazy_task_launcher<bool> launcher{t};
+      report_fatal_error_if_not(t.ready() and t.get(), "Failed to start cell={}", i);
     }
 
     // By default F1AP creates two F1-C bearers.
@@ -58,7 +64,7 @@ protected:
   {
     f1ap_ue_delete_request ue_del_req{};
     ue_del_req.ue_index = ue_index;
-    test_logger.info("TEST: Starting UE deletion with UE index={}...", fmt::underlying(ue_del_req.ue_index));
+    test_logger.info("TEST: Starting UE deletion with UE index={}...", ue_del_req.ue_index);
     ue_mng.schedule_async_task(ue_del_req.ue_index, ue_mng.handle_ue_delete_request(ue_del_req));
   }
 
@@ -104,12 +110,26 @@ protected:
                            {timers, worker, ue_execs, cell_execs},
                            {f1ap_dummy, f1ap_dummy, f1ap_dummy},
                            {f1u_teid_allocator, f1u_dummy},
-                           {mac_dummy, f1ap_dummy, f1ap_dummy, rlc_pcap},
+                           {mac_dummy,
+                            f1ap_dummy,
+                            f1ap_dummy,
+                            rlc_pcap,
+                            nullptr,
+                            rlc_drb_rx_window_seg_size,
+                            rlc_drb_rx_window_seg_pool_size,
+                            rlc_drb_tx_window_seg_size,
+                            rlc_drb_tx_window_seg_pool_size,
+                            rlc_srb_rx_window_seg_size,
+                            rlc_srb_rx_window_seg_pool_size,
+                            rlc_srb_tx_window_seg_size,
+                            rlc_srb_tx_window_seg_pool_size},
                            {mac_dummy}};
+
+  du_manager_mem_resources mem_resources{create_du_manager_mem_resources(params)};
 
   du_cell_manager                cell_mng{params};
   du_procedure_metrics_collector proc_metrics{false};
-  du_ue_manager                  ue_mng{params, cell_res_alloc, cell_mng, proc_metrics};
+  du_ue_manager                  ue_mng{params, mem_resources, cell_res_alloc, cell_mng, proc_metrics};
 };
 
 TEST_F(du_ue_manager_tester, when_ue_create_request_is_received_du_manager_requests_f1ap_and_mac_to_create_ue)
@@ -129,7 +149,7 @@ TEST_F(du_ue_manager_tester, when_ue_create_request_is_received_du_manager_reque
 
   // TEST: DU UE manager registers UE being created.
   ASSERT_TRUE(ue_mng.find_ue(ue_index) != nullptr);
-  ASSERT_EQ(to_value(ue_mng.find_ue(ue_index)->rnti), 0x4601);
+  ASSERT_EQ(to_underlying(ue_mng.find_ue(ue_index)->rnti), 0x4601);
 }
 
 TEST_F(du_ue_manager_tester,
@@ -159,6 +179,23 @@ TEST_F(du_ue_manager_tester, when_mac_fails_to_create_ue_then_no_ue_is_created_i
   // TEST: DU manager completes DU UE creation procedure with failure.
   ASSERT_EQ(ue_mng.nof_ues(), 0);
   ASSERT_FALSE(is_ue_creation_complete());
+}
+
+TEST_F(du_ue_manager_tester, when_ue_create_request_is_received_for_stopped_cell_then_it_is_discarded)
+{
+  // Action: Cell is stopped.
+  mac_dummy.mac_cell.wait_stop.ready_ev.set();
+  async_task<void>         t = cell_mng.stop_all();
+  lazy_task_launcher<void> launcher{t};
+  ASSERT_TRUE(t.ready());
+
+  // Action: UL CCCH Message received.
+  push_ul_ccch_message(create_ul_ccch_message(to_rnti(0x4601)));
+
+  // TEST: No UE creation is started.
+  ASSERT_FALSE(f1ap_dummy.last_ue_create.has_value());
+  ASSERT_FALSE(mac_dummy.last_ue_create_msg.has_value());
+  ASSERT_EQ(ue_mng.nof_ues(), 0);
 }
 
 TEST_F(du_ue_manager_tester, inexistent_ue_index_removal_is_handled)
@@ -208,7 +245,7 @@ TEST_F(du_ue_manager_tester,
   du_ue_index_t ue_index1 = get_last_ue_index();
   ASSERT_TRUE(mac_dummy.last_ue_create_msg.has_value());
   ASSERT_EQ(mac_dummy.last_ue_create_msg.value().ue_index, ue_index1);
-  ASSERT_EQ(to_value(mac_dummy.last_ue_create_msg.value().crnti), 0x4601);
+  ASSERT_EQ(to_underlying(mac_dummy.last_ue_create_msg.value().crnti), 0x4601);
   mac_completes_ue_creation(true);
 
   // Action 2: UL CCCH Message received concurrently.
@@ -216,7 +253,7 @@ TEST_F(du_ue_manager_tester,
   du_ue_index_t ue_index2 = get_last_ue_index();
   ASSERT_TRUE(mac_dummy.last_ue_create_msg.has_value());
   ASSERT_EQ(mac_dummy.last_ue_create_msg.value().ue_index, ue_index2);
-  ASSERT_EQ(to_value(mac_dummy.last_ue_create_msg.value().crnti), 0x4602);
+  ASSERT_EQ(to_underlying(mac_dummy.last_ue_create_msg.value().crnti), 0x4602);
   mac_completes_ue_creation(true);
 
   // TEST: UEs should have different UE indexes.
@@ -232,14 +269,14 @@ TEST_F(du_ue_manager_tester,
   du_ue_index_t ue_index1 = get_last_ue_index();
   ASSERT_TRUE(mac_dummy.last_ue_create_msg.has_value());
   ASSERT_EQ(mac_dummy.last_ue_create_msg.value().ue_index, ue_index1);
-  ASSERT_EQ(to_value(mac_dummy.last_ue_create_msg.value().crnti), 0x4601);
+  ASSERT_EQ(to_underlying(mac_dummy.last_ue_create_msg.value().crnti), 0x4601);
 
   // Action 2: UL CCCH Message received concurrently.
   push_ul_ccch_message(create_ul_ccch_message(to_rnti(0x4602)));
   du_ue_index_t ue_index2 = get_last_ue_index();
   ASSERT_TRUE(mac_dummy.last_ue_create_msg.has_value());
   ASSERT_EQ(mac_dummy.last_ue_create_msg.value().ue_index, ue_index2);
-  ASSERT_EQ(to_value(mac_dummy.last_ue_create_msg.value().crnti), 0x4602);
+  ASSERT_EQ(to_underlying(mac_dummy.last_ue_create_msg.value().crnti), 0x4602);
 
   // TEST: UEs should have different UE indexes.
   ASSERT_NE(ue_index1, ue_index2);
@@ -257,7 +294,7 @@ TEST_F(du_ue_manager_tester,
   // TEST: MAC only processes the first request.
   ASSERT_TRUE(mac_dummy.last_ue_create_msg.has_value());
   ASSERT_EQ(mac_dummy.last_ue_create_msg.value().ue_index, ue_index1);
-  ASSERT_EQ(to_value(mac_dummy.last_ue_create_msg.value().crnti), 0x4601);
+  ASSERT_EQ(to_underlying(mac_dummy.last_ue_create_msg.value().crnti), 0x4601);
   ASSERT_TRUE(is_ue_creation_complete());
   ASSERT_EQ(ue_mng.nof_ues(), 1);
 }
@@ -342,9 +379,9 @@ public:
     if (is_mac_rlf_cause(cause)) {
       mac_rlf_notifier.on_rlf_detected(to_mac_rlf_cause(cause));
     } else if (cause == rlf_cause::max_rlc_retxs_reached) {
-      rlc_rlf_notifier.on_max_retx();
+      rlc_rlf_notifier.on_max_retx(drb_id_t::drb1);
     } else {
-      rlc_rlf_notifier.on_protocol_failure();
+      rlc_rlf_notifier.on_protocol_failure(drb_id_t::drb1);
     }
   }
 

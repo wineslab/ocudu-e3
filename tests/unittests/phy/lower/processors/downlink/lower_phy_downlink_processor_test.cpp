@@ -5,6 +5,8 @@
 #include "downlink_processor_notifier_test_doubles.h"
 #include "pdxch/pdxch_processor_notifier_test_doubles.h"
 #include "pdxch/pdxch_processor_test_doubles.h"
+#include "support/compare_sequences.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_reader_view.h"
 #include "ocudu/phy/antenna_ports.h"
 #include "ocudu/phy/lower/processors/downlink/downlink_processor_baseband.h"
@@ -58,24 +60,19 @@ std::ostream& operator<<(std::ostream& os, slot_point slot)
 std::ostream& operator<<(std::ostream& os, const pdxch_processor_configuration& config)
 {
   fmt::print(os,
-             "CP={} SCS={} SRate={} BW={} CenterFreq={}Hz NofTxPorts={}",
+             "CP={} SCS={} SRate={} BW={} CenterFreq={}Hz AntTopology={}",
              config.cp,
              to_string(config.scs),
              config.srate,
              config.bandwidth_rb,
              config.center_freq_Hz,
-             config.nof_tx_ports);
+             to_string(config.tx_ant_topology));
   return os;
 }
 
 bool operator==(const pdxch_processor_baseband::slot_context left, const pdxch_processor_baseband::slot_context right)
 {
   return (left.slot == right.slot) && (left.sector == right.sector);
-}
-
-bool operator==(span<const cf_t> left, span<const cf_t> right)
-{
-  return std::equal(left.begin(), left.end(), right.begin(), right.end());
 }
 
 bool operator==(const baseband_gateway_buffer_reader& left, const baseband_gateway_buffer_reader& right)
@@ -121,13 +118,13 @@ bool operator==(const pdxch_processor_configuration& left, const pdxch_processor
 {
   return (left.cp == right.cp) && (left.scs == right.scs) && (left.srate == right.srate) &&
          (left.bandwidth_rb == right.bandwidth_rb) && (left.center_freq_Hz == right.center_freq_Hz) &&
-         (left.nof_tx_ports == right.nof_tx_ports);
+         (left.tx_ant_topology == right.tx_ant_topology);
 }
 
 } // namespace ocudu
 
 using LowerPhyDownlinkProcessorParams =
-    std::tuple<unsigned, sampling_rate, std::tuple<subcarrier_spacing, cyclic_prefix>>;
+    std::tuple<antenna_topology, sampling_rate, std::tuple<subcarrier_spacing, cyclic_prefix>>;
 
 namespace {
 
@@ -155,10 +152,10 @@ protected:
     ASSERT_NE(dl_proc_factory, nullptr);
 
     // Select parameters.
-    nof_tx_ports = std::get<0>(GetParam());
-    srate        = std::get<1>(GetParam());
-    scs          = std::get<0>(std::get<2>(GetParam()));
-    cp           = std::get<1>(std::get<2>(GetParam()));
+    tx_ant_topology = std::get<0>(GetParam());
+    srate           = std::get<1>(GetParam());
+    scs             = std::get<0>(std::get<2>(GetParam()));
+    cp              = std::get<1>(std::get<2>(GetParam()));
 
     nof_symbols_per_slot   = get_nsymb_per_slot(cp);
     nof_slots_per_subframe = get_nof_slots_per_subframe(scs);
@@ -174,7 +171,7 @@ protected:
                                                .rate                = srate,
                                                .bandwidth_prb       = bandwidth_rb,
                                                .center_frequency_Hz = center_freq_Hz,
-                                               .nof_tx_ports        = nof_tx_ports};
+                                               .tx_ant_topology     = tx_ant_topology};
 
     // Create processor.
     dl_processor = dl_proc_factory->create(config, modulation_executor);
@@ -197,7 +194,7 @@ protected:
   sampling_rate      srate;
   unsigned           bandwidth_rb;
   double             center_freq_Hz;
-  unsigned           nof_tx_ports;
+  antenna_topology   tx_ant_topology;
   unsigned           nof_symbols_per_slot;
   unsigned           nof_slots_per_subframe;
   unsigned           nof_slots_per_frame;
@@ -230,10 +227,10 @@ protected:
     ASSERT_NE(dl_proc_factory, nullptr);
 
     // Set test parameters.
-    scs          = subcarrier_spacing::kHz30;
-    cp           = cyclic_prefix::NORMAL;
-    srate        = sampling_rate::from_MHz(7.68);
-    nof_tx_ports = 1;
+    scs             = subcarrier_spacing::kHz30;
+    cp              = cyclic_prefix::NORMAL;
+    srate           = sampling_rate::from_MHz(7.68);
+    tx_ant_topology = antenna_topology::one_port;
 
     // Prepare configuration.
     downlink_processor_configuration config = {.sector_id           = 0,
@@ -242,7 +239,7 @@ protected:
                                                .rate                = srate,
                                                .bandwidth_prb       = MAX_NOF_PRBS,
                                                .center_frequency_Hz = 3.5e6,
-                                               .nof_tx_ports        = nof_tx_ports};
+                                               .tx_ant_topology     = tx_ant_topology};
 
     // Create processor.
     dl_processor = dl_proc_factory->create(config, modulation_executor);
@@ -256,7 +253,7 @@ protected:
   sampling_rate      srate;
   subcarrier_spacing scs;
   cyclic_prefix      cp;
-  unsigned           nof_tx_ports;
+  antenna_topology   tx_ant_topology;
 
 private:
 };
@@ -266,12 +263,12 @@ private:
 TEST_P(LowerPhyDownlinkProcessorFixture, PdxchConfiguration)
 {
   // Assert PDxCH factory configuration.
-  pdxch_processor_configuration expected_pdxch_config = {.cp             = cp,
-                                                         .scs            = scs,
-                                                         .srate          = srate,
-                                                         .bandwidth_rb   = bandwidth_rb,
-                                                         .center_freq_Hz = center_freq_Hz,
-                                                         .nof_tx_ports   = nof_tx_ports};
+  pdxch_processor_configuration expected_pdxch_config = {.cp              = cp,
+                                                         .scs             = scs,
+                                                         .srate           = srate,
+                                                         .bandwidth_rb    = bandwidth_rb,
+                                                         .center_freq_Hz  = center_freq_Hz,
+                                                         .tx_ant_topology = tx_ant_topology};
   ASSERT_EQ(expected_pdxch_config, pdxch_proc_spy->get_configuration());
 }
 
@@ -349,6 +346,9 @@ TEST_P(LowerPhyDownlinkProcessorFixture, UnalignedFlow)
       ASSERT_EQ(pdxch_proc_entries.size(), 1);
       auto& pdxch_proc_entry = pdxch_proc_entries.back();
       ASSERT_EQ(pdxch_proc_entry.context, slot_context);
+
+      // The PDxCH processor returns the full slot, while the resulting baseband buffer is resized to the remaining
+      // samples until the next slot boundary. They must therefore differ.
       ASSERT_NE(pdxch_proc_entry.samples, result.buffer->get_reader());
     } else {
       // Assert PDxCH processor call.
@@ -356,7 +356,14 @@ TEST_P(LowerPhyDownlinkProcessorFixture, UnalignedFlow)
       ASSERT_EQ(pdxch_proc_entries.size(), 1);
       auto& pdxch_proc_entry = pdxch_proc_entries.back();
       ASSERT_EQ(pdxch_proc_entry.context, slot_context);
-      ASSERT_EQ(pdxch_proc_entry.samples, result.buffer->get_reader());
+      {
+        baseband_gateway_buffer_read_only expected(result.buffer->get_reader());
+        for (unsigned channel = 0; channel != pdxch_proc_entry.samples.get_nof_channels(); ++channel) {
+          error_type<std::string> compare_result = compare_sequences(
+              pdxch_proc_entry.samples.get_channel_buffer(channel), expected.get_channel_buffer(channel));
+          ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+        }
+      }
     }
 
     // Assert the slot boundary. The slot must be notified always.

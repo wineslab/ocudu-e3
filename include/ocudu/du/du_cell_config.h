@@ -6,6 +6,8 @@
 
 #include "ocudu/mac/config/mac_cell_group_params.h"
 #include "ocudu/ran/nr_cgi.h"
+#include "ocudu/ran/positioning/trp_information_exchange.h"
+#include "ocudu/ran/prs/prs.h"
 #include "ocudu/ran/sib/system_info_config.h"
 #include "ocudu/ran/tac.h"
 #include "ocudu/scheduler/config/ran_cell_config.h"
@@ -26,6 +28,12 @@ struct phy_cell_group_params {
 struct du_cell_config {
   tac_t               tac;
   nr_cell_global_id_t nr_cgi;
+
+  /// \brief TACs broadcast in \c trackingAreaList, TS 38.331. NTN cells only.
+  ///
+  /// Empty in a TN cell, which broadcasts the mutually exclusive \c trackingAreaCode. When set, holds at least two
+  /// entries led by \c tac.
+  tac_list_t tac_list;
 
   /// Whether the DU automatically attempts to activate the cell or waits for a command from the SMO.
   /// Note: If set to false, the DU won't add this cell to the list of served cells in the F1 Setup Request.
@@ -50,6 +58,10 @@ struct du_cell_config {
 
   /// List of RAN slices to support in the scheduler.
   std::vector<slice_rrm_policy_config> rrm_policy_members;
+
+  /// Geographical coordinates of the cell/TRP antenna, Direct definition (normal or high accuracy), as per
+  /// TS 38.473, Section 9.3.1.184. Reported to the gNB-CU in the TRP Information Response procedure.
+  std::optional<trp_position_direct_accuracy_t> trp_geo_coordinates;
 };
 
 } // namespace odu

@@ -12,17 +12,24 @@ namespace ocudu::ocucp {
 class du_processor_repository;
 struct cu_cp_paging_message;
 
+/// Paging message handler dependencies.
+struct paging_message_handler_dependencies {
+  du_processor_repository& dus;
+  ocudulog::basic_logger&  logger;
+};
+
 /// Class responsible for handling incoming paging messages and forwarding them to the appropriate DUs.
 class paging_message_handler
 {
 public:
-  paging_message_handler(du_processor_repository& dus_);
+  explicit paging_message_handler(const paging_message_handler_dependencies& dependencies);
 
   /// Handle Paging message sent by the core network and distribute across the served DU cells.
-  void handle_paging_message(const cu_cp_paging_message& msg);
+  void handle_paging_message(const cu_cp_paging_message& msg) const;
 
 private:
-  bool handle_du_paging_message(cu_cp_du_index_t du_index, const cu_cp_paging_message& msg);
+  /// Handles the DU paging message.
+  bool handle_du_paging_message(cu_cp_du_index_t du_index, const cu_cp_paging_message& msg) const;
 
   du_processor_repository& dus;
   ocudulog::basic_logger&  logger;

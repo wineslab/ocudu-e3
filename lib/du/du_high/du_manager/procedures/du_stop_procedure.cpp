@@ -4,6 +4,7 @@
 
 #include "du_stop_procedure.h"
 #include "await_all_ues.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/async_timer.h"
 #include "ocudu/support/async/execute_on.h"
 

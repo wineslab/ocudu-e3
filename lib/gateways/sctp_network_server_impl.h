@@ -3,9 +3,13 @@
 
 #pragma once
 
+#include "sctp_dtls.h"
+#include "sctp_dtls_ssl.h"
 #include "sctp_network_gateway_common_impl.h"
+#include "sctp_network_gateway_dtls_interface.h"
 #include "ocudu/gateways/sctp_network_server.h"
 #include "ocudu/support/async/manual_event.h"
+#include "ocudu/support/synchronization/sync_event.h"
 #include <algorithm>
 #include <list>
 #include <unordered_map>
@@ -20,7 +24,9 @@ namespace ocudu {
 ///
 /// The io_broker thread only performs the raw sctp_recvmsg.
 //  All data and notification handling is deferred back to app_exec.
-class sctp_network_server_impl : public sctp_network_server, public sctp_network_gateway_common_impl
+class sctp_network_server_impl : public sctp_network_server,
+                                 public sctp_network_gateway_common_impl,
+                                 public sctp_network_gateway_dtls_interface
 {
   explicit sctp_network_server_impl(const sctp_network_gateway_config& sctp_cfg,
                                     io_broker&                         broker,
@@ -42,6 +48,11 @@ public:
   int get_socket_fd() const override { return socket.fd().value(); }
 
   void receive();
+  void receive_impl(std::vector<uint8_t>   payload,
+                    struct sctp_sndrcvinfo sri,
+                    int                    msg_flags,
+                    sockaddr_storage       msg_src_addr,
+                    socklen_t              msg_src_addrlen);
 
   bool listen() override;
 
@@ -53,13 +64,21 @@ private:
   class sctp_send_notifier;
 
   struct sctp_associaton_context {
-    const int                          assoc_id;
+    const int assoc_id;
+    const int fd;
+
     transport_layer_address            addr;
     std::shared_ptr<std::atomic<bool>> association_shutdown_received;
+    io_broker::subscriber              io_sub;
 
     std::unique_ptr<sctp_association_sdu_notifier> sctp_data_recv_notifier;
+    std::unique_ptr<dtls_ssl>                      ssl;
 
-    sctp_associaton_context(int assoc_id);
+    sctp_associaton_context(int assoc_id, int fd_, sctp_network_server_impl& parent_);
+    void                      receive();
+    void                      receive_plain();
+    void                      receive_dtls();
+    sctp_network_server_impl& parent;
   };
 
   // We use unique_ptr to maintain address stability.
@@ -71,14 +90,18 @@ private:
 
   // Subscribe to IO broker to listen for incoming SCTP messages/events.
   bool subscribe_to_broker();
+  bool subscribe_association_to_broker(unique_fd assoc_fd, sctp_associaton_context& assoc_ctxt);
 
   void handle_socket_shutdown(const char* cause);
+  void defer_socket_shutdown(const char* cause, const std::optional<scoped_sync_token>& token = std::nullopt);
 
   void handle_data(int assoc_id, span<const uint8_t> payload);
-  void handle_notification(span<const uint8_t>           payload,
-                           const struct sctp_sndrcvinfo& sri,
-                           const sockaddr&               src_addr,
-                           socklen_t                     src_addr_len);
+  void handle_notification(span<const uint8_t> payload,
+                           sctp_assoc_t        assoc,
+                           const sockaddr&     src_addr,
+                           socklen_t           src_addr_len);
+
+  void handle_dtls_notification(const union sctp_notification* notif, int assoc) override;
   void handle_association_shutdown(int assoc_id, const char* cause);
   void handle_sctp_shutdown_comp(int assoc_id);
   void handle_sctp_comm_lost(int assoc_id);
@@ -88,6 +111,8 @@ private:
 
   /// Remove association from the map, triggering recv notifier destruction.
   void remove_association(int assoc_id);
+
+  void mark_connection_as_complete(const transport_layer_address& addr);
 
   struct pending_connect {
     std::vector<transport_layer_address> dest_addrs;
@@ -109,6 +134,9 @@ private:
 
   association_map            associations;
   std::list<pending_connect> pending_connects;
+
+  /// DTLS Context
+  std::unique_ptr<dtls_context> dtls_ctxt;
 };
 
 } // namespace ocudu

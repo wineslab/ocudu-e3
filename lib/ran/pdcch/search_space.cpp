@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/pdcch/search_space.h"
-#include "ocudu/ran/band_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/pdcch/aggregation_level.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_coreset_config.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_occasions.h"
@@ -46,12 +46,12 @@ search_space_configuration::search_space_configuration(nr_band             band,
   // TODO: Revise the below assignment when other multiplexing patterns are supported.
   duration = 2;
 
-  for (unsigned ssb_idx = 0; ssb_idx < MAX_NUM_BEAMS; ++ssb_idx) {
+  for (unsigned ssb_idx = 0; ssb_idx < MAX_NOF_SS0_SSB_CANDIDATES; ++ssb_idx) {
     monitoring_slot_offset.push_back(
         ocudu::get_type0_pdcch_css_n0(static_cast<unsigned>(ss0_occasion.offset), ss0_occasion.M, common_scs, ssb_idx));
   }
 
-  for (unsigned ssb_idx = 0; ssb_idx < MAX_NUM_BEAMS; ++ssb_idx) {
+  for (unsigned ssb_idx = 0; ssb_idx < MAX_NOF_SS0_SSB_CANDIDATES; ++ssb_idx) {
     search_space_configuration::monitoring_symbols_within_slot_t symbols_within_slot(NOF_OFDM_SYM_PER_SLOT_NORMAL_CP);
     symbols_within_slot.set(ss0_occasion.start_symbol[ssb_idx % ss0_occasion.start_symbol.size()], true);
     monitoring_symbols_within_slot.push_back(symbols_within_slot);

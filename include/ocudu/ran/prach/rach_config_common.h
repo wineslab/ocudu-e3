@@ -8,8 +8,8 @@
 #include "ocudu/ran/meas_units.h"
 #include "ocudu/ran/prach/prach_configuration.h"
 #include "ocudu/ran/prach/restricted_set_config.h"
+#include "ocudu/ran/prach/ssb_per_rach_occasions.h"
 #include "ocudu/ran/sch/sch_mcs.h"
-#include "ocudu/ran/subcarrier_spacing.h"
 #include <chrono>
 #include <optional>
 #include <vector>
@@ -24,17 +24,17 @@ struct rach_config_generic {
   /// Values: {0,...,255}.
   uint8_t prach_config_index;
   /// Msg2 RAR window length in #slots. Network configures a value < 10msec. Values: (1, 2, 4, 8, 10, 20, 40, 80).
-  unsigned ra_resp_window;
+  uint8_t ra_resp_window;
   /// Number of PRACH occasions FDMed in one time instance as per TS38.211, clause 6.3.3.2.
   unsigned msg1_fdm = 1;
   /// Offset of lowest PRACH transmission occasion in frequency domain respective to PRB 0,
   /// as per TS38.211, clause 6.3.3.2. Possible values: {0,...,MAX_NOF_PRB - 1}.
-  unsigned msg1_frequency_start;
+  uint16_t msg1_frequency_start;
   /// Zero-correlation zone configuration number as per TS38.331 "zeroCorrelationZoneConfig", used to derive N_{CS}.
   uint16_t zero_correlation_zone_config;
   /// \brief \c preambleReceivedTargetPower, part of \c RACH-ConfigGeneric, TS 38.331.
   /// Target power level at the network receiver side, in dBm. Only values multiple of 2 are valid.
-  bounded_integer<int, -202, -60> preamble_rx_target_pw;
+  bounded_integer<int16_t, -202, -60> preamble_rx_target_pw;
   /// Max number of RA preamble transmissions performed before declaring a failure. Values {3, 4, 5, 6, 7, 8, 10, 20,
   /// 50, 100, 200}.
   uint8_t preamble_trans_max = 7;
@@ -54,7 +54,7 @@ struct rach_config_generic {
 /// Parameters to configure prioritized random access.
 struct ra_prioritization {
   enum power_ramp_step_high_priority : uint8_t { db0 = 0, db2 = 2, db4 = 4, db6 = 6 };
-  enum scaling_factor_bi { zero, dot25, dot5, dot75 };
+  enum scaling_factor_bi : uint8_t { zero, dot25, dot5, dot75 };
 
   /// Power ramping step applied for the prioritized RA procedure.
   power_ramp_step_high_priority pwr_ramp_step_hi_prio;
@@ -110,7 +110,7 @@ struct rach_config_common_two_step {
 struct rach_config_common {
   rach_config_generic rach_cfg_generic;
   /// Total number of preambles used for contention based and contention free RA. Values: (1..64).
-  unsigned total_nof_ra_preambles = MAX_NOF_RA_PREAMBLES_PER_OCCASION;
+  uint8_t total_nof_ra_preambles = MAX_NOF_RA_PREAMBLES_PER_OCCASION;
   /// Maximum time for the Contention Resolution. Values: {8, 16, 24, 32, 40, 48, 56, 64}.
   std::chrono::milliseconds ra_con_res_timer{64};
   /// PRACH Root Sequence Index can be of 2 types, as per \c prach-RootSequenceIndex, \c RACH-ConfigCommon, TS 38.331.
@@ -118,7 +118,7 @@ struct rach_config_common {
   bool is_prach_root_seq_index_l839;
   /// PRACH root sequence index. Values: (1..839).
   /// \remark See TS 38.211, clause 6.3.3.1.
-  unsigned prach_root_seq_index;
+  uint16_t prach_root_seq_index;
   /// \brief Subcarrier spacing of PRACH as per TS38.331, "RACH-ConfigCommon". If invalid, the UE applies the SCS as
   /// derived from the prach-ConfigurationIndex in RACH-ConfigGeneric as per TS38.211 Tables 6.3.3.1-[1-3].
   subcarrier_spacing    msg1_scs;
@@ -151,16 +151,56 @@ struct rach_config_common {
 
 namespace ra_helper {
 
-/// Determines range of RA preambles associated with CFRA.
-inline interval<unsigned> get_cfra_preambles(const rach_config_common& rach_cfg)
+/// Determines the number of RA preambles per SSB.
+inline uint8_t get_preambles_per_ssb(const rach_config_common& rach_cfg)
 {
-  const auto nof_cb_preambles = rach_cfg.nof_cb_preambles_per_ssb;
-  const auto nof_msga_preambles =
-      rach_cfg.two_step_rach_cfg.has_value() ? rach_cfg.two_step_rach_cfg->cb_preambles_per_ssb_per_shared_ro : 0U;
+  // For fractional values (< 1 SSB per RO), one SSB covers multiple ROs and all preambles in the RO belong to that
+  // SSB.
+  return rach_cfg.total_nof_ra_preambles / get_nof_ssb_per_ro(rach_cfg.nof_ssb_per_ro);
+}
 
-  // Preambles above the CB (4-step) and MsgA (2-step CB) ranges are reserved for CFRA.
-  const unsigned cfra_start = nof_cb_preambles + nof_msga_preambles;
-  return {cfra_start, rach_cfg.total_nof_ra_preambles};
+/// Determines the number of 2-step RACH (MsgA) contention-based preambles per SSB, or 0 if 2-step RACH is disabled.
+inline uint8_t get_msga_cb_preambles_per_ssb(const rach_config_common& rach_cfg)
+{
+  return rach_cfg.two_step_rach_cfg.has_value() ? rach_cfg.two_step_rach_cfg->cb_preambles_per_ssb_per_shared_ro : 0U;
+}
+
+/// Determines the number of 4-step RACH (Msg1) contention-free preambles per SSB.
+inline uint8_t get_msg1_cfra_preambles_per_ssb(const rach_config_common& rach_cfg)
+{
+  return get_preambles_per_ssb(rach_cfg) - rach_cfg.nof_cb_preambles_per_ssb - get_msga_cb_preambles_per_ssb(rach_cfg);
+}
+
+/// Determine if a PRACH preamble detected in a shared RO is a 2-step RACH (MsgA) preamble.
+///
+/// With shared occasions, per SSB the preamble set is split as follows (see TS 38.321, 5.1.1 and TS 38.331):
+///   [0,              nof_cb_preambles_per_ssb)                              → 4-step CB preambles
+///   [nof_cb_preambles_per_ssb, ... + cb_preambles_per_ssb_per_shared_ro)   → 2-step CB (MsgA) preambles
+///   [... + cb_preambles_per_ssb_per_shared_ro, preambles_per_ssb)          → non-CB preambles
+inline bool is_msga_cb_preamble(const rach_config_common& rach_cfg, uint8_t preamble_id)
+{
+  if (not rach_cfg.two_step_rach_cfg.has_value()) {
+    return false;
+  }
+  const uint8_t preambles_per_ssb = get_preambles_per_ssb(rach_cfg);
+  // Preamble ID relative to the start of its SSB's preamble set.
+  const uint8_t local_id = preamble_id % preambles_per_ssb;
+  return local_id >= rach_cfg.nof_cb_preambles_per_ssb and
+         local_id < rach_cfg.nof_cb_preambles_per_ssb + get_msga_cb_preambles_per_ssb(rach_cfg);
+}
+
+/// Determine if a PRACH preamble detected is a 4-step RACH (Msg1) CF preamble.
+///
+/// With shared occasions, per SSB the preamble set is split as follows (see TS 38.321, 5.1.1 and TS 38.331):
+///   [0,              nof_cb_preambles_per_ssb)                              → 4-step CB preambles
+///   [nof_cb_preambles_per_ssb, ... + cb_preambles_per_ssb_per_shared_ro)   → 2-step CB (MsgA) preambles
+///   [... + cb_preambles_per_ssb_per_shared_ro, preambles_per_ssb)          → non-CB preambles
+inline bool is_msg1_cf_preamble(const rach_config_common& rach_cfg, uint8_t preamble_id)
+{
+  const uint8_t preambles_per_ssb = get_preambles_per_ssb(rach_cfg);
+  // Preamble ID relative to the start of its SSB's preamble set.
+  const uint8_t local_id = preamble_id % preambles_per_ssb;
+  return local_id >= rach_cfg.nof_cb_preambles_per_ssb + get_msga_cb_preambles_per_ssb(rach_cfg);
 }
 
 } // namespace ra_helper

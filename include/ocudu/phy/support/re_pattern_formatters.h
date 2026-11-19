@@ -6,7 +6,7 @@
 
 #include "ocudu/phy/support/re_pattern.h"
 #include "ocudu/support/format/delimited_formatter.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 
 namespace fmt {
 

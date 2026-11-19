@@ -108,35 +108,3 @@ protected:
 };
 
 } // namespace ocudu
-
-namespace fmt {
-
-/// \brief Custom formatter for byte_buffer_view.
-template <>
-struct formatter<ocudu::byte_buffer_view> {
-  enum { hexadecimal, binary } mode = hexadecimal;
-
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    auto it = ctx.begin();
-    while (it != ctx.end() and *it != '}') {
-      if (*it == 'b') {
-        mode = binary;
-      }
-      ++it;
-    }
-    return it;
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::byte_buffer_view& buf, FormatContext& ctx) const
-  {
-    if (mode == hexadecimal) {
-      return format_to(ctx.out(), "{:0>2x}", fmt::join(buf.begin(), buf.end(), " "));
-    }
-    return format_to(ctx.out(), "{:0>8b}", fmt::join(buf.begin(), buf.end(), " "));
-  }
-};
-
-} // namespace fmt

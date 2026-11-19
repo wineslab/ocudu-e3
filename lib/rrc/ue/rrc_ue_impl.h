@@ -25,17 +25,19 @@ public:
               rrc_ue_measurement_notifier&           measurement_notifier_,
               rrc_ue_cu_cp_ue_notifier&              cu_cp_ue_notifier_,
               rrc_ue_event_notifier&                 metrics_notifier_,
+              rrc_ue_srb_pdcp_manager&               pdcp_manager_,
               cu_cp_ue_index_t                       ue_index_,
               rnti_t                                 c_rnti_,
               const rrc_cell_context&                cell_,
               const rrc_ue_cfg_t&                    cfg_,
               const byte_buffer&                     du_to_cu_container_,
-              std::optional<rrc_ue_transfer_context> rrc_context);
+              std::optional<rrc_ue_transfer_context> rrc_context,
+              std::optional<rrc_resume_context_t>    remote_resume_context = std::nullopt);
   ~rrc_ue_impl();
 
   // rrc_ul_pdu_handler
   void handle_ul_ccch_pdu(byte_buffer pdu, rnti_t c_rnti) override;
-  void handle_ul_dcch_pdu(const srb_id_t srb_id, byte_buffer pdcp_pdu) override;
+  void handle_ul_dcch_pdu(srb_id_t srb_id, byte_buffer rrc_pdu, bool integrity_verified) override;
 
   // rrc_ue_interface
   rrc_ue_controller&              get_controller() override { return *this; }
@@ -53,7 +55,12 @@ public:
   rrc_ue_security_mode_command_context get_security_mode_command_context() override;
   async_task<bool>                     handle_security_mode_complete_expected(uint8_t transaction_id) override;
   byte_buffer                          get_packed_ue_capability_rat_container_list() const override;
-  byte_buffer                          get_packed_ue_radio_access_cap_info() const override;
+  bool                                 verify_reestablishment_short_mac_i(const security::sec_short_mac_i& short_mac_i,
+                                                                          pci_t                            source_pci,
+                                                                          rnti_t                           source_c_rnti,
+                                                                          nr_cell_identity                 target_nci) override;
+  bool        verify_resume_mac_i(const security::sec_short_mac_i& resume_mac_i, nr_cell_identity target_nci) override;
+  byte_buffer get_packed_ue_radio_access_cap_info() const override;
   async_task<bool> handle_rrc_reconfiguration_request(const rrc_reconfiguration_procedure_request& msg) override;
   rrc_ue_handover_reconfiguration_context
   get_rrc_ue_handover_reconfiguration_context(const rrc_reconfiguration_procedure_request& request) override;
@@ -64,6 +71,14 @@ public:
                                                                      bool release_on_failure = true) override;
   bool             store_ue_capabilities(byte_buffer ue_capabilities) override;
   async_task<bool> handle_rrc_ue_capability_transfer_request(const rrc_ue_capability_transfer_request& msg) override;
+  void             fill_ue_derived_location(cu_cp_user_location_info_nr& user_location_info) const override;
+  void             request_coarse_ue_location() override;
+
+  /// Returns the TAC of the configured area holding the coarse position the UE reported, if any.
+  std::optional<tac_t> get_ue_location_derived_tac() const;
+
+  /// Returns the Mapped Cell ID of the configured area holding the coarse position the UE reported, if any.
+  std::optional<nr_cell_identity> get_ue_mapped_cell_id() const;
   rrc_ue_release_context
                           get_rrc_ue_release_context(bool                                          requires_rrc_message,
                                                      std::optional<std::chrono::seconds>           release_wait_time = std::nullopt,
@@ -71,17 +86,18 @@ public:
                                                      std::optional<cu_cp_release_redirect_nr_info> redirect_nr_info = std::nullopt) override;
   rrc_ue_transfer_context get_transfer_context() override;
   std::optional<rrc_meas_cfg>
-                         generate_meas_config(const std::optional<rrc_meas_cfg>& current_meas_config = std::nullopt,
-                                              bool                               cond_meas           = false,
-                                              span<const pci_t>                  candidate_pcis      = {}) override;
-  byte_buffer            get_packed_meas_config(span<const pci_t> candidate_pcis = {}) override;
-  void                   update_meas_config(const rrc_meas_cfg& cfg) override;
-  std::optional<uint8_t> get_serving_cell_mo() override;
-  byte_buffer            get_rrc_handover_command(const rrc_reconfiguration_procedure_request& request,
-                                                  unsigned                                     transaction_id) override;
-  byte_buffer            handle_rrc_handover_command(byte_buffer cmd) override;
-  bool                   handle_rrc_handover_preparation_info(byte_buffer pdu) override;
-  void                   create_srb(const srb_creation_message& msg) override;
+              generate_meas_config(const std::optional<rrc_meas_cfg>& current_meas_config = std::nullopt,
+                                   bool                               cond_meas           = false,
+                                   span<const pci_t>                  candidate_pcis      = {}) override;
+  byte_buffer get_packed_meas_config(span<const pci_t> candidate_pcis = {}) override;
+  void        update_meas_config(const rrc_meas_cfg& cfg) override;
+  std::optional<rrc_meas_cfg>           get_meas_config() override { return context.meas_cfg; }
+  std::optional<uint8_t>                get_serving_cell_mo() override;
+  byte_buffer                           get_rrc_handover_command(const rrc_reconfiguration_procedure_request& request,
+                                                                 unsigned                                     transaction_id) override;
+  byte_buffer                           handle_rrc_handover_command(byte_buffer cmd) override;
+  bool                                  handle_rrc_handover_preparation_info(byte_buffer pdu) override;
+  void                                  create_srb(const srb_creation_message& msg) override;
   static_vector<srb_id_t, MAX_NOF_SRBS> get_srbs() override;
   void                                  set_rrc_state(rrc_state state) override { context.state = state; }
   rrc_state                             get_rrc_state() const override;
@@ -128,8 +144,11 @@ private:
   void handle_rrc_resume_request(const asn1::rrc_nr::rrc_resume_request_s& msg, rnti_t c_rnti);
   void handle_ul_info_transfer(const asn1::rrc_nr::ul_info_transfer_ies_s& ul_info_transfer);
   void handle_security_mode_complete(const asn1::rrc_nr::security_mode_complete_s& msg);
+
   void handle_measurement_report(const asn1::rrc_nr::meas_report_s& msg);
   void handle_rrc_transaction_complete(const asn1::rrc_nr::ul_dcch_msg_s& msg, uint8_t transaction_id_);
+  /// Dispatches the UL-DCCH message class extension, which is where UEInformationResponse lives.
+  void handle_ul_dcch_msg_class_ext(const asn1::rrc_nr::ul_dcch_msg_s& ul_dcch_msg, bool integrity_verified);
   void cancel_rrc_transaction(uint8_t transaction_id_);
 
   // message senders
@@ -144,6 +163,7 @@ private:
   // rrc_ue_security_mode_command_proc_notifier
   void on_new_dl_dcch(srb_id_t srb_id, const asn1::rrc_nr::dl_dcch_msg_s& dl_dcch_msg) override;
   void on_new_as_security_context(bool security_mode_active) override;
+  void on_as_security_activated() override;
 
   // helpers
   void handle_illegal_pdu_integrity(const char* msg, bool integrity_verified);
@@ -160,9 +180,6 @@ private:
 
   // RRC procedures handling
   std::unique_ptr<rrc_ue_event_manager> event_mng;
-
-  /// RRC timer constants
-  const unsigned rrc_reject_max_wait_time_s = 16;
 };
 
 } // namespace ocudu::ocucp

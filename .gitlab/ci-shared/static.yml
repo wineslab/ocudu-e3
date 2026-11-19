@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
-
 include:
   - local: .gitlab/ci/static/version.yml
 
@@ -28,7 +27,7 @@ include:
       check_headers() {
         EXIT_CODE=0
         reuse --version || EXIT_CODE=$?
-        reuse lint || EXIT_CODE=$?
+        reuse --no-multiprocessing lint || EXIT_CODE=$?
         annotate_headers.sh -s || EXIT_CODE=$?
         is-pristine-repo.sh || EXIT_CODE=$?
         exit $EXIT_CODE
@@ -37,31 +36,62 @@ include:
 
 .code-format:
   extends: .static
+  # This template is shared with repositories that do not use every formatter, so each check is skipped when its
+  # configuration file is missing. Override these paths when a repository keeps its configuration elsewhere, except
+  # for CLANG_FORMAT_FILE, which only gates the check: clang-format finds its own configuration
+  variables: &format_config_files
+    CLANG_FORMAT_FILE: ${CPP_SRC_DIR}/.clang-format
+    PRETTIER_FILE: ${CI_PROJECT_DIR}/.prettierrc
+    MARKDOWNLINT_FILE: ${CI_PROJECT_DIR}/.markdownlint-cli2.jsonc
+    YAMLLINT_FILE: ${CI_PROJECT_DIR}/.yamllint
   script:
     - |
       check_code_format() {
-        run-clang-format-diff.sh $CI_MERGE_REQUEST_DIFF_BASE_SHA
-        hex2lowercase.sh
-        is-pristine-repo.sh
+        EXIT_CODE=0
+        if [ -f "$CLANG_FORMAT_FILE" ]; then
+          run-clang-format-diff.sh $CI_MERGE_REQUEST_DIFF_BASE_SHA || EXIT_CODE=$?
+        fi
+        if [ -f "$PRETTIER_FILE" ]; then
+          run-prettier-diff.sh $CI_MERGE_REQUEST_DIFF_BASE_SHA || EXIT_CODE=$?
+        fi
+        hex2lowercase.sh || EXIT_CODE=$?
+        # Lint the formatted result, and report the formatting diff even when the linter already failed
+        if [ -f "$MARKDOWNLINT_FILE" ]; then
+          run-markdownlint.sh $CI_MERGE_REQUEST_DIFF_BASE_SHA || EXIT_CODE=$?
+        fi
+        is-pristine-repo.sh || EXIT_CODE=$?
+        return $EXIT_CODE
       }
     - cd $CPP_SRC_DIR
     - check_code_format
     - &yamllint |
       cd $CI_PROJECT_DIR
-      if [ -f .yamllint ]; then
-        yamllint -f colored -c .yamllint .
+      if [ -f "$YAMLLINT_FILE" ]; then
+        yamllint -f colored -c "$YAMLLINT_FILE" .
       fi
 
 .full-code-format:
   extends: .static
+  variables:
+    <<: *format_config_files
   script:
     - |
       full_code_format() {
-        FILE_EXTENSION_REGEX='.*\.(cpp|cc|c\+\+|cxx|c|cl|h|hh|hpp)$'
-        files=$(find . | grep -E "${FILE_EXTENSION_REGEX}" | tr '\n' ' ')
-        clang-format -style=file -i ${files}
-        hex2lowercase.sh
-        is-pristine-repo.sh
+        # Called without a target, the scripts format every tracked file instead of the diff against it
+        EXIT_CODE=0
+        if [ -f "$CLANG_FORMAT_FILE" ]; then
+          run-clang-format-diff.sh || EXIT_CODE=$?
+        fi
+        if [ -f "$PRETTIER_FILE" ]; then
+          run-prettier-diff.sh || EXIT_CODE=$?
+        fi
+        hex2lowercase.sh || EXIT_CODE=$?
+        # Lint the formatted result, and report the formatting diff even when the linter already failed
+        if [ -f "$MARKDOWNLINT_FILE" ]; then
+          run-markdownlint.sh || EXIT_CODE=$?
+        fi
+        is-pristine-repo.sh || EXIT_CODE=$?
+        return $EXIT_CODE
       }
     - cd $CPP_SRC_DIR
     - full_code_format
@@ -84,3 +114,63 @@ include:
       }
     - cd $CPP_SRC_DIR
     - include-guards-check
+
+.dependency-checks:
+  extends: .static
+  variables:
+    INPUT_PATH: .
+  script:
+    - cd $CPP_SRC_DIR
+    - python3 -u $CI_PROJECT_DIR/.gitlab/ci/static/check_dependencies.py --repo $CI_PROJECT_DIR
+
+.high-resolution-clock:
+  extends: .static
+  script:
+    - cd $CPP_SRC_DIR
+    - $CI_PROJECT_DIR/.gitlab/ci/static/high-resolution-clock-check.sh
+
+.dco:
+  extends: .static
+  stage: ci
+  script:
+    - |
+      git config advice.detachedHead false
+      unshallow_flag() {
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo --unshallow
+        fi
+      }
+      if [ "$CI_PROJECT_PATH" = "$CI_MERGE_REQUEST_PROJECT_PATH" ]; then
+        # job on target
+        git fetch $(unshallow_flag) origin \
+          "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" \
+          "$CI_MERGE_REQUEST_REF_PATH:refs/mr-source-head"
+        git branch -f "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        git branch -f "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" refs/mr-source-head
+      else
+        # job on the fork
+        git fetch $(unshallow_flag) origin "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+        git branch -f "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+        git remote get-url upstream >/dev/null 2>&1 || \
+          git remote add upstream "$CI_MERGE_REQUEST_PROJECT_URL"
+        git fetch $(unshallow_flag) upstream "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        git branch -f "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" "upstream/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      fi
+
+      SOURCE_SHA=$(git rev-parse "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME")
+      FORK_POINT=$(git merge-base "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
+    - |
+      EXIT_CODE=0
+      for rev in $(git rev-list --reverse $FORK_POINT..$SOURCE_SHA); do
+        if ! git log -1 --format=%B "$rev" | grep -qiE '^Signed-off-by:\s+.+\s+<.+>$'; then
+          echo "✗ Missing Signed-off-by trailer in commit."
+          git log -1 --oneline "$rev"
+          EXIT_CODE=1
+        fi
+      done
+      exit $EXIT_CODE
+
+dco:
+  extends: .dco
+  rules:
+    - if: $ON_MR_FORK

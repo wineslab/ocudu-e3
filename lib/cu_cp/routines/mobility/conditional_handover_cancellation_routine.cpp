@@ -5,6 +5,7 @@
 #include "conditional_handover_cancellation_routine.h"
 #include "../../ue_manager/ue_manager_impl.h"
 #include "mobility_helpers.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ocudu::ocucp;

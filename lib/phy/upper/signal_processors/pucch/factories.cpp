@@ -6,6 +6,7 @@
 #include "dmrs_pucch_estimator_format2.h"
 #include "dmrs_pucch_estimator_formats3_4.h"
 #include "dmrs_pucch_estimator_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

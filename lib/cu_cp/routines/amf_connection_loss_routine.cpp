@@ -4,6 +4,9 @@
 
 #include "amf_connection_loss_routine.h"
 #include "cell_deactivation_routine.h"
+#include "cell_lifecycle_target.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ran/cause/ngap_cause.h"
 #include "ocudu/support/async/coroutine.h"
 
 using namespace ocudu;
@@ -11,16 +14,18 @@ using namespace ocucp;
 
 amf_connection_loss_routine::amf_connection_loss_routine(const cu_cp_amf_index_t           amf_index_,
                                                          const cu_cp_configuration&        cu_cp_cfg_,
-                                                         std::vector<plmn_identity>&       plmns_,
+                                                         std::vector<plmn_identity>        plmns_,
                                                          du_processor_repository&          du_db_,
+                                                         logical_cell_manager&             logical_cells_,
                                                          cu_cp_ue_context_release_handler& ue_release_handler_,
                                                          ue_manager&                       ue_mng_,
                                                          cu_cp_controller&                 controller_,
                                                          ocudulog::basic_logger&           logger_) :
   amf_index(amf_index_),
   cu_cp_cfg(cu_cp_cfg_),
-  plmns(plmns_),
+  plmns(std::move(plmns_)),
   du_db(du_db_),
+  logical_cells(logical_cells_),
   ue_release_handler(ue_release_handler_),
   ue_mng(ue_mng_),
   controller(controller_),
@@ -40,8 +45,24 @@ void amf_connection_loss_routine::operator()(coro_context<async_task<void>>& ctx
   // Stop accepting new UEs for the given PLMNs.
   ue_mng.add_blocked_plmns(plmns);
 
-  // Deactivate the cells served by the disconnected AMF.
-  CORO_AWAIT(launch_async<cell_deactivation_routine>(cu_cp_cfg, plmns, du_db, ue_release_handler, ue_mng, logger));
+  // Deactivate the cells served by the disconnected AMF, releasing their UEs from the CU-CP first (the core is
+  // gone, so they are dropped with a transport cause). No barring stage here: this is a fault path, not an
+  // operator-driven graceful stop, and the pre-existing AMF-loss behaviour is kept unchanged.
+  CORO_AWAIT_VALUE(
+      cell_deactivation_result deactivation_result,
+      launch_async<cell_deactivation_routine>(cu_cp_cfg,
+                                              resolve_deactivation_targets(du_db, plmns),
+                                              collect_ues_for_plmns(ue_mng, plmns),
+                                              ngap_cause_t{ngap_cause_transport_t::transport_res_unavailable},
+                                              /* bar_cells_first = */ false,
+                                              du_db,
+                                              logical_cells,
+                                              ue_release_handler,
+                                              ue_mng,
+                                              logger));
+  if (!deactivation_result.success) {
+    logger.warning("\"{}\" cell deactivation finished with errors", name());
+  }
 
   // Try to reconnect to AMF.
   controller.amf_connection_handler().reconnect_to_amf(amf_index, &ue_mng, cu_cp_cfg.ngap.amf_reconnection_retry_time);

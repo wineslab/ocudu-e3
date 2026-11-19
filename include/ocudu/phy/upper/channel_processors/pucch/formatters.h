@@ -35,6 +35,10 @@ struct formatter<ocudu::pucch_processor::format0_configuration> {
       helper.format_always(ctx, *config.context);
     }
     helper.format_always(ctx, "format=0");
+    if (config.slot_offset != 0) {
+      helper.format_always(ctx, "ue_ul_slot={}", config.slot - config.slot_offset);
+      helper.format_if_verbose(ctx, "slot_offset={}", config.slot_offset);
+    }
     helper.format_if_verbose(ctx, "bwp=[{}, {})", config.bwp_start_rb, config.bwp_start_rb + config.bwp_size_rb);
     helper.format_if_verbose(ctx, "slot={}", config.slot);
     helper.format_always(ctx, "prb1={}", config.starting_prb);
@@ -73,6 +77,10 @@ struct formatter<ocudu::pucch_processor::format1_configuration> {
       helper.format_always(ctx, *config.context);
     }
     helper.format_always(ctx, "format=1");
+    if (config.slot_offset != 0) {
+      helper.format_always(ctx, "ue_ul_slot={}", config.slot - config.slot_offset);
+      helper.format_if_verbose(ctx, "slot_offset={}", config.slot_offset);
+    }
     helper.format_if_verbose(ctx, "bwp=[{}, {})", config.bwp_start_rb, config.bwp_start_rb + config.bwp_size_rb);
     helper.format_always(ctx, "prb1={}", config.starting_prb);
     helper.format_always(
@@ -114,6 +122,10 @@ struct formatter<ocudu::pucch_processor::format2_configuration> {
       helper.format_always(ctx, "rnti=0x{:04x}", config.rnti);
     }
     helper.format_always(ctx, "format=2");
+    if (config.slot_offset != 0) {
+      helper.format_always(ctx, "ue_ul_slot={}", config.slot - config.slot_offset);
+      helper.format_if_verbose(ctx, "slot_offset={}", config.slot_offset);
+    }
     helper.format_if_verbose(ctx, "bwp=[{}, {})", config.bwp_start_rb, config.bwp_start_rb + config.bwp_size_rb);
     helper.format_always(ctx, "prb=[{}, {})", config.prbs.start(), config.prbs.stop());
     helper.format_always(
@@ -155,6 +167,10 @@ struct formatter<ocudu::pucch_processor::format3_configuration> {
       helper.format_always(ctx, "rnti=0x{:04x}", config.rnti);
     }
     helper.format_always(ctx, "format=3");
+    if (config.slot_offset != 0) {
+      helper.format_always(ctx, "ue_ul_slot={}", config.slot - config.slot_offset);
+      helper.format_if_verbose(ctx, "slot_offset={}", config.slot_offset);
+    }
     helper.format_if_verbose(ctx, "bwp=[{}, {})", config.bwp_start_rb, config.bwp_start_rb + config.bwp_size_rb);
     helper.format_always(ctx, "prb=[{}, {})", config.prbs.start(), config.prbs.stop());
     helper.format_always(
@@ -198,6 +214,10 @@ struct formatter<ocudu::pucch_processor::format4_configuration> {
       helper.format_always(ctx, "rnti=0x{:04x}", config.rnti);
     }
     helper.format_always(ctx, "format=4");
+    if (config.slot_offset != 0) {
+      helper.format_always(ctx, "ue_ul_slot={}", config.slot - config.slot_offset);
+      helper.format_if_verbose(ctx, "slot_offset={}", config.slot_offset);
+    }
     helper.format_if_verbose(ctx, "bwp=[{}, {})", config.bwp_start_rb, config.bwp_start_rb + config.bwp_size_rb);
     helper.format_always(ctx, "prb=[{}, {})", config.starting_prb, config.starting_prb + 1);
     helper.format_always(
@@ -256,16 +276,16 @@ struct formatter<ocudu::pucch_processor_result> {
     if (result.message.get_status() == ocudu::uci_status::valid) {
       // Valid UCI payload.
       if (nof_harq_ack) {
-        helper.format_always(ctx, "ack={:#}", ocudu::span<const uint8_t>(result.message.get_harq_ack_bits()));
+        helper.format_always(ctx, "ack={}", fmt::join(result.message.get_harq_ack_bits(), ""));
       }
       if (nof_sr) {
-        helper.format_always(ctx, "sr={:#}", ocudu::span<const uint8_t>(result.message.get_sr_bits()));
+        helper.format_always(ctx, "sr={}", fmt::join(result.message.get_sr_bits(), ""));
       }
       if (nof_csi_part1) {
-        helper.format_always(ctx, "csi1={:#}", ocudu::span<const uint8_t>(result.message.get_csi_part1_bits()));
+        helper.format_always(ctx, "csi1={}", fmt::join(result.message.get_csi_part1_bits(), ""));
       }
       if (nof_csi_part2) {
-        helper.format_always(ctx, "csi2={:#}", ocudu::span<const uint8_t>(result.message.get_csi_part2_bits()));
+        helper.format_always(ctx, "csi2={}", fmt::join(result.message.get_csi_part2_bits(), ""));
       }
     } else {
       // Bad UCI payload.
@@ -273,16 +293,18 @@ struct formatter<ocudu::pucch_processor_result> {
       std::fill(bad_payload.begin(), bad_payload.end(), 2U);
 
       if (nof_harq_ack) {
-        helper.format_always(ctx, "ack={:#}", ocudu::span<const uint8_t>(bad_payload).first(nof_harq_ack));
+        helper.format_always(ctx, "ack={}", fmt::join(ocudu::span<const uint8_t>(bad_payload).first(nof_harq_ack), ""));
       }
       if (nof_sr) {
-        helper.format_always(ctx, "sr={:#}", ocudu::span<const uint8_t>(bad_payload).first(nof_sr));
+        helper.format_always(ctx, "sr={}", fmt::join(ocudu::span<const uint8_t>(bad_payload).first(nof_sr), ""));
       }
       if (nof_csi_part1) {
-        helper.format_always(ctx, "csi1={:#}", ocudu::span<const uint8_t>(bad_payload).first(nof_csi_part1));
+        helper.format_always(
+            ctx, "csi1={}", fmt::join(ocudu::span<const uint8_t>(bad_payload).first(nof_csi_part1), ""));
       }
       if (nof_csi_part2) {
-        helper.format_always(ctx, "csi2={:#}", ocudu::span<const uint8_t>(bad_payload).first(nof_csi_part2));
+        helper.format_always(
+            ctx, "csi2={}", fmt::join(ocudu::span<const uint8_t>(bad_payload).first(nof_csi_part2), ""));
       }
     }
 

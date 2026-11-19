@@ -5,7 +5,10 @@
 #include "lib/scheduler/common_scheduling/csi_rs_scheduler.h"
 #include "lib/scheduler/common_scheduling/ra_scheduler.h"
 #include "lib/scheduler/common_scheduling/sib1_scheduler.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
+#include "lib/scheduler/ue_context/ue_repository.h"
 #include "sub_scheduler_test_environment.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/cell_config_builder_profiles.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/scheduler/scheduler_result_finder.h"
@@ -26,7 +29,7 @@ namespace {
 
 class ra_scheduler_setup : public sub_scheduler_test_environment
 {
-  static constexpr unsigned CRNTI_RANGE = to_value(rnti_t::MAX_CRNTI) - to_value(rnti_t::MIN_CRNTI);
+  static constexpr unsigned CRNTI_RANGE = to_underlying(rnti_t::MAX_CRNTI) - to_underlying(rnti_t::MIN_CRNTI);
 
 public:
   ra_scheduler_setup(const sched_cell_configuration_request_message& req, bool sched_csi, bool sched_sib1) :
@@ -39,6 +42,8 @@ public:
                      bool                                            sched_sib1) :
     sub_scheduler_test_environment(sched_cfg_, req)
   {
+    ue_db.register_cell(ue_cell_db);
+
     if (sched_csi) {
       csi_rs_sch.emplace(cell_cfg);
     }
@@ -74,7 +79,8 @@ public:
     ASSERT_NO_FATAL_FAILURE(tracker.on_new_result(res_grid[0].slot, res_grid[0].result));
   }
 
-  void handle_rach_indication(rach_indication_message ind)
+  /// \param occasion_slot_delay Slots between the PRACH occasion and the slot the lower layers report it in.
+  void handle_rach_indication(rach_indication_message ind, unsigned occasion_slot_delay = 0)
   {
     // Advance the simulator to a slot that has a valid PRACH occasion. The ra_scheduler only
     // prereserves MsgA PUSCH for slots whose corresponding PRACH slot is a valid occasion per
@@ -86,6 +92,11 @@ public:
         cell_cfg.init_bwp.ul.rach_common()->rach_cfg_generic.prach_config_index};
     run_slot_until([this, &prach_mapper]() { return prach_mapper.has_prach_occasion(next_slot_rx()); });
     ind.slot_rx = next_slot_rx();
+    if (not ind.occasions.empty()) {
+      // The lower layers report the t_id of the occasion, which may precede the slot they report it in.
+      ind.occasions[0].slot_index =
+          test_helper::compute_prach_occasion_slot_index(cell_cfg, ind.slot_rx - occasion_slot_delay);
+    }
     ra_sch.handle_rach_indication(ind);
     tracker.on_new_rach_ind(ind);
   }
@@ -98,7 +109,7 @@ public:
 
   rach_indication_message::preamble create_random_preamble()
   {
-    const auto next_rnti = rnti_count + to_value(rnti_t::MIN_CRNTI);
+    const auto next_rnti = rnti_count + to_underlying(rnti_t::MIN_CRNTI);
 
     rach_indication_message::preamble preamble =
         test_helper::create_preamble(test_rng::uniform_int<unsigned>(0, 63), to_rnti(next_rnti));
@@ -115,7 +126,7 @@ public:
     for (unsigned i = 0; i != nof_preambles; ++i) {
       preambles.push_back(create_random_preamble());
     }
-    return test_helper::create_rach_indication(next_slot_rx(), preambles);
+    return test_helper::create_rach_indication(cell_cfg, next_slot_rx(), preambles);
   }
 
   bool grants_scheduled_in_next_slots(unsigned nof_slots_to_check)
@@ -149,12 +160,22 @@ public:
   void handle_crc_for_pending_puschs(bool crc)
   {
     const auto& puschs = this->res_grid[0].result.ul.puschs;
+    for (const ul_sched_info& pusch : puschs) {
+      if (pusch.context.ue_index == INVALID_DU_UE_INDEX) {
+        // Msg3 PUSCH. "rapid" is a MsgA-only field; if set here, the PHY will wrongly apply the MsgA
+        // descrambling sequence (TS38.211 6.3.1.1) to a regular Msg3 PUSCH and fail to decode it.
+        ASSERT_FALSE(pusch.context.rapid.has_value()) << "Msg3 PUSCH context.rapid must not be set";
+      }
+    }
     if (not puschs.empty()) {
       handle_crc_indication(test_helper::create_crc_indication(this->res_grid[0].slot, puschs, crc));
     }
   }
 
-  ra_scheduler                      ra_sch{cell_cfg, *pdcch_alloc, ev_logger, metrics_hdlr};
+  ra_ue_repository   ra_ue_repo{cell_cfg, mac_logger};
+  ue_cell_repository ue_cell_db{cell_cfg, nullptr};
+  ue_repository      ue_db{sched_cfg.ue};
+  ra_scheduler ra_sch{cell_cfg, *pdcch_alloc, pucch_alloc, uci_alloc, ra_ue_repo, ue_cell_db, ev_logger, metrics_hdlr};
   std::optional<csi_rs_scheduler>   csi_rs_sch;
   std::optional<sib1_scheduler>     sib1_sch;
   test_helper::ra_scheduler_tracker tracker{cell_cfg};
@@ -183,6 +204,7 @@ public:
   ra_scheduler_common_test() :
     ra_scheduler_setup(get_sched_req(GetParam()), GetParam().sched_csi_rs, GetParam().sched_sib1)
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
   }
 
   static sched_cell_configuration_request_message get_sched_req(const test_params& t_params)
@@ -200,6 +222,25 @@ public:
 TEST_P(ra_scheduler_common_test, when_no_rach_indication_received_then_no_rar_allocated)
 {
   ASSERT_FALSE(grants_scheduled_in_next_slots(10));
+}
+
+/// \brief The RA-RNTI comes from the reported occasion slot index, not from the indication slot.
+///
+/// The lower layers own t_id, as per TS 38.321, Section 5.1.3. The RAR is only matched if the scheduler and the tracker
+/// both take t_id from the occasion.
+TEST_P(ra_scheduler_common_test, when_occasion_slot_index_differs_from_rx_slot_then_ra_rnti_uses_the_occasion)
+{
+  // A one subframe shift changes t_id in any numerology, so it never matches the one derived from slot_rx.
+  handle_rach_indication(create_rach_indication(1), get_nof_slots_per_subframe(cell_cfg.scs_common()));
+
+  for (unsigned slot_count = 0, max_slot_count = 1000; slot_count < max_slot_count and tracker.nof_msg3_acked() == 0;
+       ++slot_count) {
+    run_slot();
+    handle_crc_for_pending_puschs(true);
+  }
+
+  ASSERT_EQ(tracker.nof_rars(), 1);
+  ASSERT_EQ(tracker.nof_msg3_acked(), 1);
 }
 
 TEST_P(ra_scheduler_common_test,
@@ -318,25 +359,98 @@ TEST_P(ra_scheduler_common_test, when_crc_is_ko_then_msg3_retx_is_scheduled)
 }
 
 using tdd_fr1_30khz = tdd_pattern_profile_fr1_30khz;
-INSTANTIATE_TEST_SUITE_P(
-    ra_scheduler,
-    ra_scheduler_common_test,
-    ::testing::Values(
-        // FR1, FDD.
-        test_params{frequency_range::FR1, 2},
-        test_params{frequency_range::FR1, 4},
-        test_params{frequency_range::FR1, 4, std::nullopt, true},
-        // FR1, TDD.
-        test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU)},
-        test_params{frequency_range::FR1, 4, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU)},
-        test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDSU)},
-        test_params{frequency_range::FR1, 1, create_tdd_pattern(tdd_fr1_30khz::DSUU)},
-        test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU), true},
-        test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU), true, true},
-        test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_pattern_profile_fr1_30khz::DDDSU), true, true},
-        // FR2, TDD.
-        test_params{frequency_range::FR2, 1, create_tdd_pattern(tdd_pattern_profile_fr2_120khz::DDDSU)},
-        test_params{frequency_range::FR2, 1, create_tdd_pattern(tdd_pattern_profile_fr2_120khz::DDDSU), true}));
+
+static std::vector<test_params> get_test_params()
+{
+  return {// FR1, FDD.
+          test_params{frequency_range::FR1, 2},
+          test_params{frequency_range::FR1, 4},
+          test_params{frequency_range::FR1, 4, std::nullopt, true},
+          // FR1, TDD.
+          test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU)},
+          test_params{frequency_range::FR1, 4, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU)},
+          test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDSU)},
+          test_params{frequency_range::FR1, 1, create_tdd_pattern(tdd_fr1_30khz::DSUU)},
+          test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU), true},
+          test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU), true, true},
+          test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_pattern_profile_fr1_30khz::DDDSU), true, true},
+          // FR2, TDD.
+          test_params{frequency_range::FR2, 1, create_tdd_pattern(tdd_pattern_profile_fr2_120khz::DDDSU)},
+          test_params{frequency_range::FR2, 1, create_tdd_pattern(tdd_pattern_profile_fr2_120khz::DDDSU), true}};
+}
+
+INSTANTIATE_TEST_SUITE_P(ra_scheduler, ra_scheduler_common_test, ::testing::ValuesIn(get_test_params()));
+
+/// RA procedure in an NTN cell, where every DL-signalled UL transmission is delayed by the cell-specific Koffset.
+class ra_scheduler_ntn_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  ra_scheduler_ntn_test() : ra_scheduler_setup(get_sched_req(), false, false) {}
+
+  static sched_cell_configuration_request_message get_sched_req()
+  {
+    sched_cell_configuration_request_message req = sched_config_helper::make_default_sched_cell_configuration_request(
+        create(duplex_mode::FDD, frequency_range::FR1));
+    req.ran.ntn_params.emplace();
+    req.ran.ntn_params->ntn_cfg.cell_specific_koffset = std::chrono::milliseconds{20};
+    return req;
+  }
+};
+
+TEST_F(ra_scheduler_ntn_test, msg3_is_scheduled_the_cell_specific_koffset_after_its_msg3_delay)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-TIM-4");
+
+  ASSERT_GT(cell_cfg.ntn_cs_koffset, 0U);
+  handle_rach_indication(create_rach_indication(1));
+
+  const rar_information* rar = nullptr;
+  for (unsigned slot_count = 0; slot_count != 100 and rar == nullptr; ++slot_count) {
+    run_slot();
+    if (not res_grid[0].result.dl.rar_grants.empty()) {
+      rar = &res_grid[0].result.dl.rar_grants.front();
+    }
+  }
+  ASSERT_NE(rar, nullptr) << "No RAR was scheduled";
+  ASSERT_EQ(rar->grants.size(), 1U);
+  const rar_ul_grant& grant = rar->grants.front();
+
+  // TS 38.213, Section 8.3: the Msg3 PUSCH is transmitted K2 + delta slots after the RAR, extended by K_offset in NTN.
+  const auto&    ul_bwp     = cell_cfg.params.ul_cfg_common.init_ul_bwp;
+  const unsigned k2         = ul_bwp.pusch_cfg_common->pusch_td_alloc_list[grant.time_resource_assignment].k2;
+  const unsigned msg3_delay = ra_helper::get_msg3_delay(ul_bwp.generic_params.scs, k2);
+
+  const auto has_msg3 = [&grant](const cell_slot_resource_allocator& alloc) {
+    return std::any_of(alloc.result.ul.puschs.begin(), alloc.result.ul.puschs.end(), [&grant](const ul_sched_info& p) {
+      return p.pusch_cfg.rnti == grant.temp_crnti;
+    });
+  };
+  ASSERT_TRUE(has_msg3(res_grid[msg3_delay + cell_cfg.ntn_cs_koffset]))
+      << "Msg3 must be scheduled K_offset slots after the Msg3 delay";
+  ASSERT_FALSE(has_msg3(res_grid[msg3_delay])) << "Msg3 must not be scheduled at the terrestrial Msg3 delay";
+}
+
+TEST_F(ra_scheduler_ntn_test, ra_procedure_completes_with_msg3_retransmissions)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-TIM-4");
+
+  const unsigned nof_preambles = 2;
+  handle_rach_indication(create_rach_indication(nof_preambles));
+
+  // NACK the first Msg3 transmissions, so that their retransmissions are scheduled over the NTN delay too.
+  for (unsigned slot_count = 0; slot_count != 1000 and tracker.nof_msg3_newtxs() < nof_preambles; ++slot_count) {
+    run_slot();
+    handle_crc_for_pending_puschs(false);
+  }
+  for (unsigned slot_count = 0; slot_count != 1000 and tracker.nof_msg3_acked() < nof_preambles; ++slot_count) {
+    run_slot();
+    handle_crc_for_pending_puschs(true);
+  }
+
+  ASSERT_EQ(tracker.nof_msg3_newtxs(), nof_preambles);
+  ASSERT_GE(tracker.nof_msg3_retxs(), nof_preambles);
+  ASSERT_EQ(tracker.nof_msg3_acked(), nof_preambles);
+}
 
 class ra_scheduler_failed_rar_test : public ra_scheduler_setup, public ::testing::TestWithParam<test_params>
 {
@@ -344,6 +458,7 @@ public:
   ra_scheduler_failed_rar_test() :
     ra_scheduler_setup(get_sched_req(GetParam()), GetParam().sched_csi_rs, GetParam().sched_sib1)
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
   }
 
   static sched_cell_configuration_request_message get_sched_req(const test_params& t_params)
@@ -462,6 +577,375 @@ INSTANTIATE_TEST_SUITE_P(ra_scheduler,
                              test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDDDDDSUU)},
                              test_params{frequency_range::FR1, 2, create_tdd_pattern(tdd_fr1_30khz::DDDSU)}));
 
+/// Test class for congestion-control-driven Backoff Indicator (BI) scheduling. Preamble SNR/count thresholds are set
+/// via the scheduler_ra_expert_config passed to the constructor.
+class ra_scheduler_backoff_indicator_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  ra_scheduler_backoff_indicator_test(std::optional<float> snr_threshold_dB,
+                                      unsigned             max_preambles = MAX_PREAMBLES_PER_PRACH_OCCASION,
+                                      unsigned             duration_ms   = 40) :
+    ra_scheduler_setup(make_sched_cfg(snr_threshold_dB, max_preambles, duration_ms), get_sched_req(), false, false)
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-a");
+  }
+
+  static scheduler_expert_config
+  make_sched_cfg(std::optional<float> snr_threshold_dB, unsigned max_preambles, unsigned duration_ms)
+  {
+    scheduler_expert_config cfg               = config_helpers::make_default_scheduler_expert_config();
+    cfg.ra.backoff_indicator_snr_threshold_dB = snr_threshold_dB;
+    cfg.ra.backoff_indicator_max_preambles    = max_preambles;
+    cfg.ra.backoff_indicator_duration         = std::chrono::milliseconds{duration_ms};
+    return cfg;
+  }
+
+  static sched_cell_configuration_request_message get_sched_req()
+  {
+    cell_config_builder_params builder_params = create(duplex_mode::FDD, frequency_range::FR1);
+    builder_params.min_k1                     = 2;
+    builder_params.min_k2                     = 2;
+    return sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+  }
+
+  /// Creates a random preamble with an explicit SNR value.
+  rach_indication_message::preamble create_preamble_with_snr(float snr_dB)
+  {
+    rach_indication_message::preamble p = create_random_preamble();
+    p.snr_dB                            = snr_dB;
+    return p;
+  }
+};
+
+class ra_scheduler_snr_backoff_test : public ra_scheduler_backoff_indicator_test
+{
+public:
+  ra_scheduler_snr_backoff_test() : ra_scheduler_backoff_indicator_test(/* snr_threshold_dB */ -5.0F) {}
+};
+
+class ra_scheduler_count_backoff_test : public ra_scheduler_backoff_indicator_test
+{
+public:
+  ra_scheduler_count_backoff_test() :
+    ra_scheduler_backoff_indicator_test(/* snr_threshold_dB */ std::nullopt, /* max_preambles */ 2U)
+  {
+  }
+};
+
+class ra_scheduler_backoff_only_test : public ra_scheduler_backoff_indicator_test
+{
+public:
+  ra_scheduler_backoff_only_test() : ra_scheduler_backoff_indicator_test(/* snr_threshold_dB */ -5.0F) {}
+};
+
+class ra_scheduler_backoff_duration_test : public ra_scheduler_backoff_indicator_test
+{
+public:
+  ra_scheduler_backoff_duration_test() :
+    ra_scheduler_backoff_indicator_test(
+        /* snr_threshold_dB */ -5.0F,
+        /* max_preambles */ MAX_PREAMBLES_PER_PRACH_OCCASION,
+        /* duration_ms */ 80U)
+  {
+  }
+};
+
+/// This test verifies that a preamble with SNR below the configured threshold is excluded from the RAR/Msg3 grant,
+/// while a preamble with SNR above the threshold is still granted, and that the RAR carries a Backoff Indicator.
+TEST_F(ra_scheduler_snr_backoff_test, weak_preamble_excluded_and_backoff_indicator_set)
+{
+  rach_indication_message::preamble strong = create_preamble_with_snr(0.0F);
+  rach_indication_message::preamble weak   = create_preamble_with_snr(-10.0F);
+
+  handle_rach_indication(test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {strong, weak}));
+
+  const bool found = run_slot_until([this]() { return not res_grid[0].result.dl.rar_grants.empty(); });
+  ASSERT_TRUE(found);
+
+  const rar_information& rar = res_grid[0].result.dl.rar_grants.front();
+  ASSERT_TRUE(rar.backoff_indicator.has_value());
+  ASSERT_EQ(rar.grants.size(), 1U);
+  EXPECT_EQ(rar.grants.front().temp_crnti, strong.tc_rnti);
+}
+
+/// This test verifies that, when more preambles are detected in an occasion than the configured maximum, only the
+/// strongest-SNR preambles are granted a Msg3, and that the RAR carries a Backoff Indicator.
+TEST_F(ra_scheduler_count_backoff_test, excess_preambles_excluded_and_backoff_indicator_set)
+{
+  const float                                    snrs[] = {-2.0F, 10.0F, 3.0F, -8.0F};
+  std::vector<rach_indication_message::preamble> preambles;
+  for (float snr : snrs) {
+    preambles.push_back(create_preamble_with_snr(snr));
+  }
+
+  handle_rach_indication(test_helper::create_rach_indication(cell_cfg, next_slot_rx(), preambles));
+
+  bool bi_seen = false;
+  for (unsigned slot_count = 0, max_slots = 1000; slot_count != max_slots and tracker.has_pending_ra(); ++slot_count) {
+    run_slot();
+    for (const rar_information& rar : res_grid[0].result.dl.rar_grants) {
+      bi_seen |= rar.backoff_indicator.has_value();
+    }
+    handle_crc_for_pending_puschs(true);
+  }
+
+  EXPECT_TRUE(bi_seen);
+  ASSERT_EQ(tracker.nof_msg3_newtxs(), 2U) << "Only the 2 strongest preambles should have been granted a Msg3";
+}
+
+/// This test verifies that, when every detected preamble in an occasion is excluded by congestion control, the RA
+/// scheduler still transmits a RAR containing only a Backoff Indicator subheader (no RAPID subPDUs), and no Msg3 is
+/// granted.
+TEST_F(ra_scheduler_backoff_only_test, all_preambles_below_threshold_yields_backoff_only_rar)
+{
+  rach_indication_message::preamble weak1 = create_preamble_with_snr(-10.0F);
+  rach_indication_message::preamble weak2 = create_preamble_with_snr(-20.0F);
+
+  handle_rach_indication(test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {weak1, weak2}));
+
+  const rar_information* backoff_rar = nullptr;
+  const bool             found       = run_slot_until([this, &backoff_rar]() {
+    for (const rar_information& rar : res_grid[0].result.dl.rar_grants) {
+      if (rar.backoff_indicator.has_value()) {
+        backoff_rar = &rar;
+        return true;
+      }
+    }
+    return false;
+  });
+
+  ASSERT_TRUE(found);
+  ASSERT_NE(backoff_rar, nullptr);
+  EXPECT_TRUE(backoff_rar->grants.empty());
+  ASSERT_EQ(tracker.nof_msg3_newtxs(), 0U) << "No preamble should have been granted a Msg3";
+}
+
+/// This test verifies that the configured Backoff Indicator duration, in ms, is mapped to its index in TS38.321,
+/// Table 7.2-1. 80ms is table index 6.
+TEST_F(ra_scheduler_backoff_duration_test, duration_is_mapped_to_table_index)
+{
+  rach_indication_message::preamble weak = create_preamble_with_snr(-10.0F);
+
+  handle_rach_indication(test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {weak}));
+
+  const rar_information* backoff_rar = nullptr;
+  const bool             found       = run_slot_until([this, &backoff_rar]() {
+    for (const rar_information& rar : res_grid[0].result.dl.rar_grants) {
+      if (rar.backoff_indicator.has_value()) {
+        backoff_rar = &rar;
+        return true;
+      }
+    }
+    return false;
+  });
+
+  ASSERT_TRUE(found);
+  ASSERT_NE(backoff_rar, nullptr);
+  EXPECT_EQ(*backoff_rar->backoff_indicator, 6U);
+}
+
+/// Beam that the RA scheduler is expected to map the SS/PBCH block of the test cell onto.
+constexpr beam_identifier test_ssb_beam = static_cast<beam_identifier>(3);
+
+/// Beam that a transmission is mapped onto, or \c beam_identifier::invalid if it is not beamformed.
+static beam_identifier beam_of(const precoding_and_beamforming_info& info)
+{
+  const beam_identifier* beam = std::get_if<beam_identifier>(&info);
+  return beam != nullptr ? *beam : beam_identifier::invalid;
+}
+
+/// \brief Test suite for the beam that the RA procedure maps its downlink transmissions onto.
+///
+/// The cell transmits a single SS/PBCH block on \c test_ssb_beam, so that every PRACH occasion is associated with it
+/// and every RA transmission is expected to be carried by that beam.
+class ra_scheduler_beam_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  ra_scheduler_beam_test() : ra_scheduler_setup(make_beam_req(), /*sched_csi=*/false, /*sched_sib1=*/false)
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-MIMO-16-12");
+  }
+
+  static sched_cell_configuration_request_message make_beam_req()
+  {
+    cell_config_builder_params builder_params = create(duplex_mode::FDD, frequency_range::FR1);
+    builder_params.min_k1                     = 2;
+    builder_params.min_k2                     = 2;
+    auto  req     = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    auto& ssb_cfg = req.ran.ssb_cfg;
+    // A beam other than the first one, so that the assertions discriminate against a hardcoded default.
+    ssb_cfg.ssb_beams.reset();
+    ssb_cfg.ssb_beams.set_beam(0, test_ssb_beam);
+    return req;
+  }
+};
+
+/// Verifies that the RAR PDSCH and its PDCCH are carried by the beam of the SS/PBCH block that the UE reached the
+/// cell on.
+TEST_F(ra_scheduler_beam_test, rar_pdsch_and_pdcch_use_the_beam_of_the_ssb)
+{
+  handle_rach_indication(create_rach_indication(1));
+
+  const rar_information* rar   = nullptr;
+  bool                   found = run_slot_until([&]() {
+    if (res_grid[0].result.dl.rar_grants.empty()) {
+      return false;
+    }
+    rar = &res_grid[0].result.dl.rar_grants.front();
+    return true;
+  });
+
+  ASSERT_TRUE(found) << "No RAR was scheduled";
+  ASSERT_EQ(beam_of(rar->pdsch_cfg.precoding_and_beamforming), test_ssb_beam);
+  ASSERT_EQ(res_grid[0].result.dl.dl_pdcchs.size(), 1);
+  ASSERT_EQ(beam_of(res_grid[0].result.dl.dl_pdcchs.front().ctx.precoding_and_beamforming), test_ssb_beam);
+}
+
+/// Verifies that the PDCCH scheduling a Msg3 retransmission is carried by the beam of the SS/PBCH block, so that the
+/// UE can receive its retransmission grant.
+TEST_F(ra_scheduler_beam_test, msg3_retx_pdcch_uses_the_beam_of_the_ssb)
+{
+  handle_rach_indication(create_rach_indication(1));
+
+  // Drive the Msg3 to a NACK, which triggers a retransmission scheduled over an uplink DCI.
+  for (unsigned i = 0, max_slots = 1000; i != max_slots and tracker.nof_msg3_retxs() == 0; ++i) {
+    run_slot();
+    handle_crc_for_pending_puschs(false);
+    if (not res_grid[0].result.dl.ul_pdcchs.empty()) {
+      ASSERT_EQ(beam_of(res_grid[0].result.dl.ul_pdcchs.front().ctx.precoding_and_beamforming), test_ssb_beam);
+    }
+  }
+
+  ASSERT_GE(tracker.nof_msg3_retxs(), 1) << "No Msg3 retransmission was scheduled";
+}
+
+/// \brief Test suite for the beam selection across several SS/PBCH blocks.
+///
+/// The cell transmits two SS/PBCH blocks, each on its own beam. The association of TS 38.213, Section 8.1 alternates
+/// them over consecutive PRACH occasions, so RARs answering different occasions are expected to use different beams.
+class ra_scheduler_multi_beam_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  static constexpr beam_identifier first_beam  = static_cast<beam_identifier>(1);
+  static constexpr beam_identifier second_beam = static_cast<beam_identifier>(2);
+
+  ra_scheduler_multi_beam_test() : ra_scheduler_setup(make_multi_beam_req(), /*sched_csi=*/false, /*sched_sib1=*/false)
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-MIMO-16-12");
+  }
+
+  static sched_cell_configuration_request_message make_multi_beam_req()
+  {
+    cell_config_builder_params builder_params = create(duplex_mode::FDD, frequency_range::FR1);
+    builder_params.min_k1                     = 2;
+    builder_params.min_k2                     = 2;
+    auto  req     = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    auto& ssb_cfg = req.ran.ssb_cfg;
+    ssb_cfg.ssb_beams.reset();
+    ssb_cfg.ssb_beams.set_beam(0, first_beam);
+    ssb_cfg.ssb_beams.set_beam(1, second_beam);
+    return req;
+  }
+};
+
+/// Verifies that RARs answering different PRACH occasions are carried by the beams of the different SS/PBCH blocks
+/// those occasions are associated with.
+///
+/// The assertion is on the set of beams observed rather than on the beam of a given occasion: the association order
+/// is the subject of \c ssb_to_ro_mapping_test, and recomputing it here would pass even against a constant beam.
+TEST_F(ra_scheduler_multi_beam_test, rars_of_different_occasions_use_different_beams)
+{
+  // Each attempt drains less than one system frame, so that the next indication lands on the PRACH occasion right
+  // after the previous one. Draining a whole number of frames would keep hitting the same point of the association
+  // period and observe a single SS/PBCH block.
+  static constexpr unsigned nof_slots_drained = 8;
+
+  std::set<unsigned> observed_beams;
+  for (unsigned attempt = 0; attempt != 6 and observed_beams.size() < 2; ++attempt) {
+    handle_rach_indication(create_rach_indication(1));
+
+    for (unsigned i = 0; i != nof_slots_drained and observed_beams.size() < 2; ++i) {
+      run_slot();
+      for (const rar_information& rar : res_grid[0].result.dl.rar_grants) {
+        const beam_identifier beam = beam_of(rar.pdsch_cfg.precoding_and_beamforming);
+        ASSERT_NE(beam, beam_identifier::invalid);
+        observed_beams.emplace(to_underlying(beam));
+      }
+    }
+  }
+
+  ASSERT_EQ(observed_beams, (std::set<unsigned>{to_underlying(first_beam), to_underlying(second_beam)}))
+      << "The RARs must be carried by the beams of the SS/PBCH blocks their occasions map onto";
+}
+
+/// \brief Test suite for the beam of a RAR that carries only a Backoff Indicator.
+///
+/// Reuses the two SS/PBCH block cell, and configures an SNR threshold that drops every detected preamble, so the RAR
+/// carries no RAPID subheader and its beam cannot be inferred from a granted UE.
+class ra_scheduler_backoff_only_beam_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  static constexpr beam_identifier first_beam  = ra_scheduler_multi_beam_test::first_beam;
+  static constexpr beam_identifier second_beam = ra_scheduler_multi_beam_test::second_beam;
+
+  ra_scheduler_backoff_only_beam_test() :
+    ra_scheduler_setup(make_sched_cfg(),
+                       ra_scheduler_multi_beam_test::make_multi_beam_req(),
+                       /*sched_csi=*/false,
+                       /*sched_sib1=*/false)
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-MIMO-16-12");
+  }
+
+  static scheduler_expert_config make_sched_cfg()
+  {
+    scheduler_expert_config cfg               = config_helpers::make_default_scheduler_expert_config();
+    cfg.ra.backoff_indicator_snr_threshold_dB = -5.0F;
+    return cfg;
+  }
+
+  /// Creates a PRACH occasion whose single preamble is below the SNR threshold.
+  rach_indication_message create_weak_rach_indication()
+  {
+    rach_indication_message::preamble weak = create_random_preamble();
+    weak.snr_dB                            = -10.0F;
+    return test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {weak});
+  }
+};
+
+/// Verifies that a RAR carrying only a Backoff Indicator is beamformed towards the SS/PBCH block of its PRACH
+/// occasion, so that the UEs told to back off can receive it.
+///
+/// The beam cannot be taken from a granted UE here, so a RAR that ignored the occasion association would fall back to
+/// the first SS/PBCH block and only ever be seen on \c first_beam.
+TEST_F(ra_scheduler_backoff_only_beam_test, backoff_only_rars_use_the_beams_of_their_occasions)
+{
+  // Each attempt drains less than one system frame, so that the next indication lands on the PRACH occasion right
+  // after the previous one. Draining a whole number of frames would keep hitting the same point of the association
+  // period and observe a single SS/PBCH block.
+  static constexpr unsigned nof_slots_drained = 8;
+
+  std::set<unsigned> observed_beams;
+  for (unsigned attempt = 0; attempt != 6 and observed_beams.size() < 2; ++attempt) {
+    handle_rach_indication(create_weak_rach_indication());
+
+    for (unsigned i = 0; i != nof_slots_drained and observed_beams.size() < 2; ++i) {
+      run_slot();
+      for (const rar_information& rar : res_grid[0].result.dl.rar_grants) {
+        ASSERT_TRUE(rar.backoff_indicator.has_value());
+        ASSERT_TRUE(rar.grants.empty());
+        const beam_identifier beam = beam_of(rar.pdsch_cfg.precoding_and_beamforming);
+        ASSERT_NE(beam, beam_identifier::invalid);
+        observed_beams.emplace(to_underlying(beam));
+      }
+    }
+  }
+
+  ASSERT_EQ(observed_beams, (std::set<unsigned>{to_underlying(first_beam), to_underlying(second_beam)}))
+      << "The backoff-only RARs must be carried by the beams of the SS/PBCH blocks their occasions map onto";
+  ASSERT_EQ(tracker.nof_msg3_newtxs(), 0U) << "No preamble should have been granted a Msg3";
+}
+
 struct two_step_test_params {
   /// MsgA PUSCH TD offset.
   uint8_t                                td_offset;
@@ -486,6 +970,7 @@ public:
   ra_scheduler_two_step_rach_test() :
     ra_scheduler_setup(make_two_step_rach_req(GetParam()), /*sched_csi=*/false, /*sched_sib1=*/false)
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-2", "DU-GEN-2-a");
   }
 
   static sched_cell_configuration_request_message make_two_step_rach_req(const two_step_test_params& params)
@@ -495,7 +980,10 @@ public:
     builder_params.min_k1               = 2;
     builder_params.min_k2               = 2;
     builder_params.tdd_ul_dl_cfg_common = params.tdd_cfg;
-    auto  req  = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    auto req = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    // A beam other than the first one, so that the assertions discriminate against a hardcoded default.
+    req.ran.ssb_cfg.ssb_beams.reset();
+    req.ran.ssb_cfg.ssb_beams.set_beam(0, test_ssb_beam);
     auto& rach = *req.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common;
     // Reserve preamble IDs [60, 64) for 2-step CB RACH.
     rach.nof_cb_preambles_per_ssb = MSGA_PREAMBLE_OFFSET;
@@ -512,22 +1000,47 @@ public:
   rach_indication_message
   create_msga_rach_indication(std::initializer_list<rach_indication_message::preamble> preambles) const
   {
-    return test_helper::create_rach_indication(next_slot_rx(), {preambles.begin(), preambles.end()});
+    return test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {preambles.begin(), preambles.end()});
   }
 
-  /// Inject a CRC result for a MsgA PUSCH by TC-RNTI.
-  void send_msga_crc(rnti_t tc_rnti, bool success)
+  /// \brief Builds and forwards a MsgA RACH indication, and records the actual PRACH slot it lands on.
+  ///
+  /// \c handle_rach_indication() (from \c ra_scheduler_setup) advances the simulator to the next slot with a valid
+  /// PRACH occasion and overwrites the indication's slot_rx accordingly, so the slot passed to
+  /// \c create_msga_rach_indication is not necessarily the one actually used. \c last_prach_slot_rx is captured
+  /// right after, while \c next_slot_rx() still reflects that same (unadvanced) slot.
+  void send_msga_rach(std::initializer_list<rach_indication_message::preamble> preambles)
   {
+    handle_rach_indication(create_msga_rach_indication(preambles));
+    last_prach_slot_rx = next_slot_rx();
+  }
+
+  /// \brief Inject a CRC result for a MsgA PUSCH by preamble index (as passed to \c make_msga_preamble).
+  ///
+  /// The MsgA PUSCH grant is scheduled and decoded using the (shared, per-occasion) RA-RNTI, not the preamble's
+  /// TC-RNTI (TS 38.211, 6.3.1.1). The RA-RNTI is recomputed from the original PRACH occasion (rather than looked
+  /// up in the current resource grid) so this also works after the grid has slid past the MsgA PUSCH slot.
+  void send_msga_crc(unsigned preamble_idx, bool success)
+  {
+    const rnti_t ra_rnti = test_helper::compute_ra_rnti(cell_cfg,
+                                                        last_prach_slot_rx,
+                                                        /*start_symbol=*/0,
+                                                        /*frequency_index=*/0);
+
     ul_crc_indication crc_ind;
     crc_ind.cell_index = cell_cfg.cell_index;
     crc_ind.sl_rx      = res_grid[0].slot;
     auto& pdu          = crc_ind.crcs.emplace_back();
-    pdu.rnti           = tc_rnti;
+    pdu.rnti           = ra_rnti;
     pdu.ue_index       = INVALID_DU_UE_INDEX;
     pdu.harq_id        = to_harq_id(0);
+    pdu.rapid          = static_cast<uint8_t>(MSGA_PREAMBLE_OFFSET + preamble_idx);
     pdu.tb_crc_success = success;
     handle_crc_indication(crc_ind);
   }
+
+  /// PRACH slot of the last MsgA RACH indication created via \c create_msga_rach_indication.
+  slot_point last_prach_slot_rx;
 
   /// Returns true if the current slot result contains at least one MsgB grant of either type.
   bool has_msgb_grant() const
@@ -536,7 +1049,8 @@ public:
                        res_grid[0].result.dl.rar_grants.end(),
                        [](const rar_information& rar) {
                          return std::any_of(rar.grants.begin(), rar.grants.end(), [](const rar_ul_grant& g) {
-                           return std::holds_alternative<rar_ul_grant::two_step_info>(g.type);
+                           return std::holds_alternative<rar_ul_grant::two_step_success_info>(g.type) or
+                                  std::holds_alternative<rar_ul_grant::two_step_fallback_info>(g.type);
                          });
                        });
   }
@@ -584,7 +1098,7 @@ public:
 TEST_P(ra_scheduler_two_step_rach_test, when_two_step_rach_enqueued_then_msga_pusch_is_scheduled)
 {
   // Event: Enqueue RACH indication with two-step RACH preamble.
-  const rnti_t tc_rnti  = to_rnti(to_value(rnti_t::MIN_CRNTI));
+  const rnti_t tc_rnti  = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
   auto         rach_ind = create_msga_rach_indication({make_msga_preamble(0, tc_rnti)});
   handle_rach_indication(rach_ind);
 
@@ -598,12 +1112,12 @@ TEST_P(ra_scheduler_two_step_rach_test, when_two_step_rach_enqueued_then_msga_pu
 TEST_P(ra_scheduler_two_step_rach_test, when_msga_crc_ok_then_msgb_with_success_rar_scheduled_and_no_msg3)
 {
   // Event: Enqueue RACH indication with two-step RACH preamble.
-  const rnti_t tc_rnti = to_rnti(to_value(rnti_t::MIN_CRNTI));
-  handle_rach_indication(create_msga_rach_indication({make_msga_preamble(0, tc_rnti)}));
+  const rnti_t tc_rnti = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
+  send_msga_rach({make_msga_preamble(0, tc_rnti)});
 
   // Event: MsgA PUSCH scheduled and forward CRC=OK.
   ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.ul.puschs.empty(); }));
-  send_msga_crc(tc_rnti, true);
+  send_msga_crc(0, true);
 
   // Test: MsgB with SuccessRAR scheduled.
   ASSERT_TRUE(run_slot_until([this]() { return tracker.nof_success_rars() > 0; }));
@@ -615,38 +1129,70 @@ TEST_P(ra_scheduler_two_step_rach_test, when_msga_crc_ok_then_msgb_with_success_
   ASSERT_EQ(tracker.nof_msg3_newtxs(), 0) << "SuccessRAR must not allocate a Msg3 PUSCH";
 }
 
+/// Verifies that the MsgB PDSCH and its PDCCH are carried by the beam of the SS/PBCH block that the UE reached the
+/// cell on, the way the 4-step RAR is.
+TEST_P(ra_scheduler_two_step_rach_test, msgb_pdsch_and_pdcch_use_the_beam_of_the_ssb)
+{
+  const rnti_t tc_rnti = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
+  send_msga_rach({make_msga_preamble(0, tc_rnti)});
+
+  ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.ul.puschs.empty(); }));
+  send_msga_crc(0, true);
+
+  ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.dl.rar_grants.empty(); }));
+
+  ASSERT_EQ(beam_of(res_grid[0].result.dl.rar_grants.front().pdsch_cfg.precoding_and_beamforming), test_ssb_beam);
+
+  ASSERT_EQ(res_grid[0].result.dl.dl_pdcchs.size(), 1);
+  ASSERT_EQ(beam_of(res_grid[0].result.dl.dl_pdcchs.front().ctx.precoding_and_beamforming), test_ssb_beam);
+}
+
 /// When MsgA PUSCH decoding fails (CRC=KO), the scheduler must respond with a FallbackRAR and allocate a
 /// Msg3 PUSCH for the UE to fall back to the 4-step procedure.
 TEST_P(ra_scheduler_two_step_rach_test, when_msga_crc_ko_then_fallback_rar_and_msg3_scheduled)
 {
-  const rnti_t tc_rnti = to_rnti(to_value(rnti_t::MIN_CRNTI));
-  handle_rach_indication(create_msga_rach_indication({make_msga_preamble(0, tc_rnti)}));
+  const rnti_t tc_rnti = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
+  send_msga_rach({make_msga_preamble(0, tc_rnti)});
   run_slot();
 
   // Event: MsgA PUSCH scheduled and forward CRC=KO.
   ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.ul.puschs.empty(); }));
-  send_msga_crc(tc_rnti, false);
+  send_msga_crc(0, false);
 
   ASSERT_TRUE(run_slot_until([this]() { return tracker.nof_fallback_rars() > 0; }));
   ASSERT_EQ(tracker.nof_fallback_rars(), 1);
   ASSERT_EQ(tracker.nof_success_rars(), 0) << "No SuccessRAR expected for CRC=KO preamble";
-  ASSERT_TRUE(run_slot_until([this]() { return tracker.nof_msg3_newtxs() > 0; }));
+
+  std::optional<bool> msg3_rapid_set;
+  ASSERT_TRUE(run_slot_until([this, &msg3_rapid_set]() {
+    const auto& puschs = res_grid[0].result.ul.puschs;
+    auto        it     = std::find_if(
+        puschs.begin(), puschs.end(), [](const ul_sched_info& p) { return p.context.msg3_delay.has_value(); });
+    if (it != puschs.end()) {
+      msg3_rapid_set = it->context.rapid.has_value();
+    }
+    return tracker.nof_msg3_newtxs() > 0;
+  }));
   ASSERT_EQ(tracker.nof_msg3_newtxs(), 1) << "FallbackRAR must allocate a Msg3 PUSCH";
+  ASSERT_TRUE(msg3_rapid_set.has_value()) << "Msg3 PUSCH was never observed in the resource grid";
+  // "rapid" is a MsgA-only field; if set here, the PHY will wrongly apply the MsgA descrambling sequence
+  // (TS38.211 6.3.1.1) to this regular Msg3 PUSCH and fail to decode it.
+  ASSERT_FALSE(*msg3_rapid_set) << "FallbackRAR Msg3 PUSCH context.rapid must not be set";
 }
 
 /// While the MsgA PUSCH CRC indication has not yet arrived, MsgB scheduling must be postponed to allow
 /// time for the CRC to be received.  Once the CRC arrives the MsgB must be scheduled promptly.
 TEST_P(ra_scheduler_two_step_rach_test, when_crc_pending_then_msgb_scheduling_is_postponed)
 {
-  const rnti_t tc_rnti = to_rnti(to_value(rnti_t::MIN_CRNTI));
-  handle_rach_indication(create_msga_rach_indication({make_msga_preamble(0, tc_rnti)}));
+  const rnti_t tc_rnti = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
+  send_msga_rach({make_msga_preamble(0, tc_rnti)});
   run_slot();
 
   // Run several slots without a CRC indication; MsgB must not be scheduled.
   ASSERT_FALSE(run_slot_until([this]() { return not res_grid[0].result.dl.rar_grants.empty(); }, 5));
 
   // CRC=OK arrives; MsgB must now be scheduled.
-  send_msga_crc(tc_rnti, true);
+  send_msga_crc(0, true);
   ASSERT_TRUE(run_slot_until([this]() { return tracker.nof_success_rars() > 0; }));
   ASSERT_EQ(tracker.nof_success_rars(), 1);
 }
@@ -656,14 +1202,13 @@ TEST_P(ra_scheduler_two_step_rach_test, when_crc_pending_then_msgb_scheduling_is
 /// within the same MsgB response.
 TEST_P(ra_scheduler_two_step_rach_test, when_mixed_crc_outcomes_both_rar_types_scheduled_together)
 {
-  const rnti_t tc_rnti_ok = to_rnti(to_value(rnti_t::MIN_CRNTI));
-  const rnti_t tc_rnti_ko = to_rnti(to_value(rnti_t::MIN_CRNTI) + 1);
-  handle_rach_indication(
-      create_msga_rach_indication({make_msga_preamble(0, tc_rnti_ok), make_msga_preamble(1, tc_rnti_ko)}));
+  const rnti_t tc_rnti_ok = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
+  const rnti_t tc_rnti_ko = to_rnti(to_underlying(rnti_t::MIN_CRNTI) + 1);
+  send_msga_rach({make_msga_preamble(0, tc_rnti_ok), make_msga_preamble(1, tc_rnti_ko)});
 
   ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.ul.puschs.empty(); }));
-  send_msga_crc(tc_rnti_ok, true);
-  send_msga_crc(tc_rnti_ko, false);
+  send_msga_crc(0, true);
+  send_msga_crc(1, false);
 
   ASSERT_TRUE(run_slot_until([this]() { return tracker.nof_success_rars() > 0 and tracker.nof_fallback_rars() > 0; }));
   ASSERT_EQ(tracker.nof_success_rars(), 1);
@@ -673,6 +1218,40 @@ TEST_P(ra_scheduler_two_step_rach_test, when_mixed_crc_outcomes_both_rar_types_s
   ASSERT_EQ(res_grid[0].result.ul.puschs.size(), 1);
   ASSERT_EQ(res_grid[0].result.ul.puschs[0].pusch_cfg.rnti, tc_rnti_ko);
   ASSERT_EQ(tracker.nof_msg3_newtxs(), 1) << "FallbackRAR preamble must have a Msg3 PUSCH";
+}
+
+/// TS38.213, Section 8.2A: the successRAR/fallbackRAR PDCCH (MsgB-RNTI DCI format 1_0) must carry the 2 LSBs of the
+/// SFN where the UE transmitted PRACH whenever msgB-ResponseWindow is configured larger than 10 msec, or a
+/// MsgB-conformant UE discards the DCI/PDSCH. Otherwise, these bits are just reserved (0).
+TEST_P(ra_scheduler_two_step_rach_test, msgb_dci_carries_prach_sfn_lsbs_per_response_window_applicability)
+{
+  const rnti_t tc_rnti = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
+  send_msga_rach({make_msga_preamble(0, tc_rnti)});
+
+  ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.ul.puschs.empty(); }));
+  send_msga_crc(0, true);
+
+  const pdcch_dl_information* msgb_pdcch = nullptr;
+  ASSERT_TRUE(run_slot_until([this, &msgb_pdcch]() {
+    auto it = std::find_if(res_grid[0].result.dl.dl_pdcchs.begin(),
+                           res_grid[0].result.dl.dl_pdcchs.end(),
+                           [](const pdcch_dl_information& p) {
+                             return p.dci.type() == dci_dl_rnti_config_type::ra_f1_0 and
+                                    ra_helper::is_valid_msgb_rnti(p.ctx.rnti);
+                           });
+    if (it != res_grid[0].result.dl.dl_pdcchs.end()) {
+      msgb_pdcch = &*it;
+      return true;
+    }
+    return false;
+  }));
+  ASSERT_NE(msgb_pdcch, nullptr);
+
+  const auto&    rach_cfg       = *cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common;
+  const unsigned resp_window_ms = rach_cfg.two_step_rach_cfg->msgB_response_window_slots >>
+                                  to_numerology_value(cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.scs);
+  const unsigned expected_lsb_sfn = resp_window_ms > 10 ? (last_prach_slot_rx.sfn() & 0b11U) : 0U;
+  EXPECT_EQ(msgb_pdcch->dci.as_ra_rnti_f1_0().lsb_sfn, expected_lsb_sfn);
 }
 
 /// The MsgA PUSCH resources must be blocked in the UL resource grid before any PRACH preamble is detected,
@@ -701,7 +1280,22 @@ class ra_scheduler_cfra_test : public ra_scheduler_setup, public ::testing::Test
   static constexpr unsigned NOF_CB_PREAMBLES = 60;
 
 public:
-  ra_scheduler_cfra_test() : ra_scheduler_setup(make_cfra_sched_req(), false, false) {}
+  ra_scheduler_cfra_test() : ra_scheduler_setup(make_cfra_sched_req(), false, false)
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-b");
+
+    // The RA scheduler classifies a CRC as a CFRA Msg3 by looking the C-RNTI up in the cell UE repository, so the
+    // CFRA UE must be registered there.
+    auto ue_req                    = sched_config_helper::create_default_sched_ue_creation_request(cell_cfg.params);
+    ue_req.ue_index                = cfra_ue_index;
+    ue_req.crnti                   = cfra_crnti;
+    ue_req.cfra_enabled            = true;
+    ue_req.starts_in_fallback      = true;
+    ue_req.ul_ccch_slot_rx         = std::nullopt;
+    const ue_configuration* ue_cfg = cfg_mng.add_ue(ue_req);
+    report_error_if_not(ue_cfg != nullptr, "Failed to create the CFRA UE configuration");
+    ue_db.add_ue(*ue_cfg, {sched_config_helper::to_ue_creation_mode(ue_req)});
+  }
 
   static sched_cell_configuration_request_message make_cfra_sched_req()
   {
@@ -716,7 +1310,13 @@ public:
     const unsigned cfra_preamble_id =
         cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common->nof_cb_preambles_per_ssb;
     auto preamble = test_helper::create_preamble(cfra_preamble_id, tc_rnti);
-    return test_helper::create_rach_indication(next_slot_rx(), {preamble});
+    return test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {preamble});
+  }
+
+  rach_indication_message create_cbra_rach_indication(rnti_t tc_rnti) const
+  {
+    auto preamble = test_helper::create_preamble(0, tc_rnti);
+    return test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {preamble});
   }
 
   void send_cfra_crc(rnti_t tc_rnti, bool success)
@@ -732,14 +1332,131 @@ public:
     handle_crc_indication(crc_ind);
   }
 
+  void send_cbra_crc(rnti_t tc_rnti, bool success)
+  {
+    ul_crc_indication crc_ind;
+    crc_ind.cell_index = cell_cfg.cell_index;
+    crc_ind.sl_rx      = res_grid[0].slot;
+    auto& pdu          = crc_ind.crcs.emplace_back();
+    pdu.rnti           = tc_rnti;
+    pdu.ue_index       = INVALID_DU_UE_INDEX;
+    pdu.harq_id        = to_harq_id(0);
+    pdu.tb_crc_success = success;
+    handle_crc_indication(crc_ind);
+  }
+
   const du_ue_index_t cfra_ue_index = to_du_ue_index(5);
+  const rnti_t        cfra_crnti    = to_rnti(0x4601);
 };
+
+/// \brief Test fixture for a CFRA UE that holds a PUCCH in every UL slot, so that every candidate Msg3 slot
+/// collides with its UCI.
+///
+/// Parameterized on \c scheduler_ra_expert_config::multiplex_uci_on_cfra_msg3.
+class ra_scheduler_cfra_uci_on_msg3_test : public ra_scheduler_setup, public ::testing::TestWithParam<bool>
+{
+  static constexpr unsigned NOF_CB_PREAMBLES = 60;
+
+public:
+  ra_scheduler_cfra_uci_on_msg3_test() :
+    ra_scheduler_setup(make_expert_cfg(GetParam()), make_cfra_sched_req(), false, false)
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-b");
+
+    auto ue_req                    = sched_config_helper::create_default_sched_ue_creation_request(cell_cfg.params);
+    ue_req.ue_index                = cfra_ue_index;
+    ue_req.crnti                   = cfra_crnti;
+    ue_req.cfra_enabled            = true;
+    ue_req.starts_in_fallback      = true;
+    ue_req.ul_ccch_slot_rx         = std::nullopt;
+    const ue_configuration* ue_cfg = cfg_mng.add_ue(ue_req);
+    report_error_if_not(ue_cfg != nullptr, "Failed to create the CFRA UE configuration");
+    ue_db.add_ue(*ue_cfg, {sched_config_helper::to_ue_creation_mode(ue_req)});
+  }
+
+  static scheduler_expert_config make_expert_cfg(bool multiplex_uci_on_cfra_msg3)
+  {
+    auto cfg                                = config_helpers::make_default_scheduler_expert_config();
+    cfg.ra.multiplex_uci_on_cf_rar_ul_grant = multiplex_uci_on_cfra_msg3;
+    return cfg;
+  }
+
+  static sched_cell_configuration_request_message make_cfra_sched_req()
+  {
+    cell_config_builder_params bparams;
+    auto                       req = sched_config_helper::make_default_sched_cell_configuration_request(bparams);
+    req.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common->nof_cb_preambles_per_ssb = NOF_CB_PREAMBLES;
+    return req;
+  }
+
+  rach_indication_message create_cfra_rach_indication() const
+  {
+    const unsigned cfra_preamble_id =
+        cell_cfg.params.ul_cfg_common.init_ul_bwp.rach_cfg_common->nof_cb_preambles_per_ssb;
+    auto preamble = test_helper::create_preamble(cfra_preamble_id, cfra_crnti);
+    return test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {preamble});
+  }
+
+  void do_run_slot() override
+  {
+    // Reserve a CSI PUCCH for the CFRA UE in every UL slot the RA scheduler could pick for its Msg3. CSI is used
+    // rather than SR because only HARQ-ACK and CSI bits are carried over to the PUSCH (SR is dropped instead).
+    const ue_cell_configuration& ue_cc_cfg = ue_cell_db[cfra_ue_index].cfg();
+    for (unsigned i = 0; i <= res_grid.max_ul_slot_alloc_delay; ++i) {
+      cell_slot_resource_allocator& slot_alloc = res_grid[i];
+      if (not cell_cfg.is_ul_enabled(slot_alloc.slot)) {
+        continue;
+      }
+      // Skip slots that already hold a grant for the UE: re-adding a PUCCH next to its Msg3 PUSCH would recreate
+      // the very overlap the UCI multiplexing is meant to resolve.
+      span<const pucch_info> pucchs = slot_alloc.result.ul.pucchs.unsorted();
+      const auto&            puschs = slot_alloc.result.ul.puschs;
+      const bool             has_grant =
+          std::any_of(pucchs.begin(), pucchs.end(), [this](const pucch_info& p) { return p.crnti == cfra_crnti; }) or
+          std::any_of(
+              puschs.begin(), puschs.end(), [this](const ul_sched_info& p) { return p.pusch_cfg.rnti == cfra_crnti; });
+      if (not has_grant) {
+        pucch_alloc.alloc_csi_opportunity(slot_alloc, ue_cc_cfg);
+      }
+    }
+    ra_scheduler_setup::do_run_slot();
+  }
+
+  const du_ue_index_t cfra_ue_index = to_du_ue_index(5);
+  const rnti_t        cfra_crnti    = to_rnti(0x4601);
+};
+
+TEST_P(ra_scheduler_cfra_uci_on_msg3_test, msg3_is_only_scheduled_over_a_pucch_when_uci_multiplexing_is_enabled)
+{
+  handle_rach_indication(create_cfra_rach_indication());
+
+  bool msg3_seen     = false;
+  bool msg3_with_uci = false;
+  for (unsigned slot_count = 0, max_slots = 200; slot_count != max_slots; ++slot_count) {
+    run_slot();
+    for (const ul_sched_info& pusch : res_grid[0].result.ul.puschs) {
+      if (pusch.pusch_cfg.rnti != cfra_crnti) {
+        continue;
+      }
+      msg3_seen     = true;
+      msg3_with_uci = msg3_with_uci or pusch.uci.has_value();
+    }
+  }
+
+  if (GetParam()) {
+    ASSERT_TRUE(msg3_seen) << "Msg3 should be placed over the UE PUCCH when UCI multiplexing is enabled";
+    ASSERT_TRUE(msg3_with_uci) << "Msg3 should carry the UCI moved off the PUCCH";
+  } else {
+    ASSERT_FALSE(msg3_seen) << "Msg3 should avoid slots where the CFRA UE has a PUCCH";
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(uci_on_msg3, ra_scheduler_cfra_uci_on_msg3_test, ::testing::Bool());
 
 /// Verify that a Msg3 CRC with a valid UE index (CFRA path) is accepted by the RA scheduler.
 TEST_F(ra_scheduler_cfra_test, cfra_msg3_crc_with_valid_ue_index_is_accepted)
 {
-  const rnti_t tc_rnti = to_rnti(0x4601);
-  ra_sch.handle_cfra_mapping_update(cfra_ue_index, tc_rnti);
+  const rnti_t tc_rnti = cfra_crnti;
   handle_rach_indication(create_cfra_rach_indication(tc_rnti));
 
   for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_acked() == 0;
@@ -756,8 +1473,7 @@ TEST_F(ra_scheduler_cfra_test, cfra_msg3_crc_with_valid_ue_index_is_accepted)
 /// Verify the Msg3 retransmission flow for a CFRA UE: CRC KO triggers retx, CRC OK completes the procedure.
 TEST_F(ra_scheduler_cfra_test, cfra_msg3_crc_ko_causes_retx_then_ok_completes)
 {
-  const rnti_t tc_rnti = to_rnti(0x4601);
-  ra_sch.handle_cfra_mapping_update(cfra_ue_index, tc_rnti);
+  const rnti_t tc_rnti = cfra_crnti;
   handle_rach_indication(create_cfra_rach_indication(tc_rnti));
 
   // NACK the first Msg3 new-tx.
@@ -784,16 +1500,70 @@ TEST_F(ra_scheduler_cfra_test, cfra_msg3_crc_ko_causes_retx_then_ok_completes)
   ASSERT_EQ(tracker.nof_msg3_acked(), 1);
 }
 
-/// Verify that a CRC with a valid but unregistered UE index is filtered by the RA scheduler.
-///
-/// Because the RNTI is not in pending_cfra_ues for that ue_index, is_ra_crc() returns false and
-/// the Msg3 HARQ is not freed.  A retransmission must therefore be scheduled.
-TEST_F(ra_scheduler_cfra_test, non_cfra_crc_with_valid_ue_index_is_filtered)
+/// Verify that, when a NACKed Msg3 HARQ is never rescheduled for retransmission (starved until the retx timeout
+/// fires), its pending_msg3s ring entry is released -- so a later PRACH reusing the same TC-RNTI is accepted
+/// instead of being rejected as "already under use".
+TEST_F(ra_scheduler_cfra_test, when_msg3_retx_starves_then_tc_rnti_is_released_for_reuse)
 {
-  const rnti_t tc_rnti            = to_rnti(0x4601);
-  const auto   unrelated_ue_index = to_du_ue_index(10);
-  ra_sch.handle_cfra_mapping_update(cfra_ue_index, tc_rnti);
+  const rnti_t tc_rnti = cfra_crnti;
   handle_rach_indication(create_cfra_rach_indication(tc_rnti));
+
+  // NACK the first Msg3 new-tx, putting its HARQ into pending_retx state.
+  for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_newtxs() == 0;
+       ++slot_count) {
+    run_slot();
+    if (not res_grid[0].result.ul.puschs.empty()) {
+      send_cfra_crc(tc_rnti, false);
+    }
+  }
+  ASSERT_GE(tracker.nof_msg3_newtxs(), 1);
+
+  // Block all UL resources so the scheduler can never grant the Msg3 retransmission, until the retx timeout fires
+  // and the HARQ (and its pending_msg3s ring entry) is force-discarded.
+  const grant_info marked_res{cell_cfg.scs_common(),
+                              ofdm_symbol_range{0, NOF_OFDM_SYM_PER_SLOT_NORMAL_CP},
+                              crb_interval{0, cell_cfg.nof_ul_prbs}};
+  const unsigned   lookahead_ul_rbs = res_grid.max_ul_slot_alloc_delay;
+  for (unsigned i = 0; i != lookahead_ul_rbs; ++i) {
+    if (cell_cfg.is_ul_enabled(res_grid[i].slot)) {
+      res_grid[i].ul_res_grid.fill(marked_res);
+    }
+  }
+  const unsigned nof_retxs_before_block = tracker.nof_msg3_retxs();
+  for (unsigned i = 0, max_slots = 500; i != max_slots; ++i) {
+    if (cell_cfg.is_ul_enabled(res_grid[lookahead_ul_rbs].slot)) {
+      res_grid[lookahead_ul_rbs].ul_res_grid.fill(marked_res);
+    }
+    run_slot();
+  }
+  ASSERT_EQ(tracker.nof_msg3_retxs(), nof_retxs_before_block)
+      << "No retx grant should have been possible while UL resources were blocked";
+
+  // Drain the lookahead window of already-blocked slots (without refilling) before probing with a new preamble.
+  for (unsigned i = 0; i != lookahead_ul_rbs; ++i) {
+    run_slot();
+  }
+
+  // A new preamble reusing the SAME TC-RNTI must now be accepted. If pending_msg3s still held a stale entry for
+  // this TC-RNTI, ra_scheduler's ring-collision check would silently drop this preamble instead.
+  handle_rach_indication(create_cfra_rach_indication(tc_rnti));
+  for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_newtxs() < 2;
+       ++slot_count) {
+    run_slot();
+  }
+  ASSERT_GE(tracker.nof_msg3_newtxs(), 2)
+      << "TC-RNTI reuse after the retx timeout was rejected -- pending_msg3s leaked";
+}
+
+/// Verify that a CRC carrying a UE index is filtered when its RNTI does not belong to a UE undergoing a CFRA.
+///
+/// This is the CBRA UE that has already completed RA: its C-RNTI is the TC-RNTI that the RA scheduler still holds
+/// in \c ra_ue_repository, so an unfiltered CRC would free a Msg3 HARQ that the UE scheduler now owns.
+TEST_F(ra_scheduler_cfra_test, crc_with_ue_index_of_non_cfra_rnti_is_filtered)
+{
+  const rnti_t tc_rnti            = to_rnti(0x4602);
+  const auto   unrelated_ue_index = to_du_ue_index(10);
+  handle_rach_indication(create_cbra_rach_indication(tc_rnti));
 
   // Wait for the Msg3 new-tx.
   for (unsigned slot_count = 0, max_slots = 1000; slot_count < max_slots and tracker.nof_msg3_newtxs() == 0;
@@ -802,8 +1572,8 @@ TEST_F(ra_scheduler_cfra_test, non_cfra_crc_with_valid_ue_index_is_filtered)
   }
   ASSERT_GE(tracker.nof_msg3_newtxs(), 1) << "Msg3 new-tx was not scheduled";
 
-  // Send a CRC with a valid but unregistered UE index directly to the RA scheduler, bypassing the tracker.
-  // pending_cfra_ues[unrelated_ue_index] is INVALID_RNTI, so is_ra_crc() must reject it.
+  // Send a CRC with a valid UE index directly to the RA scheduler, bypassing the tracker. The TC-RNTI is not that of
+  // a UE undergoing a CFRA, so the CRC must be rejected.
   {
     ul_crc_indication bad_crc;
     bad_crc.cell_index = cell_cfg.cell_index;
@@ -817,13 +1587,13 @@ TEST_F(ra_scheduler_cfra_test, non_cfra_crc_with_valid_ue_index_is_filtered)
   }
   // Send a valid NACK to give the HARQ real feedback and trigger a retransmission.
   // If the bad CRC above was wrongly accepted, the HARQ would already be freed and no retx would appear.
-  send_cfra_crc(tc_rnti, false);
+  send_cbra_crc(tc_rnti, false);
 
-  // The HARQ must not have been freed by the filtered CRC — a retransmission must be scheduled.
+  // The HARQ must not have been freed by the filtered CRC -- a retransmission must be scheduled.
   for (unsigned i = 0, max_slots = 1000; i < max_slots and tracker.nof_msg3_retxs() == 0; ++i) {
     run_slot();
   }
-  ASSERT_GE(tracker.nof_msg3_retxs(), 1) << "Filtered CRC must not free the HARQ — retx expected";
+  ASSERT_GE(tracker.nof_msg3_retxs(), 1) << "Filtered CRC must not free the HARQ. Retx expected";
 }
 
 } // namespace

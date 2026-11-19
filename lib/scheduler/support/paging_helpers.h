@@ -29,13 +29,13 @@ private:
 
   /// Array of Type0-PDCCH CSS monitoring slots (1 per beam) that will be used for Paging scheduling if
   /// pagingSearchSpace is 0 [TS 38.213, Section 13].
-  std::array<slot_point, MAX_NUM_BEAMS> type0_pdcch_css_slots;
+  std::array<slot_point, MAX_NOF_SSB_CANDIDATES> type0_pdcch_css_slots;
 
   /// Array of Type2-PDCCH CSS monitoring slots that will be used for Paging scheduling if pagingSearchSpace > 0.
   /// NOTE1: nrofPDCCH-MonitoringOccasionPerSSB-InPO is always 1. See \c
   /// pcch_config::NR_OF_PDCCH_MONITORING_OCCASION_PER_SSB_IN_PO.
   /// NOTE2: Row number corresponds to SSB beam index and column number corresponds to Paging Occasion index (i_s).
-  std::array<static_vector<slot_point, pcch_config::MAX_PO_PER_PF>, MAX_NUM_BEAMS> type2_pdcch_css_slots;
+  std::array<static_vector<slot_point, pcch_config::MAX_PO_PER_PF>, MAX_NOF_SSB_CANDIDATES> type2_pdcch_css_slots;
   /// Search Space configuration when pagingSearchSpace > 0, if configured.
   const search_space_configuration* ss_cfg = nullptr;
 

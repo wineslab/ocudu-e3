@@ -11,6 +11,7 @@
 #include "procedures/positioning_activation_procedure.h"
 #include "procedures/positioning_information_exchange_procedure.h"
 #include "procedures/trp_information_exchange_procedure.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/nrppa/common.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/support/async/coroutine.h"
@@ -61,6 +62,38 @@ void nrppa_impl::remove_ue_context(cu_cp_ue_index_t ue_index)
   ue_ctxt_list.remove_ue_context(ue_index);
 }
 
+void nrppa_impl::update_ue_index(cu_cp_ue_index_t         new_ue_index,
+                                 cu_cp_ue_index_t         old_ue_index,
+                                 nrppa_cu_cp_ue_notifier& new_ue_notifier)
+{
+  if (!ue_ctxt_list.contains(old_ue_index)) {
+    // No NRPPA context to transfer.
+    return;
+  }
+
+  ue_ctxt_list.update_ue_index(new_ue_index, old_ue_index, new_ue_notifier, timers, task_exec);
+}
+
+void nrppa_impl::handle_du_addition(cu_cp_du_index_t du_index, nrppa_f1ap_notifier& f1ap_notifier)
+{
+  if (du_ctxt_list.contains(du_index)) {
+    logger.warning("du={}: NRPPA DU context already exists", du_index);
+    return;
+  }
+
+  du_ctxt_list.add_du(du_index, f1ap_notifier);
+}
+
+void nrppa_impl::handle_du_removal(cu_cp_du_index_t du_index)
+{
+  if (!du_ctxt_list.contains(du_index)) {
+    return;
+  }
+
+  trp_registry.remove_du(du_index);
+  du_ctxt_list.remove_du_context(du_index);
+}
+
 void nrppa_impl::initialize_meas_report_timer(cu_cp_ue_index_t ue_index, std::chrono::milliseconds meas_periodicity_ms)
 {
   if (!ue_ctxt_list.contains(ue_index)) {
@@ -76,8 +109,7 @@ void nrppa_impl::initialize_meas_report_timer(cu_cp_ue_index_t ue_index, std::ch
   }
 
   // Start timer.
-  ue_ctxt.meas_report_timer.set(meas_periodicity_ms,
-                                [this, ue_index](timer_id_t /*tid*/) { on_meas_report_timer_expired(ue_index); });
+  ue_ctxt.meas_report_timer.set(meas_periodicity_ms, [this, ue_index]() { on_meas_report_timer_expired(ue_index); });
   ue_ctxt.meas_report_timer.run();
 }
 
@@ -95,8 +127,8 @@ void nrppa_impl::handle_e_cid_meas_result(cu_cp_ue_index_t ue_index, const nrppa
   nrppa_msg.init_msg().load_info_obj(ASN1_NRPPA_ID_E_C_ID_MEAS_REPORT);
 
   auto& asn1_report               = nrppa_msg.init_msg().value.e_c_id_meas_report();
-  asn1_report->lmf_ue_meas_id     = lmf_ue_meas_id_to_uint(ue_ctxt.ue_ids.lmf_ue_meas_id);
-  asn1_report->ran_ue_meas_id     = ran_ue_meas_id_to_uint(ue_ctxt.ue_ids.ran_ue_meas_id);
+  asn1_report->lmf_ue_meas_id     = to_underlying(ue_ctxt.ue_ids.lmf_ue_meas_id);
+  asn1_report->ran_ue_meas_id     = to_underlying(ue_ctxt.ue_ids.ran_ue_meas_id);
   asn1_report->e_c_id_meas_result = e_cid_meas_result_to_asn1(result);
 
   byte_buffer nrppa_pdu = pack_into_pdu(nrppa_msg, "E-CID measurement report");
@@ -118,13 +150,13 @@ void nrppa_impl::on_meas_report_timer_expired(cu_cp_ue_index_t ue_index)
   auto* ue = ue_ctxt.get_cu_cp_ue();
   ocudu_assert(ue != nullptr,
                "ue={} ran_ue={} lmf_ue={}: UE for UE context doesn't exist",
-               fmt::underlying(ue_ctxt.ue_ids.ue_index),
+               ue_ctxt.ue_ids.ue_index,
                fmt::underlying(ue_ctxt.ue_ids.ran_ue_meas_id),
                fmt::underlying(ue_ctxt.ue_ids.lmf_ue_meas_id));
 
   // Restart timer.
   ue_ctxt.meas_report_timer.set(ue_ctxt.meas_periodicity_ms.value(),
-                                [this, ue_index](timer_id_t /*tid*/) { on_meas_report_timer_expired(ue_index); });
+                                [this, ue_index]() { on_meas_report_timer_expired(ue_index); });
   ue_ctxt.meas_report_timer.run();
 
   std::optional<cell_measurement_positioning_info>& ue_measurement_results = ue->on_measurement_results_required();
@@ -145,14 +177,16 @@ void nrppa_impl::on_meas_report_timer_expired(cu_cp_ue_index_t ue_index)
   }
 
   // Fill measurement result.
-  auto meas_result = fill_e_cid_measurement_result(
-      ue_ctxt.ue_ids.ue_index, ue_measurement_results.value(), ue_ctxt.meas_quantities, plmn_to_tac.at(plmn));
-  if (!meas_result.has_value()) {
-    logger.warning("{}", meas_result.error());
+  nrppa_e_cid_meas_result meas_result;
+  meas_result.serving_cell_id  = ue_measurement_results.value().serving_cell_id;
+  meas_result.serving_cell_tac = plmn_to_tac.at(plmn);
+  meas_result.measured_results = fill_rrc_measured_results(ue_measurement_results.value(), ue_ctxt.meas_quantities);
+  if (meas_result.measured_results.empty()) {
+    logger.warning("ue={}: No supported measurement quantity requested", ue_index);
     return;
   }
 
-  handle_e_cid_meas_result(ue_index, meas_result.value());
+  handle_e_cid_meas_result(ue_index, meas_result);
 }
 
 void nrppa_impl::handle_new_nrppa_pdu(const byte_buffer&                                nrppa_pdu,
@@ -163,6 +197,7 @@ void nrppa_impl::handle_new_nrppa_pdu(const byte_buffer&                        
   asn1::cbit_ref            bref(nrppa_pdu);
   if (nrppa_msg.unpack(bref) != asn1::OCUDUASN_SUCCESS) {
     logger.error(nrppa_pdu.begin(), nrppa_pdu.end(), "Failed to unpack NRPPa-PDU");
+    return;
   }
 
   // Log Rx message.
@@ -252,6 +287,27 @@ void nrppa_impl::handle_e_cid_meas_initiation_request(const asn1::nrppa::e_c_id_
 
     // Create UE context and store it.
     nrppa_cu_cp_ue_notifier* ue_notifier = cu_cp_notifier.on_new_nrppa_ue(ue_index);
+    if (ue_notifier == nullptr) {
+      logger.warning("ue={}: Dropping E-CID measurement initiation request. UE doesn't exist", ue_index);
+
+      // Create failure response.
+      asn1::nrppa::nr_ppa_pdu_c asn1_fail;
+      asn1_fail.set_unsuccessful_outcome().load_info_obj(ASN1_NRPPA_ID_E_C_ID_MEAS_INITIATION);
+      asn1_fail.unsuccessful_outcome().nrppatransaction_id = transaction_id;
+      asn1::nrppa::e_c_id_meas_initiation_fail_s& meas_init_fail =
+          asn1_fail.unsuccessful_outcome().value.e_c_id_meas_initiation_fail();
+      meas_init_fail->lmf_ue_meas_id = msg->lmf_ue_meas_id;
+      meas_init_fail->cause          = cause_to_asn1(nrppa_cause_protocol_t::msg_not_compatible_with_receiver_state);
+      byte_buffer ul_nrppa_pdu       = pack_into_pdu(asn1_fail, "ECIDMeasInitiationFailure");
+
+      // Log Tx message.
+      log_nrppa_message(logger, Tx, ul_nrppa_pdu, asn1_fail);
+
+      // Send response to CU-CP.
+      cu_cp_notifier.on_ul_nrppa_pdu(ul_nrppa_pdu, ue_index);
+
+      return;
+    }
     ue_ctxt_list.add_ue(
         ue_index, ret.value(), uint_to_lmf_ue_meas_id(msg->lmf_ue_meas_id), *ue_notifier, timers, task_exec);
   }
@@ -261,7 +317,7 @@ void nrppa_impl::handle_e_cid_meas_initiation_request(const asn1::nrppa::e_c_id_
   auto* ue = ue_ctxt.get_cu_cp_ue();
   ocudu_assert(ue != nullptr,
                "ue={} ran_ue={} lmf_ue={}: UE for UE context doesn't exist",
-               fmt::underlying(ue_ctxt.ue_ids.ue_index),
+               ue_ctxt.ue_ids.ue_index,
                fmt::underlying(ue_ctxt.ue_ids.ran_ue_meas_id),
                fmt::underlying(ue_ctxt.ue_ids.lmf_ue_meas_id));
 
@@ -271,7 +327,7 @@ void nrppa_impl::handle_e_cid_meas_initiation_request(const asn1::nrppa::e_c_id_
   fill_nrppa_e_cid_meas_initiation_request(request, msg);
 
   ue->schedule_async_task(launch_async<e_cid_measurement_initiation_procedure>(
-      ue_index, request, transaction_id, ue_ctxt_list, cu_cp_notifier, plmn_to_tac, *this, logger));
+      ue_index, request, transaction_id, ue_ctxt_list, du_ctxt_list, cu_cp_notifier, plmn_to_tac, *this, logger));
 }
 
 void nrppa_impl::handle_e_cid_meas_termination_command(const asn1::nrppa::e_c_id_meas_termination_cmd_s& msg,
@@ -289,7 +345,7 @@ void nrppa_impl::handle_e_cid_meas_termination_command(const asn1::nrppa::e_c_id
   auto* ue = ue_ctxt.get_cu_cp_ue();
   ocudu_assert(ue != nullptr,
                "ue={} ran_ue={} lmf_ue={}: UE for UE context doesn't exist",
-               fmt::underlying(ue_ctxt.ue_ids.ue_index),
+               ue_ctxt.ue_ids.ue_index,
                fmt::underlying(ue_ctxt.ue_ids.ran_ue_meas_id),
                fmt::underlying(ue_ctxt.ue_ids.lmf_ue_meas_id));
 
@@ -306,7 +362,7 @@ void nrppa_impl::handle_trp_information_request(const asn1::nrppa::trp_info_requ
   fill_trp_information_request(request, msg);
 
   common_task_sched.schedule(launch_async<trp_information_exchange_procedure>(
-      amf_index, request, transaction_id, cu_cp_notifier, trp_id_to_du_idx, du_ctxt_list, logger));
+      amf_index, request, transaction_id, cu_cp_notifier, trp_registry, logger));
 }
 
 void nrppa_impl::handle_positioning_information_request(const asn1::nrppa::positioning_info_request_s& msg,
@@ -316,7 +372,27 @@ void nrppa_impl::handle_positioning_information_request(const asn1::nrppa::posit
   logger.debug("Handling positioning information request");
 
   nrppa_cu_cp_ue_notifier* ue_notifier = cu_cp_notifier.on_new_nrppa_ue(ue_index);
-  cu_cp_du_index_t         du_index    = ue_notifier->get_du_index();
+  if (ue_notifier == nullptr) {
+    logger.warning("ue={}: Dropping positioning information request. UE doesn't exist", ue_index);
+
+    // Create failure response.
+    asn1::nrppa::nr_ppa_pdu_c asn1_fail;
+    asn1_fail.set_unsuccessful_outcome().load_info_obj(ASN1_NRPPA_ID_POSITIONING_INFO_EXCHANGE);
+    asn1_fail.unsuccessful_outcome().nrppatransaction_id = transaction_id;
+    asn1::nrppa::positioning_info_fail_s& pos_info_fail =
+        asn1_fail.unsuccessful_outcome().value.positioning_info_fail();
+    pos_info_fail->cause     = cause_to_asn1(nrppa_cause_protocol_t::msg_not_compatible_with_receiver_state);
+    byte_buffer ul_nrppa_pdu = pack_into_pdu(asn1_fail, "PositioningInformationFailure");
+
+    // Log Tx message.
+    log_nrppa_message(logger, Tx, ul_nrppa_pdu, asn1_fail);
+
+    // Send response to CU-CP.
+    cu_cp_notifier.on_ul_nrppa_pdu(ul_nrppa_pdu, ue_index);
+
+    return;
+  }
+  cu_cp_du_index_t du_index = ue_notifier->get_du_index();
 
   positioning_information_request_t request;
   request.ue_index = ue_index;
@@ -333,7 +409,27 @@ void nrppa_impl::handle_positioning_activation_request(const asn1::nrppa::positi
   logger.debug("Handling positioning activation request");
 
   nrppa_cu_cp_ue_notifier* ue_notifier = cu_cp_notifier.on_new_nrppa_ue(ue_index);
-  cu_cp_du_index_t         du_index    = ue_notifier->get_du_index();
+  if (ue_notifier == nullptr) {
+    logger.warning("ue={}: Dropping positioning activation request. UE doesn't exist", ue_index);
+
+    // Create failure response.
+    asn1::nrppa::nr_ppa_pdu_c asn1_fail;
+    asn1_fail.set_unsuccessful_outcome().load_info_obj(ASN1_NRPPA_ID_POSITIONING_ACTIVATION);
+    asn1_fail.unsuccessful_outcome().nrppatransaction_id = transaction_id;
+    asn1::nrppa::positioning_activation_fail_s& pos_activation_fail =
+        asn1_fail.unsuccessful_outcome().value.positioning_activation_fail();
+    pos_activation_fail->cause = cause_to_asn1(nrppa_cause_protocol_t::msg_not_compatible_with_receiver_state);
+    byte_buffer ul_nrppa_pdu   = pack_into_pdu(asn1_fail, "PositioningActivationFailure");
+
+    // Log Tx message.
+    log_nrppa_message(logger, Tx, ul_nrppa_pdu, asn1_fail);
+
+    // Send response to CU-CP.
+    cu_cp_notifier.on_ul_nrppa_pdu(ul_nrppa_pdu, ue_index);
+
+    return;
+  }
+  cu_cp_du_index_t du_index = ue_notifier->get_du_index();
 
   positioning_activation_request_t request;
   request.ue_index = ue_index;
@@ -353,7 +449,7 @@ void nrppa_impl::handle_measurement_request(const asn1::nrppa::meas_request_s& m
   fill_measurement_request(request, msg);
 
   common_task_sched.schedule(launch_async<measurement_procedure>(
-      amf_index, request, transaction_id, trp_id_to_du_idx, meas_ctxt_list, du_ctxt_list, cu_cp_notifier, logger));
+      amf_index, request, transaction_id, trp_registry, meas_ctxt_list, du_ctxt_list, cu_cp_notifier, logger));
 }
 
 void nrppa_impl::handle_successful_outcome(const successful_outcome_s& outcome)

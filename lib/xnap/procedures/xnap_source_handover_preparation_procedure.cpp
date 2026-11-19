@@ -19,6 +19,8 @@ using namespace asn1::xnap;
 
 xnap_source_handover_preparation_procedure::xnap_source_handover_preparation_procedure(
     const xnap_handover_request& request_,
+    xnap_ue_context&             ue_ctxt_,
+    ho_prep_outcome_t&           ho_outcome_,
     xnap_ue_context_list&        ue_ctxt_list_,
     xnap_message_notifier&       xnc_notifier_,
     xnap_cu_cp_notifier&         cu_cp_notifier_,
@@ -27,7 +29,10 @@ xnap_source_handover_preparation_procedure::xnap_source_handover_preparation_pro
   ue_ctxt_list(ue_ctxt_list_),
   xnc_notifier(xnc_notifier_),
   cu_cp_notifier(cu_cp_notifier_),
-  txn_reloc_prep_timer(timers.create_timer())
+  txn_reloc_prep_timer(timers.create_timer()),
+  ho_outcome(ho_outcome_),
+  ue_ids(ue_ctxt_.ue_ids),
+  logger(ue_ctxt_.logger)
 {
 }
 
@@ -36,31 +41,29 @@ void xnap_source_handover_preparation_procedure::operator()(
 {
   CORO_BEGIN(ctx);
 
-  ue_ctxt = ue_ctxt_list.find(request.ue_index);
-  if (ue_ctxt == nullptr) {
-    ocudulog::fetch_basic_logger("XNAP").error(
-        "ue={}: \"{}\" failed. Cause: UE context not found", request.ue_index, name());
-    CORO_EARLY_RETURN(xnap_handover_preparation_response{false});
-  }
+  logger.log_info("\"{}\" started...", name());
 
-  ue_ctxt->logger.log_debug("\"{}\" started...", name());
-
-  if (ue_ctxt->ue_ids.local_xnap_ue_id == local_xnap_ue_id_t::invalid) {
-    ue_ctxt->logger.log_error("\"{}\" failed. Cause: Invalid LOCAL XNAP UE ID", name());
+  if (ue_ids.local_xnap_ue_id == local_xnap_ue_id_t::invalid) {
+    logger.log_error("\"{}\" failed. Cause: Invalid LOCAL XNAP UE ID", name());
+    discard_cho_cell_prep();
     CORO_EARLY_RETURN(xnap_handover_preparation_response{false});
   }
 
   if (request.ue_context_info_ho_request.pdu_session_res_to_be_setup_list.empty()) {
-    ue_ctxt->logger.log_error("\"{}\" failed. Cause: PDU session list is empty", name());
+    logger.log_error("\"{}\" failed. Cause: PDU session list is empty", name());
+    discard_cho_cell_prep();
     CORO_EARLY_RETURN(xnap_handover_preparation_response{false});
   }
 
-  // Subscribe to respective publisher to receive HANDOVER REQUEST ACK/HANDOVER PREPARATION FAILURE message.
-  transaction_sink.subscribe_to(ue_ctxt->xn_handover_outcome, txn_reloc_prep_ms);
+  // Subscribe to respective publisher to receive HANDOVER REQUEST ACK/HANDOVER PREPARATION FAILURE message. This is
+  // the last use of ho_outcome: resolving the preparation drops the event source, and the subscription is all this
+  // procedure needs from it afterwards.
+  transaction_sink.subscribe_to(ho_outcome, txn_reloc_prep_ms);
 
-  // Send Handover Request to XN-C peer.
+  // Send Handover Request to Xn-C peer.
   if (!send_handover_request()) {
-    ue_ctxt->logger.log_warning("\"{}\" failed. Cause: Could not send Handover Request", name());
+    logger.log_warning("\"{}\" failed. Cause: Could not send Handover Request", name());
+    discard_cho_cell_prep();
     CORO_EARLY_RETURN(xnap_handover_preparation_response{false});
   }
 
@@ -68,13 +71,14 @@ void xnap_source_handover_preparation_procedure::operator()(
 
   if (!transaction_sink.successful()) {
     if (transaction_sink.timeout_expired()) {
-      ue_ctxt->logger.log_warning(
+      logger.log_warning(
           "\"{}\" failed. Cause: Timeout receiving Handover Request ACK/Handover Preparation Failure after {}ms",
           name(),
           txn_reloc_prep_ms.count());
+      discard_cho_cell_prep();
       // Initialize Handover Cancellation procedure.
       if (!send_handover_cancel()) {
-        ue_ctxt->logger.log_warning("\"{}\" failed. Cause: Could not send Handover Cancel", name());
+        logger.log_warning("\"{}\" failed. Cause: Could not send Handover Cancel", name());
         CORO_EARLY_RETURN(xnap_handover_preparation_response{false});
       }
 
@@ -82,24 +86,30 @@ void xnap_source_handover_preparation_procedure::operator()(
     }
 
     if (transaction_sink.failed()) {
-      ue_ctxt->logger.log_warning("\"{}\" failed. Cause: Received Handover Preparation Failure", name());
+      logger.log_warning("\"{}\" failed. Cause: Received Handover Preparation Failure", name());
+      discard_cho_cell_prep();
       CORO_EARLY_RETURN(xnap_handover_preparation_response{false});
     }
+
+    // Neither a HandoverPreparationFailure nor a timeout, e.g. the transaction was cancelled because XNAP is
+    // stopping. The UE context is being torn down, so do not touch it here.
+    logger.log_warning("\"{}\" failed. Cause: Transaction cancelled", name());
+    CORO_EARLY_RETURN(xnap_handover_preparation_response{false});
   }
 
-  // Set Target XNAP UE ID.
-  ue_ctxt_list.update_peer_xnap_ue_id(
-      ue_ctxt->ue_ids.local_xnap_ue_id,
-      uint_to_peer_xnap_ue_id(transaction_sink.response()->target_ng_ra_nnode_ue_xn_ap_id));
+  peer_xnap_ue_id = uint_to_peer_xnap_ue_id(transaction_sink.response()->target_ng_ra_nnode_ue_xn_ap_id);
 
   if (!request.is_conditional_handover) {
+    // Set Target XNAP UE ID.
+    ue_ctxt_list.update_peer_xnap_ue_id(ue_ids.local_xnap_ue_id, peer_xnap_ue_id);
+
     // Immediate HO: forward RRC Handover Command to DU Processor.
-    CORO_AWAIT_VALUE(
-        rrc_reconfig_success,
-        cu_cp_notifier.on_new_rrc_handover_command(
-            request.ue_index, transaction_sink.response()->target2_source_ng_ra_nnode_transp_container.copy()));
+    // TODO: Report the data forwarding tunnels of the Data Forwarding Info From Target IE (TS 38.423 section 9.2.1.19).
+    ho_command.ue_index      = request.ue_index;
+    ho_command.rrc_container = transaction_sink.response()->target2_source_ng_ra_nnode_transp_container.copy();
+    CORO_AWAIT_VALUE(rrc_reconfig_success, cu_cp_notifier.on_new_rrc_handover_command(std::move(ho_command)));
     if (!rrc_reconfig_success) {
-      ue_ctxt->logger.log_warning("\"{}\" failed. Cause: Received invalid Handover Command", name());
+      logger.log_warning("\"{}\" failed. Cause: Received invalid Handover Command", name());
       CORO_EARLY_RETURN(xnap_handover_preparation_response{});
     }
 
@@ -110,18 +120,29 @@ void xnap_source_handover_preparation_procedure::operator()(
     // Execution is deferred until the UE satisfies the CHO conditions.
     auto packed_rrc = transaction_sink.response()->target2_source_ng_ra_nnode_transp_container.copy();
     if (packed_rrc.empty()) {
-      ue_ctxt->logger.log_warning("\"{}\" failed. Cause: Empty RRC container in HandoverRequest Ack (CHO)", name());
+      logger.log_warning("\"{}\" failed. Cause: Empty RRC container in HandoverRequest Ack (CHO)", name());
+      discard_cho_cell_prep();
       CORO_EARLY_RETURN(xnap_handover_preparation_response{});
     }
 
+    // Record the candidate so that it can later be cancelled, or reported as the winner, by target cell.
+    ue_ctxt_list.mark_cho_prepared(ue_ids.local_xnap_ue_id, request.nr_cgi, peer_xnap_ue_id);
+
     response.success          = true;
     response.packed_rrc_recfg = std::move(packed_rrc);
-    response.peer_xnap_ue_id  = uint_to_peer_xnap_ue_id(transaction_sink.response()->target_ng_ra_nnode_ue_xn_ap_id);
+    response.peer_xnap_ue_id  = peer_xnap_ue_id;
   }
 
-  ue_ctxt->logger.log_debug("\"{}\" finished successfully", name());
+  logger.log_info("\"{}\" finished successfully", name());
 
   CORO_RETURN(response);
+}
+
+void xnap_source_handover_preparation_procedure::discard_cho_cell_prep()
+{
+  if (request.is_conditional_handover) {
+    ue_ctxt_list.remove_cho_cell_prep(ue_ids.local_xnap_ue_id, request.nr_cgi);
+  }
 }
 
 bool xnap_source_handover_preparation_procedure::send_handover_request()
@@ -134,7 +155,7 @@ bool xnap_source_handover_preparation_procedure::send_handover_request()
 
   // Fill XNAP UE ID.
   // This is sent from the source to the target, so the source UE ID is the local XNAP UE ID.
-  ho_request->source_ng_ra_nnode_ue_xn_ap_id = local_xnap_ue_id_to_uint(ue_ctxt->ue_ids.local_xnap_ue_id);
+  ho_request->source_ng_ra_nnode_ue_xn_ap_id = to_underlying(ue_ids.local_xnap_ue_id);
 
   // Fill cause.
   ho_request->cause.set_radio_network() = cause_radio_network_layer_opts::ho_desirable_for_radio_reasons;
@@ -199,14 +220,14 @@ bool xnap_source_handover_preparation_procedure::send_handover_request()
   // TODO: Add real data.
   expected<byte_buffer> last_visited_cell_information = make_byte_buffer("0000f11000066c0000800000");
   if (!last_visited_cell_information.has_value()) {
-    ue_ctxt->logger.log_warning("Failed to encode last visited cell information");
+    logger.log_warning("Failed to encode last visited cell information");
   }
   last_visited_cell.set_ng_ran_cell() = last_visited_cell_information.value().copy();
   ho_request->ue_history_info.push_back(last_visited_cell);
 
-  // Forward message to XN-C peer.
+  // Forward message to Xn-C peer.
   if (!xnc_notifier.on_new_message(msg)) {
-    ue_ctxt->logger.log_warning("XN-C notifier is not set. Cannot send Handover Request");
+    logger.log_warning("Cannot send Handover Request");
     return false;
   }
 
@@ -224,13 +245,23 @@ bool xnap_source_handover_preparation_procedure::send_handover_cancel()
   ho_cancel_s& ho_cancel = msg.pdu.init_msg().value.ho_cancel();
 
   // This is sent from the source to the target, so the source UE ID is the local XNAP UE ID.
-  ho_cancel->source_ng_ra_nnode_ue_xn_ap_id = local_xnap_ue_id_to_uint(ue_ctxt->ue_ids.local_xnap_ue_id);
+  ho_cancel->source_ng_ra_nnode_ue_xn_ap_id = to_underlying(ue_ids.local_xnap_ue_id);
 
   ho_cancel->cause.set_radio_network() = cause_radio_network_layer_opts::txn_relo_cprep_expiry;
 
-  // Forward message to XN-C peer.
+  if (request.is_conditional_handover) {
+    // TS 38.423 Section 8.2.3.2: the Target Cells to Cancel IE scopes the cancellation to the named candidates.
+    // Without it the target releases the whole UE-associated signalling connection, taking the sibling CHO
+    // candidates that share this Source NG-RAN node UE XnAP ID with it.
+    ho_cancel->target_cells_to_cancel_present = true;
+    target_cell_list_item_s cell_item;
+    cell_item.target_cell.set_nr() = cgi_to_asn1(request.nr_cgi);
+    ho_cancel->target_cells_to_cancel.push_back(cell_item);
+  }
+
+  // Forward message to Xn-C peer.
   if (!xnc_notifier.on_new_message(msg)) {
-    ue_ctxt->logger.log_warning("XN-C notifier is not set. Cannot send Handover Cancel");
+    logger.log_warning("Cannot send Handover Cancel");
     return false;
   }
 
@@ -242,7 +273,7 @@ void xnap_source_handover_preparation_procedure::fill_asn1_pdu_session_res_list(
 {
   for (const auto& pdu_session_item : request.ue_context_info_ho_request.pdu_session_res_to_be_setup_list) {
     pdu_session_res_to_be_setup_item_s asn1_pdu_session_item;
-    asn1_pdu_session_item.pdu_session_id = pdu_session_id_to_uint(pdu_session_item.pdu_session_id);
+    asn1_pdu_session_item.pdu_session_id = to_underlying(pdu_session_item.pdu_session_id);
 
     // Fill S-NSSAI.
     asn1_pdu_session_item.s_nssai = s_nssai_to_asn1(pdu_session_item.s_nssai);
@@ -259,7 +290,7 @@ void xnap_source_handover_preparation_procedure::fill_asn1_pdu_session_res_list(
     for (const auto& qos_flow : pdu_session_item.qos_flow_setup_request_items) {
       qos_flows_to_be_setup_item_s qos_flow_setup_item = {};
       // Set QFI.
-      qos_flow_setup_item.qfi = qos_flow_id_to_uint(qos_flow.qos_flow_id);
+      qos_flow_setup_item.qfi = to_underlying(qos_flow.qos_flow_id);
       // Fill QoS flow level QoS parameters.
       qos_flow_setup_item.qos_flow_level_qos_params =
           qos_flow_level_qos_parameters_to_asn1(qos_flow.qos_flow_level_qos_params);

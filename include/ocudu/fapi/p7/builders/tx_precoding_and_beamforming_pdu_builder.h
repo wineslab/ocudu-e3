@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/fapi/p7/messages/tx_precoding_and_beamforming_pdu.h"
+#include "ocudu/support/ocudu_assert.h"
 
 namespace ocudu {
 namespace fapi {
@@ -31,7 +32,32 @@ public:
   /// These parameters are specified in SCF-222 v4.0 section 3.4.2.5, in table Tx precoding and beamforming PDU.
   tx_precoding_and_beamforming_pdu_builder& set_pmi(unsigned pm_index)
   {
-    pdu.prg.pm_index = pm_index;
+    ocudu_assert(std::holds_alternative<std::monostate>(pdu.prg.precoding),
+                 "The PRG precoding already holds a precoding object.");
+    pdu.prg.precoding = static_cast<precoding_matrix_index>(pm_index);
+
+    return *this;
+  }
+
+  /// \brief Sets the precoding weights in the transmission precoding and beamforming PDU.
+  ///
+  /// [Implementation-defined] The precoding weights extend the SCF FAPI, for the precoding matrices that the precoding
+  /// matrix table cannot hold.
+  tx_precoding_and_beamforming_pdu_builder& set_precoding_weights(const precoding_weight_matrix& weights)
+  {
+    ocudu_assert(std::holds_alternative<std::monostate>(pdu.prg.precoding),
+                 "The PRG precoding already holds a precoding object.");
+    pdu.prg.precoding = weights;
+
+    return *this;
+  }
+
+  /// \brief Sets the beam of each precoding matrix virtual port in the transmission precoding and beamforming PDU.
+  ///
+  /// These parameters are specified in SCF-222 v4.0 section 3.4.2.5, in table Tx precoding and beamforming PDU.
+  tx_precoding_and_beamforming_pdu_builder& set_beams(const precoding_beam_list& beams)
+  {
+    pdu.prg.beams = beams;
 
     return *this;
   }

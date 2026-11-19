@@ -3,10 +3,13 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "tests/test_doubles/rrc/rrc_packed_test_messages.h"
 #include "tests/unittests/cu_cp/test_helpers.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/f1ap/f1ap_message.h"
@@ -194,6 +197,47 @@ TEST_F(cu_cp_paging_test, when_no_du_for_tac_exists_then_paging_is_not_sent_to_d
   ASSERT_FALSE(this->get_du(du_idx).try_pop_dl_pdu(f1ap_pdu));
 }
 
+TEST_F(cu_cp_paging_test, when_paged_tac_is_a_secondary_broadcast_tac_then_paging_is_sent_to_du)
+{
+  OCUDU_TEST_REQUIREMENTS("CU-NTN-LOC-3");
+
+  // Cell broadcasts TACs 7, 8 and 9 in trackingAreaList, TS 38.331. F1AP carries only the primary TAC, so the CU-CP
+  // recovers the list from the SIB1 the DU provides.
+  static const std::array<tac_t, 3> broadcast_tacs = {7, 8, 9};
+  unsigned                          du_idx         = setup_du(test_helpers::generate_f1_setup_request(
+      int_to_gnb_du_id(0x11),
+      {test_helpers::served_cell_item_info{
+                                           .tac = broadcast_tacs[0],
+                                           .sib1_str = test_helpers::create_sib1_hex_string(plmn_identity::test_value(), broadcast_tacs)}}));
+
+  // Page a TAC the cell broadcasts but which is not its primary TAC. Matching only the primary would drop this.
+  ngap_message paging_msg = generate_valid_minimal_paging_message();
+  paging_msg.pdu.init_msg().value.paging()->tai_list_for_paging[0].tai.tac.from_number(9);
+  ASSERT_TRUE(send_ngap_paging(du_idx, paging_msg));
+
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu)) << "F1AP Paging should have been sent to the DU";
+  ASSERT_TRUE(test_helpers::is_valid_paging(f1ap_pdu));
+}
+
+TEST_F(cu_cp_paging_test, when_paged_tac_is_outside_the_broadcast_tac_list_then_paging_is_not_sent_to_du)
+{
+  OCUDU_TEST_REQUIREMENTS("CU-NTN-LOC-3");
+
+  static const std::array<tac_t, 3> broadcast_tacs = {7, 8, 9};
+  unsigned                          du_idx         = setup_du(test_helpers::generate_f1_setup_request(
+      int_to_gnb_du_id(0x11),
+      {test_helpers::served_cell_item_info{
+                                           .tac = broadcast_tacs[0],
+                                           .sib1_str = test_helpers::create_sib1_hex_string(plmn_identity::test_value(), broadcast_tacs)}}));
+
+  // A TAC outside the broadcast list must still be rejected.
+  ngap_message paging_msg = generate_valid_minimal_paging_message();
+  paging_msg.pdu.init_msg().value.paging()->tai_list_for_paging[0].tai.tac.from_number(10);
+  ASSERT_TRUE(send_ngap_paging(du_idx, paging_msg));
+
+  ASSERT_FALSE(this->get_du(du_idx).try_pop_dl_pdu(f1ap_pdu));
+}
+
 TEST_F(cu_cp_paging_test, when_assist_data_for_paging_for_unknown_tac_is_included_then_paging_is_not_sent_to_du)
 {
   // Connect DU and run F1Setup.
@@ -298,4 +342,172 @@ TEST_F(cu_cp_paging_test, when_valid_paging_message_with_optional_values_receive
   // Make sure he paging request is in the metrics.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ngaps[0].metrics.nof_cn_initiated_paging_requests, 1) << "Paging request should be in the metrics";
+}
+
+/// Covers paging the cells the core names by a Mapped Cell ID, TS 38.300 sec. 16.14.5.
+class cu_cp_paging_mapped_cell_id_test : public cu_cp_test_environment, public ::testing::Test
+{
+public:
+  static constexpr uint64_t uu_nci        = 0x66c000; // gnb_id 411, bit length 22, cell 0.
+  static constexpr uint64_t second_uu_nci = 0x66c001;
+  static constexpr uint64_t mapped_nci    = 0x66c0ff;
+  /// A cell of the same tracking area that no Mapped Cell ID names, so that it is paged for its TAC alone.
+  static constexpr uint64_t unmapped_uu_nci = 0x66c002;
+  /// Tracking area the paging message pages.
+  static constexpr tac_t paged_tac = 7;
+
+  cu_cp_paging_mapped_cell_id_test() : cu_cp_test_environment(make_params()) { run_ng_setup(); }
+
+protected:
+  /// Both cells report the same Mapped Cell ID, so that one identity names the area the two of them cover.
+  static cu_cp_test_env_params make_params()
+  {
+    cu_cp_test_env_params params{};
+    for (uint64_t nci : {uu_nci, second_uu_nci}) {
+      ntn_location_area area;
+      area.tac        = 7;
+      area.mapped_nci = nr_cell_identity::create(mapped_nci).value();
+      area.lat_min    = 50.0;
+      area.lat_max    = 52.0;
+      area.lon_min    = 14.0;
+      area.lon_max    = 17.0;
+
+      ntn_cell_location_mapping cell_mapping{nr_cell_identity::create(nci).value(), ntn_location_mapping{}};
+      cell_mapping.mapping.location_areas.push_back(area);
+      params.ntn_location_mappings.push_back(cell_mapping);
+    }
+    return params;
+  }
+
+  /// Brings up a gNB-DU serving \c cells, each a Uu Cell ID with the tracking area it broadcasts.
+  void connect_du_serving(const std::vector<std::pair<uint64_t, tac_t>>& cells)
+  {
+    std::vector<test_helpers::served_cell_item_info> served_cells;
+    unsigned                                         pci = 0;
+    for (const auto& [nci, tac] : cells) {
+      served_cells.push_back(
+          {.nci = nr_cell_identity::create(nci).value(), .pci = static_cast<pci_t>(pci++), .tac = tac});
+    }
+
+    std::optional<unsigned> ret = connect_new_du();
+    EXPECT_TRUE(ret.has_value());
+    du_idx = ret.value();
+    get_du(du_idx).push_ul_pdu(test_helpers::generate_f1_setup_request(int_to_gnb_du_id(0x11), served_cells));
+    EXPECT_TRUE(wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  }
+
+  /// Brings up a gNB-DU serving \c ncis, all in the tracking area that the paging message pages.
+  void connect_du_serving(std::initializer_list<uint64_t> ncis)
+  {
+    std::vector<std::pair<uint64_t, tac_t>> cells;
+    cells.reserve(ncis.size());
+    for (uint64_t nci : ncis) {
+      cells.emplace_back(nci, paged_tac);
+    }
+    connect_du_serving(cells);
+  }
+
+  /// A paging message whose recommended cells are named by \c ncis, the identities the core knows them by.
+  static ngap_message paging_recommending(std::initializer_list<uint64_t> ncis)
+  {
+    ngap_message msg  = generate_valid_paging_message();
+    auto&        list = msg.pdu.init_msg()
+                     .value.paging()
+                     ->assist_data_for_paging.assist_data_for_recommended_cells.recommended_cells_for_paging
+                     .recommended_cell_list;
+    list.resize(0);
+    for (uint64_t nci : ncis) {
+      asn1::ngap::recommended_cell_item_s item;
+      auto&                               nr_cgi = item.ngran_cgi.set_nr_cgi();
+      nr_cgi.plmn_id.from_string("00f110");
+      nr_cgi.nr_cell_id.from_number(nci);
+      list.push_back(item);
+    }
+    return msg;
+  }
+
+  /// The cells the gNB-DU is asked to page in, in the order it is asked.
+  std::vector<uint64_t> paged_cells() const
+  {
+    std::vector<uint64_t> ncis;
+    for (const auto& item : f1ap_pdu.pdu.init_msg().value.paging()->paging_cell_list) {
+      ncis.push_back(item.value().paging_cell_item().nr_cgi.nr_cell_id.to_number());
+    }
+    return ncis;
+  }
+
+  unsigned     du_idx = 0;
+  f1ap_message f1ap_pdu;
+};
+
+TEST_F(cu_cp_paging_mapped_cell_id_test, a_cell_recommended_by_its_mapped_cell_id_is_paged_by_its_uu_cell_id)
+{
+  OCUDU_TEST_REQUIREMENTS("CU-NTN-LOC-2", "CU-NTN-LOC-3");
+
+  // The core names the cell by the identity the gNB reported for it, TS 38.300 sec. 16.14.5, while the gNB-DU pages
+  // the cells it knows by their Uu Cell ID, TS 38.473 sec. 8.7.1.2.
+  connect_du_serving({uu_nci});
+
+  get_amf().push_tx_pdu(paging_recommending({mapped_nci}));
+
+  ASSERT_TRUE(wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  EXPECT_EQ(paged_cells(), std::vector<uint64_t>{uu_nci}) << "the Mapped Cell ID names no cell of this gNB-DU";
+}
+
+TEST_F(cu_cp_paging_mapped_cell_id_test, a_mapped_cell_id_covering_two_cells_pages_both)
+{
+  OCUDU_TEST_REQUIREMENTS("CU-NTN-LOC-2", "CU-NTN-LOC-3");
+
+  // A Mapped Cell ID names a geographical area, and TS 38.300 sec. 16.14.5 leaves the mapping to configuration, so
+  // more than one cell may cover it. Paging only the first would leave the rest of the area unpaged.
+  connect_du_serving({uu_nci, second_uu_nci});
+
+  get_amf().push_tx_pdu(paging_recommending({mapped_nci}));
+
+  ASSERT_TRUE(wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  EXPECT_EQ(paged_cells(), (std::vector<uint64_t>{uu_nci, second_uu_nci}));
+}
+
+TEST_F(cu_cp_paging_mapped_cell_id_test, a_cell_recommended_by_both_identities_is_paged_once)
+{
+  OCUDU_TEST_REQUIREMENTS("CU-NTN-LOC-2", "CU-NTN-LOC-3");
+
+  // The core may name one cell by its Uu Cell ID and by the Mapped Cell ID of an area it covers. Both resolve to the
+  // same cell, which must not be paged twice.
+  connect_du_serving({uu_nci});
+
+  get_amf().push_tx_pdu(paging_recommending({uu_nci, mapped_nci}));
+
+  ASSERT_TRUE(wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  EXPECT_EQ(paged_cells(), std::vector<uint64_t>{uu_nci}) << "the cell is named twice, so it must not be paged twice";
+}
+
+TEST_F(cu_cp_paging_mapped_cell_id_test, a_recommended_cell_is_paged_before_the_rest_of_the_tracking_area)
+{
+  OCUDU_TEST_REQUIREMENTS("CU-NTN-LOC-2", "CU-NTN-LOC-3");
+
+  // Every served cell of a paged tracking area is paged whether or not the core recommended it, so what a
+  // recommendation decides is the order, TS 38.413 sec. 9.3.1.70 making it assistance data rather than a selection.
+  connect_du_serving({unmapped_uu_nci, uu_nci});
+
+  get_amf().push_tx_pdu(paging_recommending({mapped_nci}));
+
+  ASSERT_TRUE(wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  EXPECT_EQ(paged_cells(), (std::vector<uint64_t>{uu_nci, unmapped_uu_nci}))
+      << "no Mapped Cell ID names unmapped_uu_nci, so it is paged for its TAC alone and last";
+}
+
+TEST_F(cu_cp_paging_mapped_cell_id_test, a_mapped_cell_id_does_not_page_a_cell_outside_the_paged_tracking_area)
+{
+  OCUDU_TEST_REQUIREMENTS("CU-NTN-LOC-2", "CU-NTN-LOC-3");
+
+  // The cells one Mapped Cell ID covers need not broadcast the same TAC: TS 38.300 sec. 16.14.3.1 does not
+  // synchronise the TAC in system information with the illumination on ground. The paged tracking area still decides.
+  connect_du_serving({{uu_nci, paged_tac}, {second_uu_nci, 9}});
+
+  get_amf().push_tx_pdu(paging_recommending({mapped_nci}));
+
+  ASSERT_TRUE(wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  EXPECT_EQ(paged_cells(), std::vector<uint64_t>{uu_nci})
+      << "second_uu_nci covers the Mapped Cell ID, but broadcasts a TAC the paging does not name";
 }

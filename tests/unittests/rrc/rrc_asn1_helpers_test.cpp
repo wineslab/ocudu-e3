@@ -55,3 +55,46 @@ TEST(rrc_asn1_helpers_test, test_amf_identifier_converter_for_valid_amf_id)
   ASSERT_EQ(70U, amf_id.amf_set_id);
   ASSERT_EQ(50U, amf_id.amf_pointer);
 }
+
+/// Test that a UE capability RAT container list survives a conversion to the common type and back.
+TEST(rrc_asn1_helpers_test, test_ue_cap_rat_container_list_converter_round_trip)
+{
+  asn1::rrc_nr::ue_cap_rat_container_list_l asn1_capabilities_list;
+  asn1_capabilities_list.resize(2);
+  asn1_capabilities_list[0].rat_type.value = asn1::rrc_nr::rat_type_opts::options::nr;
+  ASSERT_TRUE(asn1_capabilities_list[0].ue_cap_rat_container.append(std::array<uint8_t, 3>{0x11, 0x22, 0x33}));
+  asn1_capabilities_list[1].rat_type.value = asn1::rrc_nr::rat_type_opts::options::eutra;
+  ASSERT_TRUE(asn1_capabilities_list[1].ue_cap_rat_container.append(std::array<uint8_t, 2>{0xaa, 0xbb}));
+
+  // Convert to the common type.
+  rrc_ue_cap_rat_container_list_t capabilities_list = asn1_to_ue_cap_rat_container_list(asn1_capabilities_list);
+
+  ASSERT_EQ(2U, capabilities_list.size());
+  ASSERT_EQ(rat_type_t::nr, capabilities_list[0].rat_type);
+  ASSERT_EQ(asn1_capabilities_list[0].ue_cap_rat_container, capabilities_list[0].ue_cap_rat_container);
+  ASSERT_EQ(rat_type_t::eutra, capabilities_list[1].rat_type);
+  ASSERT_EQ(asn1_capabilities_list[1].ue_cap_rat_container, capabilities_list[1].ue_cap_rat_container);
+
+  // Convert back to ASN.1.
+  asn1::rrc_nr::ue_cap_rat_container_list_l asn1_result = ue_cap_rat_container_list_to_asn1(capabilities_list);
+
+  ASSERT_EQ(asn1_capabilities_list.size(), asn1_result.size());
+  for (unsigned i = 0, e = asn1_capabilities_list.size(); i != e; ++i) {
+    ASSERT_EQ(asn1_capabilities_list[i].rat_type, asn1_result[i].rat_type);
+    ASSERT_EQ(asn1_capabilities_list[i].ue_cap_rat_container, asn1_result[i].ue_cap_rat_container);
+  }
+}
+
+/// Test that the common UE capability RAT container list never exceeds the ASN.1 list bound.
+TEST(rrc_asn1_helpers_test, test_ue_cap_rat_container_list_converter_respects_capacity)
+{
+  asn1::rrc_nr::ue_cap_rat_container_list_l asn1_capabilities_list;
+  asn1_capabilities_list.resize(MAX_NOF_UE_CAP_RAT_CONTAINERS + 2);
+  for (auto& asn1_container : asn1_capabilities_list) {
+    asn1_container.rat_type.value = asn1::rrc_nr::rat_type_opts::options::nr;
+  }
+
+  rrc_ue_cap_rat_container_list_t capabilities_list = asn1_to_ue_cap_rat_container_list(asn1_capabilities_list);
+
+  ASSERT_EQ(MAX_NOF_UE_CAP_RAT_CONTAINERS, capabilities_list.size());
+}

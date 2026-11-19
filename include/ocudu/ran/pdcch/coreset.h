@@ -15,6 +15,8 @@
 #include <utility>
 
 namespace ocudu {
+class ssb_offset_to_pointA;
+class ssb_subcarrier_offset;
 
 /// Max number of CORESETs per BWP per cell (including UE-specific and common CORESETs).
 /// \remark See TS 38.331, "PDCCH-Config".

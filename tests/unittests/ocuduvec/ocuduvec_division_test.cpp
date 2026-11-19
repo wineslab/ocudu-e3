@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ocudu/ocuduvec/division.h"
+#include "fmt/format.h"
 #include <gtest/gtest.h>
 #include <random>
 

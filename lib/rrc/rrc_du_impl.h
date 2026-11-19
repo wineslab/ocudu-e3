@@ -22,13 +22,6 @@ public:
 
   void on_new_rrc_connection() override { metrics_handler.handle_successful_rrc_setup(); }
 
-  void on_successful_rrc_release(bool is_inactive = false) override
-  {
-    metrics_handler.handle_successful_rrc_release(is_inactive);
-  }
-
-  void on_rrc_inactive() override { metrics_handler.handle_rrc_inactive(); }
-
   void on_attempted_rrc_connection_establishment(establishment_cause_t cause) override
   {
     metrics_handler.handle_attempted_rrc_setup(cause);
@@ -57,11 +50,6 @@ public:
   void on_successful_rrc_connection_reestablishment_fallback() override
   {
     metrics_handler.handle_successful_rrc_reestablishment_fallback();
-  }
-
-  void on_attempted_rrc_connection_resume(resume_cause_t cause) override
-  {
-    metrics_handler.handle_attempted_rrc_resume(cause);
   }
 
   void on_successful_rrc_connection_resume(resume_cause_t cause) override
@@ -102,12 +90,17 @@ public:
   std::vector<rrc_plmn_ran_area_cell_t> get_ran_area_cells() override;
 
   void store_cell_info_db(const std::map<nr_cell_global_id_t, rrc_cell_info>& cell_infos) override;
+  void remove_cell_info(const nr_cell_global_id_t& cgi) override;
+
+  std::optional<std::chrono::system_clock::time_point> get_ref_time_r16(const byte_buffer& encoded,
+                                                                        bool               is_local_clock) override;
+
+  std::optional<arfcn_t> get_ssb_arfcn(const byte_buffer& encoded) override;
 
   // rrc_du_ue_repository.
   byte_buffer                         get_rrc_reject() override;
   byte_buffer                         pack_meas_config(const rrc_meas_cfg& meas_cfg) override;
-  std::optional<rrc_resume_context_t> get_rrc_resume_context(byte_buffer rrc_container,
-                                                             uint8_t     nof_i_rnti_ue_bits) override;
+  std::optional<rrc_resume_context_t> get_rrc_resume_context(byte_buffer rrc_container) override;
   rrc_ue_interface*                   add_ue(const rrc_ue_creation_message& msg) override;
   void                                release_ues() override;
   size_t                              get_nof_ues() const override { return ue_db.size(); }
@@ -124,7 +117,6 @@ public:
 
   // rrc_du_connection_event_handler.
   void handle_successful_rrc_setup(std::optional<establishment_cause_t> cause) override;
-  void handle_successful_rrc_release(bool is_inactive = false) override;
   void handle_rrc_inactive() override;
   void handle_attempted_rrc_setup(establishment_cause_t cause) override;
   void handle_failed_rrc_connection_establishment(establishment_fail_cause_t cause) override;
@@ -155,8 +147,8 @@ private:
 
   // RRC-internal user database indexed by ue_index.
   std::unordered_map<cu_cp_ue_index_t, std::unique_ptr<rrc_ue_impl>> ue_db;
-  // Cell database to store cell information from the DU.
-  std::map<nr_cell_identity, rrc_cell_info> cell_info_db;
+  // Cell database to store cell information from the DU. Keyed by NR-CGI, as the NCI is only unique within a PLMN.
+  std::map<nr_cell_global_id_t, rrc_cell_info> cell_info_db;
 
   // Metrics aggregator.
   rrc_du_metrics_aggregator metrics_aggregator;

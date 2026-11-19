@@ -4,6 +4,7 @@
 
 #include "dft_processor_ci16_avx2.h"
 #include <immintrin.h>
+#include <memory>
 
 using namespace ocudu;
 

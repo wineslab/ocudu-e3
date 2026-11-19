@@ -8,6 +8,7 @@
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
 #include "ocudu/adt/byte_buffer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/asn1/rrc_nr/dl_ccch_msg.h"
 #include "ocudu/asn1/rrc_nr/dl_dcch_msg.h"
@@ -260,6 +261,30 @@ public:
     return true;
   }
 
+  // Extracts the waitTime IE from the RRC Reject carried in the last received
+  // F1AP UE context release command. Returns nullopt if the IE is absent.
+  [[nodiscard]] std::optional<uint8_t> get_wait_time_from_last_rrc_reject()
+  {
+    const auto& ue_rel = f1ap_pdu.pdu.init_msg().value.ue_context_release_cmd();
+    report_fatal_error_if_not(ue_rel->rrc_container_present, "RRC container not present");
+
+    // Check that the UE Context Release command contains an RRC Reject.
+    asn1::rrc_nr::dl_ccch_msg_s ccch;
+    {
+      asn1::cbit_ref bref{f1ap_pdu.pdu.init_msg().value.ue_context_release_cmd()->rrc_container};
+      report_fatal_error_if_not(ccch.unpack(bref) == asn1::OCUDUASN_SUCCESS, "Failed to unpack RRC container");
+    }
+    report_fatal_error_if_not(ccch.msg.c1().type().value ==
+                                  asn1::rrc_nr::dl_ccch_msg_type_c::c1_c_::types_opts::rrc_reject,
+                              "Unexpected RRC message type");
+
+    const auto& reject = ccch.msg.c1().rrc_reject().crit_exts.rrc_reject();
+    if (not reject.wait_time_present) {
+      return std::nullopt;
+    }
+    return reject.wait_time;
+  }
+
 protected:
   unsigned du_idx    = 0;
   unsigned cu_up_idx = 0;
@@ -457,9 +482,92 @@ TEST_F(cu_cp_setup_admission_limit_test, when_initial_ul_rrc_message_is_rejected
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ues.size(), 1);
 
+  // Evaluate that metrics were updated correctly.
+  ASSERT_FALSE(report.dus.empty());
+  ASSERT_EQ(report.dus[0].rrc_metrics.attempted_rrc_connection_establishments.get_count(establishment_cause_t::unknown),
+            1u);
+  ASSERT_EQ(report.dus[0].rrc_metrics.failed_rrc_connection_establishments.get_count(
+                establishment_fail_cause_t::network_reject),
+            1u);
+
   auto rel_complete = test_helpers::generate_ue_context_release_complete(cu_ue_id.value(), du_ue_f1ap_id);
   get_du(du_idx).push_ul_pdu(rel_complete);
 
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
+  ASSERT_TRUE(report.ues.empty());
+}
+
+TEST_F(cu_cp_setup_admission_limit_test,
+       when_du_disconnects_while_ue_context_release_is_in_flight_then_teardown_does_not_crash)
+{
+  ASSERT_TRUE(send_initial_ul_rrc_message_and_await_ue_context_release_command());
+
+  // Do not inject the F1AP UE Context Release Complete: the release transaction is left in flight.
+
+  // The DU disconnects while the release procedure is still awaiting a response from it. This drives the F1AP
+  // stop procedure to cancel a per-UE transaction whose completion synchronously runs the UE removal cascade.
+  ASSERT_TRUE(drop_du_connection(du_idx));
+
+  // The UE is removed as part of the DU teardown, despite the release response never arriving.
+  auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
+  ASSERT_TRUE(report.ues.empty());
+}
+
+TEST_F(cu_cp_setup_admission_limit_test,
+       when_rrc_reject_wait_time_is_not_configured_then_rrc_reject_has_no_wait_time_ie)
+{
+  // rrc_reject_wait_time is optional and left unset in the default configuration.
+  ASSERT_FALSE(get_cu_cp_cfg().rrc.rrc_reject_wait_time.has_value());
+
+  ASSERT_TRUE(send_initial_ul_rrc_message_and_await_ue_context_release_command());
+
+  // The RRC Reject does not carry the waitTime IE.
+  ASSERT_FALSE(get_wait_time_from_last_rrc_reject().has_value());
+
+  // Injects F1AP UE Context Release Complete.
+  auto rel_complete = test_helpers::generate_ue_context_release_complete(cu_ue_id.value(), du_ue_f1ap_id);
+  get_du(du_idx).push_ul_pdu(rel_complete);
+
+  // TEST: UE context removed from CU-CP.
+  auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
+  ASSERT_TRUE(report.ues.empty());
+}
+
+class cu_cp_setup_wait_time_test : public cu_cp_setup_test
+{
+public:
+  static constexpr uint8_t reject_wait_time_s = 8;
+  cu_cp_setup_wait_time_test() :
+    cu_cp_setup_test(cu_cp_test_env_params{/*max_nof_cu_ups*/ 8,
+                                           /*max_nof_dus*/ 8,
+                                           /*max_nof_ues*/ 0,
+                                           /*max_nof_drbs_per_ue*/ 8,
+                                           /*amf_config*/ {{default_supported_tracking_area}},
+                                           /*trigger_ho_from_measurements*/ true,
+                                           /*enable_rrc_inactive*/ false,
+                                           /*enable_xnc_peer*/ false,
+                                           /*rrc_reject_wait_time*/ std::chrono::seconds{reject_wait_time_s}})
+  {
+  }
+};
+
+TEST_F(cu_cp_setup_wait_time_test, when_rrc_reject_wait_time_is_configured_then_rrc_reject_carries_wait_time_ie)
+{
+  // Check the configuratin matches with the provided value.
+  ASSERT_EQ(get_cu_cp_cfg().rrc.rrc_reject_wait_time, std::chrono::seconds{reject_wait_time_s});
+
+  ASSERT_TRUE(send_initial_ul_rrc_message_and_await_ue_context_release_command());
+
+  // The RRC Reject carries the configured waitTime value.
+  auto wait_time = get_wait_time_from_last_rrc_reject();
+  ASSERT_TRUE(wait_time.has_value());
+  ASSERT_EQ(wait_time.value(), reject_wait_time_s);
+
+  // Injects F1AP UE Context Release Complete.
+  auto rel_complete = test_helpers::generate_ue_context_release_complete(cu_ue_id.value(), du_ue_f1ap_id);
+  get_du(du_idx).push_ul_pdu(rel_complete);
+
+  // TEST: UE context removed from CU-CP.
+  auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_TRUE(report.ues.empty());
 }

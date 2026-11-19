@@ -4,6 +4,7 @@
 
 #include "pdcch_config_pool.h"
 #include "../support/pdcch/pdcch_mapping.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

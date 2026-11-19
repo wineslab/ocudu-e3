@@ -6,14 +6,19 @@
 #include "apps/services/worker_manager/worker_manager_config.h"
 #include "du_high_config.h"
 #include "ntn/du_high_ntn_config_translators.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/du/du_cell_config_validation.h"
 #include "ocudu/du/du_high/du_high_configuration.h"
 #include "ocudu/du/du_high/du_qos_config_helpers.h"
 #include "ocudu/du/du_update_config_helpers.h"
+#include "ocudu/ran/band_helper.h"
+#include "ocudu/ran/beamforming/beam_identifier_helpers.h"
 #include "ocudu/ran/duplex_mode.h"
 #include "ocudu/ran/pdcch/pdcch_candidates.h"
 #include "ocudu/ran/prach/prach_configuration.h"
+#include "ocudu/ran/prs/prs.h"
+#include "ocudu/ran/prs/prs_constants.h"
 #include "ocudu/ran/pucch/pucch_info.h"
 #include "ocudu/ran/pucch/pucch_mapping.h"
 #include "ocudu/ran/sib/cell_reselection.h"
@@ -27,8 +32,98 @@
 #include "ocudu/scheduler/config/scheduler_expert_config_validator.h"
 #include "ocudu/scheduler/config/time_domain_resource_helper.h"
 #include <algorithm>
+#include <cmath>
 
 using namespace ocudu;
+
+static ng_ran_high_accuracy_access_point_position_t
+make_trp_geo_coordinates_ha(const du_high_unit_cell_geo_coordinates_ha_config& cfg)
+{
+  ng_ran_high_accuracy_access_point_position_t position;
+  // TS 23.032, Section 6.1a: N = floor((X/90)*2^31), X being the latitude in degrees [-90, 90].
+  position.latitude = static_cast<int64_t>(std::floor((cfg.latitude / 90.0) * 2147483648.0));
+  // TS 23.032, Section 6.1a: N = floor((X/180)*2^31), X being the longitude in degrees [-180, 180].
+  position.longitude = static_cast<int64_t>(std::floor((cfg.longitude / 180.0) * 2147483648.0));
+  // TS 23.032, Section 6.3a: a = N*2^-7, a being the altitude in metres [-500, 10000].
+  position.altitude                  = static_cast<int32_t>(std::lround(cfg.altitude * 128.0));
+  position.uncertainty_semi_major    = cfg.uncertainty_semi_major;
+  position.uncertainty_semi_minor    = cfg.uncertainty_semi_minor;
+  position.orientation_of_major_axis = cfg.orientation_of_major_axis;
+  position.horizontal_confidence     = cfg.horizontal_confidence;
+  position.uncertainty_altitude      = cfg.uncertainty_altitude;
+  position.vertical_confidence       = cfg.vertical_confidence;
+  return position;
+}
+
+static ng_ran_access_point_position_t
+make_trp_geo_coordinates_normal(const du_high_unit_cell_geo_coordinates_normal_config& cfg)
+{
+  ng_ran_access_point_position_t position;
+  position.latitude_sign = cfg.latitude >= 0.0 ? latitude_sign_t::north : latitude_sign_t::south;
+  // TS 38.473, Section 9.3.1.174: N<=2^23*X/90<N+1, X being the latitude in degrees [0, 90].
+  position.latitude = static_cast<uint32_t>(std::floor(std::abs(cfg.latitude) * 8388607.0 / 90.0));
+  // TS 38.473, Section 9.3.1.174: N<=2^24*X/360<N+1, X being the longitude in degrees [-180, 180].
+  position.longitude = static_cast<int32_t>(std::floor(cfg.longitude * 16777215.0 / 360.0));
+  position.direction_of_altitude =
+      cfg.altitude >= 0.0 ? direction_of_altitude_t::height : direction_of_altitude_t::depth;
+  position.altitude               = static_cast<uint16_t>(std::clamp(std::floor(std::abs(cfg.altitude)), 0.0, 32767.0));
+  position.uncertainty_semi_major = cfg.uncertainty_semi_major;
+  position.uncertainty_semi_minor = cfg.uncertainty_semi_minor;
+  position.orientation_of_major_axis = cfg.orientation_of_major_axis;
+  position.uncertainty_altitude      = cfg.uncertainty_altitude;
+  position.confidence                = cfg.confidence;
+  return position;
+}
+
+static trp_position_direct_accuracy_t make_trp_geo_coordinates(const du_high_unit_cell_geo_coordinates_config& geo_cfg)
+{
+  if (const auto* cfg = std::get_if<du_high_unit_cell_geo_coordinates_normal_config>(&geo_cfg)) {
+    return make_trp_geo_coordinates_normal(*cfg);
+  }
+  return make_trp_geo_coordinates_ha(std::get<du_high_unit_cell_geo_coordinates_ha_config>(geo_cfg));
+}
+
+/// \brief Generates the DL-PRS configuration of a cell.
+///
+/// \param prs_cfg  DL-PRS application configuration of the cell.
+/// \param nof_crbs Number of CRBs of the cell, used to derive the bandwidth of the resource sets that do not set it.
+static prs_config make_prs_config(const du_high_unit_prs_config& prs_cfg, unsigned nof_crbs)
+{
+  prs_config out;
+
+  out.resource_sets.reserve(prs_cfg.resource_sets.size());
+  for (const auto& res_set_cfg : prs_cfg.resource_sets) {
+    prs_resource_set& res_set = out.resource_sets.emplace_back();
+    if (res_set_cfg.bandwidth_prbs.has_value()) {
+      res_set.bandwidth_prbs = static_cast<uint16_t>(res_set_cfg.bandwidth_prbs.value());
+    } else {
+      // The PRS bandwidth is a multiple of the PRB granularity and does not exceed the maximum. A start PRB past the
+      // end of the cell bandwidth results in a null bandwidth, which the DU cell config validator rejects.
+      const unsigned nof_crbs_left = (res_set_cfg.start_prb < nof_crbs) ? (nof_crbs - res_set_cfg.start_prb) : 0U;
+      res_set.bandwidth_prbs       = static_cast<uint16_t>(std::min(
+          prs_constants::MAX_PRBS, (nof_crbs_left / prs_constants::PRB_GRANULARITY) * prs_constants::PRB_GRANULARITY));
+    }
+    res_set.start_prb         = static_cast<uint16_t>(res_set_cfg.start_prb);
+    res_set.comb_size         = static_cast<prs_comb_size>(res_set_cfg.comb_size);
+    res_set.periodicity_slots = res_set_cfg.periodicity_slots;
+    res_set.slot_offset       = res_set_cfg.slot_offset;
+    res_set.repetition_factor = static_cast<prs_repetition_factor>(res_set_cfg.repetition_factor);
+    res_set.time_gap          = static_cast<prs_time_gap>(res_set_cfg.time_gap);
+    res_set.nof_symbols       = static_cast<prs_num_symbols>(res_set_cfg.nof_symbols);
+    res_set.power_offset_db   = static_cast<int8_t>(res_set_cfg.power_offset_db);
+
+    res_set.resources.reserve(res_set_cfg.resources.size());
+    for (const auto& res_cfg : res_set_cfg.resources) {
+      prs_resource& res = res_set.resources.emplace_back();
+      res.sequence_id   = static_cast<uint16_t>(res_cfg.sequence_id);
+      res.re_offset     = static_cast<uint8_t>(res_cfg.re_offset);
+      res.slot_offset   = static_cast<uint16_t>(res_cfg.slot_offset);
+      res.symbol_offset = static_cast<uint8_t>(res_cfg.symbol_offset);
+    }
+  }
+
+  return out;
+}
 
 static tdd_ul_dl_config_common generate_tdd_pattern(subcarrier_spacing scs, const du_high_unit_tdd_ul_dl_config& config)
 {
@@ -166,48 +261,37 @@ static sib5_info create_sib5_info(const du_high_unit_sib_config::sib5_config& co
   return sib5;
 }
 
-static sib6_info create_sib6_info(const du_high_unit_sib_config::etws_config& etws_cfg)
+static sib6_info create_sib6_info(const du_high_unit_sib_config::etws_config::test_config& cfg)
 {
   sib6_info sib6;
 
-  sib6.message_id    = etws_cfg.message_id;
-  sib6.serial_number = etws_cfg.serial_num;
-  sib6.warning_type  = etws_cfg.warning_type;
+  sib6.message_id    = cfg.message_id;
+  sib6.serial_number = cfg.serial_num;
+  sib6.warning_type  = cfg.warning_type;
 
   return sib6;
 }
 
-static sib7_info create_sib7_info(const du_high_unit_sib_config::etws_config& etws_cfg)
+static sib7_info create_sib7_info(const du_high_unit_sib_config::etws_config::test_config& cfg)
 {
-  if (!etws_cfg.warning_message.has_value()) {
-    report_error("Scheduled SIB-7 but no ETWS warning message is configured.");
-  }
-  if (etws_cfg.warning_message.value().empty()) {
-    report_error("Scheduled SIB-7 but ETWS warning message is empty.");
-  }
-
   sib7_info sib7;
 
-  sib7.message_id              = etws_cfg.message_id;
-  sib7.serial_number           = etws_cfg.serial_num;
-  sib7.data_coding_scheme      = etws_cfg.data_coding_scheme;
-  sib7.warning_message_segment = etws_cfg.warning_message.value();
+  sib7.message_id              = cfg.message_id;
+  sib7.serial_number           = cfg.serial_num;
+  sib7.data_coding_scheme      = cfg.data_coding_scheme;
+  sib7.warning_message_segment = cfg.warning_message;
 
   return sib7;
 }
 
-static sib8_info create_sib8_info(const du_high_unit_sib_config::cmas_config& cmas_cfg)
+static sib8_info create_sib8_info(const du_high_unit_sib_config::cmas_config::test_config& cfg)
 {
-  if (cmas_cfg.warning_message.empty()) {
-    report_error("Scheduled SIB-8 but CMAS warning message is empty.");
-  }
-
   sib8_info sib8;
 
-  sib8.message_id              = cmas_cfg.message_id;
-  sib8.serial_number           = cmas_cfg.serial_num;
-  sib8.data_coding_scheme      = cmas_cfg.data_coding_scheme;
-  sib8.warning_message_segment = cmas_cfg.warning_message;
+  sib8.message_id              = cfg.message_id;
+  sib8.serial_number           = cfg.serial_num;
+  sib8.data_coding_scheme      = cfg.data_coding_scheme;
+  sib8.warning_message_segment = cfg.warning_message;
   return sib8;
 }
 
@@ -240,24 +324,68 @@ static sib16_info create_sib16_info(const du_high_unit_sib_config::sib16_config&
 static sib19_info create_sib19_info(const du_high_unit_cell_ntn_config& config)
 {
   sib19_info sib19;
-  sib19.t_service      = config.t_service;
-  sib19.ref_location   = config.reference_location;
-  sib19.distance_thres = config.distance_threshold;
-  for (const auto& ncell : config.ncells) {
-    sib19.ncells.push_back(ncell);
-  }
-  sib19.moving_ref_location    = config.moving_ref_location;
-  sib19.sat_switch_with_resync = config.sat_switch_with_resync;
 
-  sib19.ntn_cfg.emplace();
-  sib19.ntn_cfg->cell_specific_koffset    = config.cell_specific_koffset;
-  sib19.ntn_cfg->ephemeris_info           = config.ephemeris_info;
-  sib19.ntn_cfg->epoch_time               = config.epoch_time;
-  sib19.ntn_cfg->k_mac                    = config.k_mac;
-  sib19.ntn_cfg->ta_info                  = config.ta_info;
-  sib19.ntn_cfg->ntn_ul_sync_validity_dur = config.ntn_ul_sync_validity_dur;
-  sib19.ntn_cfg->polarization             = config.polarization;
-  sib19.ntn_cfg->ta_report                = config.ta_report;
+  if (config.serving) {
+    const auto& serving       = *config.serving;
+    sib19.t_service           = serving.t_service;
+    sib19.ref_location        = serving.reference_location;
+    sib19.distance_thres      = serving.distance_threshold;
+    sib19.moving_ref_location = serving.moving_ref_location;
+
+    sib19.ntn_cfg.emplace();
+    // Placeholder: this SIB19 sizes the SI-message PDSCH grant, and the live one always carries epochTime.
+    sib19.ntn_cfg->epoch_time            = epoch_time_t{0, 0};
+    sib19.ntn_cfg->cell_specific_koffset = serving.cell_specific_koffset;
+    sib19.ntn_cfg->ephemeris_info        = serving.sat_ref.ephemeris_info;
+    sib19.ntn_cfg->k_mac                 = serving.k_mac;
+    sib19.ntn_cfg->ta_info               = serving.sat_ref.ta_info;
+    if (serving.feeder_link_info and not sib19.ntn_cfg->ta_info) {
+      // Same, for a feeder link: the live SIB19 always carries ta-Info.
+      sib19.ntn_cfg->ta_info = ta_info_t{0.0, 0.0, 0.0, std::nullopt};
+    }
+    sib19.ntn_cfg->ntn_ul_sync_validity_dur = serving.ntn_ul_sync_validity_dur;
+    sib19.ntn_cfg->polarization             = serving.polarization;
+    sib19.ntn_cfg->ta_report                = serving.ta_report;
+
+    if (serving.sat_switch_with_resync) {
+      const auto&              sw_cfg = *serving.sat_switch_with_resync;
+      sat_switch_with_resync_t sw;
+      sw.epoch_timestamp      = sw_cfg.sat_ref.epoch_timestamp;
+      sw.ntn_gateway_location = sw_cfg.sat_ref.gateway_location;
+      sw.t_service_start      = sw_cfg.t_service_start;
+      if (sw_cfg.ssb_time_offset_sf) {
+        sw.ssb_time_offset_sf =
+            sat_switch_with_resync_t::ssb_time_offset_t{static_cast<uint8_t>(*sw_cfg.ssb_time_offset_sf)};
+      }
+      sw.ntn_cfg.ta_info                  = sw_cfg.sat_ref.ta_info;
+      sw.ntn_cfg.ephemeris_info           = sw_cfg.sat_ref.ephemeris_info;
+      sw.ntn_cfg.ntn_ul_sync_validity_dur = sw_cfg.ntn_ul_sync_validity_dur;
+      sw.ntn_cfg.cell_specific_koffset    = sw_cfg.cell_specific_koffset;
+      sw.ntn_cfg.k_mac                    = sw_cfg.k_mac;
+      sw.ntn_cfg.polarization             = sw_cfg.polarization;
+      sw.ntn_cfg.ta_report                = sw_cfg.ta_report;
+      sib19.sat_switch_with_resync        = sw;
+    }
+  }
+
+  for (const auto& ncell : config.ncells) {
+    neighbor_ntn_cell ntn_ncell;
+    ntn_ncell.phys_cell_id = ncell.phys_cell_id;
+    ntn_ncell.carrier_freq = ncell.carrier_freq;
+    ntn_config ncell_ntn_cfg;
+    ncell_ntn_cfg.cell_specific_koffset    = ncell.cell_specific_koffset;
+    ncell_ntn_cfg.ntn_ul_sync_validity_dur = ncell.ntn_ul_sync_validity_dur;
+    ncell_ntn_cfg.k_mac                    = ncell.k_mac;
+    ncell_ntn_cfg.polarization             = ncell.polarization;
+    ncell_ntn_cfg.ta_report                = ncell.ta_report;
+    if (ncell.has_feeder_link) {
+      ncell_ntn_cfg.ta_info = ncell.sat_ref.ta_info;
+    }
+    ncell_ntn_cfg.ephemeris_info = ncell.sat_ref.ephemeris_info;
+    ntn_ncell.ntn_cfg            = ncell_ntn_cfg;
+    sib19.ncells.push_back(ntn_ncell);
+  }
+
   return sib19;
 }
 
@@ -274,6 +402,11 @@ static void fill_csi_resources(odu::du_cell_config& out_cell, const du_high_unit
     du_csi.enable_aperiodic_report = true;
   }
   du_csi.pwr_ctrl_offset = static_cast<int8_t>(cell_cfg.csi_cfg.pwr_ctrl_offset);
+
+  // The Type-II codebook is only configured for the UEs that report support for it.
+  if (csi_cfg.type2_codebook_enabled) {
+    du_csi.type2_codebook.emplace();
+  }
 
   // [Implementation-defined] The default CSI symbols are in symbols 4 and 8, the DM-RS for PDSCH might collide in
   // symbol index 8 when the number of DM-RS additional positions is 3.
@@ -355,17 +488,22 @@ generate_du_slicing_rrm_policy_config(span<const std::string>                   
   return rrm_policy_cfgs;
 }
 
-static ntn_cell_params make_ntn_cell_params(const du_high_unit_cell_ntn_config& cfg, bool ul_harq_mode_b)
+static ntn_cell_params make_ntn_cell_params(const du_high_unit_ntn_serving_cell_config& cfg, bool ul_harq_mode_b)
 {
   ntn_cell_params ntn;
   ntn.ntn_cfg.cell_specific_koffset    = cfg.cell_specific_koffset;
   ntn.ntn_cfg.k_mac                    = cfg.k_mac;
   ntn.ntn_cfg.ntn_ul_sync_validity_dur = cfg.ntn_ul_sync_validity_dur;
-  ntn.ntn_cfg.epoch_time               = cfg.epoch_time;
-  ntn.ntn_cfg.ta_info                  = cfg.ta_info;
+  ntn.ntn_cfg.ta_info                  = cfg.sat_ref.ta_info;
   ntn.ntn_cfg.polarization             = cfg.polarization;
   ntn.ntn_cfg.ta_report                = cfg.ta_report;
-  ntn.ntn_cfg.ephemeris_info           = cfg.ephemeris_info;
+  ntn.ntn_cfg.ephemeris_info           = cfg.sat_ref.ephemeris_info;
+
+  if (cfg.ta_report_offset_threshold.has_value()) {
+    ntn.tar_cfg = tar_config{
+        std::chrono::microseconds{static_cast<int64_t>(std::lround(*cfg.ta_report_offset_threshold * 1000.0F))},
+        cfg.ta_report_sr_enabled};
+  }
 
   // Derived from PUSCH config.
   ntn.ul_harq_mode_b = ul_harq_mode_b;
@@ -373,15 +511,40 @@ static ntn_cell_params make_ntn_cell_params(const du_high_unit_cell_ntn_config& 
   return ntn;
 }
 
-/// Fill SI-Scheduling Information.
+/// \brief Fills the SI messages that carry a warning, and the content the cell broadcasts them with, if any.
+///
+/// A warning SIB is never mapped together with another SIB, so ETWS takes one SI message for its primary notification
+/// and another for its secondary one. Only a warning configured for testing has content from the start; any other one
+/// waits for a Write-Replace Warning to provide it.
+static void fill_pws_si_messages(si_scheduling_info_config& out, const du_high_unit_sib_config& sib_cfg)
+{
+  if (sib_cfg.etws_cfg.has_value()) {
+    const auto& etws = sib_cfg.etws_cfg.value();
+    out.pws_si_messages.push_back({sib_type::sib6, etws.si_period_rf, etws.test.has_value()});
+    out.pws_si_messages.push_back({sib_type::sib7, etws.si_period_rf, etws.test.has_value()});
+    if (etws.test.has_value()) {
+      out.sibs.push_back({create_sib6_info(etws.test.value()), value_tag_t::min()});
+      out.sibs.push_back({create_sib7_info(etws.test.value()), value_tag_t::min()});
+    }
+  }
+  if (sib_cfg.cmas_cfg.has_value()) {
+    const auto& cmas = sib_cfg.cmas_cfg.value();
+    out.pws_si_messages.push_back({sib_type::sib8, cmas.si_period_rf, cmas.test.has_value()});
+    if (cmas.test.has_value()) {
+      out.sibs.push_back({create_sib8_info(cmas.test.value()), value_tag_t::min()});
+    }
+  }
+}
+
 static std::optional<si_scheduling_info_config> make_si_sched_info_config(const du_high_unit_base_cell_config& cell_cfg)
 {
   const auto& sib_cfg = cell_cfg.sib_cfg;
-  if (sib_cfg.si_sched_info.empty()) {
+  if (sib_cfg.si_sched_info.empty() and not sib_cfg.etws_cfg.has_value() and not sib_cfg.cmas_cfg.has_value()) {
     return std::nullopt;
   }
   si_scheduling_info_config out;
   out.si_window_len_slots = sib_cfg.si_window_len_slots;
+  fill_pws_si_messages(out, sib_cfg);
   // Set SIB mapping info.
   out.si_sched_info.resize(sib_cfg.si_sched_info.size());
   std::vector<uint8_t> sibs_included;
@@ -390,9 +553,12 @@ static std::optional<si_scheduling_info_config> make_si_sched_info_config(const 
     out_si.si_period_radio_frames = sib_cfg.si_sched_info[i].si_period_rf;
     out_si.sib_mapping_info.resize(sib_cfg.si_sched_info[i].sib_mapping_info.size());
     out_si.si_window_position = sib_cfg.si_sched_info[i].si_window_position;
-    for (unsigned j = 0; j != sib_cfg.si_sched_info[i].sib_mapping_info.size(); ++j) {
-      sibs_included.push_back(sib_cfg.si_sched_info[i].sib_mapping_info[j]);
-      out_si.sib_mapping_info[j] = static_cast<sib_type>(sibs_included.back());
+
+    const auto& sib_mapping_info = sib_cfg.si_sched_info[i].sib_mapping_info;
+    for (unsigned j = 0; j != sib_mapping_info.size(); ++j) {
+      const uint8_t sib_id = sib_mapping_info[j];
+      sibs_included.push_back(sib_id);
+      out_si.sib_mapping_info[j] = static_cast<sib_type>(sib_id);
     }
   }
 
@@ -427,27 +593,6 @@ static std::optional<si_scheduling_info_config> make_si_sched_info_config(const 
                        "the si_sched_info list");
         }
         item = create_sib5_info(sib_cfg.sib5_cfg.value());
-      } break;
-      case 6: {
-        if (!sib_cfg.etws_cfg.has_value()) {
-          report_error("SIB-6 cannot be scheduled without ETWS config. Set the ETWS config or remove SIB-6 from "
-                       "the si_sched_info list");
-        }
-        item = create_sib6_info(sib_cfg.etws_cfg.value());
-      } break;
-      case 7: {
-        if (!sib_cfg.etws_cfg.has_value()) {
-          report_error("SIB-7 cannot be scheduled without ETWS config. Set the ETWS config or remove SIB-7 from "
-                       "the si_sched_info list");
-        }
-        item = create_sib7_info(sib_cfg.etws_cfg.value());
-      } break;
-      case 8: {
-        if (!sib_cfg.cmas_cfg.has_value()) {
-          report_error("SIB-8 cannot be scheduled without CMAS config. Set the CMAS config or remove SIB-8 from "
-                       "the si_sched_info list");
-        }
-        item = create_sib8_info(sib_cfg.cmas_cfg.value());
       } break;
       case 16: {
         if (!sib_cfg.sib16_cfg.has_value()) {
@@ -517,6 +662,7 @@ static void fill_si_acquisition_info(si_acquisition_info& si, const du_high_unit
   si.ue_timers_and_constants.t311 = std::chrono::milliseconds(cli_cfg.sib_cfg.ue_timers_and_constants.t311);
   si.ue_timers_and_constants.n311 = cli_cfg.sib_cfg.ue_timers_and_constants.n311;
   si.ue_timers_and_constants.t319 = std::chrono::milliseconds(cli_cfg.sib_cfg.ue_timers_and_constants.t319);
+  si.ue_timers_and_constants.t304 = std::chrono::milliseconds(cli_cfg.sib_cfg.ue_timers_and_constants.t304);
 }
 
 std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_unit_config& config)
@@ -540,7 +686,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     // Enable CSI-RS if the PDSCH mcs is dynamic (min_ue_mcs != max_ue_mcs).
     param.csi_rs_enabled     = base_cell.csi_cfg.csi_rs_enabled;
     param.dl_carrier.nof_ant = base_cell.nof_antennas_dl;
-    param.max_nof_layers     = base_cell.pdsch_cfg.max_rank;
+    param.max_rank           = base_cell.pdsch_cfg.max_rank;
     param.min_k1             = base_cell.pucch_cfg.min_k1;
     param.min_k2             = base_cell.pusch_cfg.min_k2;
     param.cs0_index          = base_cell.pdcch_cfg.common.coreset0_index;
@@ -571,15 +717,37 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     out_cell.nr_cgi.nci     = nr_cell_identity::create(config.gnb_id, base_cell.sector_id.value()).value();
     out_cell.tac            = base_cell.tac;
     out_cell.enabled        = base_cell.enabled;
+    // The list leads with the cell TAC.
+    if (!base_cell.additional_tacs.empty()) {
+      out_cell.tac_list.push_back(base_cell.tac);
+      for (tac_t tac : base_cell.additional_tacs) {
+        out_cell.tac_list.push_back(tac);
+      }
+    }
+
+    // > TA offset.
+    out_cell.ran.ta_offset = band_helper::get_ta_offset(band, base_cell.eutra_coexistence);
 
     // > SSB.
+    out_cell.ran.ssb_cfg.ssb_beams.reset();
+    for (const auto& ssb_beam : base_cell.ssb_cfg.beams) {
+      const auto& beam = *std::find_if(base_cell.ref_beams.begin(),
+                                       base_cell.ref_beams.end(),
+                                       [&ssb_beam](const du_high_unit_ref_beam_config& cell_beam) {
+                                         return cell_beam.ref_beam_id == ssb_beam.ref_beam_id.value();
+                                       });
+      out_cell.ran.ssb_cfg.ssb_beams.set_beam(
+          ssb_beam.ssb_index,
+          get_beam_id(base_cell.tx_ant_topology, beam.i_panel, beam.i_pol, beam.i_beam_dim1, beam.i_beam_dim2));
+    }
     out_cell.ran.ssb_cfg.ssb_period      = static_cast<ssb_periodicity>(base_cell.ssb_cfg.ssb_period_msec);
     out_cell.ran.ssb_cfg.ssb_block_power = base_cell.ssb_cfg.ssb_block_power;
     out_cell.ran.ssb_cfg.pss_to_sss_epre = base_cell.ssb_cfg.pss_to_sss_epre;
 
     // > Carrier config.
-    out_cell.ran.dl_carrier.nof_ant = base_cell.nof_antennas_dl;
-    out_cell.ran.ul_carrier.nof_ant = base_cell.nof_antennas_ul;
+    out_cell.ran.dl_carrier.nof_ant  = base_cell.nof_antennas_dl;
+    out_cell.ran.dl_carrier.topology = base_cell.tx_ant_topology;
+    out_cell.ran.ul_carrier.nof_ant  = base_cell.nof_antennas_ul;
     // > System Information.
     fill_si_acquisition_info(out_cell.si, base_cell);
     if (out_cell.si.si_config.has_value()) {
@@ -591,6 +759,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     if (base_cell.ul_common_cfg.p_max.has_value()) {
       out_cell.ran.ul_cfg_common.freq_info_ul.p_max = base_cell.ul_common_cfg.p_max.value();
     }
+    out_cell.ran.ul_cfg_common.freq_info_ul.freq_shift_7p5khz_present = base_cell.ul_common_cfg.freq_shift_7p5khz;
 
     // DL common config.
     out_cell.ran.dl_cfg_common.freq_info_dl.scs_carrier_list.back().tx_direct_current_location =
@@ -655,6 +824,17 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
       out_cell.pcg_params.p_nr_fr1 = base_cell.pcg_cfg.p_nr_fr1.value();
     }
 
+    // Geographical coordinates of the cell/TRP antenna.
+    if (base_cell.geo_coordinates_cfg.has_value()) {
+      out_cell.trp_geo_coordinates = make_trp_geo_coordinates(base_cell.geo_coordinates_cfg.value());
+    }
+
+    // Number of CRBs of the cell.
+    const unsigned nof_crbs = band_helper::get_n_rbs_from_bw(base_cell.channel_bw_mhz, param.scs_common, freq_range);
+
+    // DL-PRS parameters.
+    out_cell.ran.prs_cfg = make_prs_config(base_cell.prs_cfg, nof_crbs);
+
     // MAC Cell Group Config parameters.
     out_cell.mcg_params = make_mac_cell_group_params(base_cell);
 
@@ -699,6 +879,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
         static_cast<uint8_t>(config.cells_cfg.front().cell.pdsch_cfg.nof_harqs);
     out_cell.ran.init_bwp.pdsch.dl_harq_feedback_disabled = base_cell.pdsch_cfg.harq_feedback_disabled;
     out_cell.ran.init_bwp.pdsch.mcs_table                 = base_cell.pdsch_cfg.mcs_table;
+    out_cell.ran.init_bwp.pdsch.max_nof_repetitions       = base_cell.pdsch_cfg.max_nof_rep;
     out_cell.ran.init_bwp.pdsch.additional_positions =
         uint_to_dmrs_additional_positions(base_cell.pdsch_cfg.dmrs_add_pos);
     out_cell.ran.init_bwp.pdsch.interleaving_bundle_size = base_cell.pdsch_cfg.interleaving_bundle_size;
@@ -706,6 +887,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     out_cell.ran.init_bwp.pusch.min_k2                      = base_cell.pusch_cfg.min_k2;
     out_cell.ran.init_bwp.pusch.transform_precoding_enabled = base_cell.pusch_cfg.enable_transform_precoding;
     out_cell.ran.init_bwp.pusch.mcs_table                   = base_cell.pusch_cfg.mcs_table;
+    out_cell.ran.init_bwp.pusch.max_nof_repetitions         = base_cell.pusch_cfg.max_nof_rep;
     out_cell.ran.init_bwp.pusch.additional_positions =
         uint_to_dmrs_additional_positions(base_cell.pusch_cfg.dmrs_add_pos);
     // Determine the PUSCH transmission maximum number of layers:
@@ -726,8 +908,9 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     b_offsets.beta_offset_csi_p2_idx_2           = base_cell.pusch_cfg.beta_offset_csi_p2_idx_2;
     out_cell.ran.init_bwp.pusch.uci_beta_offsets = b_offsets;
     out_cell.ran.init_bwp.pusch.p0_pusch_alpha   = float_to_alpha(base_cell.pusch_cfg.path_loss_compensation_factor);
-    out_cell.ran.init_bwp.pusch.max_harq_procs   = static_cast<uint8_t>(base_cell.pusch_cfg.nof_harqs);
-    out_cell.ran.init_bwp.pusch.ul_harq_mode     = ~base_cell.pusch_cfg.harq_mode_b;
+    out_cell.ran.init_bwp.pusch.p0_nominal_without_grant = base_cell.pusch_cfg.p0_nominal_without_grant;
+    out_cell.ran.init_bwp.pusch.max_harq_procs           = static_cast<uint8_t>(base_cell.pusch_cfg.nof_harqs);
+    out_cell.ran.init_bwp.pusch.ul_harq_mode             = ~base_cell.pusch_cfg.harq_mode_b;
     // > PUCCH
     out_cell.ran.init_bwp.pucch.min_k1    = base_cell.pucch_cfg.min_k1;
     out_cell.ran.init_bwp.pucch.sr_period = static_cast<sr_periodicity>(
@@ -736,9 +919,11 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     out_cell.ran.init_bwp.rach.cfra_enabled   = base_cell.prach_cfg.cfra_enabled;
     out_cell.ran.init_bwp.paging.edrx_enabled = base_cell.paging_cfg.edrx_enabled;
     out_cell.ran.init_bwp.rlm.type            = base_cell.rlm_cfg.resource_type;
-    // > NTN.
-    if (base_cell.ntn_cfg.has_value()) {
-      out_cell.ran.ntn_params = make_ntn_cell_params(base_cell.ntn_cfg.value(), base_cell.pusch_cfg.harq_mode_b.any());
+    // NTN. Only a NTN serving cell gets ran.ntn_params; a TN-band cell that only reports NTN neighbor
+    // cells in SIB19 must not be treated as NTN downstream (e.g. for MAC HARQ buffer sizing).
+    if (base_cell.ntn_cfg.has_value() and base_cell.ntn_cfg->serving.has_value()) {
+      out_cell.ran.ntn_params =
+          make_ntn_cell_params(*base_cell.ntn_cfg->serving, base_cell.pusch_cfg.harq_mode_b.any());
     }
 
     // UE-dedicated PDCCH config.
@@ -747,8 +932,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     if (base_cell.pdcch_cfg.dedicated.coreset1_rb_start.has_value()) {
       cset1_start_crb = base_cell.pdcch_cfg.dedicated.coreset1_rb_start.value();
     }
-    const unsigned nof_crbs    = band_helper::get_n_rbs_from_bw(base_cell.channel_bw_mhz, param.scs_common, freq_range);
-    unsigned       cset1_l_crb = nof_crbs - cset1_start_crb;
+    unsigned cset1_l_crb = nof_crbs - cset1_start_crb;
     if (base_cell.pdcch_cfg.dedicated.coreset1_l_crb.has_value()) {
       cset1_l_crb = base_cell.pdcch_cfg.dedicated.coreset1_l_crb.value();
     }
@@ -951,6 +1135,34 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     du_srs_cfg.sequence_id_reuse_factor  = user_srs_cfg.sequence_id_reuse_factor;
     du_srs_cfg.p0                        = user_srs_cfg.p0;
 
+    // Parameters for Configured Grant.
+    const du_high_configured_grants& user_cg_cfg = base_cell.cg_cfg;
+    if (user_cg_cfg.periodicity_slots.has_value()) {
+      cg_builder_params du_cg_params{};
+      du_cg_params.periodicity = static_cast<cg_configuration::periodicity_t>(user_cg_cfg.periodicity_slots.value());
+      du_cg_params.mcs         = user_cg_cfg.mcs;
+      du_cg_params.nof_harq_processes  = user_cg_cfg.nof_harq_processes;
+      du_cg_params.max_nof_cell_cg_rbs = user_cg_cfg.max_nof_cell_cg_rbs;
+      // The requested bitrate, when set, takes precedence over the grant size.
+      if (user_cg_cfg.requested_bitrate.has_value()) {
+        // The CLI requested bitrate is passed in kBps, while in the cg_builder_params the corresponding value is in
+        // bytes per seconds.
+        du_cg_params.grant_size_or_bitrate.emplace<units::byterate>(user_cg_cfg.requested_bitrate.value() * 1000U);
+      } else {
+        du_cg_params.grant_size_or_bitrate.emplace<units::bytes>(user_cg_cfg.grant_size);
+      }
+      beta_offsets cg_b_offsets{};
+      cg_b_offsets.beta_offset_ack_idx_1    = base_cell.pusch_cfg.beta_offset_ack_idx_1;
+      cg_b_offsets.beta_offset_ack_idx_2    = base_cell.pusch_cfg.beta_offset_ack_idx_2;
+      cg_b_offsets.beta_offset_ack_idx_3    = base_cell.pusch_cfg.beta_offset_ack_idx_3;
+      cg_b_offsets.beta_offset_csi_p1_idx_1 = base_cell.pusch_cfg.beta_offset_csi_p1_idx_1;
+      cg_b_offsets.beta_offset_csi_p1_idx_2 = base_cell.pusch_cfg.beta_offset_csi_p1_idx_2;
+      cg_b_offsets.beta_offset_csi_p2_idx_1 = base_cell.pusch_cfg.beta_offset_csi_p2_idx_1;
+      cg_b_offsets.beta_offset_csi_p2_idx_2 = base_cell.pusch_cfg.beta_offset_csi_p2_idx_2;
+      du_cg_params.uci_beta_offsets.emplace(cg_b_offsets);
+      out_cell.ran.init_bwp.cg_cfg.emplace(du_cg_params);
+    }
+
     // If any dependent parameter needs to be updated, this is the place.
     config_helpers::compute_nof_sr_csi_pucch_res(du_pucch_cfg,
                                                  base_cell.ul_common_cfg.max_pucchs_per_slot,
@@ -958,28 +1170,16 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
                                                  base_cell.csi_cfg.csi_rs_enabled
                                                      ? std::optional<unsigned>{base_cell.csi_cfg.csi_rs_period_msec}
                                                      : std::nullopt);
-    // The maximum number of symbols for cell PUCCH resources is computed based on the SRS configuration, but only if
-    // the SRS are periodic. The aperiodic SRS resources are not currently supported and used only for the UE to accept
-    // the configuration; therefore, the maximum number of symbols for PUCCH resources is computed only for periodic
-    // SRS.
-    du_pucch_cfg.max_nof_symbols = config_helpers::compute_max_nof_pucch_symbols(du_srs_cfg);
-    if (user_srs_cfg.srs_type_enabled == "periodic" or user_srs_cfg.srs_type_enabled == "aperiodic") {
-      if (std::holds_alternative<pucch_f1_params>(du_pucch_cfg.f0_or_f1_params)) {
-        auto& f1_params    = std::get<pucch_f1_params>(du_pucch_cfg.f0_or_f1_params);
-        f1_params.nof_syms = std::min(du_pucch_cfg.max_nof_symbols.value(), f1_params.nof_syms.value());
-      }
-      if (std::holds_alternative<pucch_f3_params>(du_pucch_cfg.f2_or_f3_or_f4_params)) {
-        auto& f3_params    = std::get<pucch_f3_params>(du_pucch_cfg.f2_or_f3_or_f4_params);
-        f3_params.nof_syms = std::min(du_pucch_cfg.max_nof_symbols.value(), f3_params.nof_syms.value());
-      } else if (std::holds_alternative<pucch_f4_params>(du_pucch_cfg.f2_or_f3_or_f4_params)) {
-        auto& f4_params    = std::get<pucch_f4_params>(du_pucch_cfg.f2_or_f3_or_f4_params);
-        f4_params.nof_syms = std::min(du_pucch_cfg.max_nof_symbols.value(), f4_params.nof_syms.value());
-      }
-      // Add extra PUSCH time-domain resources to enable PUSCH on symbols not used by the SRS.
-      config_helpers::recompute_pusch_time_domain_resources(
-          out_cell.ran.ul_cfg_common.init_ul_bwp.pusch_cfg_common->pusch_td_alloc_list,
-          du_srs_cfg,
-          out_cell.ran.tdd_cfg);
+    pucch_helper::cap_pucch_symbols(du_pucch_cfg, config_helpers::compute_max_nof_pucch_symbols(du_srs_cfg).value());
+    if (du_srs_cfg.srs_type_enabled != srs_type::disabled) {
+      // Regenerate the PUSCH time-domain resources, adding extra ones to enable PUSCH on symbols not used by the SRS.
+      out_cell.ran.ul_cfg_common.init_ul_bwp.pusch_cfg_common->pusch_td_alloc_list =
+          time_domain_resource_helper::generate_dedicated_pusch_td_res_list(
+              out_cell.ran.tdd_cfg,
+              out_cell.ran.ul_cfg_common.init_ul_bwp.generic_params.cp,
+              base_cell.pusch_cfg.min_k2,
+              du_srs_cfg.max_nof_symbols.value(),
+              static_cast<uint8_t>(du_srs_cfg.nof_symbols));
     }
 
     // Parameters for csiMeasConfig.
@@ -1089,14 +1289,26 @@ static std::map<five_qi_t, odu::du_qos_config> generate_du_qos_config(const du_h
     out_f1u.warn_on_drop   = config.warn_on_drop;
     out_f1u.ul_buffer_size = qos.f1u_du.ul_buffer_size;
 
-    // Convert triggered UL grant config (optional - presence enables the feature)
+    // Convert triggered UL grant config (optional - presence enables the feature). The configured delay is in ms; the
+    // scheduler converts it to slots using the cell numerology.
     if (qos.mac.triggered_ul_grant.has_value()) {
-      auto& out_trig       = out_cfg[qos.five_qi].triggered_ul_grant.emplace();
-      out_trig.delay_slots = qos.mac.triggered_ul_grant->delay_slots;
-      out_trig.grant_size  = units::bytes{qos.mac.triggered_ul_grant->grant_size};
+      auto& out_trig      = out_cfg[qos.five_qi].triggered_ul_grant.emplace();
+      out_trig.delay_ms   = qos.mac.triggered_ul_grant->delay;
+      out_trig.grant_size = qos.mac.triggered_ul_grant->grant_size;
     }
   }
   return out_cfg;
+}
+
+/// Finds the SRB entry with the given id in the (unordered) SRB list, or nullptr if absent.
+static const du_high_unit_srb_config* find_srb(const std::vector<du_high_unit_srb_config>& srbs, srb_id_t id)
+{
+  for (const auto& srb : srbs) {
+    if (static_cast<srb_id_t>(srb.srb_id) == id) {
+      return &srb;
+    }
+  }
+  return nullptr;
 }
 
 static std::map<srb_id_t, odu::du_srb_config> generate_du_srb_config(const du_high_unit_config& config)
@@ -1105,21 +1317,31 @@ static std::map<srb_id_t, odu::du_srb_config> generate_du_srb_config(const du_hi
 
   // SRB1
   srb_cfg.insert(std::make_pair(srb_id_t::srb1, odu::du_srb_config{}));
-  if (config.srb_cfg.find(srb_id_t::srb1) != config.srb_cfg.end()) {
-    auto& out_rlc             = srb_cfg[srb_id_t::srb1].rlc;
+  if (const du_high_unit_srb_config* in_srb1_ptr = find_srb(config.srb_cfg, srb_id_t::srb1)) {
+    const auto& in_srb1       = *in_srb1_ptr;
+    auto&       out_srb1      = srb_cfg[srb_id_t::srb1];
+    auto&       out_rlc       = out_srb1.rlc;
     out_rlc.mode              = rlc_mode::am;
-    out_rlc.am                = generate_du_rlc_am_config(config.srb_cfg.at(srb_id_t::srb1).rlc);
+    out_rlc.am                = generate_du_rlc_am_config(in_srb1.rlc);
     out_rlc.am.tx.pdcp_sn_len = pdcp_sn_size::size12bits;
+    // The presence of the triggered_ul_grant block enables the feature.
+    if (in_srb1.mac.triggered_ul_grant.has_value()) {
+      // [Implementation-defined] Fixed UL grant size for SRB1, sized for a small RRC UL response.
+      static constexpr units::bytes srb1_triggered_ul_grant_size = SRB1_TRIG_GRANT_SIZE;
+      auto&                         trig                         = out_srb1.triggered_ul_grant.emplace();
+      trig.delay_ms                                              = in_srb1.mac.triggered_ul_grant->delay;
+      trig.grant_size                                            = srb1_triggered_ul_grant_size;
+    }
   } else {
     srb_cfg.at(srb_id_t::srb1).rlc = make_default_srb_rlc_config();
   }
 
   // SRB2
   srb_cfg.insert(std::make_pair(srb_id_t::srb2, odu::du_srb_config{}));
-  if (config.srb_cfg.find(srb_id_t::srb2) != config.srb_cfg.end()) {
+  if (const du_high_unit_srb_config* in_srb2 = find_srb(config.srb_cfg, srb_id_t::srb2)) {
     auto& out_rlc             = srb_cfg[srb_id_t::srb2].rlc;
     out_rlc.mode              = rlc_mode::am;
-    out_rlc.am                = generate_du_rlc_am_config(config.srb_cfg.at(srb_id_t::srb2).rlc);
+    out_rlc.am                = generate_du_rlc_am_config(in_srb2->rlc);
     out_rlc.am.tx.pdcp_sn_len = pdcp_sn_size::size12bits;
   } else {
     srb_cfg.at(srb_id_t::srb2).rlc = make_default_srb_rlc_config();
@@ -1127,10 +1349,10 @@ static std::map<srb_id_t, odu::du_srb_config> generate_du_srb_config(const du_hi
 
   // SRB3
   srb_cfg.insert(std::make_pair(srb_id_t::srb3, odu::du_srb_config{}));
-  if (config.srb_cfg.find(srb_id_t::srb3) != config.srb_cfg.end()) {
+  if (const du_high_unit_srb_config* in_srb3 = find_srb(config.srb_cfg, srb_id_t::srb3)) {
     auto& out_rlc             = srb_cfg[srb_id_t::srb3].rlc;
     out_rlc.mode              = rlc_mode::am;
-    out_rlc.am                = generate_du_rlc_am_config(config.srb_cfg.at(srb_id_t::srb3).rlc);
+    out_rlc.am                = generate_du_rlc_am_config(in_srb3->rlc);
     out_rlc.am.tx.pdcp_sn_len = pdcp_sn_size::size12bits;
   } else {
     srb_cfg.at(srb_id_t::srb3).rlc = make_default_srb_rlc_config();
@@ -1170,6 +1392,9 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
   const du_high_unit_scheduler_config& app_sched_expert_cfg = cell.scheduler_cfg;
   out_cfg.ue.dl_mcs                                         = {pdsch.min_ue_mcs, pdsch.max_ue_mcs};
   out_cfg.ue.pdsch_rv_sequence.assign(pdsch.rv_sequence.begin(), pdsch.rv_sequence.end());
+  out_cfg.ue.pdsch_cqi_rep_threshold           = pdsch.cqi_rep_threshold;
+  out_cfg.ue.pusch_sinr_rep_threshold          = pusch.sinr_rep_threshold;
+  out_cfg.ue.pusch_force_rep                   = pusch.force_rep;
   out_cfg.ue.dl_harq_la_cqi_drop_threshold     = pdsch.harq_la_cqi_drop_threshold;
   out_cfg.ue.dl_harq_la_ri_drop_threshold      = pdsch.harq_la_ri_drop_threshold;
   out_cfg.ue.max_nof_dl_harq_retxs             = pdsch.max_nof_harq_retxs;
@@ -1184,10 +1409,7 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
   out_cfg.ue.olla_dl_target_bler               = pdsch.olla_target_bler;
   out_cfg.ue.olla_cqi_inc                      = pdsch.olla_cqi_inc;
   out_cfg.ue.olla_max_cqi_offset               = pdsch.olla_max_cqi_offset;
-  if (cell.ntn_cfg.has_value()) {
-    out_cfg.ue.auto_ack_harq = true;
-  }
-  out_cfg.ue.ul_mcs = {pusch.min_ue_mcs, pusch.max_ue_mcs};
+  out_cfg.ue.ul_mcs                            = {pusch.min_ue_mcs, pusch.max_ue_mcs};
   out_cfg.ue.pusch_rv_sequence.assign(pusch.rv_sequence.begin(), pusch.rv_sequence.end());
   out_cfg.ue.enable_csi_rs_pdsch_multiplexing = pdsch.enable_csi_rs_pdsch_multiplexing;
   out_cfg.ue.initial_ul_dc_offset             = pusch.dc_offset;
@@ -1195,6 +1417,7 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
   out_cfg.ue.olla_ul_target_bler              = pusch.olla_target_bler;
   out_cfg.ue.olla_ul_snr_inc                  = pusch.olla_snr_inc;
   out_cfg.ue.olla_max_ul_snr_offset           = pusch.olla_max_snr_offset;
+  out_cfg.ue.olla_ul_min_pusch_snr            = pusch.olla_min_pusch_snr;
   out_cfg.ue.pdsch_crb_limits                 = {pdsch.start_rb, pdsch.end_rb};
   out_cfg.ue.pdsch_interleaving_bundle_size   = pdsch.interleaving_bundle_size;
   out_cfg.ue.pusch_crb_limits                 = {pusch.start_rb, pusch.end_rb};
@@ -1224,6 +1447,8 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
   out_cfg.ue.max_pucchs_per_slot                              = cell.ul_common_cfg.max_pucchs_per_slot;
   out_cfg.ue.min_pucch_pusch_prb_distance                     = cell.ul_common_cfg.min_pucch_pusch_prb_distance;
   const du_high_unit_pucch_config& pucch                      = cell.pucch_cfg;
+  out_cfg.ue.pucch_sinr_threshold_dB                          = pucch.sinr_threshold_dB;
+  out_cfg.ue.cg_pusch_sinr_threshold_dB                       = cell.cg_cfg.sinr_threshold_dB;
   out_cfg.ue.ul_power_ctrl.enable_pucch_cl_pw_control         = pucch.enable_closed_loop_pw_control;
   out_cfg.ue.ul_power_ctrl.pucch_f0_sinr_target_dB            = pucch.pucch_f0_sinr_target_dB;
   out_cfg.ue.ul_power_ctrl.pucch_f2_sinr_target_dB            = pucch.pucch_f2_sinr_target_dB;
@@ -1233,14 +1458,41 @@ static scheduler_expert_config generate_scheduler_expert_config(const du_high_un
   // RA parameters.
   const du_high_unit_rach_config& prach = cell.prach_cfg;
 
-  out_cfg.ra.rar_mcs_index            = pdsch.fixed_rar_mcs;
-  out_cfg.ra.max_nof_msg3_harq_retxs  = prach.max_msg3_harq_retx;
-  out_cfg.ra.msg3_mcs_index           = prach.fixed_msg3_mcs;
-  out_cfg.ra.nof_prach_guardbands_rbs = prach.nof_prach_guardbands_rbs;
+  out_cfg.ra.rar_mcs_index                      = pdsch.fixed_rar_mcs;
+  out_cfg.ra.max_nof_msg3_harq_retxs            = prach.max_msg3_harq_retx;
+  out_cfg.ra.msg3_mcs_index                     = prach.fixed_msg3_mcs;
+  out_cfg.ra.nof_prach_guardbands_rbs           = prach.nof_prach_guardbands_rbs;
+  out_cfg.ra.backoff_indicator_snr_threshold_dB = prach.backoff_indicator_snr_threshold;
+  out_cfg.ra.backoff_indicator_max_preambles    = prach.backoff_indicator_max_preambles;
+  out_cfg.ra.backoff_indicator_duration         = std::chrono::milliseconds{prach.backoff_indicator_duration_ms};
+  out_cfg.ra.multiplex_uci_on_cf_rar_ul_grant   = prach.multiplex_uci_on_cf_rar_ul_grant;
 
   // SI parameters.
   out_cfg.si.sib1_mcs_index    = pdsch.fixed_sib1_mcs;
   out_cfg.si.sib1_dci_aggr_lev = aggregation_level::n4;
+
+  // Paging parameters.
+  out_cfg.pg.paging_mcs_index   = sch_mcs_index{static_cast<uint8_t>(app_sched_expert_cfg.paging_mcs_index)};
+  out_cfg.pg.max_paging_retries = app_sched_expert_cfg.max_paging_retries;
+  switch (app_sched_expert_cfg.paging_dci_aggr_lev) {
+    case 1:
+      out_cfg.pg.paging_dci_aggr_lev = aggregation_level::n1;
+      break;
+    case 2:
+      out_cfg.pg.paging_dci_aggr_lev = aggregation_level::n2;
+      break;
+    case 4:
+      out_cfg.pg.paging_dci_aggr_lev = aggregation_level::n4;
+      break;
+    case 8:
+      out_cfg.pg.paging_dci_aggr_lev = aggregation_level::n8;
+      break;
+    case 16:
+      out_cfg.pg.paging_dci_aggr_lev = aggregation_level::n16;
+      break;
+    default:
+      report_error("Invalid paging_dci_aggr_lev={}\n", app_sched_expert_cfg.paging_dci_aggr_lev);
+  }
 
   // Logging and tracing.
   out_cfg.log_broadcast_messages       = config.loggers.broadcast_enabled;
@@ -1299,6 +1551,8 @@ void ocudu::generate_du_high_config(odu::du_high_configuration& du_hi_cfg, const
   du_hi_cfg.metrics.enable_du_proc  = du_high_unit_cfg.metrics.layers_cfg.enable_du_proc;
   du_hi_cfg.metrics.period          = std::chrono::milliseconds{du_high_unit_cfg.metrics.du_report_period};
 
+  du_hi_cfg.f1ap.retry_tnl_connection = du_high_unit_cfg.retry_f1c_connection;
+
   // Validates the derived parameters.
   du_hi_cfg.ran.srbs                  = generate_du_srb_config(du_high_unit_cfg);
   du_hi_cfg.ran.qos                   = generate_du_qos_config(du_high_unit_cfg);
@@ -1306,8 +1560,25 @@ void ocudu::generate_du_high_config(odu::du_high_configuration& du_hi_cfg, const
   du_hi_cfg.ran.mac_cfg.initial_crnti = to_rnti(0x4601);
   du_hi_cfg.ran.sched_cfg             = generate_scheduler_expert_config(du_high_unit_cfg);
 
+  du_hi_cfg.rlc.drb_rx_window_seg_size      = du_high_unit_cfg.rlc_cfg.drb_rx_window_seg_size;
+  du_hi_cfg.rlc.drb_rx_window_seg_pool_size = du_high_unit_cfg.rlc_cfg.drb_rx_window_seg_pool_size;
+  du_hi_cfg.rlc.drb_tx_window_seg_size      = du_high_unit_cfg.rlc_cfg.drb_tx_window_seg_size;
+  du_hi_cfg.rlc.drb_tx_window_seg_pool_size = du_high_unit_cfg.rlc_cfg.drb_tx_window_seg_pool_size;
+  du_hi_cfg.rlc.srb_rx_window_seg_size      = du_high_unit_cfg.rlc_cfg.srb_rx_window_seg_size;
+  du_hi_cfg.rlc.srb_rx_window_seg_pool_size = du_high_unit_cfg.rlc_cfg.srb_rx_window_seg_pool_size;
+  du_hi_cfg.rlc.srb_tx_window_seg_size      = du_high_unit_cfg.rlc_cfg.srb_tx_window_seg_size;
+  du_hi_cfg.rlc.srb_tx_window_seg_pool_size = du_high_unit_cfg.rlc_cfg.srb_tx_window_seg_pool_size;
+
   // Configure test mode
   du_hi_cfg.test_cfg = generate_test_mode_config(du_high_unit_cfg);
+
+  // Populate the NTN configuration manager config only when at least one cell configures NTN, so that the optional
+  // reflects whether NTN is actually configured.
+  if (auto ntn_cfg = generate_ntn_configuration_manager_config(
+          du_high_unit_cfg.gnb_id, du_high_unit_cfg.cells_cfg, du_high_unit_cfg.ntn_satellites);
+      not ntn_cfg.cells.empty()) {
+    du_hi_cfg.ntn = std::move(ntn_cfg);
+  }
 }
 
 void ocudu::fill_du_high_worker_manager_config(worker_manager_config&     config,
@@ -1321,7 +1592,7 @@ void ocudu::fill_du_high_worker_manager_config(worker_manager_config&     config
   du_hi_cfg.ue_data_tasks_queue_size = unit_cfg.expert_execution_cfg.du_queue_cfg.ue_data_executor_queue_size;
   du_hi_cfg.is_rt_mode_enabled       = !is_blocking_mode_enabled;
   du_hi_cfg.nof_cells                = unit_cfg.cells_cfg.size();
-  du_hi_cfg.executor_tracing_enable  = unit_cfg.tracer.executor_tracing_enable;
+  du_hi_cfg.executor_tracing_enable  = unit_cfg.tracer.executor_tracing_enabled;
 
   auto& pcap_cfg = config.pcap_cfg;
   if (unit_cfg.pcaps.f1ap.enabled) {

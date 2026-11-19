@@ -3,8 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/ue_context/ue.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
 #include "lib/scheduler/ue_context/ue_repository.h"
 #include "lib/scheduler/ue_scheduling/triggered_ul_grant_scheduler.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/unittests/scheduler/test_utils/config_generators.h"
 #include "tests/unittests/scheduler/test_utils/result_test_helpers.h"
@@ -12,24 +14,28 @@
 #include "ocudu/mac/mac_lc_config.h"
 #include "ocudu/ran/logical_channel/lcid.h"
 #include "ocudu/scheduler/result/pdsch_info.h"
+#include <chrono>
 #include <gtest/gtest.h>
 
 using namespace ocudu;
 
 namespace {
 
-constexpr du_cell_index_t CELL_IDX      = to_du_cell_index(0);
-constexpr uint8_t         DELAY_SLOTS   = 4;
-constexpr unsigned        GRANT_BYTES   = 600;
-constexpr lcid_t          TRIG_LCID     = lcid_t::LCID_MIN_DRB;
-constexpr lcid_t          NOT_TRIG_LCID = uint_to_lcid(TRIG_LCID + 1);
-constexpr lcg_id_t        TRIG_LCG      = uint_to_lcg_id(2);
+constexpr du_cell_index_t CELL_IDX = to_du_cell_index(0);
+// Configured triggered-grant delay, in ms. All cells in this fixture use 15 kHz SCS (numerology 0), i.e. 1 slot per
+// subframe, so a delay of DELAY_SLOTS ms maps to the same number of slots. The scheduler does the ms->slot conversion.
+constexpr uint8_t  DELAY_SLOTS   = 4;
+constexpr unsigned GRANT_BYTES   = 600;
+constexpr lcid_t   TRIG_LCID     = lcid_t::LCID_MIN_DRB;
+constexpr lcid_t   NOT_TRIG_LCID = uint_to_lcid(TRIG_LCID + 1);
+constexpr lcg_id_t TRIG_LCG      = uint_to_lcg_id(2);
 
 class trig_ul_sched_test : public scheduler_test_simulator, public ::testing::Test
 {
 public:
   trig_ul_sched_test() : scheduler_test_simulator(scheduler_test_sim_config{.auto_uci = true, .auto_crc = true})
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-2");
     add_cell(sched_config_helper::make_default_sched_cell_configuration_request());
   }
 
@@ -40,10 +46,10 @@ public:
     req.ue_index = ue_idx;
     req.crnti    = crnti;
     if (with_trigger) {
-      auto& drb_lc                           = req.cfg.lc_config_list->back();
-      drb_lc.triggered_ul_grant              = mac_lc_config::triggered_ul_grant_cfg{};
-      drb_lc.triggered_ul_grant->delay_slots = DELAY_SLOTS;
-      drb_lc.triggered_ul_grant->grant_size  = units::bytes{GRANT_BYTES};
+      auto& drb_lc                          = req.cfg.lc_config_list->back();
+      drb_lc.triggered_ul_grant             = mac_lc_config::triggered_ul_grant_cfg{};
+      drb_lc.triggered_ul_grant->delay_ms   = std::chrono::milliseconds{DELAY_SLOTS};
+      drb_lc.triggered_ul_grant->grant_size = units::bytes{GRANT_BYTES};
     }
     return req;
   }
@@ -260,8 +266,10 @@ class trig_ul_grant_unit_test : public ::testing::Test
 protected:
   trig_ul_grant_unit_test()
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-16-2");
     cfg_mgr.add_cell(sched_config_helper::make_default_sched_cell_configuration_request());
-    ue_repo.add_cell(cfg_mgr.get_cell(CELL_IDX), nullptr);
+    cell_ues.emplace(cfg_mgr.get_cell(CELL_IDX), nullptr);
+    ue_repo.register_cell(*cell_ues);
   }
 
   ue& add_ue_to_repo(du_ue_index_t ue_idx, rnti_t crnti, bool with_trigger)
@@ -271,12 +279,12 @@ protected:
     req.ue_index = ue_idx;
     req.crnti    = crnti;
     if (with_trigger) {
-      auto& drb_lc                           = req.cfg.lc_config_list->back();
-      drb_lc.triggered_ul_grant              = mac_lc_config::triggered_ul_grant_cfg{};
-      drb_lc.triggered_ul_grant->delay_slots = DELAY_SLOTS;
-      drb_lc.triggered_ul_grant->grant_size  = units::bytes{GRANT_BYTES};
+      auto& drb_lc                          = req.cfg.lc_config_list->back();
+      drb_lc.triggered_ul_grant             = mac_lc_config::triggered_ul_grant_cfg{};
+      drb_lc.triggered_ul_grant->delay_ms   = std::chrono::milliseconds(DELAY_SLOTS);
+      drb_lc.triggered_ul_grant->grant_size = units::bytes{GRANT_BYTES};
     }
-    ue_repo.add_ue(*cfg_mgr.add_ue(req), false, {}, false);
+    ue_repo.add_ue(*cfg_mgr.add_ue(req), {});
     return *ue_repo.find(ue_idx);
   }
 
@@ -307,8 +315,9 @@ protected:
   }
 
   test_helpers::test_sched_config_manager cfg_mgr{cell_config_builder_params{}};
+  std::optional<ue_cell_repository>       cell_ues;
   ue_repository                           ue_repo{scheduler_ue_expert_config{}};
-  triggered_ul_grant_scheduler            ul_trig_sched{ue_repo, CELL_IDX};
+  triggered_ul_grant_scheduler            ul_trig_sched{ue_repo, CELL_IDX, subcarrier_spacing::kHz15};
   const slot_point                        sl{subcarrier_spacing::kHz15, 0};
 };
 

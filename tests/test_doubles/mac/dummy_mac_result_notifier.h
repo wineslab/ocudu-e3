@@ -6,9 +6,9 @@
 
 #include "ocudu/mac/mac_cell_result.h"
 #include "ocudu/scheduler/result/sched_result.h"
-#include "ocudu/support/executors/task_executor.h"
 
 namespace ocudu {
+class task_executor;
 
 struct phy_cell_test_dummy : public mac_cell_result_notifier {
 public:

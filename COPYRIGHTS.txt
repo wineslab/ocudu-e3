@@ -10,8 +10,8 @@ License:   See LICENSE file
 The following files are used within OCUDU:
 
 
-Files:     docs/doxygen-awesome-sidebar-only.css
-           docs/doxygen-awesome.css
+Files:     docs/doxygen/doxygen-awesome-sidebar-only.css
+           docs/doxygen/doxygen-awesome.css
 Copyright: 2021-2024 jothepro
 License:   MIT
 

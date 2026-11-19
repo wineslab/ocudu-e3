@@ -7,17 +7,12 @@
 #include "../ue_manager/ue_manager_impl.h"
 #include "du_processor.h"
 #include "du_processor_config.h"
-#include "ocudu/f1ap/f1ap_message_notifier.h"
-#include "ocudu/support/async/async_task_scheduler.h"
 #include <memory>
 
 namespace ocudu::ocucp {
 
 /// Creates an instance of an DU processor interface
-std::unique_ptr<du_processor> create_du_processor(du_processor_config_t        du_processor_config_,
-                                                  du_processor_cu_cp_notifier& cu_cp_notifier_,
-                                                  f1ap_message_notifier&       f1ap_pdu_notifier_,
-                                                  async_task_scheduler&        common_task_sched_,
-                                                  ue_manager&                  ue_mng_);
+std::unique_ptr<du_processor> create_du_processor(const du_processor_config& cfg,
+                                                  du_processor_dependencies  dependencies);
 
 } // namespace ocudu::ocucp

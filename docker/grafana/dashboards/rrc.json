@@ -2094,12 +2094,12 @@
           "type": "influxdb",
           "uid": "JOSE3g9KVz"
         },
-        "definition": "SELECT gnb_id FROM cell GROUP BY gnb_id",
+        "definition": "SELECT gnb_id FROM cu_cp GROUP BY gnb_id",
         "label": "gNB ID",
         "name": "gnb_id",
         "options": [],
         "query": {
-          "query": "SELECT gnb_id FROM cell GROUP BY gnb_id",
+          "query": "SELECT gnb_id FROM cu_cp GROUP BY gnb_id",
           "refId": "InfluxVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,

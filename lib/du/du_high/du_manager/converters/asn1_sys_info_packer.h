@@ -15,6 +15,7 @@ namespace ocudu {
 struct sib19_info;
 
 namespace odu {
+
 namespace asn1_packer {
 
 /// \brief Derive and pack cell MIB based on DU cell configuration.
@@ -40,9 +41,15 @@ byte_buffer pack_sib19(const sib19_info& sib19_params, std::string* js_str = nul
 /// \param[in] du_cfg DU Cell Configuration.
 /// \param[out] bcch_dl_sch_json_msgs Optional list of BCCH-DL-SCH messages serialized as JSON (one entry per returned
 /// message). If nullptr, no conversion takes place.
-/// \return A list of buffers with packed cell BCCH-DL-SCH message. First buffer is SIB1, the rest are SI messages.
+/// \return A list of buffers with packed cell BCCH-DL-SCH message. First buffer is SIB1, the rest are the SI messages
+/// of the normal operation. The ones carrying a warning are packed by \c pack_pws_si_messages.
 std::vector<bcch_dl_sch_payload_type>
 pack_all_bcch_dl_sch_msgs(const du_cell_config& du_cfg, std::vector<std::string>* bcch_dl_sch_json_msgs = nullptr);
+
+/// \brief Pack the content that each SI message carrying a warning broadcasts from the cell start.
+/// \param[in] du_cfg DU Cell Configuration.
+/// \return One entry per \c si_scheduling_info_config::pws_si_messages entry, empty if no content is configured for it.
+std::vector<bcch_dl_sch_payload_type> pack_pws_si_messages(const du_cell_config& du_cfg);
 
 } // namespace asn1_packer
 } // namespace odu

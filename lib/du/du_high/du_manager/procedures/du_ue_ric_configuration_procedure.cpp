@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_ue_ric_configuration_procedure.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/scheduler/config/scheduler_expert_config.h"
@@ -49,6 +50,13 @@ manual_event<du_mac_sched_control_config_response>& du_ue_ric_configuration_proc
     return ue_config_completed;
   }
 
+  // Reject the request if the RRM Policy Member(s) it indicates do not match a slice actually in use by the UE.
+  if (!ue_uses_requested_slice(request.rrm_policy_ratio_list[0])) {
+    du_mac_sched_control_config_response fail{false, false, false};
+    ue_config_completed.set(fail);
+    return ue_config_completed;
+  }
+
   // Dispatch UE configuration to UE task loop inside the UE manager.
   ue_mng.schedule_async_task(ue->ue_index, launch_async([this](coro_context<async_task<void>>& ctx) {
                                CORO_BEGIN(ctx);
@@ -68,6 +76,27 @@ manual_event<du_mac_sched_control_config_response>& du_ue_ric_configuration_proc
                              }));
 
   return ue_config_completed;
+}
+
+bool du_ue_ric_configuration_procedure::ue_uses_requested_slice(const rrm_policy_ratio_group& policy) const
+{
+  if (policy.policy_members_list.empty()) {
+    // No RRM Policy Member indicated in the request; nothing to validate against.
+    return true;
+  }
+
+  for (const auto& member : policy.policy_members_list) {
+    // A RRM Policy Member identifies a slice by PLMN and S-NSSAI, so both must match.
+    if (member.plmn_id != ue->nr_cgi.plmn_id) {
+      continue;
+    }
+    for (const auto& drb : ue->bearers.drbs()) {
+      if (drb.second->s_nssai == member.s_nssai) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 async_task<mac_ue_reconfiguration_response> du_ue_ric_configuration_procedure::handle_mac_config()

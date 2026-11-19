@@ -47,6 +47,28 @@ struct cu_cp_ue_handover_context {
   uint8_t          rrc_reconfig_transaction_id;
 };
 
+/// \brief Context of a UE whose context was retrieved from a peer NG-RAN node over Xn (TS 38.423 section 8.2.4).
+/// Present on a UE that reestablished or resumed here while the peer still held its context. It carries what the
+/// bearer setup, the NGAP Path Switch and the release towards the peer take from the retrieval.
+struct cu_cp_ue_context_retrieval_context {
+  /// XNAP UE ID the peer allocated for this UE, needed to release the context there once the path is switched.
+  peer_xnap_ue_id_t peer_xnap_ue_id = peer_xnap_ue_id_t::invalid;
+  /// AMF UE NGAP ID the UE has at the AMF, reported by the peer. Needed as the source AMF UE NGAP ID in the Path
+  /// Switch Request. The AMF UE NGAP ID is 40 bits wide (TS 38.413 section 9.3.3.1), so it does not fit an unsigned.
+  uint64_t amf_ue_id = 0;
+  /// GUAMI of the AMF serving the UE, reported by the peer.
+  guami_t guami;
+  /// PDU sessions to be established locally, as reported by the peer.
+  slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item> pdu_session_res_to_be_setup_list;
+  /// Packed RRC HandoverPreparationInformation, whose AS-Config carries the source's DRB-to-QoS-flow mapping.
+  byte_buffer rrc_context;
+  /// Request that moves the DL path to this node, filled once the bearers are up. Set by the resume trigger, where the
+  /// bearers are established before Msg4 but the path is only switched after the UE confirms it.
+  std::optional<cu_cp_path_switch_request> path_switch_request;
+  /// Location reporting the peer asks this node to run for the UE (TS 38.423 section 8.2.4.2).
+  std::optional<location_report_request> location_report_info;
+};
+
 /// \brief Single CHO candidate cell context.
 struct cu_cp_cho_candidate {
   cond_recfg_id_t cond_recfg_id{
@@ -155,6 +177,9 @@ public:
   /// \brief Get the PCI of the UE.
   [[nodiscard]] pci_t get_pci() const { return pci; }
 
+  /// \brief Get the global identity of the cell serving the UE.
+  [[nodiscard]] std::optional<nr_cell_global_id_t> get_serving_cell_id() const override { return serving_cell_id; }
+
   /// \brief Get the C-RNTI of the UE.
   [[nodiscard]] rnti_t get_c_rnti() const { return ue_ctxt.crnti; }
 
@@ -166,7 +191,7 @@ public:
   /// \brief Get the CU-UP index of the UE.
   [[nodiscard]] cu_cp_cu_up_index_t get_cu_up_index() const override { return ue_ctxt.cu_up_idx; }
 
-  /// \brief Get the XN-C peer index of the UE.
+  /// \brief Get the Xn-C peer index of the UE.
   [[nodiscard]] xnc_peer_index_t get_xnc_peer_index() const override { return ue_ctxt.xnc_peer_idx; }
 
   /// \brief Get the PCell index of the UE.
@@ -197,10 +222,11 @@ public:
   unique_timer& get_rna_update_timer() { return rna_update_timer; }
 
   /// \brief Update a UE with PCI and/or C-RNTI.
-  void update_du_ue(gnb_du_id_t     du_id_       = gnb_du_id_t::invalid,
-                    pci_t           pci_         = INVALID_PCI,
-                    rnti_t          c_rnti_      = rnti_t::INVALID_RNTI,
-                    du_cell_index_t pcell_index_ = INVALID_DU_CELL_INDEX);
+  void update_du_ue(gnb_du_id_t                        du_id_       = gnb_du_id_t::invalid,
+                    pci_t                              pci_         = INVALID_PCI,
+                    rnti_t                             c_rnti_      = rnti_t::INVALID_RNTI,
+                    du_cell_index_t                    pcell_index_ = INVALID_DU_CELL_INDEX,
+                    std::optional<nr_cell_global_id_t> cgi_         = std::nullopt);
 
   /// \brief Set/update the measurement context of the UE.
   void update_meas_context(cell_meas_manager_ue_context meas_ctxt);
@@ -215,7 +241,7 @@ public:
   /// \brief Set the CU-UP index of the UE.
   void set_cu_up_index(cu_cp_cu_up_index_t cu_up_idx) { ue_ctxt.cu_up_idx = cu_up_idx; }
 
-  /// \brief Set the XN-C peer index of the UE.
+  /// \brief Set the Xn-C peer index of the UE.
   void set_xnc_peer_index(xnc_peer_index_t xnc_peer_idx) { ue_ctxt.xnc_peer_idx = xnc_peer_idx; }
 
   /// \brief Get the NGAP RRC UE notifier of the UE.
@@ -267,6 +293,13 @@ public:
   /// \brief Get the Conditional Handover context of the UE.
   std::optional<cu_cp_ue_cho_context>& get_cho_context() { return cho_context; }
 
+  /// \brief Get the UE context retrieval context of the UE. Set while this UE's context was retrieved from an Xn
+  /// peer, which is what selects the bearer setup driven by the retrieved PDU sessions.
+  std::optional<cu_cp_ue_context_retrieval_context>& get_context_retrieval_context()
+  {
+    return context_retrieval_context;
+  }
+
 private:
   // Common context.
   cu_cp_ue_index_t       ue_index = cu_cp_ue_index_t::invalid;
@@ -279,6 +312,8 @@ private:
   cu_cp_ue_context ue_ctxt;
   du_cell_index_t  pcell_index = INVALID_DU_CELL_INDEX;
   pci_t            pci         = INVALID_PCI;
+  /// Global identity of the cell serving the UE.
+  std::optional<nr_cell_global_id_t> serving_cell_id;
 
   // RRC UE context.
   rrc_ue_interface*       rrc_ue = nullptr;
@@ -300,6 +335,8 @@ private:
   unique_timer                             rna_update_timer;
   std::optional<cu_cp_ue_handover_context> ho_context;
   std::optional<cu_cp_ue_cho_context>      cho_context; ///< Conditional Handover context.
+  /// Context retrieved from an Xn peer; empty unless this UE arrived through a UE context retrieval.
+  std::optional<cu_cp_ue_context_retrieval_context> context_retrieval_context;
 };
 
 } // namespace ocudu::ocucp

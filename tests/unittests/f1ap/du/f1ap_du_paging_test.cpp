@@ -4,7 +4,9 @@
 
 #include "f1ap_du_test_helpers.h"
 #include "test_doubles/f1ap/f1ap_test_messages.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/ran/pcch/paging_helper.h"
 #include <gtest/gtest.h>
@@ -14,6 +16,8 @@ using namespace odu;
 
 TEST(hashed_id_calculation_test, ts38304_annex_A_using_32bit_FCS_example)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-GEN-10");
+
   // TS 38.304, Annex A (informative) - Example of Hashed ID calculation using 32-bit FCS
   const uint64_t tmsi48 = 0x12341234U;
 
@@ -38,6 +42,8 @@ class f1ap_du_paging_test : public f1ap_du_test
 protected:
   f1ap_du_paging_test()
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BAS-16-1");
+
     // Test Preamble.
     run_f1_setup_procedure();
 
@@ -60,6 +66,8 @@ TEST_F(f1ap_du_paging_test, when_f1ap_paging_message_received_then_it_is_propaga
 
 TEST_F(f1ap_du_paging_test, when_f1ap_paging_message_received_with_edrx_then_the_ue_hashed_id_is_computed)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-GEN-10");
+
   const auto   tmsi        = test_rng::uniform_int<uint64_t>(0U, (static_cast<uint64_t>(1U) << 48U) - 1U);
   f1ap_message msg         = test_helpers::generate_f1ap_paging_message(tmsi);
   auto&        asn1_paging = msg.pdu.init_msg().value.paging();

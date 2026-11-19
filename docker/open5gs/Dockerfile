@@ -5,7 +5,7 @@ ARG OS_VERSION=22.04
 FROM ubuntu:$OS_VERSION AS base
 
 ENV PYTHONBUFFERED=1
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
     && apt install -y software-properties-common \
@@ -39,7 +39,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
     gettext \
     gdb \
     iproute2 \
-    iptables \
+    nftables \
     iputils-ping \
     netcat-openbsd \
     iperf \
@@ -80,7 +80,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && npm ci --no-optional
 
 # mongodb python prerequisites
-RUN python3 -m pip install pymongo click pyroute2 ipaddress python-iptables
+RUN python3 -m pip install pymongo click pyroute2 ipaddress
 
 FROM base AS open5gs
 

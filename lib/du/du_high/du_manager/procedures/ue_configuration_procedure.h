@@ -7,6 +7,7 @@
 #include "../du_cell_manager.h"
 #include "../du_ue/du_ue_manager_repository.h"
 #include "procedure_logger.h"
+#include "ocudu/du/du_high/du_manager/du_manager_mem_resources.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
 #include "ocudu/mac/mac_ue_configurator.h"
 
@@ -19,7 +20,8 @@ public:
   ue_configuration_procedure(const f1ap_ue_context_update_request& request_,
                              du_ue_manager_repository&             ue_mng_,
                              const du_cell_manager&                cell_mng_,
-                             const du_manager_params&              du_params_);
+                             const du_manager_params&              du_params_,
+                             const du_manager_mem_resources&       du_mem_resources_);
 
   void operator()(coro_context<async_task<f1ap_ue_context_update_response>>& ctx);
 
@@ -37,7 +39,7 @@ private:
 
   /// \brief Update MAC MUX and DEMUX tables of the respective UE, given the newly added/modified/removed bearers and
   /// the scheduler with the new UE config.
-  async_task<mac_ue_reconfiguration_response> update_mac_and_sched();
+  async_task<mac_ue_reconfiguration_response> update_mac_and_sched(bool cs_rnti_requested = false);
 
   f1ap_ue_context_update_response        make_ue_config_response();
   static f1ap_ue_context_update_response make_empty_ue_config_response();
@@ -49,6 +51,7 @@ private:
   du_ue_manager_repository&            ue_mng;
   const du_cell_manager&               cell_mng;
   const du_manager_params&             du_params;
+  const du_manager_mem_resources&      du_mem_resources;
 
   ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("DU-MNG");
   du_ue*                  ue     = nullptr;

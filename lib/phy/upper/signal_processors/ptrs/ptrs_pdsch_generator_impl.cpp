@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ptrs_pdsch_generator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/resource_grid_mapper.h"
 #include "ocudu/ran/ptrs/ptrs_pattern.h"
 
@@ -11,10 +12,13 @@ using namespace ocudu;
 void ptrs_pdsch_generator_generic_impl::generate(resource_grid_writer& grid, const configuration& config)
 {
   // Get the number of ports used for PT-RS: it is equal to the number of layers used for the PDSCH transmission.
-  unsigned nof_ports = config.precoding.get_nof_layers();
+  unsigned nof_ports = config.precoding_and_beamforming.get_nof_layers();
 
   // Get the number of DM-RS per RB.
   unsigned nof_dmrs_prb = get_nof_re_per_prb(config.dmrs_type);
+
+  // PT-RS transmission is fixed to one layer.
+  static constexpr unsigned nof_layers = 1;
 
   // The PT-RS antenna port is associated with the lowest indexed DM-RS antenna port among the DM-RS antenna ports
   // assigned for the PDSCH (TS38.214 Section 5.1.6.3).
@@ -58,18 +62,25 @@ void ptrs_pdsch_generator_generic_impl::generate(resource_grid_writer& grid, con
   pseudo_random_gen->advance(2 * (pattern.rb_begin - config.reference_point_k_rb) * nof_dmrs_prb);
   pseudo_random_gen->generate(dmrs_sequence, M_SQRT1_2 * config.amplitude);
 
-  // Prepare the precoding for a single port.
-  unsigned                prg_size     = config.precoding.get_prg_size();
-  unsigned                nof_prg      = config.precoding.get_nof_prg();
-  unsigned                nof_tx_ports = config.precoding.get_nof_ports();
-  precoding_configuration port_precoding(1, config.precoding.get_nof_ports(), nof_prg, prg_size);
+  // Precoding and beamforming of the transmission.
+  const precoding_beamforming_configuration& precoding = config.precoding_and_beamforming;
+
+  // Prepare the precoding and beamforming of the layer that carries the PT-RS.
+  unsigned nof_beams = precoding.get_nof_beams();
+  unsigned nof_prg   = precoding.get_nof_prg();
+
+  precoding_beamforming_configuration layer_precoding(nof_layers, nof_beams, nof_prg, precoding.get_prg_size());
   for (unsigned i_prg = 0; i_prg != nof_prg; ++i_prg) {
-    for (unsigned i_tx_port = 0; i_tx_port != nof_tx_ports; ++i_tx_port) {
-      // Extracts the port coefficient.
-      cf_t port_coefficient = config.precoding.get_coefficient(i_layer, i_tx_port, i_prg);
-      // Inserts the coefficient.
-      port_precoding.set_coefficient(port_coefficient, 0, i_tx_port, i_prg);
+    const precoding_beamforming_composite& prg_composite = precoding.get_prg(i_prg);
+
+    // The MIMO precoding matrix contains the row of the layer that carries the PT-RS.
+    precoding_weight_matrix layer_mimo(nof_layers, nof_beams);
+    for (unsigned i_beam = 0; i_beam != nof_beams; ++i_beam) {
+      layer_mimo.set_coefficient(prg_composite.mimo.get_coefficient(i_layer, i_beam), 0, i_beam);
     }
+
+    // The PT-RS is carried by the beams of the transmission.
+    layer_precoding.set_prg({layer_mimo, prg_composite.beams}, i_prg);
   }
 
   // Select samples from the sequence.
@@ -99,6 +110,6 @@ void ptrs_pdsch_generator_generic_impl::generate(resource_grid_writer& grid, con
     map_pattern.re_mask.set(pattern.re_offset[0]);
 
     // Map sequence in the resource grid.
-    mapper->map(grid, sequence, map_pattern, port_precoding);
+    mapper->map(grid, sequence, map_pattern, layer_precoding);
   }
 }

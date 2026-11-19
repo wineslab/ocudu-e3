@@ -41,13 +41,13 @@ inline void send_error_indication(ngap_message_notifier&      ngap_notifier,
   // Set optionally provided RAN UE ID.
   if (ran_ue_id.has_value()) {
     error_ind->ran_ue_ngap_id_present = true;
-    error_ind->ran_ue_ngap_id         = ran_ue_id_to_uint(ran_ue_id.value());
+    error_ind->ran_ue_ngap_id         = to_underlying(ran_ue_id.value());
   }
 
   // Set optionally provided AMF UE ID.
   if (amf_ue_id.has_value()) {
     error_ind->amf_ue_ngap_id_present = true;
-    error_ind->amf_ue_ngap_id         = amf_ue_id_to_uint(amf_ue_id.value());
+    error_ind->amf_ue_ngap_id         = to_underlying(amf_ue_id.value());
   }
 
   if (cause.has_value()) {
@@ -59,7 +59,7 @@ inline void send_error_indication(ngap_message_notifier&      ngap_notifier,
 
   // Forward message to AMF.
   if (!ngap_notifier.on_new_message(ngap_msg)) {
-    logger.warning("AMF notifier is not set. Cannot send ErrorIndication");
+    logger.warning("Cannot send ErrorIndication");
     return;
   }
 }

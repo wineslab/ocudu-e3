@@ -15,6 +15,7 @@ namespace ocucp {
 struct f1ap_gnb_cu_configuration_update {
   std::vector<f1ap_cell_to_activate>   cells_to_be_activated_list;
   std::vector<f1ap_cell_to_deactivate> cells_to_be_deactivated_list;
+  std::vector<f1ap_cell_to_bar>        cells_to_be_barred_list;
 
   std::string gnb_cu_name;
 

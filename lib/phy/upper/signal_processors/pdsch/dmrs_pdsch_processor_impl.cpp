@@ -4,6 +4,7 @@
 
 #include "dmrs_pdsch_processor_impl.h"
 #include "../dmrs_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ocuduvec/sc_prod.h"
 #include "ocudu/phy/support/re_pattern.h"
@@ -100,20 +101,29 @@ void ocudu::dmrs_pdsch_processor_impl::map(resource_grid_writer& grid, const con
   // Number of DM-RS RE in the entire slot.
   unsigned nof_dmrs_re_slot = nof_dmrs_re_symbol * config.symbols_mask.count();
 
-  // Number of logical DM-RS ports. It is equivalent to the number of PDSCH transmit layers.
-  unsigned nof_dmrs_ports = config.precoding.get_nof_layers();
+  // Precoding and beamforming of the transmission.
+  const precoding_beamforming_configuration& precoding = config.precoding_and_beamforming;
 
-  // Number of physical antenna ports.
-  unsigned nof_antenna_ports = config.precoding.get_nof_ports();
+  // Number of logical DM-RS ports. It is equivalent to the number of PDSCH transmit layers.
+  unsigned nof_dmrs_ports = precoding.get_nof_layers();
+
+  // Number of beams that carry the transmission.
+  unsigned nof_beams = precoding.get_nof_beams();
 
   // Number of grid OFDM symbols.
   unsigned nof_symbols = config.symbols_mask.size();
 
   // CDM group size in number of DM-RS ports.
-  static constexpr unsigned cdm_group_size = 2;
+  const unsigned cdm_group_size = (nof_dmrs_ports > 4) ? 4 : 2;
 
   // Calculate number of CDM groups.
   unsigned nof_cdm_groups = divide_ceil(nof_dmrs_ports, cdm_group_size);
+
+  // List of DM-RS port identifiers per CDM group, as per TS38.211 Table 7.4.1.1.2-1.
+  static constexpr std::array<std::array<uint8_t, 4>, 2> dmrs_cdm_ports = {{
+      {0, 1, 4, 5},
+      {2, 3, 6, 7},
+  }};
 
   // Iterate each CDM group.
   for (unsigned i_cdm_group = 0; i_cdm_group != nof_cdm_groups; ++i_cdm_group) {
@@ -123,8 +133,9 @@ void ocudu::dmrs_pdsch_processor_impl::map(resource_grid_writer& grid, const con
     // Resize RE buffer where the DM-RS RE are stored.
     temp_re.resize(nof_dmrs_ports_cdm, nof_dmrs_re_slot);
 
-    // Prepare precoding configuration for the CDM group.
-    precoding_configuration cdm_group_precoding(nof_dmrs_ports_cdm, nof_antenna_ports, 1, MAX_NOF_PRBS);
+    // Prepare the precoding and beamforming configuration of the CDM group.
+    precoding_beamforming_configuration cdm_group_precoding(
+        nof_dmrs_ports_cdm, nof_beams, precoding.get_nof_prg(), precoding.get_prg_size());
 
     // For each symbol in the slot....
     unsigned i_gen_dmrs_symbols = 0;
@@ -145,7 +156,7 @@ void ocudu::dmrs_pdsch_processor_impl::map(resource_grid_writer& grid, const con
     }
 
     ocudu_assert((i_gen_dmrs_symbols == nof_dmrs_re_slot),
-                 "The number of generated DM-RS seymbols (i.e., {}) does not match the expected (i.e., {})",
+                 "The number of generated DM-RS symbols (i.e., {}) does not match the expected (i.e., {})",
                  i_gen_dmrs_symbols,
                  nof_dmrs_re_slot);
 
@@ -158,18 +169,7 @@ void ocudu::dmrs_pdsch_processor_impl::map(resource_grid_writer& grid, const con
     // Iterate each port within the CDM group
     for (unsigned i_cdm_port = 0; i_cdm_port != nof_dmrs_ports_cdm; ++i_cdm_port) {
       // Current DM-RS port.
-      unsigned i_dmrs_port = (cdm_group_size * i_cdm_group) + i_cdm_port;
-
-      // Load the port coefficients for the CDM port.
-      for (unsigned i_ant_port = 0, i_port_end = nof_antenna_ports; i_ant_port != i_port_end; ++i_ant_port) {
-        for (unsigned i_prg = 0, i_prg_end = config.precoding.get_nof_prg(); i_prg != i_prg_end; ++i_prg) {
-          // Extract the coefficient for mapping the DM-RS port to the antenna port.
-          cf_t coefficient = config.precoding.get_coefficient(i_dmrs_port, i_ant_port, i_prg);
-
-          // Set coefficient in the CDM group precoding.
-          cdm_group_precoding.set_coefficient(coefficient, i_cdm_port, i_ant_port, i_prg);
-        }
-      }
+      unsigned i_dmrs_port = dmrs_cdm_ports[i_cdm_group][i_cdm_port];
 
       // Skip CDM weights for first DM-RS port.
       if (i_dmrs_port == 0) {
@@ -203,6 +203,29 @@ void ocudu::dmrs_pdsch_processor_impl::map(resource_grid_writer& grid, const con
                    nof_proc_re_cdm,
                    i_dmrs_port,
                    i_gen_dmrs_symbols);
+    }
+
+    // Extract the precoding and beamforming of the CDM group ports for each PRG.
+    for (unsigned i_prg = 0, i_prg_end = precoding.get_nof_prg(); i_prg != i_prg_end; ++i_prg) {
+      const precoding_beamforming_composite& prg_composite = precoding.get_prg(i_prg);
+
+      // The MIMO precoding matrix of the CDM group contains the rows of the DM-RS ports within the group.
+      precoding_weight_matrix cdm_precoding(nof_dmrs_ports_cdm, nof_beams);
+      for (unsigned i_cdm_port = 0; i_cdm_port != nof_dmrs_ports_cdm; ++i_cdm_port) {
+        // Current DM-RS port, which is the layer of the transmission precoding.
+        unsigned i_dmrs_port = dmrs_cdm_ports[i_cdm_group][i_cdm_port];
+
+        for (unsigned i_beam = 0; i_beam != nof_beams; ++i_beam) {
+          // Extract the coefficient for mapping the DM-RS port to the beam.
+          cf_t coefficient = prg_composite.mimo.get_coefficient(i_dmrs_port, i_beam);
+
+          // Set coefficient in the CDM group precoding.
+          cdm_precoding.set_coefficient(coefficient, i_cdm_port, i_beam);
+        }
+      }
+
+      // The CDM group ports are carried by the beams of the transmission.
+      cdm_group_precoding.set_prg({cdm_precoding, prg_composite.beams}, i_prg);
     }
 
     // Map the CDM group symbols into the resource grid.

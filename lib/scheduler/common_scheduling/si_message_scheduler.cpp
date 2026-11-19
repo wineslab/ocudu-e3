@@ -9,9 +9,10 @@
 #include "../support/pdsch/pdsch_default_time_allocation.h"
 #include "../support/pdsch/pdsch_resource_allocation.h"
 #include "../support/prbs_calculator.h"
-#include "../support/rb_helper.h"
 #include "../support/sch_pdu_builder.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/scheduler/support/rb_helper.h"
+#include <algorithm>
 
 using namespace ocudu;
 
@@ -25,16 +26,20 @@ si_message_scheduler::si_message_scheduler(const cell_configuration&   cfg_,
   logger(ocudulog::fetch_basic_logger("SCHED"))
 {
   pending_messages.resize(si_sched_cfg.si_messages.size());
+  for (unsigned i = 0, e = pending_messages.size(); i != e; ++i) {
+    pending_messages[i].active  = not si_sched_cfg.si_messages[i].requires_activation();
+    pending_messages[i].msg_len = si_sched_cfg.si_messages[i].msg_len;
+  }
 }
 
-void si_message_scheduler::run_slot(cell_slot_resource_allocator& res_grid)
+void si_message_scheduler::run_slot(cell_slot_resource_allocator& res_grid, slot_point_extended sl_tx_ext)
 {
   if (si_sched_cfg.si_messages.empty()) {
     return;
   }
 
   // Check for SI message updates
-  update_si_message_windows(res_grid.slot);
+  update_si_message_windows(sl_tx_ext);
 
   // Schedule SI messages that are within the window for tx.
   schedule_pending_si_messages(res_grid);
@@ -44,27 +49,122 @@ void si_message_scheduler::stop()
 {
   // Clear all windows.
   for (unsigned i = 0; i != pending_messages.size(); ++i) {
-    pending_messages[i] = {};
+    pending_messages[i]         = {};
+    pending_messages[i].active  = not si_sched_cfg.si_messages[i].requires_activation();
+    pending_messages[i].msg_len = si_sched_cfg.si_messages[i].msg_len;
   }
 }
 
 void si_message_scheduler::handle_si_message_update_indication(unsigned                    new_version,
                                                                const si_scheduling_config& new_si_sched_cfg)
 {
+  if (baseline.has_value()) {
+    // The ETWS/CMAS epoch is in effect. Update the epoch kept aside, so that reverting to it does not bring back
+    // superseded System Information. The warnings on air are left untouched: their content is exempt from the SI
+    // modification window, and they must keep being transmitted for the duration they were activated for.
+    baseline->version      = new_version;
+    baseline->si_sched_cfg = new_si_sched_cfg;
+    return;
+  }
+
+  for (unsigned i = 0, e = pending_messages.size(); i != e; ++i) {
+    ocudu_assert(not si_sched_cfg.si_messages[i].requires_activation() or not pending_messages[i].active,
+                 "A warning is on air with no ETWS/CMAS SI epoch in effect");
+  }
+
   // Update SI messages.
   version      = new_version;
   si_sched_cfg = new_si_sched_cfg;
   pending_messages.resize(si_sched_cfg.si_messages.size());
 
   // Reset window and transmission counters.
-  std::fill(pending_messages.begin(),
-            pending_messages.end(),
-            message_window_context{.window = {}, .nof_tx_in_current_window = 0, .total_nof_tx = 0});
+  std::fill(pending_messages.begin(), pending_messages.end(), message_window_context{});
+  for (unsigned i = 0, e = pending_messages.size(); i != e; ++i) {
+    const si_message_scheduling_config& si_msg = si_sched_cfg.si_messages[i];
+
+    pending_messages[i].active  = not si_msg.requires_activation();
+    pending_messages[i].msg_len = si_msg.msg_len;
+  }
 }
 
-void si_message_scheduler::update_si_message_windows(slot_point sl_tx)
+void si_message_scheduler::apply_pws_epoch(unsigned                                new_version,
+                                           const si_scheduling_config&             pws_si_sched_cfg,
+                                           span<const pws_broadcasting_si_message> broadcasting)
 {
-  const unsigned sfn = sl_tx.sfn();
+  if (not baseline.has_value()) {
+    baseline.emplace(baseline_epoch{version, si_sched_cfg});
+  }
+
+  version      = new_version;
+  si_sched_cfg = pws_si_sched_cfg;
+  pending_messages.resize(si_sched_cfg.si_messages.size());
+
+  // The epoch declares which SI messages carry a warning, so that the SI messages being broadcast and the ones its
+  // SIB1 lists as broadcasting are one and the same.
+  for (unsigned i = 0, e = pending_messages.size(); i != e; ++i) {
+    const si_message_scheduling_config& si_msg = si_sched_cfg.si_messages[i];
+    if (not si_msg.requires_activation()) {
+      pending_messages[i].active  = true;
+      pending_messages[i].msg_len = si_msg.msg_len;
+      continue;
+    }
+
+    auto it = std::find_if(broadcasting.begin(), broadcasting.end(), [&si_msg](const auto& entry) {
+      return entry.sib_set == si_msg.sibs;
+    });
+    if (it == broadcasting.end()) {
+      pending_messages[i] = {};
+      continue;
+    }
+
+    // The warning content length is only known once the warning is pushed, so it comes from the epoch rather than
+    // from the static SI scheduling configuration.
+    pending_messages[i].active  = true;
+    pending_messages[i].msg_len = it->msg_len;
+  }
+}
+
+si_epoch_info si_message_scheduler::revert_pws_epoch()
+{
+  if (not baseline.has_value()) {
+    return si_epoch_info{version, si_sched_cfg.sib1_payload_size};
+  }
+
+  version      = baseline->version;
+  si_sched_cfg = baseline->si_sched_cfg;
+  baseline.reset();
+
+  pending_messages.resize(si_sched_cfg.si_messages.size());
+  for (unsigned i = 0, e = pending_messages.size(); i != e; ++i) {
+    if (si_sched_cfg.si_messages[i].requires_activation()) {
+      // Every warning goes back to dormant.
+      pending_messages[i] = {};
+      continue;
+    }
+    pending_messages[i].active  = true;
+    pending_messages[i].msg_len = si_sched_cfg.si_messages[i].msg_len;
+  }
+
+  return si_epoch_info{version, si_sched_cfg.sib1_payload_size};
+}
+
+void si_message_scheduler::update_msg_lens(const si_scheduling_config& new_si_sched_cfg)
+{
+  for (unsigned i = 0, e = std::min(pending_messages.size(), new_si_sched_cfg.si_messages.size()); i != e; ++i) {
+    // Only resize immediately for the NTN SI-message, whose content is pushed immediately. Version-gated messages
+    // keep broadcasting their old content until the modification window, so resizing early would truncate it.
+    // Note: a PWS SI message is equally exempt from the modification window, but its length comes from the warning
+    // being broadcast rather than from this configuration, which only holds a placeholder.
+    if (new_si_sched_cfg.si_messages[i].is_ntn()) {
+      pending_messages[i].msg_len = new_si_sched_cfg.si_messages[i].msg_len;
+    }
+  }
+}
+
+void si_message_scheduler::update_si_message_windows(slot_point_extended sl_tx_ext)
+{
+  const slot_point sl_tx = sl_tx_ext.without_hyper_sfn();
+  const unsigned   sfn   = sl_tx.sfn();
 
   for (unsigned i = 0; i != pending_messages.size(); ++i) {
     const si_message_scheduling_config& si_msg = si_sched_cfg.si_messages[i];
@@ -78,6 +178,18 @@ void si_message_scheduler::update_si_message_windows(slot_point sl_tx)
         pending_messages[i].window                   = {};
         pending_messages[i].nof_tx_in_current_window = 0;
       }
+      continue;
+    }
+
+    if (not pending_messages[i].active) {
+      // SI-message requires activation and is currently dormant. Do not open a new window until it is activated.
+      continue;
+    }
+
+    if (pending_messages[i].active_until.has_value() and pending_messages[i].active_until.value() <= sl_tx_ext) {
+      // The activation's deadline has passed. Go back to dormant; any window already in-flight (handled above)
+      // is left to complete normally.
+      pending_messages[i].active = false;
       continue;
     }
 
@@ -151,7 +263,8 @@ bool si_message_scheduler::allocate_si_message(unsigned si_message, cell_slot_re
   // As per Section 5.1.3.2, TS 38.214, nof_oh_prb = 0 if PDSCH is scheduled by PDCCH with a CRC scrambled by SI-RNTI.
   static constexpr unsigned nof_oh_prb = 0;
 
-  const units::bytes si_msg_payload_size = si_sched_cfg.si_messages[si_message].msg_len;
+  // Note: For SI-messages currently PWS-activated, this reflects the real (activation-time) content length.
+  const units::bytes si_msg_payload_size = pending_messages[si_message].msg_len;
 
   const auto& pdsch_td_res_alloc_list =
       get_si_rnti_type0A_common_pdsch_time_domain_list(cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common,
@@ -194,8 +307,8 @@ bool si_message_scheduler::allocate_si_message(unsigned si_message, cell_slot_re
   }
 
   // > Allocate DCI_1_0 for SI message on PDCCH.
-  pdcch_dl_information* pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(res_grid, rnti_t::SI_RNTI, ss_id, expert_cfg.si_message_dci_aggr_lev);
+  pdcch_dl_information* pdcch = pdcch_sch.alloc_dl_pdcch_common(
+      res_grid, rnti_t::SI_RNTI, ss_id, expert_cfg.si_message_dci_aggr_lev, std::nullopt);
   if (pdcch == nullptr) {
     logger.info("Skipping SI message scheduling. Cause: Not enough PDCCH space for SI Message {}", si_message);
     return false;
@@ -240,6 +353,7 @@ void si_message_scheduler::fill_si_grant(cell_slot_resource_allocator& res_grid,
   sib_information& si = res_grid.result.dl.bc.sibs.emplace_back();
   si.si_indicator     = sib_information::si_indicator_type::other_si;
   si.si_msg_index     = si_message;
+  si.sibs             = si_sched_cfg.si_messages[si_message].sibs;
   si.version          = version;
   si.nof_txs          = message_context.total_nof_tx;
 

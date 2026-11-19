@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ofh_sector_controller.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ofh;

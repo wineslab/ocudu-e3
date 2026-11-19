@@ -50,8 +50,8 @@ struct fmt::formatter<ocudu::uci_part2_size_description::entry> {
   auto format(const ocudu::uci_part2_size_description::entry& value, FormatContext& ctx) const
   {
     helper.format_always(
-        ctx, "params=[{:,}]", ocudu::span<const ocudu::uci_part2_size_description::parameter>(value.parameters));
-    helper.format_always(ctx, "map=[{:,}]", ocudu::span<const uint16_t>(value.map));
+        ctx, "params={}", ocudu::span<const ocudu::uci_part2_size_description::parameter>(value.parameters));
+    helper.format_always(ctx, "map={}", ocudu::span<const uint16_t>(value.map));
     return ctx.out();
   }
 };
@@ -75,7 +75,7 @@ struct fmt::formatter<ocudu::uci_part2_size_description> {
   auto format(const ocudu::uci_part2_size_description& description, FormatContext& ctx) const
   {
     helper.format_always(
-        ctx, "entries=[{:,}]", ocudu::span<const ocudu::uci_part2_size_description::entry>(description.entries));
+        ctx, "entries={}", ocudu::span<const ocudu::uci_part2_size_description::entry>(description.entries));
 
     return ctx.out();
   }

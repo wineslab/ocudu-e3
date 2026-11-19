@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/ofh/compression/iq_compressor.h"
+#include <memory>
 
 namespace ocudu {
 namespace ofh {

@@ -40,6 +40,18 @@ mux_regions_matrix make_mux_regions_matrix(const cell_pucch_res_config& cell_res
 
 } // namespace detail
 
+/// Reasons for a PUCCH allocation failure.
+enum class pucch_alloc_failure {
+  /// The resource does not fall within the slot UL symbols.
+  INCOMPATIBLE_SLOT,
+  /// The resource has already been already allocated in this slot.
+  RESOURCE_IN_USE,
+  /// The resource collides with another PUCCH grant in this slot.
+  PUCCH_COLLISION,
+  /// The resource collides with another UL grant in this slot.
+  UL_GRANT_COLLISION,
+};
+
 /// \brief This class manages PUCCH resource collisions within a cell.
 ///
 /// It keeps track of the usage of both common and dedicated resources for each slot, and provides methods to allocate
@@ -69,20 +81,22 @@ public:
   void slot_indication(slot_point sl_tx);
   void stop();
 
-  /// Reasons for a PUCCH allocation failure.
-  enum class alloc_failure_reason {
-    PUCCH_COLLISION,
-    UL_GRANT_COLLISION,
-  };
-  using alloc_result_t = error_type<alloc_failure_reason>;
+  /// \brief Check if a PUCCH resource can be allocated at a given slot.
+  /// \return Success if the resource can be allocated, otherwise an error indicating the reason of failure.
+  error_type<pucch_alloc_failure>
+  can_alloc(const cell_slot_resource_allocator& slot_alloc, const pucch_resource& res, rnti_t rnti) const;
 
   /// \brief Allocate a PUCCH resource at a given slot.
   /// \return Success if the allocation was successful, otherwise an error indicating the reason of failure.
-  alloc_result_t alloc(cell_slot_resource_grid& ul_res_grid, slot_point sl, const pucch_resource& res);
+  error_type<pucch_alloc_failure>
+  alloc(cell_slot_resource_allocator& slot_alloc, const pucch_resource& res, rnti_t rnti);
+
+  /// Allocate a PUCCH resource at a given slot, without doing any checks.
+  void do_alloc(cell_slot_resource_allocator& slot_alloc, const pucch_resource& res, rnti_t rnti);
 
   /// Free a common PUCCH resource at the given slot.
-  /// \return True if the resource was successfully freed, false if the resource was not allocated.
-  bool free(cell_slot_resource_grid& ul_res_grid, slot_point sl, const pucch_resource& res);
+  /// \return True if the resource was successfully freed, false if the resource was not allocated to this UE.
+  bool free(cell_slot_resource_allocator& slot_alloc, const pucch_resource& res, rnti_t rnti);
 
 private:
   using mux_region_lookup_t = slotted_array<size_t, pucch_constants::MAX_NOF_TOT_CELL_RESOURCES>;
@@ -100,22 +114,23 @@ private:
     /// Bitset representing the current usage state of all PUCCH resources (common and dedicated) in this slot.
     ///  - S[i] = 1 if resource i is in use, 0 otherwise.
     bounded_bitset<pucch_constants::MAX_NOF_TOT_CELL_RESOURCES> current_state;
+    /// Map of currently allocated resources to their owners (RNTIs).
+    std::vector<rnti_t> owners;
     /// Resource grid that keeps track of the time-frequency grants of PUCCH resources in this slot.
     cell_slot_resource_grid pucch_res_grid;
 
     /// Default constructor needed by circular_array.
     slot_context() : pucch_res_grid({}) {}
 
-    slot_context(const cell_configuration& cell_cfg) :
-      current_state(pucch_constants::MAX_NOF_CELL_COMMON_PUCCH_RESOURCES +
-                    cell_cfg.bwp_res[to_bwp_id(0)].ul().pucch.dedicated.size()),
-      pucch_res_grid(cell_cfg.params.ul_cfg_common.freq_info_ul.scs_carrier_list)
-    {
-    }
+    /// Construct a slot context from the given cell configuration.
+    slot_context(const cell_configuration& cell_cfg);
+
+    /// Clear the slot context to the default state.
+    void clear();
   };
 
   // Ring buffer of slot contexts to keep track of PUCCH resource usage in recent slots.
-  circular_vector<slot_context> slots_ctx;
+  circular_vector<slot_context, true> slots_ctx;
 
   // Keeps track of the last slot_point used by the resource manager.
   slot_point last_sl_ind;

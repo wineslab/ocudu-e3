@@ -5,11 +5,12 @@
 #pragma once
 
 #include "ocudu/adt/tensor.h"
+#include "ocudu/phy/upper/rx_buffer_decoder_callback.h"
 #include "ocudu/phy/upper/unique_rx_buffer.h"
 
 namespace ocudu {
 
-class rx_buffer_spy : public unique_rx_buffer::callback
+class rx_buffer_spy : public unique_rx_buffer::buffer_management
 {
 public:
   rx_buffer_spy() = default;
@@ -48,16 +49,22 @@ public:
     ++count;
     return hard_bits[codeblock_id].first(data_size);
   }
+  void decode_cb_in_sequence(unsigned                    retransmission,
+                             unsigned                    codeblock_id,
+                             rx_buffer_decoder_callback& decoder_callback) override
+  {
+    decoder_callback.codeblock_decode(codeblock_id);
+  }
 
-  bool try_lock() override
+  bool try_lock()
   {
     locked = true;
     return true;
   }
 
-  void unlock() override { locked = false; }
+  void unlock(unsigned) override { locked = false; }
 
-  void release() override { locked = false; }
+  void release(unsigned) override { locked = false; }
 
   /// Clears all counters.
   void clear()

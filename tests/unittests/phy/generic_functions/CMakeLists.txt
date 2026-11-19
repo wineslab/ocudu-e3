@@ -8,11 +8,13 @@ set_directory_properties(PROPERTIES LABELS "phy")
 add_subdirectory(precoding)
 
 add_executable(dft_processor_test dft_processor_test.cpp)
+target_include_directories(dft_processor_test PRIVATE ${CMAKE_SOURCE_DIR}/tests/unittests)
 target_link_libraries(dft_processor_test ocudulog ocudu_dft GTest::gtest GTest::gtest_main)
 add_test(dft_processor_test dft_processor_test)
 
 if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64")
     add_executable(dft_processor_ci16_test dft_processor_ci16_test.cpp)
+    target_include_directories(dft_processor_ci16_test PRIVATE ${CMAKE_SOURCE_DIR}/tests/unittests)
     target_link_libraries(dft_processor_ci16_test ocudulog ocudu_dft GTest::gtest GTest::gtest_main)
     add_test(dft_processor_ci16_test dft_processor_ci16_test)
 endif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64")

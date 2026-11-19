@@ -22,7 +22,30 @@ public:
 
     // Notify completion of PUSCH UCI.
     if ((pdu.uci.nof_harq_ack != 0) || (pdu.uci.nof_csi_part1 != 0)) {
-      notifier.on_uci({});
+      pusch_processor_result_control uci_result;
+
+      // Report HARQ-ACK if present.
+      if (pdu.uci.nof_harq_ack != 0) {
+        uci_result.harq_ack.payload.resize(pdu.uci.nof_harq_ack);
+        uci_result.harq_ack.status = uci_status::valid;
+      }
+
+      // Report CSI-Part1 if present.
+      if (pdu.uci.nof_csi_part1 != 0) {
+        uci_result.csi_part1.payload.resize(pdu.uci.nof_csi_part1);
+        uci_result.csi_part1.status = uci_status::valid;
+      }
+
+      // CSI Part 2: derive size from the fixed-size entry (if present).
+      if (pdu.uci.csi_part2_size.entries.size() == 1 && pdu.uci.csi_part2_size.entries[0].map.size() == 1) {
+        unsigned part2_bits = pdu.uci.csi_part2_size.entries[0].map[0];
+        if (part2_bits != 0) {
+          uci_result.csi_part2.payload.resize(part2_bits);
+          uci_result.csi_part2.status = uci_status::valid;
+        }
+      }
+
+      notifier.on_uci(uci_result);
     }
 
     // Notify completion of PUSCH data.

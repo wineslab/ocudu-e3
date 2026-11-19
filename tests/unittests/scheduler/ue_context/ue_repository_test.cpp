@@ -4,7 +4,9 @@
 
 #include "lib/scheduler/config/sched_config_manager.h"
 #include "lib/scheduler/support/sch_pdu_builder.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
 #include "lib/scheduler/ue_context/ue_repository.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/unittests/scheduler/test_utils/config_generators.h"
 #include "tests/unittests/scheduler/test_utils/dummy_test_components.h"
@@ -26,13 +28,13 @@ protected:
     serv_cell_cfg(config_helpers::make_default_ue_cell_config(cell_cfg.params).serv_cell_cfg),
     ue_db(expert_cfg.ue)
   {
-    ue_db.add_cell(cell_cfg, nullptr);
+    ue_db.register_cell(cell_ues);
 
     sched_ue_creation_request_message ue_req = sched_config_helper::create_default_sched_ue_creation_request(
         cell_cfg.params, std::array<lcid_t, 3>{lcid_t::LCID_SRB1, lcid_t::LCID_SRB2, lcid_t::LCID_MIN_DRB});
     ue_config_update_event  ev     = cfg_mng.add_ue(ue_req);
     const ue_configuration& ue_cfg = ev.next_config();
-    ue_db.add_ue(ue_cfg, ue_req.starts_in_fallback, ue_req.ul_ccch_slot_rx, ue_req.cfra_enabled);
+    ue_db.add_ue(ue_cfg, {sched_config_helper::to_ue_creation_mode(ue_req), ue_req.ul_ccch_slot_rx});
     ev.notify_completion();
   }
 
@@ -91,6 +93,7 @@ protected:
   const cell_configuration&                cell_cfg;
   serving_cell_config                      serv_cell_cfg;
   ocudulog::basic_logger&                  logger = ocudulog::fetch_basic_logger("SCHED");
+  ue_cell_repository                       cell_ues{cell_cfg, nullptr};
   ue_repository                            ue_db;
 };
 
@@ -200,7 +203,9 @@ protected:
     cell_cfg(*cfg_mng.add_cell(sched_cfg)),
     ue_db(expert_cfg.ue)
   {
-    ue_db.add_cell(cell_cfg, nullptr);
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-RACH-16-1", "DU-GEN-2-b");
+
+    ue_db.register_cell(cell_ues);
   }
 
   du_ue_index_t add_ue(bool cfra_enabled, bool starts_in_fallback, rnti_t crnti = to_rnti(0x4601))
@@ -214,7 +219,7 @@ protected:
     ue_config_update_event  ev     = cfg_mng.add_ue(ue_req);
     const ue_configuration& ue_cfg = ev.next_config();
     du_ue_index_t           ue_idx = ue_req.ue_index;
-    ue_db.add_ue(ue_cfg, ue_req.starts_in_fallback, ue_req.ul_ccch_slot_rx, ue_req.cfra_enabled);
+    ue_db.add_ue(ue_cfg, {sched_config_helper::to_ue_creation_mode(ue_req), ue_req.ul_ccch_slot_rx});
     ev.notify_completion();
     return ue_idx;
   }
@@ -225,6 +230,7 @@ protected:
   sched_config_manager                     cfg_mng;
   sched_cell_configuration_request_message sched_cfg;
   const cell_configuration&                cell_cfg;
+  ue_cell_repository                       cell_ues{cell_cfg, nullptr};
   ue_repository                            ue_db;
 };
 

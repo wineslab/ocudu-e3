@@ -4,11 +4,14 @@
 
 #include "cu_cp_test_environment.h"
 #include "test_doubles/mock_amf.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
+#include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
 #include "tests/test_doubles/rrc/rrc_test_messages.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/e1ap/common/e1ap_message.h"
 #include "ocudu/f1ap/f1ap_message.h"
@@ -160,7 +163,8 @@ TEST_F(cu_cp_mocn_test, when_new_f1_setup_request_is_received_and_ngs_are_setup_
   ASSERT_EQ(report.dus[0].cells.size(), 1);
 }
 
-TEST_F(cu_cp_mocn_test, when_ng_setup_for_amf_supporting_the_dus_plmn_is_not_successful_then_f1_setup_is_rejected)
+TEST_F(cu_cp_mocn_test,
+       when_ng_setup_for_amf_supporting_the_dus_plmn_is_not_successful_then_f1_setup_is_accepted_with_no_cell_activated)
 {
   // Enqueue AMF NG Setup Failure for first AMF as an auto-reply to CU-CP.
   get_amf().enqueue_next_tx_pdu(generate_ng_setup_failure());
@@ -179,8 +183,11 @@ TEST_F(cu_cp_mocn_test, when_ng_setup_for_amf_supporting_the_dus_plmn_is_not_suc
   f1ap_message f1ap_pdu;
   ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu, std::chrono::milliseconds{1000}));
 
-  // The CU-CP should reject F1 setup.
-  ASSERT_EQ(f1ap_pdu.pdu.type().value, asn1::f1ap::f1ap_pdu_c::types_opts::unsuccessful_outcome);
+  // The CU-CP accepts the DU, but keeps all of its cells deactivated.
+  ASSERT_EQ(f1ap_pdu.pdu.type().value, asn1::f1ap::f1ap_pdu_c::types_opts::successful_outcome);
+  ASSERT_EQ(f1ap_pdu.pdu.successful_outcome().value.type().value,
+            asn1::f1ap::f1ap_elem_procs_o::successful_outcome_c::types_opts::f1_setup_resp);
+  ASSERT_FALSE(f1ap_pdu.pdu.successful_outcome().value.f1_setup_resp()->cells_to_be_activ_list_present);
 }
 
 TEST_F(cu_cp_mocn_test, when_ng_setup_for_amf_supporting_the_dus_plmn_is_successful_then_f1_setup_is_accepted)
@@ -210,6 +217,51 @@ TEST_F(cu_cp_mocn_test, when_ng_setup_for_amf_supporting_the_dus_plmn_is_success
 
   // The CU-CP should accept F1 setup.
   ASSERT_EQ(f1ap_pdu.pdu.type().value, asn1::f1ap::f1ap_pdu_c::types_opts::successful_outcome);
+}
+
+TEST_F(cu_cp_mocn_test, when_the_amfs_connect_one_after_the_other_then_each_activates_the_cells_of_its_plmn)
+{
+  // Neither AMF is reachable yet, so the CU-CP starts without a core.
+  get_amf().drop_connection();
+  get_amf(1).drop_connection();
+  ASSERT_TRUE(get_cu_cp().start());
+
+  // A DU with one cell per AMF PLMN.
+  test_helpers::served_cell_item_info cell_a;
+  test_helpers::served_cell_item_info cell_b;
+  cell_b.plmn_id  = plmn_identity::parse("99902").value();
+  cell_b.nci      = nr_cell_identity::create(gnb_id_t{411, 22}, 1).value();
+  cell_b.pci      = 7;
+  cell_b.sib1_str = test_helpers::create_sib1_hex_string(cell_b.plmn_id);
+
+  auto ret = connect_new_du();
+  ASSERT_TRUE(ret.has_value());
+  unsigned du_idx = *ret;
+  get_du(du_idx).push_ul_pdu(test_helpers::generate_f1_setup_request(int_to_gnb_du_id(0x11), {cell_a, cell_b}));
+
+  // The CU-CP accepts the DU and keeps both cells deactivated.
+  f1ap_message f1ap_pdu;
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_EQ(f1ap_pdu.pdu.type().value, asn1::f1ap::f1ap_pdu_c::types_opts::successful_outcome);
+  ASSERT_FALSE(f1ap_pdu.pdu.successful_outcome().value.f1_setup_resp()->cells_to_be_activ_list_present);
+
+  // Each AMF activates the cell of its own PLMN when it connects.
+  for (const auto& [amf_idx, activated_cell] : {std::make_pair(0U, cell_a), std::make_pair(1U, cell_b)}) {
+    ASSERT_TRUE(reconnect_amf(amf_idx)) << "AMF " << amf_idx << " did not reconnect within expected time";
+
+    ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu, std::chrono::milliseconds{1000}))
+        << "no activation update after AMF " << amf_idx << " connected";
+    ASSERT_TRUE(test_helpers::is_valid_gnb_cu_configuration_update(f1ap_pdu));
+    const auto& cu_cfg_upd = f1ap_pdu.pdu.init_msg().value.gnb_cu_cfg_upd();
+    ASSERT_TRUE(cu_cfg_upd->cells_to_be_activ_list_present);
+    ASSERT_EQ(cu_cfg_upd->cells_to_be_activ_list.size(), 1U) << "only the cells of the connected PLMN are activated";
+    ASSERT_EQ(cu_cfg_upd->cells_to_be_activ_list[0]->cells_to_be_activ_list_item().nr_cgi.nr_cell_id.to_number(),
+              activated_cell.nci.value());
+
+    f1ap_message ack = test_helpers::generate_gnb_cu_configuration_update_acknowledgement({});
+    ack.pdu.successful_outcome().value.gnb_cu_cfg_upd_ack()->transaction_id = cu_cfg_upd->transaction_id;
+    get_du(du_idx).push_ul_pdu(ack);
+  }
 }
 
 //----------------------------------------------------------------------------------//
@@ -349,4 +401,51 @@ TEST_F(cu_cp_mocn_test, when_ngs_f1_e1_are_setup_and_ue_selects_second_plmn_then
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ues.size(), 1);
   ASSERT_EQ(report.ues[0].rnti, crnti);
+}
+
+TEST_F(cu_cp_mocn_test, when_cells_of_different_plmns_share_an_nci_then_ue_is_routed_to_the_amf_of_its_cell)
+{
+  // Run NG setup to completion.
+  run_ng_setup();
+
+  // Setup DU with one cell per PLMN. The NCI is only unique within a PLMN, so both cells may use the same one.
+  test_helpers::served_cell_item_info cell_a;
+  test_helpers::served_cell_item_info cell_b;
+  cell_b.plmn_id  = plmn_identity::parse("99902").value();
+  cell_b.pci      = 1;
+  cell_b.sib1_str = test_helpers::create_sib1_hex_string(cell_b.plmn_id);
+  ASSERT_EQ(cell_a.nci, cell_b.nci);
+
+  auto ret = connect_new_du();
+  ASSERT_TRUE(ret.has_value());
+  unsigned du_idx = ret.value();
+  ASSERT_TRUE(this->run_f1_setup(du_idx, int_to_gnb_du_id(0x11), {cell_a, cell_b}));
+
+  // Setup CU-UP.
+  ret = connect_new_cu_up();
+  ASSERT_TRUE(ret.has_value());
+  unsigned cu_up_idx = ret.value();
+  ASSERT_TRUE(this->run_e1_setup(cu_up_idx));
+
+  // Create UE in cell A.
+  gnb_du_ue_f1ap_id_t du_ue_f1ap_id = int_to_gnb_du_ue_f1ap_id(0);
+  rnti_t              crnti         = to_rnti(0x4601);
+  get_du(du_idx).push_ul_pdu(test_helpers::generate_init_ul_rrc_message_transfer(du_ue_f1ap_id, crnti, cell_a.plmn_id));
+  f1ap_message f1ap_pdu;
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  ASSERT_TRUE(test_helpers::is_valid_dl_rrc_message_transfer_with_msg4(f1ap_pdu));
+
+  // UE selects the only PLMN of cell A.
+  byte_buffer pdu = test_helpers::pack_ul_dcch_msg(test_helpers::create_rrc_setup_complete(1));
+  get_du(du_idx).push_rrc_ul_dcch_message(du_ue_f1ap_id, srb_id_t::srb1, std::move(pdu));
+
+  // CU-CP should send the Initial UE Message to the AMF of cell A's PLMN.
+  ngap_message ngap_pdu;
+  ASSERT_FALSE(this->wait_for_ngap_tx_pdu(ngap_pdu, std::chrono::milliseconds{100}, 1))
+      << "Initial UE Message was sent to the AMF of cell B's PLMN";
+  ASSERT_TRUE(this->wait_for_ngap_tx_pdu(ngap_pdu, std::chrono::milliseconds{1000}, 0))
+      << "CU-CP did not send the Initial UE Message to the AMF of cell A's PLMN";
+  ASSERT_TRUE(test_helpers::is_valid_init_ue_message(ngap_pdu)) << "Invalid Initial UE Message";
+  const auto& user_loc_info = ngap_pdu.pdu.init_msg().value.init_ue_msg()->user_location_info.user_location_info_nr();
+  ASSERT_EQ(user_loc_info.nr_cgi.plmn_id.to_number(), cell_a.plmn_id.to_bcd());
 }

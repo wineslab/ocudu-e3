@@ -8,6 +8,7 @@
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/ran/resource_block.h"
 #include "ocudu/ran/s_nssai.h"
+#include <optional>
 
 namespace ocudu {
 

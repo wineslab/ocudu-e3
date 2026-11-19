@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ocudu/phy/support/precoding_configuration.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
 #include "ocudu/ran/cyclic_prefix.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/resource_allocation/rb_bitmap.h"
 #include "ocudu/ran/slot_point.h"
 
@@ -36,8 +36,8 @@ public:
     unsigned n_id;
     /// Provides the linear signal amplitude to conform with the transmission power.
     float amplitude;
-    /// Precoding configuration.
-    precoding_configuration precoding;
+    /// Precoding and beamforming configuration.
+    precoding_beamforming_configuration precoding_and_beamforming;
   };
 
   /// Default destructor.

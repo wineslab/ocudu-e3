@@ -8,6 +8,7 @@
 #include "ocudu/hal/phy/upper/channel_processors/pusch/ext_harq_buffer_context_repository.h"
 #include "ocudu/hal/phy/upper/channel_processors/pusch/hw_accelerator_pusch_dec.h"
 #include "ocudu/hal/phy/upper/channel_processors/pusch/hw_accelerator_pusch_dec_factory.h"
+#include <memory>
 
 namespace ocudu {
 namespace hal {

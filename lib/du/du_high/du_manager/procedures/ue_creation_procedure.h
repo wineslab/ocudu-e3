@@ -7,6 +7,7 @@
 #include "../du_ue/du_ue.h"
 #include "../du_ue/du_ue_manager_repository.h"
 #include "procedure_logger.h"
+#include "ocudu/du/du_high/du_manager/du_manager_mem_resources.h"
 #include "ocudu/f1ap/du/f1ap_du_ue_config.h"
 #include "ocudu/mac/mac_ue_configurator.h"
 #include "ocudu/support/async/async_task.h"
@@ -24,6 +25,8 @@ struct du_ue_creation_request {
   rnti_t tc_rnti;
   /// \brief UL-CCCH message received from the UE in Msg3. Empty if the UE is created by upper layers.
   byte_buffer ul_ccch_msg;
+  /// Decoded per-UE MAC CEs carried in Msg3. Handed back to MAC for processing after UE creation.
+  msg3_mac_ce_list msg3_mac_ces;
   /// \brief If present, it represents the slot at which the UL-CCCH message was received in the PUSCH. Absent, when
   /// the UE is created by command from upper layers.
   std::optional<slot_point> slot_rx;
@@ -53,6 +56,7 @@ public:
   ue_creation_procedure(const du_ue_creation_request&   req_,
                         du_ue_manager_repository&       ue_mng_,
                         const du_manager_params&        du_params_,
+                        const du_manager_mem_resources& du_mem_resources_,
                         du_ran_resource_manager&        cell_res_alloc_,
                         du_procedure_metrics_collector& metrics_);
 
@@ -83,6 +87,7 @@ private:
   const du_ue_creation_request    req;
   du_ue_manager_repository&       ue_mng;
   const du_manager_params&        du_params;
+  const du_manager_mem_resources& du_mem_resources;
   du_ran_resource_manager&        du_res_alloc;
   du_procedure_metrics_collector& metrics;
   ue_procedure_logger             proc_logger;

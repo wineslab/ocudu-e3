@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "../du_manager_test_helpers.h"
+#include "tests/ocudu_test_requirements.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/bcch_dl_sch_msg.h"
 #include "ocudu/asn1/rrc_nr/sys_info.h"
 #include "ocudu/du/du_cell_config_helpers.h"
@@ -116,6 +118,7 @@ public:
       return cfgs;
     }())
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-17-3-e");
   }
 
   static constexpr unsigned NOF_CELLS = 3U;
@@ -483,6 +486,8 @@ TEST_F(du_manager_value_tag_test, when_value_tag_reaches_31_then_wraps_to_0)
 
 TEST_F(du_manager_value_tag_test, when_sib19_updated_then_value_tag_increments_independently)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-2");
+
   // Send SIB19 update request (initial value_tag is 0 from fixture setup).
   du_param_config_request  req  = make_sib_update_request(create_modified_sib19());
   du_param_config_response resp = du_mng->get_operation_configurator().handle_sync_operator_config(req);
@@ -552,6 +557,133 @@ TEST_F(du_manager_value_tag_test, when_sib4_updated_then_value_tag_increments_in
   // MAC and F1AP were notified.
   ASSERT_TRUE(dependencies.mac.mac_cell.last_cell_recfg_req.has_value());
   ASSERT_TRUE(dependencies.f1ap.last_du_cfg_req.has_value());
+}
+
+// ============================================================================================
+// SIB3/SIB4 List Cardinality Validation Tests
+//
+// The RRC ASN.1 encoder caps sib3_info::intra_freq_neigh_cell_list/intra_freq_excluded_cell_list at
+// MAX_NOF_SIB3_INTRA_FREQ_CELLS entries each, and sib4_info::inter_freq_carrier_freq_list at
+// MAX_NOF_SIB4_INTER_FREQ_CARRIERS entries. An oversized list must be rejected by
+// validate_du_param_config_request() before the live SIB content is committed and its value_tag incremented,
+// rather than being caught later (or not at all in Release builds) during ASN.1 packing.
+// ============================================================================================
+
+TEST_F(du_manager_value_tag_test, when_sib3_neigh_cell_list_at_max_boundary_then_accepted)
+{
+  sib3_info max_sib3;
+  for (unsigned i = 0; i != MAX_NOF_SIB3_INTRA_FREQ_CELLS; ++i) {
+    max_sib3.intra_freq_neigh_cell_list.push_back(
+        intra_freq_neigh_cell_info{.pci = static_cast<pci_t>(i), .q_offset_cell = q_offset_range_t::db0});
+  }
+
+  du_param_config_request  req  = make_sib_update_request(max_sib3);
+  du_param_config_response resp = du_mng->get_operation_configurator().handle_sync_operator_config(req);
+  dependencies.worker.run_pending_tasks();
+
+  ASSERT_TRUE(resp.success);
+  ASSERT_EQ(get_value_tag_for_sib(sib_type::sib3).value(), 1);
+}
+
+TEST_F(du_manager_value_tag_test, when_sib3_neigh_cell_list_exceeds_max_then_rejected_without_mutating_state)
+{
+  sib3_info oversized_sib3;
+  for (unsigned i = 0; i != MAX_NOF_SIB3_INTRA_FREQ_CELLS + 1; ++i) {
+    oversized_sib3.intra_freq_neigh_cell_list.push_back(
+        intra_freq_neigh_cell_info{.pci = static_cast<pci_t>(i), .q_offset_cell = q_offset_range_t::db0});
+  }
+
+  du_param_config_request  bad_req  = make_sib_update_request(oversized_sib3);
+  du_param_config_response bad_resp = du_mng->get_operation_configurator().handle_sync_operator_config(bad_req);
+  dependencies.worker.run_pending_tasks();
+
+  // The oversized request must be rejected before any state mutation; MAC and F1AP must not be notified of a
+  // change that never happened.
+  ASSERT_FALSE(bad_resp.success);
+  EXPECT_FALSE(dependencies.mac.mac_cell.last_cell_recfg_req.has_value());
+  EXPECT_FALSE(dependencies.f1ap.last_du_cfg_req.has_value());
+
+  // A subsequent, valid SIB3 update must still see the pristine initial value_tag (0 -> 1), proving the earlier
+  // rejected request left the live SIB3 content and value_tag untouched.
+  du_param_config_request  good_req  = make_sib_update_request(create_modified_sib3());
+  du_param_config_response good_resp = du_mng->get_operation_configurator().handle_sync_operator_config(good_req);
+  dependencies.worker.run_pending_tasks();
+  ASSERT_TRUE(good_resp.success);
+  ASSERT_EQ(get_value_tag_for_sib(sib_type::sib3).value(), 1);
+}
+
+TEST_F(du_manager_value_tag_test, when_sib3_excluded_cell_list_exceeds_max_then_rejected_without_mutating_state)
+{
+  sib3_info oversized_sib3;
+  for (unsigned i = 0; i != MAX_NOF_SIB3_INTRA_FREQ_CELLS + 1; ++i) {
+    oversized_sib3.intra_freq_excluded_cell_list.push_back(
+        pci_range_t{.start = static_cast<pci_t>(i), .size = pci_range_t::range_t::n4});
+  }
+
+  du_param_config_request  bad_req  = make_sib_update_request(oversized_sib3);
+  du_param_config_response bad_resp = du_mng->get_operation_configurator().handle_sync_operator_config(bad_req);
+  dependencies.worker.run_pending_tasks();
+
+  ASSERT_FALSE(bad_resp.success);
+  EXPECT_FALSE(dependencies.mac.mac_cell.last_cell_recfg_req.has_value());
+  EXPECT_FALSE(dependencies.f1ap.last_du_cfg_req.has_value());
+
+  du_param_config_request  good_req  = make_sib_update_request(create_modified_sib3());
+  du_param_config_response good_resp = du_mng->get_operation_configurator().handle_sync_operator_config(good_req);
+  dependencies.worker.run_pending_tasks();
+  ASSERT_TRUE(good_resp.success);
+  ASSERT_EQ(get_value_tag_for_sib(sib_type::sib3).value(), 1);
+}
+
+TEST_F(du_manager_value_tag_test, when_sib4_carrier_freq_list_at_max_boundary_then_accepted)
+{
+  sib4_info max_sib4;
+  for (unsigned i = 0; i != MAX_NOF_SIB4_INTER_FREQ_CARRIERS; ++i) {
+    inter_freq_carrier_freq_info carrier;
+    carrier.arfcn                      = 620000 + i;
+    carrier.ssb_scs                    = subcarrier_spacing::kHz30;
+    carrier.derive_ssb_index_from_cell = true;
+    carrier.q_rx_lev_min               = q_rx_lev_min_t{-70};
+    carrier.thresh_x_high_p            = reselection_threshold_t{16};
+    carrier.thresh_x_low_p             = reselection_threshold_t{4};
+    max_sib4.inter_freq_carrier_freq_list.push_back(carrier);
+  }
+
+  du_param_config_request  req  = make_sib_update_request(max_sib4);
+  du_param_config_response resp = du_mng->get_operation_configurator().handle_sync_operator_config(req);
+  dependencies.worker.run_pending_tasks();
+
+  ASSERT_TRUE(resp.success);
+  ASSERT_EQ(get_value_tag_for_sib(sib_type::sib4).value(), 1);
+}
+
+TEST_F(du_manager_value_tag_test, when_sib4_carrier_freq_list_exceeds_max_then_rejected_without_mutating_state)
+{
+  sib4_info oversized_sib4;
+  for (unsigned i = 0; i != MAX_NOF_SIB4_INTER_FREQ_CARRIERS + 1; ++i) {
+    inter_freq_carrier_freq_info carrier;
+    carrier.arfcn                      = 620000 + i;
+    carrier.ssb_scs                    = subcarrier_spacing::kHz30;
+    carrier.derive_ssb_index_from_cell = true;
+    carrier.q_rx_lev_min               = q_rx_lev_min_t{-70};
+    carrier.thresh_x_high_p            = reselection_threshold_t{16};
+    carrier.thresh_x_low_p             = reselection_threshold_t{4};
+    oversized_sib4.inter_freq_carrier_freq_list.push_back(carrier);
+  }
+
+  du_param_config_request  bad_req  = make_sib_update_request(oversized_sib4);
+  du_param_config_response bad_resp = du_mng->get_operation_configurator().handle_sync_operator_config(bad_req);
+  dependencies.worker.run_pending_tasks();
+
+  ASSERT_FALSE(bad_resp.success);
+  EXPECT_FALSE(dependencies.mac.mac_cell.last_cell_recfg_req.has_value());
+  EXPECT_FALSE(dependencies.f1ap.last_du_cfg_req.has_value());
+
+  du_param_config_request  good_req  = make_sib_update_request(create_modified_sib4());
+  du_param_config_response good_resp = du_mng->get_operation_configurator().handle_sync_operator_config(good_req);
+  dependencies.worker.run_pending_tasks();
+  ASSERT_TRUE(good_resp.success);
+  ASSERT_EQ(get_value_tag_for_sib(sib_type::sib4).value(), 1);
 }
 
 TEST_F(du_manager_value_tag_test, when_sib3_and_sib4_updated_in_sequence_then_each_value_tag_tracks_independently)

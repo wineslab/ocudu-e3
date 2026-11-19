@@ -4,6 +4,7 @@
 
 #include "ocudu/phy/upper/signal_processors/ptrs/ptrs_pdsch_generator_factory.h"
 #include "ptrs_pdsch_generator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/support_factories.h"
 
 using namespace ocudu;

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "../asn1_helpers.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_ue_context_update.h"
 #include "ocudu/ran/cu_cp_cell_configuration.h"
@@ -138,7 +139,7 @@ inline cu_cp_tx_bw f1ap_asn1_to_tx_bw(const asn1::f1ap::tx_bw_s& asn1_tx_bw)
   cu_cp_tx_bw tx_bw;
 
   // Fill NR SCS.
-  tx_bw.nr_scs = to_subcarrier_spacing(asn1_tx_bw.nr_scs.to_string());
+  tx_bw.nr_scs = khz_to_scs(asn1_tx_bw.nr_scs.to_number());
 
   // Fill NR NRB.
   tx_bw.nr_nrb = asn1_tx_bw.nr_nrb.to_number();
@@ -268,6 +269,50 @@ inline f1ap_srbs_setup_mod_item asn1_to_f1ap_srbs_setup_mod_item(const template_
   srbs_setup_mod_item.lcid = uint_to_lcid(asn1_srbs_setup_mod_item.lcid);
 
   return srbs_setup_mod_item;
+}
+
+/// \brief Converts the ASN.1 information of a cell served by a gNB-DU.
+/// \param[in] asn1_cell_info The ASN.1 Served Cell Information.
+/// \param[in] asn1_sys_info The ASN.1 gNB-DU System Information, which NG-RAN requires.
+/// \return The served cell, or std::nullopt if the CU-CP cannot read the ASN.1 information.
+inline std::optional<cu_cp_du_served_cells_item>
+f1ap_asn1_to_du_served_cell(const asn1::f1ap::served_cell_info_s& asn1_cell_info,
+                            const asn1::f1ap::gnb_du_sys_info_s*  asn1_sys_info)
+{
+  expected<nr_cell_global_id_t> cgi = cgi_from_asn1(asn1_cell_info.nr_cgi);
+  if (not cgi.has_value()) {
+    return std::nullopt;
+  }
+  // For NG-RAN, the gNB-DU includes the gNB-DU System Information IE, as per TS 38.473, Section 8.2.3.2.
+  if (asn1_sys_info == nullptr) {
+    return std::nullopt;
+  }
+
+  cu_cp_du_served_cells_item served_cell;
+  served_cell.served_cell_info.nr_cgi = cgi.value();
+  served_cell.served_cell_info.nr_pci = asn1_cell_info.nr_pci;
+  if (asn1_cell_info.five_gs_tac_present) {
+    served_cell.served_cell_info.five_gs_tac = asn1_cell_info.five_gs_tac.to_number();
+  }
+  for (const auto& asn1_plmn : asn1_cell_info.served_plmns) {
+    auto result = plmn_identity::from_bytes(asn1_plmn.plmn_id.to_bytes());
+    // Note: An invalid ASN.1 PLMN ID is not considered in the response back to the DU.
+    if (result.has_value()) {
+      served_cell.served_cell_info.served_plmns.push_back(result.value());
+    }
+  }
+  served_cell.served_cell_info.nr_mode_info    = f1ap_asn1_to_nr_mode_info(asn1_cell_info.nr_mode_info);
+  served_cell.served_cell_info.meas_timing_cfg = asn1_cell_info.meas_timing_cfg.copy();
+  if (asn1_cell_info.ie_exts_present and asn1_cell_info.ie_exts.ranac_present) {
+    served_cell.served_cell_info.ranac = asn1_cell_info.ie_exts.ranac;
+  }
+
+  cu_cp_gnb_du_sys_info sys_info;
+  sys_info.mib_msg            = asn1_sys_info->mib_msg.copy();
+  sys_info.sib1_msg           = asn1_sys_info->sib1_msg.copy();
+  served_cell.gnb_du_sys_info = sys_info;
+
+  return served_cell;
 }
 
 } // namespace ocudu::ocucp

@@ -4,8 +4,13 @@
 
 #pragma once
 
+#include "ocudu/adt/static_vector.h"
+#include "ocudu/ran/du_types.h"
+#include "ocudu/ran/phy_time_unit.h"
 #include "ocudu/ran/rnti.h"
+#include "ocudu/ran/slot_pdu_capacity_constants.h"
 #include "ocudu/ran/slot_point.h"
+#include <optional>
 
 namespace ocudu {
 
@@ -15,16 +20,25 @@ struct rach_indication_message {
   slot_point      slot_rx;
 
   struct preamble {
-    unsigned preamble_id;
+    /// Preamble logical index. Values: {0,...,63}.
+    uint8_t preamble_id;
     /// Allocated TC-RNTI, for Contention-based RACH, or C-RNTI, for Contention-free RACH.
     rnti_t        tc_rnti;
     phy_time_unit time_advance;
+    /// Average SNR value in dB, if available.
+    std::optional<float> snr_dB;
   };
 
   struct occasion {
-    /// Index of the first OFDM Symbol where RACH was detected.
-    unsigned                                                  start_symbol;
-    unsigned                                                  frequency_index;
+    /// Index of the first OFDM Symbol where RACH was detected. Values: {0,...,13}.
+    uint8_t start_symbol;
+    /// \brief Index of the first slot of the PRACH occasion in a system frame, as reported by the PHY.
+    ///
+    /// The t_id of the RA-RNTI and MsgB-RNTI (TS 38.321 Sections 5.1.3 and 5.1.3a), counted in slots of the PRACH
+    /// subcarrier spacing. Values: {0,...,79}.
+    uint8_t slot_index;
+    /// Frequency domain occasion index. Values: {0,...,7}.
+    uint8_t                                                   frequency_index;
     static_vector<preamble, MAX_PREAMBLES_PER_PRACH_OCCASION> preambles;
   };
 

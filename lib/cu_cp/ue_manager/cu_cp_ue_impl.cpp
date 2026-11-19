@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_ue_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -51,7 +52,11 @@ cu_cp_ue::cu_cp_ue(cu_cp_ue_index_t               ue_index_,
   rna_update_timer          = timers_.create_unique_timer(task_exec_);
 }
 
-void cu_cp_ue::update_du_ue(gnb_du_id_t du_id_, pci_t pci_, rnti_t c_rnti_, du_cell_index_t pcell_index_)
+void cu_cp_ue::update_du_ue(gnb_du_id_t                        du_id_,
+                            pci_t                              pci_,
+                            rnti_t                             c_rnti_,
+                            du_cell_index_t                    pcell_index_,
+                            std::optional<nr_cell_global_id_t> cgi_)
 {
   if (du_id_ != gnb_du_id_t::invalid) {
     ue_ctxt.du_id = du_id_;
@@ -67,6 +72,10 @@ void cu_cp_ue::update_du_ue(gnb_du_id_t du_id_, pci_t pci_, rnti_t c_rnti_, du_c
 
   if (pcell_index_ != INVALID_DU_CELL_INDEX) {
     pcell_index = pcell_index_;
+  }
+
+  if (cgi_.has_value()) {
+    serving_cell_id = cgi_.value();
   }
 }
 

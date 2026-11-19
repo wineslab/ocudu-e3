@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "support/compare_sequences.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/sc_prod.h"
 #include "ocudu/phy/generic_functions/generic_functions_factories.h"
 #include "ocudu/support/math/math_utils.h"
-#include "ocudu/support/ocudu_test.h"
 #include "fmt/ostream.h"
 #include <cmath>
 #include <gtest/gtest.h>
@@ -23,14 +24,6 @@ static std::set<unsigned> dft_required_sizes = {4, 8, 16, 32, 64, 128, 256, 512,
 static float ASSERT_MAX_ERROR = 10;
 
 namespace ocudu {
-
-static bool operator==(span<const ci16_t> lhs, span<const ci16_t> rhs)
-{
-  return std::equal(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), [](ci16_t left, ci16_t right) {
-    int16_t abs_err = std::abs(left - right);
-    return abs_err < ASSERT_MAX_ERROR;
-  });
-}
 
 std::ostream& operator<<(std::ostream& os, dft_processor_ci16::direction direction)
 {
@@ -163,8 +156,12 @@ TEST_P(DFTprocessorFixture, DFTProcessorUnittest)
     // Run expected DFT
     run_expected_dft(expected_output, direction, input);
 
-    // Make sure the output matches the expected within the tolerances.
-    ASSERT_EQ(span<const ci16_t>(expected_output), span<const ci16_t>(output)) << fmt::format("input=[{}]", input);
+    error_type<std::string> compare_result = compare_sequences(
+        span<const ci16_t>(output),
+        span<const ci16_t>(expected_output),
+        [](const ci16_t& output_val, const ci16_t& expected_val) { return std::abs(output_val - expected_val); },
+        ASSERT_MAX_ERROR);
+    ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
   }
 }
 

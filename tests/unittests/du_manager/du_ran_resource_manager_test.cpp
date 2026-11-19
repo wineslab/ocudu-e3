@@ -3,7 +3,9 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/du/du_high/du_manager/ran_resource_management/du_ran_resource_manager_impl.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/du/du_high/du_qos_config_helpers.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
@@ -48,6 +50,24 @@ protected:
     return &ues[ue_index];
   }
 
+  // Creates UE contexts until the cell runs out of them. Returns the number of created UE contexts.
+  unsigned fill_cell_ue_contexts()
+  {
+    const unsigned max_nof_ue_ctxts = get_max_nof_ue_contexts();
+    for (unsigned i = 0; i != max_nof_ue_ctxts; ++i) {
+      if (create_ue(to_du_ue_index(i)) == nullptr) {
+        return i;
+      }
+    }
+    return max_nof_ue_ctxts;
+  }
+
+  unsigned get_max_nof_ue_contexts() const
+  {
+    return res_mng->get_max_nof_established_ue_contexts(to_du_cell_index(0)) +
+           res_mng->get_max_nof_rejected_ue_contexts(to_du_cell_index(0));
+  }
+
   static f1ap_ue_context_update_request srb1_creation_req(du_ue_index_t ue_index)
   {
     f1ap_ue_context_update_request req;
@@ -57,15 +77,33 @@ protected:
     return req;
   }
 
+  /// \brief Build a request to set up a DRB that uses a GBR 5QI, optionally without the GBR QoS Flow Information.
+  static f1ap_ue_context_update_request gbr_drb_creation_req(du_ue_index_t ue_index, bool set_gbr_qos_info)
+  {
+    f1ap_ue_context_update_request req;
+    req.ue_index = ue_index;
+
+    f1ap_drb_to_setup& drb = req.drbs_to_setup.emplace_back();
+    drb.drb_id             = drb_id_t::drb1;
+    // The default QoS configuration of 5QI 1, a GBR 5QI, uses the UM bidirectional RLC mode.
+    drb.mode        = rlc_mode::um_bidir;
+    drb.pdcp_sn_len = pdcp_sn_size::size12bits;
+    drb.uluptnl_info_list.push_back(
+        up_transport_layer_info{transport_layer_address::create_from_string("127.0.0.1"), int_to_gtpu_teid(1)});
+    drb.qos_info.drb_qos.qos_desc = non_dyn_5qi_descriptor{uint_to_five_qi(1), {}, {}, {}};
+    if (set_gbr_qos_info) {
+      drb.qos_info.drb_qos.gbr_qos_info.emplace(gbr_qos_flow_information{1000000, 1000000, 1000000, 1000000});
+    }
+
+    return req;
+  }
+
   unsigned get_config_sr_period() const
   {
     return sr_periodicity_to_slot(default_ue_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list[0].period);
   }
 
-  unsigned get_config_csi_period() const
-  {
-    return csi_report_periodicity_to_uint(default_csi_pucch_res_cfg.report_slot_period);
-  }
+  unsigned get_config_csi_period() const { return to_underlying(default_csi_pucch_res_cfg.report_slot_period); }
 
   bool has_ue_csi_cfg(const serving_cell_config& serv_cell_cfg) const
   {
@@ -202,6 +240,38 @@ TEST_P(du_ran_resource_manager_tester, when_srb1_is_added_then_ue_resource_confi
   ASSERT_EQ(ue_res->value().srbs[srb_id_t::srb1].rlc_cfg.mode, rlc_mode::am);
 }
 
+TEST_P(du_ran_resource_manager_tester, when_gbr_drb_has_no_gbr_qos_information_then_drb_setup_fails)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-QOS-1");
+
+  const du_ue_index_t           ue_idx1 = to_du_ue_index(0);
+  ue_ran_resource_configurator* ue_res  = create_ue(ue_idx1);
+  ASSERT_NE(ue_res, nullptr);
+  ASSERT_FALSE(ue_res->update(to_du_cell_index(0), srb1_creation_req(ue_idx1)).failed());
+
+  auto resp = ue_res->update(to_du_cell_index(0), gbr_drb_creation_req(ue_idx1, false));
+
+  // The DRB is reported as failed to setup and isn't added to the UE configuration.
+  ASSERT_EQ(resp.failed_drbs.size(), 1);
+  ASSERT_EQ(resp.failed_drbs[0], drb_id_t::drb1);
+  ASSERT_TRUE(ue_res->value().drbs.empty());
+}
+
+TEST_P(du_ran_resource_manager_tester, when_gbr_drb_has_gbr_qos_information_then_drb_setup_succeeds)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-QOS-1");
+
+  const du_ue_index_t           ue_idx1 = to_du_ue_index(0);
+  ue_ran_resource_configurator* ue_res  = create_ue(ue_idx1);
+  ASSERT_NE(ue_res, nullptr);
+  ASSERT_FALSE(ue_res->update(to_du_cell_index(0), srb1_creation_req(ue_idx1)).failed());
+
+  auto resp = ue_res->update(to_du_cell_index(0), gbr_drb_creation_req(ue_idx1, true));
+
+  ASSERT_TRUE(resp.failed_drbs.empty());
+  ASSERT_TRUE(ue_res->value().drbs.contains(drb_id_t::drb1));
+}
+
 TEST_P(du_ran_resource_manager_tester, when_multiple_ues_are_created_then_they_use_different_sr_offsets)
 {
   const unsigned sr_period = get_config_sr_period();
@@ -296,6 +366,47 @@ TEST_P(du_ran_resource_manager_tester, when_multiple_ues_are_created_then_they_u
                 .offset);
 }
 
+TEST_P(du_ran_resource_manager_tester, max_nof_ue_contexts_of_a_cell_fits_the_du_limit)
+{
+  ASSERT_LE(get_max_nof_ue_contexts(), static_cast<unsigned>(MAX_NOF_DU_UES_PER_CELL));
+}
+
+TEST_P(du_ran_resource_manager_tester, when_ues_are_created_then_max_nof_ue_contexts_does_not_change)
+{
+  const unsigned max_nof_established = res_mng->get_max_nof_established_ue_contexts(to_du_cell_index(0));
+  const unsigned max_nof_rejected    = res_mng->get_max_nof_rejected_ue_contexts(to_du_cell_index(0));
+  ASSERT_GT(max_nof_established, 0);
+
+  for (unsigned i = 0; i != 4; ++i) {
+    ASSERT_NE(create_ue(to_du_ue_index(i)), nullptr);
+    ASSERT_EQ(res_mng->get_max_nof_established_ue_contexts(to_du_cell_index(0)), max_nof_established);
+    ASSERT_EQ(res_mng->get_max_nof_rejected_ue_contexts(to_du_cell_index(0)), max_nof_rejected);
+  }
+}
+
+TEST_P(du_ran_resource_manager_tester, when_cell_runs_out_of_ue_contexts_then_ue_resource_creation_fails)
+{
+  const unsigned max_nof_ue_ctxts = get_max_nof_ue_contexts();
+  ASSERT_EQ(fill_cell_ue_contexts(), max_nof_ue_ctxts);
+
+  // The number of established UEs cannot exceed its upper-bound, so the last UE contexts of the cell can only be used
+  // to RRC Reject UEs.
+  ASSERT_TRUE(ues[to_du_ue_index(max_nof_ue_ctxts - 1)].resource_alloc_failed());
+
+  ASSERT_EQ(create_ue(to_du_ue_index(max_nof_ue_ctxts)), nullptr);
+}
+
+TEST_P(du_ran_resource_manager_tester, when_ue_context_is_released_then_cell_accepts_a_new_ue)
+{
+  const unsigned max_nof_ue_ctxts = get_max_nof_ue_contexts();
+  ASSERT_EQ(fill_cell_ue_contexts(), max_nof_ue_ctxts);
+  ASSERT_EQ(create_ue(to_du_ue_index(max_nof_ue_ctxts)), nullptr);
+
+  ues.erase(to_du_ue_index(0));
+
+  ASSERT_NE(create_ue(to_du_ue_index(max_nof_ue_ctxts)), nullptr);
+}
+
 INSTANTIATE_TEST_SUITE_P(du_ran_resource_manager_tester,
                          du_ran_resource_manager_tester,
                          ::testing::Values(params{duplex_mode::FDD}, params{duplex_mode::TDD}));
@@ -326,7 +437,7 @@ std::ostream& operator<<(std::ostream& out, const pucch_cnt_builder_params& para
                      params.nof_res_csi,
                      params.max_allowed_pucch_grants,
                      sr_periodicity_to_slot(params.sr_period),
-                     csi_report_periodicity_to_uint(params.csi_period));
+                     to_underlying(params.csi_period));
   return out;
 }
 
@@ -444,7 +555,7 @@ protected:
         nof_sr_offsets * cell_cfg_list[0].ran.init_bwp.pucch.resources.nof_cell_sr_resources;
 
     // Get the available offsets for CSI.
-    const unsigned csi_period_slots = csi_report_periodicity_to_uint(default_csi_pucch_res_cfg.report_slot_period);
+    const unsigned csi_period_slots = to_underlying(default_csi_pucch_res_cfg.report_slot_period);
     if (cell_cfg_list[0].ran.tdd_cfg.has_value()) {
       for (unsigned j = 0; j != csi_period_slots; ++j) {
         if (get_active_tdd_ul_symbols(*cell_cfg_list[0].ran.tdd_cfg, j % slots_per_frame, cyclic_prefix::NORMAL)
@@ -506,7 +617,7 @@ TEST_P(du_ran_res_mng_multiple_cfg_tester, test_correct_resource_creation_indexi
     ASSERT_FALSE(ue_csi_cfg.pucch_csi_res_list.empty());
     const unsigned ue_csi_pucch_res_id = ue_csi_cfg.pucch_csi_res_list.front().pucch_res_id.ded().cell_res_id;
     const unsigned ue_csi_pucch_offset = ue_csi_cfg.report_slot_offset;
-    ASSERT_EQ(csi_period, csi_report_periodicity_to_uint(ue_csi_cfg.report_slot_period));
+    ASSERT_EQ(csi_period, to_underlying(ue_csi_cfg.report_slot_period));
     // Make sure the CSI is in a fully-UL slot.
     if (cell_cfg_list[0].ran.tdd_cfg.has_value()) {
       ASSERT_TRUE(get_active_tdd_ul_symbols(
@@ -628,7 +739,7 @@ make_custom_du_cell_config_for_pucch_cnt(const pucch_cnt_builder_params&        
   du_cfg.ran.init_bwp.pucch.sr_period = pucch_params_.sr_period;
   if (du_cfg.ran.init_bwp.csi.has_value()) {
     auto&          csi_params       = du_cfg.ran.init_bwp.csi.value();
-    const unsigned csi_period_slots = csi_report_periodicity_to_uint(pucch_params_.csi_period);
+    const unsigned csi_period_slots = to_underlying(pucch_params_.csi_period);
     csi_params.csi_rs_period        = static_cast<csi_resource_periodicity>(csi_period_slots);
 
     // Ensure CSI offsets remain within the selected period.
@@ -664,8 +775,7 @@ protected:
                      std::holds_alternative<csi_report_config::periodic_or_semi_persistent_report_on_pucch>(
                          default_ue_cell_cfg.csi_meas_cfg.value().csi_report_cfg_list[0].report_cfg_type),
                  "CSI report configuration is required for this unittest;");
-    lcm_csi_sr_period =
-        std::lcm(sr_periodicity_to_slot(GetParam().sr_period), csi_report_periodicity_to_uint(GetParam().csi_period));
+    lcm_csi_sr_period = std::lcm(sr_periodicity_to_slot(GetParam().sr_period), to_underlying(GetParam().csi_period));
     pucch_cnts.resize(lcm_csi_sr_period, 0);
   }
 

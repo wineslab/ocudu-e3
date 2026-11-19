@@ -4,6 +4,7 @@
 
 #include "f1ap_du_test_helpers.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;

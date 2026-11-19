@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/csi_rs/csi_rs_config_helpers.h"
+#include "ocudu/ran/csi_rs/csi_rs_types.h"
 
 using namespace ocudu;
 using namespace csi_rs;

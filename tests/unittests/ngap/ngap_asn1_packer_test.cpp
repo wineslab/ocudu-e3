@@ -7,21 +7,15 @@
 #include "lib/ngap/ngap_asn1_utils.h"
 #include "ngap_test_messages.h"
 #include "test_helpers.h"
+#include "tests/test_doubles/security/security_test_keys.h"
 #include "tests/unittests/gateways/test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/ngap/common.h"
 #include "ocudu/ngap/ngap_message.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
 using namespace ocucp;
-
-security::sec_key make_sec_key(std::string hex_str)
-{
-  byte_buffer       key_buf = make_byte_buffer(hex_str).value();
-  security::sec_key key     = {};
-  std::copy(key_buf.begin(), key_buf.end(), key.begin());
-  return key;
-}
 
 /// Fixture class for NGAP ASN1 packer.
 class ngap_asn1_packer_test : public ::testing::Test
@@ -58,13 +52,12 @@ protected:
 TEST_F(ngap_asn1_packer_test, when_packing_successful_then_pdu_matches_tv)
 {
   // Populate message.
-  ngap_context_t ngap_ctxt = {{411, 22},
-                              "tstgnb01",
-                              "AMF",
-                              cu_cp_amf_index_t::min,
-                              {{7, {{plmn_identity::test_value(), {{slice_service_type{1}}}}}}},
-                              {},
-                              256};
+  ngap_context_t ngap_ctxt = {.gnb_id             = {411, 22},
+                              .ran_node_name      = "tstgnb01",
+                              .amf_name           = "AMF",
+                              .amf_index          = cu_cp_amf_index_t::min,
+                              .supported_tas      = {{7, {{plmn_identity::test_value(), {{slice_service_type{1}}}}}}},
+                              .default_paging_drx = 256};
 
   ngap_message ngap_msg = {};
   ngap_msg.pdu.set_init_msg();
@@ -133,7 +126,7 @@ TEST_F(ngap_asn1_packer_test, when_unpack_init_ctx_extract_sec_params_correctly)
 
   // Get expected security key.
   const char*       security_key_cstr = "50636e38151d62356d9a1a0c9f2391885177307ad494be15281dfe5fdac06302";
-  security::sec_key security_key      = make_sec_key(security_key_cstr);
+  security::sec_key security_key      = test_helpers::make_sec_key(security_key_cstr);
 
   byte_buffer buf = make_byte_buffer(ngap_init_ctx_req).value();
 
@@ -180,8 +173,7 @@ TEST_F(ngap_asn1_packer_test, when_dl_nas_message_packing_successful_then_unpack
   ASSERT_EQ(ngap->last_msg.pdu.type(), dl_nas_transport.pdu.type());
 
   // Assert that the AMF UE ID of the originally created message is equal to the one of the unpacked message.
-  ASSERT_EQ(ngap->last_msg.pdu.init_msg().value.dl_nas_transport()->amf_ue_ngap_id,
-            amf_ue_id_to_uint(amf_ue_id_t::max));
+  ASSERT_EQ(ngap->last_msg.pdu.init_msg().value.dl_nas_transport()->amf_ue_ngap_id, to_underlying(amf_ue_id_t::max));
 }
 
 /// Test unpacking packing and unpacking of UL NAS messages.
@@ -202,8 +194,7 @@ TEST_F(ngap_asn1_packer_test, when_ul_nas_message_packing_successful_then_unpack
   ASSERT_EQ(ngap->last_msg.pdu.type(), ul_nas_transport.pdu.type());
 
   // Assert that the AMF UE ID of the originally created message is equal to the one of the unpacked message.
-  ASSERT_EQ(ngap->last_msg.pdu.init_msg().value.ul_nas_transport()->amf_ue_ngap_id,
-            amf_ue_id_to_uint(amf_ue_id_t::max));
+  ASSERT_EQ(ngap->last_msg.pdu.init_msg().value.ul_nas_transport()->amf_ue_ngap_id, to_underlying(amf_ue_id_t::max));
 }
 
 // Test unsuccessful unpacking.

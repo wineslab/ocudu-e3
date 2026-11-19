@@ -7,6 +7,7 @@
 #include "apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_factories.h"
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_factories.h"
 #include "dynamic_o_du_translators.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ru/dummy/ru_dummy_factory.h"
 
 using namespace ocudu;
@@ -15,15 +16,21 @@ static flexible_o_du_unit_config::ru_config
 generate_ru_config(const std::variant<ru_sdr_unit_config, ru_ofh_unit_parsed_config, ru_dummy_unit_config>& ru_cfg)
 {
   if (const auto* ru = std::get_if<ru_sdr_unit_config>(&ru_cfg)) {
-    return {ru->metrics_cfg.metrics_cfg, ru->metrics_cfg.enable_ru_metrics};
+    return flexible_o_du_unit_config::ru_config{.config            = ru->metrics_cfg.metrics_cfg,
+                                                .enable_ru_metrics = ru->metrics_cfg.enable_ru_metrics,
+                                                .rx_gain_dB        = static_cast<float>(ru->rx_gain_dB)};
   }
 
   if (const auto* ru = std::get_if<ru_dummy_unit_config>(&ru_cfg)) {
-    return {ru->metrics_cfg.metrics_cfg, ru->metrics_cfg.enable_ru_metrics};
+    return flexible_o_du_unit_config::ru_config{.config            = ru->metrics_cfg.metrics_cfg,
+                                                .enable_ru_metrics = ru->metrics_cfg.enable_ru_metrics,
+                                                .rx_gain_dB        = 0.F};
   }
 
   if (const auto* ru = std::get_if<ru_ofh_unit_parsed_config>(&ru_cfg)) {
-    return {ru->config.metrics_cfg.metrics_cfg, ru->config.metrics_cfg.enable_ru_metrics};
+    return flexible_o_du_unit_config::ru_config{.config            = ru->config.metrics_cfg.metrics_cfg,
+                                                .enable_ru_metrics = ru->config.metrics_cfg.enable_ru_metrics,
+                                                .rx_gain_dB        = 0.F};
   }
 
   return {};
@@ -59,7 +66,8 @@ dynamic_o_du_factory::create_radio_unit(const flexible_o_du_ru_config&       ru_
 {
   const auto& ru_cfg = unit_config.ru_cfg;
   if (const auto* cfg = std::get_if<ru_ofh_unit_parsed_config>(&ru_cfg)) {
-    return create_ofh_radio_unit(cfg->config, ru_config, ru_dependencies);
+    return create_ofh_radio_unit(
+        cfg->config, ru_config, ru_dependencies, unit_config.du_low_cfg.hal_config.has_value());
   }
 
   if (const auto* cfg = std::get_if<ru_sdr_unit_config>(&ru_cfg)) {

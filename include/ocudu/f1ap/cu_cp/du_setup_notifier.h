@@ -47,10 +47,35 @@ struct du_setup_result {
   bool is_accepted() const { return std::holds_alternative<accepted>(result); }
 };
 
+/// Served cell whose configuration the gNB-DU changed, as per TS 38.473, Section 9.2.1.7.
+struct du_cell_to_modify {
+  /// Identity the cell had before the change.
+  nr_cell_global_id_t old_cgi;
+  /// Configuration the cell takes.
+  cu_cp_du_served_cells_item cell;
+};
+
 struct du_config_update_request {
   gnb_du_id_t                             gnb_du_id;
   std::vector<cu_cp_du_served_cells_item> served_cells_to_add;
+  std::vector<du_cell_to_modify>          served_cells_to_mod;
   std::vector<nr_cell_global_id_t>        served_cells_to_rem;
+};
+
+/// Result of a DU configuration update.
+struct du_config_update_result {
+  struct accepted {
+    /// Cells the gNB-DU activates. Empty when the update adds no cell that the CU-CP activates.
+    std::vector<f1ap_cells_to_be_activ_list_item> cells_to_be_activ_list;
+    /// Cells the gNB-DU deactivates, because the CU-CP stopped serving them.
+    std::vector<nr_cell_global_id_t> cells_to_be_deactiv_list;
+  };
+  using rejected = du_setup_result::rejected;
+
+  std::variant<accepted, rejected> result;
+
+  /// Whether the CU-CP accepted the DU configuration update.
+  bool is_accepted() const { return std::holds_alternative<accepted>(result); }
 };
 
 /// \brief Interface used to handle F1AP interface management procedures as defined in TS 38.473 section 8.2.
@@ -63,6 +88,11 @@ public:
   /// \param[in] msg The received F1 Setup Request message.
   /// \return Error with time-to-wait in case the F1 Setup should not be accepted by the DU.
   virtual du_setup_result on_new_du_setup_request(const du_setup_request& msg) = 0;
+
+  /// \brief Notifies about the reception of a gNB-DU Configuration Update message.
+  /// \param[in] msg The received gNB-DU Configuration Update message.
+  /// \return The cells the gNB-DU activates, or the cause that rejects the update.
+  virtual du_config_update_result on_new_du_config_update(const du_config_update_request& msg) = 0;
 };
 
 } // namespace ocudu::ocucp

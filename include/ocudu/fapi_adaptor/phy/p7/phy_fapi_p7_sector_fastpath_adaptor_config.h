@@ -5,9 +5,10 @@
 #pragma once
 
 #include "ocudu/fapi/cell_config.h"
-#include "ocudu/fapi_adaptor/precoding_matrix_repository.h"
+#include "ocudu/fapi_adaptor/precoding_codebook_repository.h"
 #include "ocudu/fapi_adaptor/uci_part2_correspondence_repository.h"
 #include "ocudu/ocudulog/logger.h"
+#include "ocudu/ran/antenna_topology.h"
 #include "ocudu/ran/prach/rach_config_common.h"
 
 namespace ocudu {
@@ -39,12 +40,23 @@ struct phy_fapi_p7_sector_fastpath_adaptor_config {
   subcarrier_spacing scs_common;
   /// Carrier cell configuration.
   fapi::carrier_config carrier_cfg;
+  /// Topology of the transmit antennas.
+  antenna_topology tx_ant_topology = antenna_topology::one_port;
   /// PRACH cell configuration.
   rach_config_common prach_cfg;
   /// PRACH port list.
   std::vector<uint8_t> prach_ports;
-  /// dBFS calibration value.
-  float dBFS_calibration_value;
+  /// Value in dBm at the antenna connector equivalent to 0 dBFS for a receive gain of 0 dB.
+  float dbfs_to_dbm_conversion_factor;
+  /// Value in dB relative to Full Scale (dBFS) equivalent to 0 dB in normalized units, i.e., as coming from the
+  /// physical layer.
+  float db_to_dbfs_conversion_factor;
+  /// \brief NTN k_mac in slots at the cell SCS; zero for terrestrial cells.
+  ///
+  /// The gNB DL and UL frames are misaligned by k_mac, so uplink that the UE transmits in its UL slot p is received
+  /// at DL-clock slot p + k_mac. The adaptor passes it to the PHY as the PDU slot offset, and reports the
+  /// RACH.indication occasion slot in the UE UL frame.
+  unsigned ntn_k_mac_slots = 0;
 };
 
 /// PHY-FAPI P7 sector fastpath adaptor dependencies.
@@ -63,8 +75,8 @@ struct phy_fapi_p7_sector_fastpath_adaptor_dependencies {
   uplink_pdu_slot_repository_pool& ul_pdu_repository;
   /// Uplink PDU validator.
   const uplink_pdu_validator& ul_pdu_validator;
-  /// Precoding matrix repository.
-  std::unique_ptr<precoding_matrix_repository> pm_repo;
+  /// Precoding codebook repository.
+  std::unique_ptr<precoding_codebook_repository> pm_repo;
   /// UCI Part2 correspondence repository.
   std::unique_ptr<uci_part2_correspondence_repository> part2_repo;
 };

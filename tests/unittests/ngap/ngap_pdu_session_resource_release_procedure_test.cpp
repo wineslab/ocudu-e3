@@ -4,6 +4,7 @@
 
 #include "ngap_test_helpers.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include <gtest/gtest.h>
 
@@ -88,8 +89,8 @@ TEST_F(ngap_pdu_session_resource_release_procedure_test,
        when_pdu_sessions_to_release_not_found_then_pdu_session_release_fails)
 {
   // Test preamble
-  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(test_rng::uniform_int<uint16_t>(
-      pdu_session_id_to_uint(pdu_session_id_t::min), pdu_session_id_to_uint(pdu_session_id_t::max)));
+  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(
+      test_rng::uniform_int<uint16_t>(to_underlying(pdu_session_id_t::min), to_underlying(pdu_session_id_t::max)));
 
   cu_cp_ue_index_t ue_index = this->start_procedure(pdu_session_id);
 
@@ -116,8 +117,8 @@ TEST_F(ngap_pdu_session_resource_release_procedure_test,
        when_valid_pdu_session_resource_release_command_received_then_pdu_session_release_succeeds)
 {
   // Test preamble
-  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(test_rng::uniform_int<uint16_t>(
-      pdu_session_id_to_uint(pdu_session_id_t::min), pdu_session_id_to_uint(pdu_session_id_t::max)));
+  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(
+      test_rng::uniform_int<uint16_t>(to_underlying(pdu_session_id_t::min), to_underlying(pdu_session_id_t::max)));
 
   cu_cp_ue_index_t ue_index = this->start_procedure(pdu_session_id);
 
@@ -134,13 +135,77 @@ TEST_F(ngap_pdu_session_resource_release_procedure_test,
   ASSERT_TRUE(was_pdu_session_resource_release_command_valid());
 }
 
+/// Test that a PDU Session Resource Release Command listing the same PDU Session ID twice triggers the release of a
+/// single PDU session, as required by TS 38.413 section 8.2.2.4.
+TEST_F(ngap_pdu_session_resource_release_procedure_test,
+       when_release_command_contains_duplicate_pdu_session_id_then_single_pdu_session_is_released)
+{
+  // Test preamble.
+  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(
+      test_rng::uniform_int<uint16_t>(to_underlying(pdu_session_id_t::min), to_underlying(pdu_session_id_t::max)));
+
+  cu_cp_ue_index_t ue_index = this->start_procedure(pdu_session_id);
+
+  auto& ue = test_ues.at(ue_index);
+
+  ngap_message pdu_session_resource_release_command =
+      generate_pdu_session_resource_release_command_with_duplicate_pdu_session_id(
+          ue.amf_ue_id.value(), ue.ran_ue_id.value(), pdu_session_id);
+  ASSERT_EQ(pdu_session_resource_release_command.pdu.init_msg()
+                .value.pdu_session_res_release_cmd()
+                ->pdu_session_res_to_release_list_rel_cmd.size(),
+            2);
+
+  ngap->handle_message(pdu_session_resource_release_command);
+
+  // Check that the duplicated instance is ignored and a single PDU session is requested to be released.
+  ASSERT_EQ(cu_cp_notifier.last_release_command.pdu_session_res_to_release_list_rel_cmd.size(), 1);
+  ASSERT_EQ(cu_cp_notifier.last_release_command.pdu_session_res_to_release_list_rel_cmd[pdu_session_id].pdu_session_id,
+            pdu_session_id);
+
+  // Check that PDU Session Resource Release Command was valid.
+  ASSERT_TRUE(was_pdu_session_resource_release_command_valid());
+}
+
+/// Test that the procedure survives the removal of the NGAP UE context while it is suspended. The NGAP UE context is
+/// transferred between UEs on handover, so it can be removed from a task loop other than the one this procedure runs
+/// on.
+TEST_F(ngap_pdu_session_resource_release_procedure_test,
+       when_ue_context_is_removed_while_release_procedure_is_suspended_then_procedure_finishes)
+{
+  // Test preamble.
+  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(
+      test_rng::uniform_int<uint16_t>(to_underlying(pdu_session_id_t::min), to_underlying(pdu_session_id_t::max)));
+
+  cu_cp_ue_index_t ue_index = this->start_procedure(pdu_session_id);
+
+  auto& ue = test_ues.at(ue_index);
+
+  // Suspend the procedure inside the CU-CP release routine.
+  cu_cp_notifier.defer_pdu_session_resource_release();
+
+  ngap_message pdu_session_resource_release_command =
+      generate_valid_pdu_session_resource_release_command(ue.amf_ue_id.value(), ue.ran_ue_id.value(), pdu_session_id);
+  ngap->handle_message(pdu_session_resource_release_command);
+
+  ASSERT_TRUE(was_conversion_successful(pdu_session_resource_release_command, pdu_session_id));
+
+  // Remove the NGAP UE context while the procedure is suspended.
+  ngap->get_ngap_ue_context_removal_handler().remove_ue_context(ue_index);
+
+  // Let the procedure resume and report its outcome.
+  cu_cp_notifier.complete_pdu_session_resource_release();
+
+  ASSERT_TRUE(was_pdu_session_resource_release_command_valid());
+}
+
 /// Test PDU Session Resource Setup after PDU Session Resource Release Command.
 TEST_F(ngap_pdu_session_resource_release_procedure_test,
        when_pdu_session_resource_setup_request_received_after_release_command_then_pdu_session_setup_succeeds)
 {
   // Test preamble.
-  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(test_rng::uniform_int<uint16_t>(
-      pdu_session_id_to_uint(pdu_session_id_t::min), pdu_session_id_to_uint(pdu_session_id_t::max)));
+  pdu_session_id_t pdu_session_id = uint_to_pdu_session_id(
+      test_rng::uniform_int<uint16_t>(to_underlying(pdu_session_id_t::min), to_underlying(pdu_session_id_t::max)));
 
   cu_cp_ue_index_t ue_index = this->start_procedure(pdu_session_id);
 

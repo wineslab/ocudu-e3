@@ -16,6 +16,7 @@
 #include "ocudu/phy/lower/processors/downlink/pdxch/pdxch_processor_request_handler.h"
 #include "ocudu/phy/lower/processors/lower_phy_center_freq_controller.h"
 #include "ocudu/phy/support/resource_grid_context.h"
+#include "ocudu/ran/beamforming/beam_weights_codebook_generator.h"
 #include "ocudu/support/memory_pool/bounded_object_pool.h"
 
 namespace ocudu {
@@ -40,7 +41,7 @@ public:
     subcarrier_spacing scs;
     cyclic_prefix      cp;
     sampling_rate      srate;
-    unsigned           nof_tx_ports;
+    antenna_topology   tx_ant_topology;
   };
 
   /// Constructs a physical downlink channel baseband processor.
@@ -49,8 +50,9 @@ public:
                        task_executor&                         executor,
                        const configuration&                   config) :
     logger(ocudulog::fetch_basic_logger("PHY")),
+    beamforming_codebook(generate_beam_weights_codebook(config.tx_ant_topology)),
     bb_buffers(buffer_request_pool::get_request_array_size() + max_slot_modulation_concurrency + 1,
-               config.nof_tx_ports,
+               beamforming_codebook.get_nof_antennas(),
                config.srate.to_kHz()),
     common_ofdm_modulator(std::move(modulator)),
     common_amplitude_control(std::move(amplitude_control)),
@@ -61,10 +63,10 @@ public:
       return std::make_unique<pdxch_baseband_modulator>(config.scs,
                                                         config.cp,
                                                         config.srate,
-                                                        config.nof_tx_ports,
                                                         executor,
                                                         *common_ofdm_modulator,
                                                         *common_amplitude_control,
+                                                        beamforming_codebook,
                                                         *this);
     });
   }
@@ -129,6 +131,8 @@ private:
   std::atomic<bool> stopped = false;
   /// Physical channel baseband processor event notifier.
   pdxch_processor_notifier* notifier = nullptr;
+  /// Beamfoming codebook.
+  const beam_weights_codebook beamforming_codebook;
   /// Baseband buffer pool.
   baseband_gateway_buffer_pool bb_buffers;
   /// Common OFDM symbol modulators. It must be thread-safe.

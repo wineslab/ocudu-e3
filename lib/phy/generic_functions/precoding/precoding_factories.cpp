@@ -4,6 +4,7 @@
 
 #include "ocudu/phy/generic_functions/precoding/precoding_factories.h"
 #include "channel_precoder_generic.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/cpu_features.h"
 
 #ifdef __x86_64__

@@ -5,9 +5,11 @@
 #include "asn1_rrc_config_helpers.h"
 #include "asn1_csi_meas_config_helpers.h"
 #include "asn1_ntn_config_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/asn1_diff_utils.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/frequency_range.h"
+#include "ocudu/ran/resource_allocation/resource_allocation_frequency.h"
 #include "ocudu/support/enum_utils.h"
 #include "ocudu/support/error_handling.h"
 #include "ocudu/support/math/math_utils.h"
@@ -45,7 +47,7 @@ static rlc_bearer_cfg_s make_asn1_rrc_rlc_bearer(const rlc_bearer_config& cfg)
   if (is_srb(cfg.lcid)) {
     out.served_radio_bearer.set_srb_id() = srb_id_to_uint(to_srb_id(cfg.lcid));
   } else {
-    out.served_radio_bearer.set_drb_id() = drb_id_to_uint(*cfg.drb_id);
+    out.served_radio_bearer.set_drb_id() = to_underlying(*cfg.drb_id);
   }
 
   out.rlc_cfg_present = true;
@@ -198,12 +200,13 @@ static rlc_bearer_cfg_s make_asn1_rrc_rlc_bearer(const rlc_bearer_config& cfg)
     default:
       report_fatal_error("Invalid Bucket size duration {}", fmt::underlying(cfg.mac_cfg->bsd));
   }
-  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_group_present          = true;
-  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_group                  = cfg.mac_cfg->lcg_id;
-  out.mac_lc_ch_cfg.ul_specific_params.sched_request_id_present     = true;
-  out.mac_lc_ch_cfg.ul_specific_params.sched_request_id             = cfg.mac_cfg->sr_id;
-  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_sr_mask                = cfg.mac_cfg->lc_sr_mask;
-  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_sr_delay_timer_applied = cfg.mac_cfg->lc_sr_delay_applied;
+  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_group_present             = true;
+  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_group                     = cfg.mac_cfg->lcg_id;
+  out.mac_lc_ch_cfg.ul_specific_params.sched_request_id_present        = true;
+  out.mac_lc_ch_cfg.ul_specific_params.sched_request_id                = cfg.mac_cfg->sr_id;
+  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_sr_mask                   = cfg.mac_cfg->lc_sr_mask;
+  out.mac_lc_ch_cfg.ul_specific_params.lc_ch_sr_delay_timer_applied    = cfg.mac_cfg->lc_sr_delay_applied;
+  out.mac_lc_ch_cfg.ul_specific_params.cfg_grant_type1_allowed_present = cfg.mac_cfg->cg_type1_allowed;
 
   return out;
 }
@@ -412,7 +415,7 @@ static asn1::rrc_nr::dl_cfg_common_s make_asn1_rrc_dl_cfg_common(const du_cell_c
   // > frequencyInfoDL   FrequencyInfoDL   OPTIONAL   -- Cond InterFreqHOAndServCellAdd
   out.freq_info_dl_present = true;
   for (const auto& dl_band : cfg.ran.dl_cfg_common.freq_info_dl.freq_band_list) {
-    out.freq_info_dl.freq_band_list.push_back(nr_band_to_uint(dl_band.band));
+    out.freq_info_dl.freq_band_list.push_back(to_underlying(dl_band.band));
   }
   out.freq_info_dl.absolute_freq_ssb_present = true;
   // TODO: Check how to derive this value.
@@ -908,13 +911,16 @@ static asn1::rrc_nr::ul_cfg_common_s make_asn1_rrc_ul_cfg_common(const ul_config
   // > frequencyInfoUL FrequencyInfoUL OPTIONAL, -- Cond InterFreqHOAndServCellAdd
   out.freq_info_ul_present = true;
   for (const auto& ul_band : cfg.freq_info_ul.freq_band_list) {
-    out.freq_info_ul.freq_band_list.push_back(nr_band_to_uint(ul_band.band));
+    out.freq_info_ul.freq_band_list.push_back(to_underlying(ul_band.band));
   }
   out.freq_info_ul.absolute_freq_point_a_present = true;
   out.freq_info_ul.absolute_freq_point_a         = cfg.freq_info_ul.absolute_freq_point_a.value();
   if (cfg.freq_info_ul.p_max.has_value()) {
     out.freq_info_ul.p_max_present = true;
     out.freq_info_ul.p_max         = cfg.freq_info_ul.p_max->value();
+  }
+  if (cfg.freq_info_ul.freq_shift_7p5khz_present) {
+    out.freq_info_ul.freq_shift7p5khz_present = true;
   }
   out.freq_info_ul.scs_specific_carrier_list =
       make_asn1_rrc_scs_specific_carrier_list(cfg.freq_info_ul.scs_carrier_list);
@@ -1101,6 +1107,35 @@ make_asn1_rrc_pdsch_time_domain_alloc_list(const pdsch_time_domain_resource_allo
   return out;
 }
 
+static asn1::rrc_nr::pdsch_time_domain_res_alloc_r16_s
+make_asn1_rrc_pdsch_time_domain_alloc_r16(const pdsch_time_domain_resource_allocation& cfg)
+{
+  pdsch_time_domain_res_alloc_r16_s out{};
+  out.k0_r16_present = true;
+  out.k0_r16         = cfg.k0;
+  switch (cfg.map_type) {
+    case sch_mapping_type::typeA:
+      out.map_type_r16 = pdsch_time_domain_res_alloc_r16_s::map_type_r16_opts::type_a;
+      break;
+    case sch_mapping_type::typeB:
+      out.map_type_r16 = pdsch_time_domain_res_alloc_r16_s::map_type_r16_opts::type_b;
+      break;
+    default:
+      ocudu_assertion_failure("Invalid SCH mapping Type={}", fmt::underlying(cfg.map_type));
+  }
+
+  out.start_symbol_and_len_r16 = ofdm_symbol_range_to_sliv(cfg.symbols);
+
+  if (cfg.rep_number.has_value()) {
+    out.repeat_num_r16_present = true;
+    if (not asn1::number_to_enum(out.repeat_num_r16, cfg.rep_number.value())) {
+      ocudu_assertion_failure("Invalid PDSCH repetitionNumber-r16={}", cfg.rep_number.value());
+    }
+  }
+
+  return out;
+}
+
 asn1::rrc_nr::tci_state_s ocudu::odu::make_asn1_rrc_tci_state(const tci_state& cfg)
 {
   tci_state_s tci_st;
@@ -1185,18 +1220,65 @@ calculate_pdsch_config_diff(asn1::rrc_nr::pdsch_cfg_s& out, const pdsch_config& 
       ocudu_assertion_failure("Invalid resource allocation type={}", fmt::underlying(dest.res_alloc));
   }
 
-  // PDSCH Time Domain Allocation.
-  if ((not dest.pdsch_td_alloc_list.empty() && src.pdsch_td_alloc_list.empty()) ||
-      (not dest.pdsch_td_alloc_list.empty() && not src.pdsch_td_alloc_list.empty() &&
-       dest.pdsch_td_alloc_list != src.pdsch_td_alloc_list)) {
-    out.pdsch_time_domain_alloc_list_present = true;
-    auto& alloc_list                         = out.pdsch_time_domain_alloc_list.set_setup();
-    for (const auto& td_alloc : dest.pdsch_td_alloc_list) {
-      alloc_list.push_back(make_asn1_rrc_pdsch_time_domain_alloc_list(td_alloc));
+  // PDSCH Time Domain Allocation: encoded via the legacy IE (pdsch-TimeDomainAllocationList), or, when an entry
+  // carries repetitionNumber-r16, via the Rel-16 IE (pdsch-TimeDomainAllocationList-r16), which replaces the legacy
+  // and common lists for DCI format 1_1. The two IEs are mutually exclusive, so only one is ever signalled; a
+  // transition between them releases the one no longer in use before (or instead of) setting up the other.
+  auto has_repetitions = [](const std::vector<pdsch_time_domain_resource_allocation>& list) {
+    return std::any_of(list.begin(), list.end(), [](const auto& alloc) { return alloc.rep_number.has_value(); });
+  };
+  const bool dest_is_r16 = has_repetitions(dest.pdsch_td_alloc_list);
+  const bool src_is_r16  = has_repetitions(src.pdsch_td_alloc_list);
+
+  if (not dest.pdsch_td_alloc_list.empty() && dest_is_r16) {
+    if (not src_is_r16 && not src.pdsch_td_alloc_list.empty()) {
+      out.pdsch_time_domain_alloc_list_present = true;
+      out.pdsch_time_domain_alloc_list.set_release();
     }
-  } else if (not src.pdsch_td_alloc_list.empty() && dest.pdsch_td_alloc_list.empty()) {
+    if (not src_is_r16 || dest.pdsch_td_alloc_list != src.pdsch_td_alloc_list) {
+      out.ext = true;
+      out.pdsch_time_domain_alloc_list_r16.set_present();
+      auto& alloc_list = out.pdsch_time_domain_alloc_list_r16->set_setup();
+      for (const auto& td_alloc : dest.pdsch_td_alloc_list) {
+        alloc_list.push_back(make_asn1_rrc_pdsch_time_domain_alloc_r16(td_alloc));
+      }
+    }
+  } else if (not dest.pdsch_td_alloc_list.empty()) {
+    // dest is a legacy (non-repetition) list.
+    if (src_is_r16) {
+      out.ext = true;
+      out.pdsch_time_domain_alloc_list_r16.set_present();
+      out.pdsch_time_domain_alloc_list_r16->set_release();
+    }
+    if (src_is_r16 || src.pdsch_td_alloc_list.empty() || dest.pdsch_td_alloc_list != src.pdsch_td_alloc_list) {
+      out.pdsch_time_domain_alloc_list_present = true;
+      auto& alloc_list                         = out.pdsch_time_domain_alloc_list.set_setup();
+      for (const auto& td_alloc : dest.pdsch_td_alloc_list) {
+        alloc_list.push_back(make_asn1_rrc_pdsch_time_domain_alloc_list(td_alloc));
+      }
+    }
+  } else if (src_is_r16) {
+    out.ext = true;
+    out.pdsch_time_domain_alloc_list_r16.set_present();
+    out.pdsch_time_domain_alloc_list_r16->set_release();
+  } else if (not src.pdsch_td_alloc_list.empty()) {
     out.pdsch_time_domain_alloc_list_present = true;
     out.pdsch_time_domain_alloc_list.set_release();
+  }
+
+  // Slot-based repetition scheme (repetitionSchemeConfig-r16 with slotBased-r16), required by the UE to apply
+  // repetitionNumber-r16 of the Rel-16 TDRA list. With a single TCI state indicated in the DCI, the TCI mapping and
+  // the RV sequence offset are not used; nominal values are signalled.
+  if (dest.slot_based_repetition_enabled and not src.slot_based_repetition_enabled) {
+    out.ext = true;
+    out.repeat_scheme_cfg_r16.set_present();
+    auto& slot_based                 = out.repeat_scheme_cfg_r16->set_setup().set_slot_based_r16().set_setup();
+    slot_based.tci_map_r16.value     = slot_based_r16_s::tci_map_r16_opts::cyclic_map;
+    slot_based.seq_offset_for_rv_r16 = 1;
+  } else if (src.slot_based_repetition_enabled and not dest.slot_based_repetition_enabled) {
+    out.ext = true;
+    out.repeat_scheme_cfg_r16.set_present();
+    out.repeat_scheme_cfg_r16->set_release();
   }
 
   // RBG Size.
@@ -2094,6 +2176,42 @@ make_asn1_rrc_pusch_time_domain_alloc_list(const pusch_time_domain_resource_allo
   return out;
 }
 
+static asn1::rrc_nr::pusch_time_domain_res_alloc_r16_s
+make_asn1_rrc_pusch_time_domain_alloc_r16(const pusch_time_domain_resource_allocation& cfg)
+{
+  pusch_time_domain_res_alloc_r16_s out{};
+  out.k2_r16_present = true;
+  out.k2_r16         = cfg.k2;
+
+  pusch_alloc_r16_s alloc{};
+  alloc.map_type_r16_present = true;
+  switch (cfg.map_type) {
+    case sch_mapping_type::typeA:
+      alloc.map_type_r16 = pusch_alloc_r16_s::map_type_r16_opts::type_a;
+      break;
+    case sch_mapping_type::typeB:
+      alloc.map_type_r16 = pusch_alloc_r16_s::map_type_r16_opts::type_b;
+      break;
+    default:
+      ocudu_assertion_failure("Invalid SCH mapping Type={}", fmt::underlying(cfg.map_type));
+  }
+
+  alloc.start_symbol_and_len_r16_present = true;
+  alloc.start_symbol_and_len_r16         = ofdm_symbol_range_to_sliv(cfg.symbols);
+
+  // The field numberOfRepetitions-r16 is mandatory present in entries of pusch-TimeDomainAllocationListDCI-0-1-r16,
+  // as per TS 38.331, conditional presence Format01-02; an unset nof_repetitions (a mirrored, non-repetition entry)
+  // still maps to value 1, corresponding to a single transmission.
+  alloc.nof_repeats_r16_present = true;
+  if (not asn1::number_to_enum(alloc.nof_repeats_r16, cfg.nof_repetitions.value_or(1))) {
+    ocudu_assertion_failure("Invalid PUSCH numberOfRepetitions-r16={}", cfg.nof_repetitions.value_or(1));
+  }
+
+  out.pusch_alloc_list_r16.push_back(alloc);
+
+  return out;
+}
+
 static void
 calculate_pusch_config_diff(asn1::rrc_nr::pusch_cfg_s& out, const pusch_config& src, const pusch_config& dest)
 {
@@ -2185,16 +2303,54 @@ calculate_pusch_config_diff(asn1::rrc_nr::pusch_cfg_s& out, const pusch_config& 
       ocudu_assertion_failure("Invalid PUSCH Resource Allocation={}", fmt::underlying(dest.res_alloc));
   }
 
-  // PUSCH Time Domain Allocation.
-  if ((not dest.pusch_td_alloc_list.empty() && src.pusch_td_alloc_list.empty()) ||
-      (not dest.pusch_td_alloc_list.empty() && not src.pusch_td_alloc_list.empty() &&
-       dest.pusch_td_alloc_list != src.pusch_td_alloc_list)) {
-    out.pusch_time_domain_alloc_list_present = true;
-    auto& alloc_list                         = out.pusch_time_domain_alloc_list.set_setup();
-    for (const auto& td_alloc : dest.pusch_td_alloc_list) {
-      alloc_list.push_back(make_asn1_rrc_pusch_time_domain_alloc_list(td_alloc));
+  // PUSCH Time Domain Allocation: encoded via the legacy IE (pusch-TimeDomainAllocationList), or, when an entry
+  // carries nof_repetitions, via the Rel-16 IE (pusch-TimeDomainAllocationListDCI-0-1-r16), which replaces the legacy
+  // and common lists for DCI format 0_1. The two IEs are mutually exclusive, so only one is ever signalled; a
+  // transition between them releases the one no longer in use before (or instead of) setting up the other.
+  auto has_pusch_repetitions = [](const std::vector<pusch_time_domain_resource_allocation>& list) {
+    return std::any_of(list.begin(), list.end(), [](const auto& alloc) { return alloc.nof_repetitions.has_value(); });
+  };
+  const bool dest_is_r16 = has_pusch_repetitions(dest.pusch_td_alloc_list);
+  const bool src_is_r16  = has_pusch_repetitions(src.pusch_td_alloc_list);
+
+  if (not dest.pusch_td_alloc_list.empty() && dest_is_r16) {
+    if (not src_is_r16 && not src.pusch_td_alloc_list.empty()) {
+      out.pusch_time_domain_alloc_list_present = true;
+      out.pusch_time_domain_alloc_list.set_release();
     }
-  } else if (not src.pusch_td_alloc_list.empty() && dest.pusch_td_alloc_list.empty()) {
+    // pusch-RepTypeIndicatorDCI-0-1-r16 is a Cond field, mandatory whenever
+    // pusch-TimeDomainAllocationListDCI-0-1-r16 is configured. Only Rel-16 PUSCH repetition Type A is supported.
+    out.ext                                    = true;
+    out.pusch_rep_type_ind_dci_0_1_r16_present = true;
+    out.pusch_rep_type_ind_dci_0_1_r16.value   = pusch_cfg_s::pusch_rep_type_ind_dci_0_1_r16_opts::pusch_rep_type_a;
+    // availableSlotCounting-r17: the scheduler counts occasions over available (fully UL), not consecutive, slots.
+    out.available_slot_count_r17_present = true;
+    if (not src_is_r16 || dest.pusch_td_alloc_list != src.pusch_td_alloc_list) {
+      out.pusch_time_domain_alloc_list_dci_0_1_r16.set_present();
+      auto& alloc_list = out.pusch_time_domain_alloc_list_dci_0_1_r16->set_setup();
+      for (const auto& td_alloc : dest.pusch_td_alloc_list) {
+        alloc_list.push_back(make_asn1_rrc_pusch_time_domain_alloc_r16(td_alloc));
+      }
+    }
+  } else if (not dest.pusch_td_alloc_list.empty()) {
+    // dest is a legacy (non-repetition) list.
+    if (src_is_r16) {
+      out.ext = true;
+      out.pusch_time_domain_alloc_list_dci_0_1_r16.set_present();
+      out.pusch_time_domain_alloc_list_dci_0_1_r16->set_release();
+    }
+    if (src_is_r16 || src.pusch_td_alloc_list.empty() || dest.pusch_td_alloc_list != src.pusch_td_alloc_list) {
+      out.pusch_time_domain_alloc_list_present = true;
+      auto& alloc_list                         = out.pusch_time_domain_alloc_list.set_setup();
+      for (const auto& td_alloc : dest.pusch_td_alloc_list) {
+        alloc_list.push_back(make_asn1_rrc_pusch_time_domain_alloc_list(td_alloc));
+      }
+    }
+  } else if (src_is_r16) {
+    out.ext = true;
+    out.pusch_time_domain_alloc_list_dci_0_1_r16.set_present();
+    out.pusch_time_domain_alloc_list_dci_0_1_r16->set_release();
+  } else if (not src.pusch_td_alloc_list.empty()) {
     out.pusch_time_domain_alloc_list_present = true;
     out.pusch_time_domain_alloc_list.set_release();
   }
@@ -2608,6 +2764,227 @@ static void calculate_srs_config_diff(asn1::rrc_nr::srs_cfg_s& out, const srs_co
   }
 }
 
+static void make_asn1_rrc_cfg_grant_cfg(asn1::rrc_nr::cfg_grant_cfg_s& out, const cg_configuration& cfg)
+{
+  // Frequency hopping.
+  if (cfg.frequency_hopping != cg_configuration::freq_hopping::disabled) {
+    out.freq_hop_present = true;
+    out.freq_hop         = cfg.frequency_hopping == cg_configuration::freq_hopping::intra_slot
+                               ? cfg_grant_cfg_s::freq_hop_e_::intra_slot
+                               : cfg_grant_cfg_s::freq_hop_e_::inter_slot;
+  }
+
+  // DMRS for CG-PUSCH.
+  make_asn1_rrc_dmrs_ul_for_pusch(out.cg_dmrs_cfg, dmrs_uplink_config{}, cfg.cg_dmrs_cfg);
+
+  // MCS table.
+  if (cfg.mcs_table != pusch_mcs_table::qam64) {
+    out.mcs_table_present = true;
+    out.mcs_table         = cfg.mcs_table == pusch_mcs_table::qam256 ? cfg_grant_cfg_s::mcs_table_e_::qam256
+                                                                     : cfg_grant_cfg_s::mcs_table_e_::qam64_low_se;
+  }
+
+  // MCS table for transform precoder.
+  if (cfg.mcs_table_transform_precoder != pusch_mcs_table::qam64) {
+    out.mcs_table_transform_precoder_present = true;
+    out.mcs_table_transform_precoder         = cfg.mcs_table_transform_precoder == pusch_mcs_table::qam256
+                                                   ? cfg_grant_cfg_s::mcs_table_transform_precoder_e_::qam256
+                                                   : cfg_grant_cfg_s::mcs_table_transform_precoder_e_::qam64_low_se;
+  }
+
+  // UCI on PUSCH (CG-UCI-OnPUSCH carries only beta offsets, no scaling field).
+  if (cfg.uci_on_pusch_cfg.beta_offsets_cfg.has_value()) {
+    out.uci_on_pusch_present = true;
+    auto& cg_uci             = out.uci_on_pusch.set_setup();
+    if (const auto* semi_static =
+            std::get_if<uci_on_pusch::beta_offsets_semi_static>(&cfg.uci_on_pusch_cfg.beta_offsets_cfg.value())) {
+      fill_uci_beta_offset(cg_uci.set_semi_static(), *semi_static);
+    } else {
+      const auto& dyn = std::get<uci_on_pusch::beta_offsets_dynamic>(cfg.uci_on_pusch_cfg.beta_offsets_cfg.value());
+      auto&       asn1_dyn = cg_uci.set_dyn();
+      asn1_dyn.resize(dyn.size());
+      for (unsigned i = 0; i < dyn.size(); ++i) {
+        fill_uci_beta_offset(asn1_dyn[i], dyn[i]);
+      }
+    }
+  }
+
+  // Resource allocation type.
+  switch (cfg.res_alloc) {
+    case cg_configuration::res_allocation::type_0:
+      out.res_alloc = cfg_grant_cfg_s::res_alloc_e_::res_alloc_type0;
+      break;
+    case cg_configuration::res_allocation::type_1:
+      out.res_alloc = cfg_grant_cfg_s::res_alloc_e_::res_alloc_type1;
+      break;
+    case cg_configuration::res_allocation::dynamic_switch:
+      out.res_alloc = cfg_grant_cfg_s::res_alloc_e_::dyn_switch;
+      break;
+    default:
+      ocudu_assertion_failure("Invalid CG resource allocation type={}", fmt::underlying(cfg.res_alloc));
+  }
+
+  // Power control loop.
+  out.pwr_ctrl_loop_to_use = cfg.enable_pwr_ctrl_loop_n1 ? cfg_grant_cfg_s::pwr_ctrl_loop_to_use_e_::n1
+                                                         : cfg_grant_cfg_s::pwr_ctrl_loop_to_use_e_::n0;
+
+  // P0-PUSCH-Alpha set index.
+  out.p0_pusch_alpha = cfg.p0_pusch_alpha;
+
+  // Transform precoder.
+  if (cfg.trans_precoder.has_value()) {
+    out.transform_precoder_present = true;
+    out.transform_precoder         = cfg.trans_precoder.value() ? cfg_grant_cfg_s::transform_precoder_e_::enabled
+                                                                : cfg_grant_cfg_s::transform_precoder_e_::disabled;
+  }
+
+  // Number of HARQ processes.
+  out.nrof_harq_processes = cfg.nof_harq_processes;
+
+  // repK.
+  switch (cfg.rep.rep_k) {
+    case cg_configuration::rep_k_t::n1:
+      out.rep_k = cfg_grant_cfg_s::rep_k_e_::n1;
+      break;
+    case cg_configuration::rep_k_t::n2:
+      out.rep_k = cfg_grant_cfg_s::rep_k_e_::n2;
+      break;
+    case cg_configuration::rep_k_t::n4:
+      out.rep_k = cfg_grant_cfg_s::rep_k_e_::n4;
+      break;
+    case cg_configuration::rep_k_t::n8:
+      out.rep_k = cfg_grant_cfg_s::rep_k_e_::n8;
+      break;
+    default:
+      ocudu_assertion_failure("Invalid CG repK={}", fmt::underlying(cfg.rep.rep_k));
+  }
+
+  // repK-RV (absent means the default sequence {0,2,3,1}).
+  if (cfg.rep.rv_seq != cg_configuration::rep_k_rv::s1_0231) {
+    out.rep_k_rv_present = true;
+    switch (cfg.rep.rv_seq) {
+      case cg_configuration::rep_k_rv::s2_0303:
+        out.rep_k_rv = cfg_grant_cfg_s::rep_k_rv_e_::s2_neg0303;
+        break;
+      case cg_configuration::rep_k_rv::s3_0000:
+        out.rep_k_rv = cfg_grant_cfg_s::rep_k_rv_e_::s3_neg0000;
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Periodicity (mapping from slot count to ASN.1 symbol×slot enum for 14-symbol slots).
+  // TODO: Add support for 12-symbol slots.
+  switch (cfg.periodicity) {
+    case cg_configuration::periodicity_t::sl1:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym1x14;
+      break;
+    case cg_configuration::periodicity_t::sl2:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym2x14;
+      break;
+    case cg_configuration::periodicity_t::sl4:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym4x14;
+      break;
+    case cg_configuration::periodicity_t::sl5:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym5x14;
+      break;
+    case cg_configuration::periodicity_t::sl8:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym8x14;
+      break;
+    case cg_configuration::periodicity_t::sl10:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym10x14;
+      break;
+    case cg_configuration::periodicity_t::sl16:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym16x14;
+      break;
+    case cg_configuration::periodicity_t::sl20:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym20x14;
+      break;
+    case cg_configuration::periodicity_t::sl32:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym32x14;
+      break;
+    case cg_configuration::periodicity_t::sl40:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym40x14;
+      break;
+    case cg_configuration::periodicity_t::sl64:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym64x14;
+      break;
+    case cg_configuration::periodicity_t::sl80:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym80x14;
+      break;
+    case cg_configuration::periodicity_t::sl128:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym128x14;
+      break;
+    case cg_configuration::periodicity_t::sl160:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym160x14;
+      break;
+    case cg_configuration::periodicity_t::sl256:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym256x14;
+      break;
+    case cg_configuration::periodicity_t::sl320:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym320x14;
+      break;
+    case cg_configuration::periodicity_t::sl512:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym512x14;
+      break;
+    case cg_configuration::periodicity_t::sl640:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym640x14;
+      break;
+    case cg_configuration::periodicity_t::sl1024:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym1024x14;
+      break;
+    case cg_configuration::periodicity_t::sl1280:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym1280x14;
+      break;
+    case cg_configuration::periodicity_t::sl2560:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym2560x14;
+      break;
+    case cg_configuration::periodicity_t::sl5120:
+      out.periodicity = cfg_grant_cfg_s::periodicity_e_::sym5120x14;
+      break;
+    default:
+      ocudu_assertion_failure("Invalid CG periodicity={}", fmt::underlying(cfg.periodicity));
+  }
+
+  // Configured grant timer.
+  if (cfg.configured_grant_timer != 0) {
+    out.cfg_grant_timer_present = true;
+    out.cfg_grant_timer         = cfg.configured_grant_timer;
+  }
+
+  // RRC-configured UL grant (Type 1 CG).
+  if (cfg.rrc_configured_ul_grant_cfg.has_value()) {
+    out.rrc_cfg_ul_grant_present = true;
+    auto&       asn1_grant       = out.rrc_cfg_ul_grant;
+    const auto& grant            = cfg.rrc_configured_ul_grant_cfg.value();
+
+    asn1_grant.time_domain_offset = grant.time_domain_offset;
+    asn1_grant.time_domain_alloc  = grant.time_domain_allocation;
+
+    // Frequency domain allocation: RIV encoding for resource allocation type 1 (TS 38.214, clause 6.1.2.2).
+    const unsigned riv = ra_frequency_type1_get_riv(std::get<ra_frequency_type1_configuration>(grant.freq_domain_res));
+    asn1_grant.freq_domain_alloc.from_number(riv);
+
+    asn1_grant.ant_port = grant.antenna_port;
+    if (grant.dmrs_seq_initialization.has_value()) {
+      asn1_grant.dmrs_seq_initization_present = true;
+      asn1_grant.dmrs_seq_initization         = grant.dmrs_seq_initialization.value();
+    }
+    asn1_grant.precoding_and_nof_layers = grant.precoding_and_nof_layers;
+    if (grant.srs_resource_indicator.has_value()) {
+      asn1_grant.srs_res_ind_present = true;
+      asn1_grant.srs_res_ind         = grant.srs_resource_indicator.value();
+    }
+    asn1_grant.mcs_and_tbs = grant.mcs;
+    if (grant.frequency_hopping_offset.has_value()) {
+      asn1_grant.freq_hop_offset_present = true;
+      asn1_grant.freq_hop_offset         = grant.frequency_hopping_offset.value();
+    }
+    asn1_grant.pathloss_ref_idx = grant.pathloss_ref_index;
+  }
+}
+
 static bool calculate_bwp_ul_dedicated_diff(asn1::rrc_nr::bwp_ul_ded_s& out,
                                             const bwp_uplink_dedicated& src,
                                             const bwp_uplink_dedicated& dest)
@@ -2643,9 +3020,17 @@ static bool calculate_bwp_ul_dedicated_diff(asn1::rrc_nr::bwp_ul_ded_s& out,
     out.srs_cfg_present = true;
     out.srs_cfg.set_release();
   }
-  // TODO: Remaining.
 
-  return out.pucch_cfg_present || out.pusch_cfg_present || out.srs_cfg_present;
+  if ((dest.cg_cfg.has_value() && not src.cg_cfg.has_value()) ||
+      (dest.cg_cfg.has_value() && src.cg_cfg.has_value() && dest.cg_cfg != src.cg_cfg)) {
+    out.cfg_grant_cfg_present = true;
+    make_asn1_rrc_cfg_grant_cfg(out.cfg_grant_cfg.set_setup(), dest.cg_cfg.value());
+  } else if (src.cg_cfg.has_value() && not dest.cg_cfg.has_value()) {
+    out.cfg_grant_cfg_present = true;
+    out.cfg_grant_cfg.set_release();
+  }
+
+  return out.pucch_cfg_present || out.pusch_cfg_present || out.srs_cfg_present || out.cfg_grant_cfg_present;
 }
 
 static void calculate_pusch_serving_cell_cfg_diff(asn1::rrc_nr::pusch_serving_cell_cfg_s& out,
@@ -2857,7 +3242,10 @@ static sched_request_to_add_mod_s make_asn1_rrc_scheduling_request(const schedul
   req.sched_request_id = cfg.sr_id;
   if (cfg.prohibit_timer.has_value()) {
     req.sr_prohibit_timer_present = true;
-    switch (cfg.prohibit_timer.value()) {
+    // Extended values go in sr-ProhibitTimer-v1700, which makes the UE ignore this field (TS 38.331).
+    const sr_prohib_timer legacy_timer =
+        is_sr_prohib_timer_ext(cfg.prohibit_timer.value()) ? sr_prohib_timer::ms128 : cfg.prohibit_timer.value();
+    switch (legacy_timer) {
       case sr_prohib_timer::ms1:
         req.sr_prohibit_timer = sched_request_to_add_mod_s::sr_prohibit_timer_opts::ms1;
         break;
@@ -2883,7 +3271,7 @@ static sched_request_to_add_mod_s make_asn1_rrc_scheduling_request(const schedul
         req.sr_prohibit_timer = sched_request_to_add_mod_s::sr_prohibit_timer_opts::ms128;
         break;
       default:
-        ocudu_assertion_failure("Invalid SR prohibit timer={}", fmt::underlying(cfg.prohibit_timer.value()));
+        ocudu_assertion_failure("Invalid SR prohibit timer={}", fmt::underlying(legacy_timer));
     }
   }
 
@@ -2908,6 +3296,52 @@ static sched_request_to_add_mod_s make_asn1_rrc_scheduling_request(const schedul
   }
 
   return req;
+}
+
+/// Builds the \c SchedulingRequestToAddModExt-v1700 entry of an SR configuration. Empty for legacy prohibit timers.
+static sched_request_to_add_mod_ext_v1700_s
+make_asn1_rrc_scheduling_request_ext(const scheduling_request_to_addmod& cfg)
+{
+  sched_request_to_add_mod_ext_v1700_s ext{};
+  if (not cfg.prohibit_timer.has_value() or not is_sr_prohib_timer_ext(cfg.prohibit_timer.value())) {
+    return ext;
+  }
+
+  ext.sr_prohibit_timer_v1700_present = true;
+  using ext_opts                      = sched_request_to_add_mod_ext_v1700_s::sr_prohibit_timer_v1700_opts;
+  switch (cfg.prohibit_timer.value()) {
+    case sr_prohib_timer::ms192:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms192;
+      break;
+    case sr_prohib_timer::ms256:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms256;
+      break;
+    case sr_prohib_timer::ms320:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms320;
+      break;
+    case sr_prohib_timer::ms384:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms384;
+      break;
+    case sr_prohib_timer::ms448:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms448;
+      break;
+    case sr_prohib_timer::ms512:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms512;
+      break;
+    case sr_prohib_timer::ms576:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms576;
+      break;
+    case sr_prohib_timer::ms640:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms640;
+      break;
+    case sr_prohib_timer::ms1082:
+      ext.sr_prohibit_timer_v1700 = ext_opts::ms1082;
+      break;
+    default:
+      ocudu_assertion_failure("Invalid extended SR prohibit timer={}", fmt::underlying(cfg.prohibit_timer.value()));
+  }
+
+  return ext;
 }
 
 static asn1::rrc_nr::drx_cfg_s make_asn1_drx_config(const drx_config& cfg)
@@ -3273,6 +3707,41 @@ static bool calculate_mac_cell_group_config_diff(asn1::rrc_nr::mac_cell_group_cf
     out.sched_request_cfg_present = true;
   }
 
+  // schedulingRequestConfig-v1700 is signalled when an add/mod entry above sets or clears an extended sr-ProhibitTimer.
+  // When absent, the UE keeps its stored values (Need M). Its list must match the add/mod list entry by entry
+  // (TS 38.331).
+  auto find_sr_cfg = [](const auto& sr_cfgs, uint8_t sr_id) -> const scheduling_request_to_addmod* {
+    auto it = std::find_if(sr_cfgs.begin(), sr_cfgs.end(), [sr_id](const scheduling_request_to_addmod& req) {
+      return req.sr_id == sr_id;
+    });
+    return it != sr_cfgs.end() ? &*it : nullptr;
+  };
+  auto has_ext_prohibit_timer = [](const scheduling_request_to_addmod* sr_cfg) {
+    return sr_cfg != nullptr and sr_cfg->prohibit_timer.has_value() and
+           is_sr_prohib_timer_ext(sr_cfg->prohibit_timer.value());
+  };
+  const auto& sr_add_mod_list = out.sched_request_cfg.sched_request_to_add_mod_list;
+  const bool  needs_sr_prohibit_timer_ext =
+      std::any_of(sr_add_mod_list.begin(), sr_add_mod_list.end(), [&](const sched_request_to_add_mod_s& req) {
+        return has_ext_prohibit_timer(find_sr_cfg(dest.scheduling_request_config, req.sched_request_id)) or
+               has_ext_prohibit_timer(find_sr_cfg(src.scheduling_request_config, req.sched_request_id));
+      });
+  if (needs_sr_prohibit_timer_ext) {
+    out.sched_request_cfg_v1700.set_present();
+    auto& ext_list = out.sched_request_cfg_v1700->sched_request_to_add_mod_list_ext_v1700;
+    ext_list.resize(sr_add_mod_list.size());
+    for (unsigned i = 0, e = ext_list.size(); i != e; ++i) {
+      const scheduling_request_to_addmod* sr_cfg =
+          find_sr_cfg(dest.scheduling_request_config, sr_add_mod_list[i].sched_request_id);
+      // An entry without sr-ProhibitTimer-v1700 releases the UE stored value (Need R).
+      if (sr_cfg != nullptr) {
+        ext_list[i] = make_asn1_rrc_scheduling_request_ext(*sr_cfg);
+      }
+    }
+  } else {
+    out.sched_request_cfg_v1700.reset();
+  }
+
   if (dest.bsr_cfg.has_value()) {
     out.bsr_cfg_present = true;
     make_asn1_rrc_bsr_config(out.bsr_cfg, dest.bsr_cfg.value());
@@ -3300,8 +3769,28 @@ static bool calculate_mac_cell_group_config_diff(asn1::rrc_nr::mac_cell_group_cf
 
   out.skip_ul_tx_dyn = dest.skip_uplink_tx_dynamic;
 
+  // tar-Config, in the Rel-17 extension group. Only signalled on a change, like phr_cfg above.
+  if (dest.tar_cfg.has_value() and dest.tar_cfg != src.tar_cfg) {
+    out.tar_cfg_r17.set_present();
+    tar_cfg_r17_s& tar              = out.tar_cfg_r17->set_setup();
+    tar.offset_thres_ta_r17_present = true;
+    // The field is enumerated in milliseconds, with 0.5ms as the smallest step.
+    const float offset_thres_ms = static_cast<float>(dest.tar_cfg->offset_threshold_ta.count()) / 1000.0F;
+    if (not asn1::number_to_enum(tar.offset_thres_ta_r17, offset_thres_ms)) {
+      report_error("Invalid offsetThresholdTA={}ms in tar-Config\n", offset_thres_ms);
+    }
+    tar.timing_advance_sr_r17_present = dest.tar_cfg->sr_enabled;
+  } else if (src.tar_cfg.has_value() and not dest.tar_cfg.has_value()) {
+    out.tar_cfg_r17.set_present();
+    out.tar_cfg_r17->set_release();
+  } else {
+    // Either tar-Config is unchanged, or it was never configured. Nothing to signal.
+    out.tar_cfg_r17.reset();
+  }
+  out.ext = out.ext or out.tar_cfg_r17.is_present() or out.sched_request_cfg_v1700.is_present();
+
   return out.drx_cfg_present || out.sched_request_cfg_present || out.bsr_cfg_present || out.tag_cfg_present ||
-         out.phr_cfg_present;
+         out.phr_cfg_present || out.tar_cfg_r17.is_present() || out.sched_request_cfg_v1700.is_present();
 }
 
 static static_vector<rlc_bearer_config, MAX_NOF_RB_LCIDS> fill_rlc_bearers(const du_ue_resource_config& res)
@@ -3364,6 +3853,14 @@ void ocudu::odu::calculate_cell_group_config_diff(asn1::rrc_nr::cell_group_cfg_s
     out.phys_cell_group_cfg.p_nr_fr1_present = true;
     out.phys_cell_group_cfg.p_nr_fr1         = dest.cell_group.pcg_cfg.p_nr_fr1.value();
   }
+  if (dest.cell_group.pcg_cfg.cs_rnti.has_value() or src.cell_group.pcg_cfg.cs_rnti.has_value()) {
+    out.phys_cell_group_cfg.cs_rnti_present = true;
+    if (dest.cell_group.pcg_cfg.cs_rnti.has_value()) {
+      out.phys_cell_group_cfg.cs_rnti.set_setup() = to_underlying(dest.cell_group.pcg_cfg.cs_rnti.value());
+    } else {
+      out.phys_cell_group_cfg.cs_rnti.set_release();
+    }
+  }
   out.phys_cell_group_cfg.pdsch_harq_ack_codebook.value =
       dest.cell_group.pcg_cfg.pdsch_harq_codebook == pdsch_harq_ack_codebook::dynamic
           ? phys_cell_group_cfg_s::pdsch_harq_ack_codebook_opts::dyn
@@ -3395,7 +3892,7 @@ static ssb_mtc_s make_ssb_mtc(const du_cell_config& du_cell_cfg)
       ret.periodicity_and_offset.set_sf160() = 0;
       break;
     default:
-      report_fatal_error("Invalud SSB period={}", fmt::underlying(du_cell_cfg.ran.ssb_cfg.ssb_period));
+      report_fatal_error("Invalid SSB period={}", fmt::underlying(du_cell_cfg.ran.ssb_cfg.ssb_period));
   }
   ret.dur.value = ssb_mtc_s::dur_opts::sf5;
 
@@ -3436,15 +3933,14 @@ bool ocudu::odu::calculate_reconfig_with_sync_diff(asn1::rrc_nr::recfg_with_sync
 
   // n-TimingAdvanceOffset only covers FR1 offsets, FR2 value n13792 is not present in this enum and should be skipped.
   if (band_helper::get_freq_range(du_cell_cfg.ran.dl_carrier.band) == frequency_range::FR1) {
-    const n_ta_offset ta_offset = band_helper::get_ta_offset(du_cell_cfg.ran.dl_carrier.band);
     out.sp_cell_cfg_common.n_timing_advance_offset_present = true;
-    if (ta_offset == n_ta_offset::n0) {
+    if (du_cell_cfg.ran.ta_offset == n_ta_offset::n0) {
       out.sp_cell_cfg_common.n_timing_advance_offset.value =
           serving_cell_cfg_common_s::n_timing_advance_offset_opts::n0;
-    } else if (ta_offset == n_ta_offset::n25600) {
+    } else if (du_cell_cfg.ran.ta_offset == n_ta_offset::n25600) {
       out.sp_cell_cfg_common.n_timing_advance_offset.value =
           serving_cell_cfg_common_s::n_timing_advance_offset_opts::n25600;
-    } else if (ta_offset == n_ta_offset::n39936) {
+    } else if (du_cell_cfg.ran.ta_offset == n_ta_offset::n39936) {
       out.sp_cell_cfg_common.n_timing_advance_offset.value =
           serving_cell_cfg_common_s::n_timing_advance_offset_opts::n39936;
     }
@@ -3453,22 +3949,20 @@ bool ocudu::odu::calculate_reconfig_with_sync_diff(asn1::rrc_nr::recfg_with_sync
   // As per \c ssb-PositionsInBurst, in \c ServingCellConfigCommon, TS 38.331, the length of \c ssb-PositionsInBurst
   // needs to be set according to TS 38.213, Section 4.1.
   out.sp_cell_cfg_common.ssb_positions_in_burst_present = true;
-  const uint8_t l_max                                   = du_cell_cfg.ran.ssb_cfg.ssb_bitmap.get_L_max();
+  const ssb_bitmap_t ssb_bitmap                         = du_cell_cfg.ran.ssb_cfg.ssb_beams.get_ssb_bitmap();
+  const uint8_t      l_max                              = ssb_bitmap.get_L_max();
   ocudu_assert(l_max == 4U or l_max == 8U or l_max == 64U, "L_max value {} not valid", l_max);
   if (l_max == 4U) {
-    out.sp_cell_cfg_common.ssb_positions_in_burst.set_short_bitmap().from_number(
-        du_cell_cfg.ran.ssb_cfg.ssb_bitmap.to_uint64());
+    out.sp_cell_cfg_common.ssb_positions_in_burst.set_short_bitmap().from_number(ssb_bitmap.to_uint64());
   } else if (l_max == 8U) {
-    out.sp_cell_cfg_common.ssb_positions_in_burst.set_medium_bitmap().from_number(
-        du_cell_cfg.ran.ssb_cfg.ssb_bitmap.to_uint64());
+    out.sp_cell_cfg_common.ssb_positions_in_burst.set_medium_bitmap().from_number(ssb_bitmap.to_uint64());
   } else {
-    out.sp_cell_cfg_common.ssb_positions_in_burst.set_long_bitmap().from_number(
-        du_cell_cfg.ran.ssb_cfg.ssb_bitmap.to_uint64());
+    out.sp_cell_cfg_common.ssb_positions_in_burst.set_long_bitmap().from_number(ssb_bitmap.to_uint64());
   }
 
   out.sp_cell_cfg_common.ssb_periodicity_serving_cell_present = true;
   asn1::number_to_enum(out.sp_cell_cfg_common.ssb_periodicity_serving_cell,
-                       to_value(du_cell_cfg.ran.ssb_cfg.ssb_period));
+                       to_underlying(du_cell_cfg.ran.ssb_cfg.ssb_period));
 
   out.sp_cell_cfg_common.dmrs_type_a_position.value = du_cell_cfg.ran.dmrs_typeA_pos == dmrs_typeA_position::pos2
                                                           ? serving_cell_cfg_common_s::dmrs_type_a_position_opts::pos2
@@ -3487,9 +3981,9 @@ bool ocudu::odu::calculate_reconfig_with_sync_diff(asn1::rrc_nr::recfg_with_sync
   // ss-PBCH-BlockPower INTEGER (-60..50)
   out.sp_cell_cfg_common.ss_pbch_block_pwr = du_cell_cfg.ran.ssb_cfg.ssb_block_power;
 
-  out.new_ue_id = to_value(rnti);
+  out.new_ue_id = to_underlying(rnti);
 
-  out.t304.value = recfg_with_sync_s::t304_opts::ms2000;
+  asn1::number_to_enum(out.t304, du_cell_cfg.si.ue_timers_and_constants.t304.count());
 
   // In case of CFRA.
   out.rach_cfg_ded_present = dest.cfra.has_value();

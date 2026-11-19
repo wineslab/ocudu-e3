@@ -79,9 +79,15 @@ public:
   mac_paging_information_handler&       get_cell_paging_info_handler() override { return *this; }
 
   void handle_rach_indication(const mac_rach_indication& rach_ind) override {}
-  void handle_crc(const mac_crc_indication_message& msg) override { events.last_crc = msg; }
-  void handle_uci(const mac_uci_indication_message& msg) override { events.last_uci = msg; }
-  void handle_srs(const mac_srs_indication_message& msg) override
+  std::optional<rnti_t>
+  handle_msga_ccch_sdu(rnti_t ra_rnti, uint8_t rapid, slot_point sl_rx, const ue_con_res_id_t& con_res_id) override
+  {
+    return std::nullopt;
+  }
+  std::optional<ue_con_res_id_t> resolve_msga_con_res_id(rnti_t tc_rnti) override { return std::nullopt; }
+  void                           handle_crc(const mac_crc_indication_message& msg) override { events.last_crc = msg; }
+  void                           handle_uci(const mac_uci_indication_message& msg) override { events.last_uci = msg; }
+  void                           handle_srs(const mac_srs_indication_message& msg) override
   {
     // TODO: Implement this.
   }
@@ -113,7 +119,10 @@ public:
   {
     return launch_no_op_task(mac_ue_delete_response{});
   }
-  bool handle_ul_ccch_msg(du_ue_index_t ue_index, byte_buffer pdu) override { return true; }
+  bool handle_ul_ccch_msg(du_ue_index_t, du_cell_index_t, slot_point, byte_buffer, msg3_mac_ce_list) override
+  {
+    return true;
+  }
   void handle_ue_config_applied(du_ue_index_t ue_index) override {}
 
   void                                   handle_rx_data_indication(mac_rx_data_indication pdu) override {}
@@ -145,7 +154,7 @@ void PrintTo(const test_params& value, ::std::ostream* os)
   *os << fmt::format("ports={} cqi={} ri={}", value.nof_ports, value.test_ue_cfg.cqi, value.test_ue_cfg.ri);
   if (value.nof_ports == 2) {
     *os << fmt::format(" pmi={}", value.test_ue_cfg.pmi);
-  } else if (value.nof_ports == 4) {
+  } else if (value.nof_ports > 2) {
     *os << fmt::format(" i1_1={} i1_2={} i1_3={} i2={}",
                        value.test_ue_cfg.i_1_1,
                        value.test_ue_cfg.i_1_2,
@@ -244,7 +253,7 @@ TEST_F(mac_test_mode_test, when_test_mode_ue_has_pucch_grants_then_uci_indicatio
   for (const auto& pucch : {pucch_f0, pucch_f1}) {
     // PUCCH got scheduled for test mode UE.
     ul_sched_result ul_res{};
-    ul_res.pucchs.push_back(pucch);
+    ul_res.pucchs.emplace(pucch);
 
     mac_events.next_ul_sched_res.emplace();
     mac_events.next_ul_sched_res->slot   = next_slot.without_hyper_sfn();
@@ -348,13 +357,13 @@ TEST_P(mac_test_mode_auto_uci_test, when_test_mode_ue_has_pucch_grants_then_uci_
   // PUCCH got scheduled for test mode UE.
   ul_sched_result ul_res{};
 
-  pucch_info& pucch_f0 = ul_res.pucchs.emplace_back();
+  pucch_info& pucch_f0 = ul_res.pucchs[ul_res.pucchs.emplace()];
   pucch_f0.crnti       = this->params.test_ue_cfg.rnti;
   pucch_f0.format_params.emplace<pucch_info::f0_config>();
   pucch_f0.uci_bits.harq_ack_nof_bits = 1;
   pucch_f0.uci_bits.sr_bits           = sr_nof_bits::no_sr;
 
-  pucch_info& pucch_f1 = ul_res.pucchs.emplace_back();
+  pucch_info& pucch_f1 = ul_res.pucchs[ul_res.pucchs.emplace()];
   pucch_f1.crnti       = this->params.test_ue_cfg.rnti;
   pucch_f1.format_params.emplace<pucch_info::f1_config>();
   pucch_f1.uci_bits.harq_ack_nof_bits = 1;
@@ -430,7 +439,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_forwarded_to_mac_then_test_mode_
   // PUCCH got scheduled for test mode UE.
   ul_sched_result ul_res{};
 
-  pucch_info& pucch_f2 = ul_res.pucchs.emplace_back();
+  pucch_info& pucch_f2 = ul_res.pucchs[ul_res.pucchs.emplace()];
   pucch_f2.crnti       = this->params.test_ue_cfg.rnti;
   pucch_f2.format_params.emplace<pucch_info::f2_config>();
   pucch_f2.uci_bits.harq_ack_nof_bits  = 1;
@@ -438,7 +447,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_forwarded_to_mac_then_test_mode_
   pucch_f2.uci_bits.csi_part1_nof_bits = 11;
   pucch_f2.csi_rep_cfg                 = this->csi_cfg;
 
-  pucch_info& pucch_f3 = ul_res.pucchs.emplace_back();
+  pucch_info& pucch_f3 = ul_res.pucchs[ul_res.pucchs.emplace()];
   pucch_f3.crnti       = this->params.test_ue_cfg.rnti;
   pucch_f3.format_params.emplace<pucch_info::f3_config>();
   pucch_f3.uci_bits.harq_ack_nof_bits  = 1;
@@ -446,7 +455,7 @@ TEST_P(mac_test_mode_auto_uci_test, when_uci_is_forwarded_to_mac_then_test_mode_
   pucch_f3.uci_bits.csi_part1_nof_bits = 11;
   pucch_f3.csi_rep_cfg                 = this->csi_cfg;
 
-  pucch_info& pucch_f4 = ul_res.pucchs.emplace_back();
+  pucch_info& pucch_f4 = ul_res.pucchs[ul_res.pucchs.emplace()];
   pucch_f4.crnti       = this->params.test_ue_cfg.rnti;
   pucch_f4.format_params.emplace<pucch_info::f4_config>();
   pucch_f4.uci_bits.harq_ack_nof_bits  = 1;
@@ -536,6 +545,9 @@ INSTANTIATE_TEST_SUITE_P(test_configs,
   test_params{2, {to_rnti(0x4601), 1, 10, 8, true, true, 3,   1,  3}},
   test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  4,  0,   2,  std::nullopt, 0,  1}},
   test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  1,  0,   1,  std::nullopt, 0,  3}},
-  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  2,  0,   7,  std::nullopt, 1,  0}}
+  test_params{4, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  2,  0,   7,  std::nullopt, 1,  0}},
+  test_params{8, {to_rnti(0x4601), 1, 10, 8, true, true, 12,  1,  0,   9,  std::nullopt, 0,  3}},
+  test_params{8, {to_rnti(0x4601), 1, 10, 8, true, true, 9,   2,  0,   15, std::nullopt, 3,  1}},
+  test_params{8, {to_rnti(0x4601), 1, 10, 8, true, true, 6,   4,  0,   2,  std::nullopt, 2,  0}}
 ));
 // clang-format on

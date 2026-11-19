@@ -26,18 +26,30 @@ struct mac_slice_configuration {
   // TODO: Fill remaining fields
 };
 
+/// \brief Requests the MAC/scheduler to repeat a PWS (ETWS/CMAS) short-message broadcast indication a given number of
+/// times at a given cadence, as per TS 38.473, Section 8.5.1 "Repetition Period"/"Number of Broadcasts Requested".
+struct pws_broadcast_indication {
+  /// Repetition Period.
+  std::chrono::seconds repeat_period;
+  /// Number of Broadcasts Requested.
+  uint32_t nof_broadcasts_requested;
+};
+
 /// Structure used to update SI PDU messages, without SI change notifications nor in a modification of valueTag in SIB1.
 struct mac_cell_sys_info_pdu_update {
-  /// SI message index.
-  unsigned si_msg_idx;
-  /// SIB index (e.g., sib2 => value 2).
-  uint8_t sib_idx;
-  /// Slot at which the new SI is transmitted.
-  slot_point slot;
+  /// \brief SIB whose SI message this update targets.
+  ///
+  /// A SIB is mapped to at most one SI message, so it identifies the SI message within the cell. \c si_messages holds
+  /// the content of that SI message as a whole, every SIB it carries included.
+  sib_type sib_idx;
+  /// Slot at which the new SI is transmitted. If absent, the update is applied as soon as possible (e.g. PWS).
+  std::optional<slot_point> slot;
   /// SI period in nof slots, required if more than one are SI PDU passed.
   std::optional<unsigned> si_slot_period;
   /// Packed content of SIB messages.
-  span<byte_buffer> si_messages;
+  span<const byte_buffer> si_messages;
+  /// If not empty, requests a repeated PWS short-message broadcast indication for this SI PDU update.
+  std::optional<pws_broadcast_indication> pws_broadcast;
 };
 
 /// Reconfiguration of a MAC cell during its operation.
@@ -48,6 +60,13 @@ struct mac_cell_reconfig_request {
   std::optional<mac_cell_sys_info_pdu_update> new_si_pdu_info;
   /// If not empty, contains the updates to be applied to the RRM policies.
   std::optional<du_cell_slice_reconfig_request> slice_reconf_req;
+  /// If not empty, contains a new reference location uplink timing advance for an NTN cell.
+  std::optional<sched_cell_ntn_ul_ta_update> ntn_ul_ta_update;
+  /// If set, contains the new value for the MIB cellBarred flag (TS 38.331). Takes effect on the next SSB build.
+  std::optional<bool> cell_barred_mod;
+  /// If set, contains the new value for the MIB intraFreqReselection flag (TS 38.331). Takes effect on the next SSB
+  /// build.
+  std::optional<bool> intra_freq_reselection_mod;
 };
 
 struct mac_cell_reconfig_response {

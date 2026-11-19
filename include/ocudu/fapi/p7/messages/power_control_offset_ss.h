@@ -4,7 +4,6 @@
 #pragma once
 
 #include "ocudu/support/ocudu_assert.h"
-#include <cstdint>
 
 namespace ocudu {
 namespace fapi {

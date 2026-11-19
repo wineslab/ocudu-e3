@@ -5,6 +5,7 @@
 #include "cu_appconfig_cli11_schema.h"
 #include "apps/helpers/f1u/f1u_cli11_schema.h"
 #include "apps/helpers/logger/logger_appconfig_cli11_schema.h"
+#include "apps/helpers/network/dtls_cli11_schema.h"
 #include "apps/helpers/network/sctp_cli11_schema.h"
 #include "apps/helpers/tracing/tracer_appconfig_cli11_schema.h"
 #include "apps/services/app_execution_metrics/executor_metrics_config_cli11_schema.h"
@@ -22,11 +23,15 @@ static void configure_cli11_f1ap_args(CLI::App& app, ocu::cu_f1ap_appconfig& f1a
 {
   add_option(
       app,
-      "--bind_addrs,--bind_addr", // TODO: old name kept for backward compatibility, should be removed in the future
+      "--bind_addrs,--bind_addr",
       f1ap_params.bind_addrs,
-      "CU F1-C bind addresses. Multiple addresses can be specified for SCTP multi-homing")
+      "CU F1-C bind addresses. Multiple addresses can be specified for SCTP multi-homing. The '--bind_addr' name is "
+      "a deprecated alias and should not be used.")
       ->capture_default_str();
   configure_cli11_sctp_socket_args(app, f1ap_params.sctp);
+
+  CLI::App* dtls_subcmd = add_subcommand(app, "dtls", "DTLS configuration");
+  configure_cli11_dtls_server_args(*dtls_subcmd, f1ap_params.dtls);
 }
 
 void ocudu::configure_cli11_with_cu_appconfig_schema(CLI::App& app, cu_appconfig& cu_cfg)
@@ -53,13 +58,15 @@ void ocudu::configure_cli11_with_cu_appconfig_schema(CLI::App& app, cu_appconfig
   app_services::configure_cli11_with_metrics_appconfig_schema(app, cu_cfg.metrics_cfg.metrics_service_cfg);
   app_services::configure_cli11_with_executor_metrics_appconfig_schema(app, cu_cfg.metrics_cfg.executors_metrics_cfg);
 
-  // F1AP section.
+  // CU-CP section.
   CLI::App* cu_cp_subcmd = add_subcommand(app, "cu_cp", "CU-CP parameters")->configurable();
-  CLI::App* f1ap_subcmd  = add_subcommand(*cu_cp_subcmd, "f1ap", "F1AP parameters")->configurable();
+  // F1AP section.
+  CLI::App* f1ap_subcmd = add_subcommand(*cu_cp_subcmd, "f1ap", "F1AP parameters")->configurable();
   configure_cli11_f1ap_args(*f1ap_subcmd, cu_cfg.f1ap_cfg);
 
-  // NR-U section.
+  // CU-UP section.
   CLI::App* cu_up_subcmd = add_subcommand(app, "cu_up", "CU-UP parameters")->configurable();
-  CLI::App* f1u_subcmd   = add_subcommand(*cu_up_subcmd, "f1u", "F1-U parameters")->configurable();
+  // NR-U section.
+  CLI::App* f1u_subcmd = add_subcommand(*cu_up_subcmd, "f1u", "F1-U parameters")->configurable();
   configure_cli11_f1u_sockets_args(*f1u_subcmd, cu_cfg.f1u_cfg);
 }

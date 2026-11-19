@@ -4,6 +4,7 @@
 
 #include "du_positioning_handler_factory.h"
 #include "du_positioning_manager_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace odu;

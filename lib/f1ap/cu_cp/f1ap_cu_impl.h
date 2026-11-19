@@ -69,9 +69,18 @@ public:
   async_task<expected<measurement_response_t, measurement_failure_t>>
   handle_positioning_measurement_request(const measurement_request_t& request) override;
 
+  async_task<expected<e_cid_measurement_response_t, e_cid_measurement_failure_t>>
+  handle_e_cid_measurement_request(const e_cid_measurement_request_t& request) override;
+
   // f1ap_interface_management_handler functions.
   async_task<f1ap_gnb_cu_configuration_update_response>
   handle_gnb_cu_configuration_update(const f1ap_gnb_cu_configuration_update& request) override;
+
+  void handle_ref_time_info_report_ctrl(const f1ap_ref_time_report_ctrl_request& request) override;
+
+  // f1ap_warning_manager functions.
+  async_task<f1ap_write_replace_warning_response>
+  handle_write_replace_warning_request(const f1ap_write_replace_warning_request& request) override;
 
   // f1ap_cu_interface
   f1ap_message_handler&              get_f1ap_message_handler() override { return *this; }
@@ -82,6 +91,7 @@ public:
   f1ap_ue_context_removal_handler&   get_f1ap_ue_context_removal_handler() override { return *this; }
   f1ap_nrppa_message_handler&        get_f1ap_nrppa_message_handler() override { return *this; }
   f1ap_interface_management_handler& get_f1ap_interface_management_handler() override { return *this; }
+  f1ap_warning_manager&              get_f1ap_warning_manager() override { return *this; }
 
 private:
   class tx_pdu_notifier_with_logging final : public f1ap_message_notifier
@@ -138,6 +148,9 @@ private:
   /// \param[in] msg The gNB-DU Configuration Update message.
   void handle_du_cfg_update(const asn1::f1ap::gnb_du_cfg_upd_s& request);
 
+  /// \brief Handle REFERENCE TIME INFORMATION REPORT from the gNB-DU as per TS 38.473 section 8.12.2.
+  void handle_ref_time_info_report(const asn1::f1ap::ref_time_info_report_s& msg);
+
   /// \brief Log F1AP PDU.
   void log_pdu(bool is_rx, const f1ap_message& pdu);
 
@@ -157,8 +170,8 @@ private:
   tx_pdu_notifier_with_logging tx_pdu_notifier;
   f1ap_event_manager           ev_mng;
 
-  // Store current F1AP transaction ID.
-  unsigned current_transaction_id = 0;
+  // Counter used to allocate transaction IDs for CU-initiated Reference Time Information Reporting Control messages.
+  uint8_t next_ref_time_transaction_id = 0;
 };
 
 } // namespace ocudu::ocucp

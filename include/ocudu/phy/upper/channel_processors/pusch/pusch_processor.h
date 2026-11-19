@@ -11,7 +11,8 @@
 #include "ocudu/phy/support/rb_allocation.h"
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/dmrs/dmrs.h"
-#include "ocudu/ran/pusch/pusch_context.h"
+#include "ocudu/ran/harq_id.h"
+#include "ocudu/ran/rnti.h"
 #include "ocudu/ran/sch/ldpc_base_graph.h"
 #include "ocudu/ran/sch/sch_mcs.h"
 #include "ocudu/ran/slot_point.h"
@@ -43,6 +44,8 @@ public:
     /// Unlike the NDI field in DCI, it does not toggle to indicate new transmission. It is true for the first
     /// transmission of the HARQ process. Otherwise, it is false.
     bool new_data;
+    /// Flag to denote last repetition (last HARQ transmission in a burst).
+    bool last_repetition;
   };
 
   /// Collects Uplink Control Information parameters.
@@ -100,12 +103,21 @@ public:
   ///
   /// For a valid PUSCH transmission the codeword, the UCI information or both must be present.
   struct pdu_t {
-    /// Context information.
-    std::optional<pusch_context> context;
+    /// HARQ identifier.
+    harq_id_t harq_id = INVALID_HARQ_ID;
     /// Indicates the slot and numerology.
     slot_point slot;
+    /// \brief Slot delay with which the message is processed.
+    ///
+    /// Determines the number of slot that have passed since the UE transmitted to the gNB received. In other words,
+    /// the UE transmitted in slot \e n while the gNB is receiving in slot <em>n + slot_offset</em>.
+    ///
+    /// The effect of this offset is applied to the sequence generators that depend on the slot.
+    ///
+    /// This parameter is derived from the higher layers K-MAC which is specific for NTN.
+    unsigned slot_offset;
     /// Provides \f$n_{RNTI}\f$ from TS38.211 Section 6.3.1.1 Scrambling.
-    uint16_t rnti;
+    rnti_t rnti;
     /// Number of contiguous PRBs allocated to the BWP {1...275}.
     unsigned bwp_size_rb;
     /// BWP start RB index from reference CRB {0...274}.

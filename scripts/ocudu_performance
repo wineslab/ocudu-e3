@@ -17,12 +17,28 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+assume_yes=0
+if [[ "${1:-}" == "-y" ]]; then
+  assume_yes=1
+fi
+
+#
+# Prompt for confirmation, unless -y was passed.
+#
+confirm() {
+  if [[ "$assume_yes" == 1 ]]; then
+    choice="y"
+    return
+  fi
+  read -e -p "$1" choice
+}
+
 #
 # Set the scaling governor to performance.
 # See: https://docs.kernel.org/admin-guide/pm/cpufreq.html#generic-scaling-governors
 #
 set_performance_governor() {
-  read -e -p "Would you like to set the CPU governor to performance: [Y/n]: " choice
+  confirm "Would you like to set the CPU governor to performance: [Y/n]: "
   if ! [[ "$choice" == [Yy]* || "$choice" == "" ]]; then
     echo "Did not set scaling governor"
     return
@@ -36,7 +52,7 @@ set_performance_governor() {
 # See: https://wiki.archlinux.org/title/kernel_mode_setting#Problem_upon_bootloading_and_dmesg
 #
 set_kms_polling() {
-  read -e -p "Would you like to disable KMS polling: [Y/n]: " choice
+  confirm "Would you like to disable KMS polling: [Y/n]: "
   if ! [[ "$choice" == [Yy]* || "$choice" == "" ]]; then
     echo "Did not disable KMS polling"
     return
@@ -50,7 +66,7 @@ set_kms_polling() {
 # See: https://kb.ettus.com/USRP_Host_Performance_Tuning_Tips_and_Tricks
 #
 set_network_buffers() {
-  read -e -p "Would you like to tweak the network buffer sizes: [Y/n]: " choice
+  confirm "Would you like to tweak the network buffer sizes: [Y/n]: "
   if ! [[ "$choice" == [Yy]* || "$choice" == "" ]]; then
     echo "Did not tweak network buffer sizes"
     return

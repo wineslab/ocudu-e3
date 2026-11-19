@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/span.h"
+#include "ocudu/ocudulog/log_channel.h"
 
 namespace ocudu {
 

@@ -4,11 +4,16 @@
 
 #include "../test_utils/config_generators.h"
 #include "lib/scheduler/srs/srs_scheduler_impl.h"
+#include "lib/scheduler/ue_context/ue_cell_repository.h"
+#include "lib/scheduler/ue_context/ue_repository.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/cell_config_builder_profiles.h"
+#include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/scheduler/test_utils/scheduler_test_suite.h"
 #include "ocudu/ran/srs/srs_bandwidth_configuration.h"
 #include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
+#include "ocudu/scheduler/sched_consts.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -134,11 +139,12 @@ public:
     expert_cfg{config_helpers::make_default_scheduler_expert_config()},
     cfg_mng{cell_config_builder_profiles::create(params.is_tdd ? duplex_mode::TDD : duplex_mode::FDD), expert_cfg},
     cell_cfg(*cfg_mng.add_cell(cfg_mng.get_default_cell_config_request())),
+    cell_ues(cell_cfg, nullptr),
     ues(expert_cfg.ue),
-    cell_ues(ues.add_cell(cell_cfg, nullptr)),
-    srs_sched(cell_cfg, ues),
+    srs_sched(cell_cfg, cell_ues),
     current_sl_tx{to_numerology_value(cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.scs), 0}
   {
+    ues.register_cell(cell_ues);
     slot_indication(current_sl_tx);
     mac_logger.set_level(ocudulog::basic_levels::debug);
 
@@ -149,8 +155,8 @@ public:
   scheduler_expert_config                 expert_cfg;
   test_helpers::test_sched_config_manager cfg_mng;
   const cell_configuration&               cell_cfg;
+  ue_cell_repository                      cell_ues;
   ue_repository                           ues;
-  ue_cell_repository&                     cell_ues;
   std::vector<const ue_configuration*>    ue_ded_cfgs;
   cell_resource_allocator                 res_grid{cell_cfg};
   srs_scheduler_impl                      srs_sched;
@@ -169,7 +175,7 @@ public:
         cell_cfg.params.tdd_cfg);
     ue_ded_cfgs.emplace_back(cfg_mng.add_ue(ue_req));
     report_error_if_not(ue_ded_cfgs.back() != nullptr, "Failed to create UE configuration");
-    ues.add_ue(*ue_ded_cfgs.back(), ue_req.starts_in_fallback, ue_req.ul_ccch_slot_rx, ue_req.cfra_enabled);
+    ues.add_ue(*ue_ded_cfgs.back(), {sched_config_helper::to_ue_creation_mode(ue_req), ue_req.ul_ccch_slot_rx});
     srs_sched.add_ue(ues[ue_req.ue_index].get_pcell().cfg());
   }
 
@@ -271,6 +277,8 @@ protected:
 
 TEST_P(srs_scheduler_tester, test_different_periods)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-PHY-16-3");
+
   const auto srs_period_uint = static_cast<unsigned>(GetParam().period);
 
   const auto add_ue_slot = test_rng::uniform_int<unsigned>(0, res_grid.ring_size());
@@ -284,13 +292,17 @@ TEST_P(srs_scheduler_tester, test_different_periods)
     }
 
     srs_sched.run_slot(res_grid);
-    // Only check the results once the UE has been added.
-    if (not ues.empty() and (current_sl_tx - get_offset()).to_uint() % srs_period_uint == 0) {
-      ASSERT_EQ(1, res_grid[0].result.ul.srss.size());
-      expected<bool, std::string> pdu_test = test_srs_pdu(res_grid[0].result.ul.srss.front());
-      ASSERT_TRUE(pdu_test.has_value()) << pdu_test.error();
-    } else {
-      ASSERT_TRUE(res_grid[0].result.ul.srss.empty());
+    // Only check the results once the UE has been added, and after SCHEDULER_MAX_K2 slots have elapsed since then.
+    // Slots closer than that to UE creation are deliberately skipped by the SRS scheduler, as UL grants for them may
+    // already have been scheduled before the UE (and its SRS resource) existed.
+    if (sl_cnt >= add_ue_slot + SCHEDULER_MAX_K2) {
+      if (not ues.empty() and (current_sl_tx - get_offset()).count() % srs_period_uint == 0) {
+        ASSERT_EQ(1, res_grid[0].result.ul.srss.size());
+        expected<bool, std::string> pdu_test = test_srs_pdu(res_grid[0].result.ul.srss.front());
+        ASSERT_TRUE(pdu_test.has_value()) << pdu_test.error();
+      } else {
+        ASSERT_TRUE(res_grid[0].result.ul.srss.empty());
+      }
     }
 
     // Update the slot indicator.
@@ -320,7 +332,10 @@ INSTANTIATE_TEST_SUITE_P(test_srs_scheduler_for_different_periods,
 class srs_positioning_scheduler_test : public srs_sched_test_bench, public ::testing::Test
 {
 public:
-  srs_positioning_scheduler_test() : srs_sched_test_bench(srs_test_params{true, srs_periodicity::sl20}) {}
+  srs_positioning_scheduler_test() : srs_sched_test_bench(srs_test_params{true, srs_periodicity::sl20})
+  {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-POS-16-3-a", "MVP-FUNC-POS-16-3-b");
+  }
 
   const srs_info* next_srs_info(rnti_t rnti, unsigned max_slots = 0)
   {

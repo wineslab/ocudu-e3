@@ -8,8 +8,6 @@
 
 using namespace ocudu;
 
-/// Scaling factor for converting from complex float to 16-bit complex integer.
-static constexpr float scaling_factor_cf_to_ci16 = std::numeric_limits<int16_t>::max();
 /// Alignment timeout. Waits this time before padding zeros.
 static constexpr std::chrono::milliseconds RECEIVE_TS_ALIGN_TIMEOUT = std::chrono::milliseconds(100);
 
@@ -88,7 +86,7 @@ baseband_gateway_receiver::metadata radio_zmq_rx_stream::receive(baseband_gatewa
     if (gain != 1.0f) {
       ocuduvec::sc_prod(view, view, gain);
     }
-    ocuduvec::convert(data.get_channel_buffer(channel_id), view, scaling_factor_cf_to_ci16);
+    ocuduvec::convert(data.get_channel_buffer(channel_id), view, ocuduvec::scaling_factor_cf_to_ci16);
   }
 
   // Increment the number of samples.

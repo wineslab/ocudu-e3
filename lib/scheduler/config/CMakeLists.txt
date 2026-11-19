@@ -5,17 +5,24 @@
 add_library(sched_config STATIC
         builder/pucch_config.cpp
         builder/csi_meas_config.cpp
+        cell_config_builder_params.cpp
         ran_cell_config_helper.cpp
+        si_scheduling_config.cpp
+	periodic_resource_sched_validator.cpp
         serving_cell_config_factory.cpp
         sched_cell_config_helpers.cpp
         scheduler_cell_config_validator.cpp
         scheduler_ue_config_validator.cpp
         serving_cell_config_validator.cpp
         csi_helper.cpp
+        pucch_default_resource.cpp
+        pucch_guardbands.cpp
         pucch_resource_generator.cpp
         time_domain_resource_helper.cpp
-        rlm_helper.cpp)
-target_link_libraries(sched_config ocudu_ran du_resource_manager)
+        rlm_helper.cpp
+        time_domain_mapper.cpp
+		pusch_td_resource_indices.cpp)
+target_link_libraries(sched_config ocudu_ran sched_support sched_config_manager)
 
 add_library(sched_config_manager OBJECT
 		cell_bwp_res_config.cpp

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/bounded_integer.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 
 namespace ocudu {
 

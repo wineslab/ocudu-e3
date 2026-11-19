@@ -4,6 +4,7 @@
 
 #include "ocudu/nrppa/nrppa_factory.h"
 #include "nrppa_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/async_task_scheduler.h"
 
 /// Notice this would be the only place were we include concrete class implementation files.

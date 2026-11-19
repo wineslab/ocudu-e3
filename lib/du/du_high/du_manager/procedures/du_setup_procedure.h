@@ -8,6 +8,7 @@
 #include "du_proc_context_view.h"
 #include "procedure_logger.h"
 #include "ocudu/f1ap/du/f1ap_du_connection_manager.h"
+#include <limits>
 
 namespace ocudu {
 namespace odu {
@@ -17,11 +18,19 @@ struct du_manager_params;
 
 /// Request to transition the DU to operational mode.
 struct du_start_request {
-  /// Whether the cells need to be reconfigured.
-  bool                      configure_cells                = true;
+  /// Value of \c max_f1c_tnl_connection_retries that requests an unlimited number of setup attempts.
+  static constexpr unsigned unlimited_retries = std::numeric_limits<unsigned>::max();
+
+  /// Maximum number of F1-C TNL connection attempts. A rejected F1 Setup is not retried and is not counted here.
   unsigned                  max_f1c_tnl_connection_retries = 1;
   std::chrono::milliseconds f1c_tnl_connection_retry_wait{1000};
 };
+
+/// \brief Configures the DU cells and creates them in the MAC, without activating them.
+///
+/// It is run when the DU is started, before the F1 interface is set up, so that the layers below are ready to run as
+/// soon as the DU is started. The cells are only activated once the CU-CP accepted the F1 Setup.
+void configure_du_cells(const du_proc_context_view& ctxt);
 
 /// Procedure to transition the DU state to operation mode.
 class du_setup_procedure
@@ -32,9 +41,6 @@ public:
   void operator()(coro_context<async_task<void>>& ctx);
 
 private:
-  // Handle passed DU unit config.
-  void configure_du_cells();
-
   async_task<f1_setup_result> start_f1_setup_request();
 
   // Handle F1 setup response with list of cells to activate.

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/adt/static_vector.h"

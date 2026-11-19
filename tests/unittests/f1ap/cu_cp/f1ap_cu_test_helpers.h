@@ -125,6 +125,13 @@ public:
     return next_du_setup_resp;
   }
 
+  du_config_update_result on_new_du_config_update(const du_config_update_request& msg) override
+  {
+    du_config_update_result res;
+    res.result.emplace<du_config_update_result::accepted>();
+    return res;
+  }
+
   cu_cp_ue_index_t request_new_ue_creation() override
   {
     logger.info("Received request to create new UE");
@@ -140,7 +147,7 @@ public:
                                                    .rrc_pdu  = byte_buffer::create({0x0, 0x0}).value(),
                                                    .srb_id   = srb_id_t::srb0};
 
-    if (cu_cp_ue_index_to_uint(msg.ue_index) >= max_nof_supported_ues) {
+    if (to_underlying(msg.ue_index) >= max_nof_supported_ues) {
       logger.warning("UE creation failed. Maximum number of supported UEs ({}) exceeded", max_nof_supported_ues);
 
       if (f1ap != nullptr) {
@@ -215,12 +222,15 @@ public:
     });
   }
 
+  void on_ref_time_info_report(const f1ap_time_ref_info& info) override { last_ref_time_info_report = info; }
+
   void set_ue_id(uint16_t ue_id_) { ue_id = ue_id_; }
 
   ocucp::du_setup_request last_f1_setup_request_msg;
   ocucp::du_setup_result  next_du_setup_resp;
 
   std::optional<ocucp::f1ap_access_success>            last_access_success_msg;
+  std::optional<f1ap_time_ref_info>                    last_ref_time_info_report;
   ocucp::ue_rrc_context_creation_request               last_ue_creation_msg;
   std::optional<cu_cp_ue_index_t>                      last_created_ue_index;
   std::unique_ptr<dummy_f1ap_ul_ccch_message_notifier> f1ap_srb0_notifier =
@@ -234,7 +244,7 @@ private:
   const unsigned            max_nof_supported_ues;
   f1ap_cu*                  f1ap = nullptr;
   ocudulog::basic_logger&   logger;
-  unsigned                  ue_id = cu_cp_ue_index_to_uint(cu_cp_ue_index_t::min);
+  unsigned                  ue_id = to_underlying(cu_cp_ue_index_t::min);
   fifo_async_task_scheduler task_sched{16};
 };
 

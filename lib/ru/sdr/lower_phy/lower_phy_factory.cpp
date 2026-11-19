@@ -15,12 +15,11 @@ static std::shared_ptr<lower_phy_factory> create_lower_phy_factory(const lower_p
     fr = frequency_range::FR2;
   }
 
-  // Create DFT factory. It tries to create a FFTW based factory. If FFTW library is not available, it creates a generic
-  // DFT factory.
-  std::shared_ptr<dft_processor_factory> dft_factory = create_dft_processor_factory_fftw_fast();
-  if (dft_factory == nullptr) {
-    dft_factory = create_dft_processor_factory_generic();
-  }
+  // Deduce the number of transmit ports from the antenna topology.
+  unsigned nof_tx_ports = get_total_nof_ports(config.tx_ant_topology);
+
+  // Create DFT factory.
+  std::shared_ptr<dft_processor_factory> dft_factory = create_dft_processor_factory();
   report_fatal_error_if_not(dft_factory, "Failed to create DFT factory.");
 
   // Create OFDM modulator factory.
@@ -30,7 +29,7 @@ static std::shared_ptr<lower_phy_factory> create_lower_phy_factory(const lower_p
 
   // Wrap the OFDM modulator factory with a pool factory.
   modulator_factory =
-      create_ofdm_modulator_pool_factory(std::move(modulator_factory), MAX_NSYMB_PER_SLOT * config.nof_tx_ports);
+      create_ofdm_modulator_pool_factory(std::move(modulator_factory), MAX_NSYMB_PER_SLOT * nof_tx_ports);
   report_fatal_error_if_not(modulator_factory, "Failed to create OFDM modulator pool factory.");
 
   // Create OFDM demodulator factory.

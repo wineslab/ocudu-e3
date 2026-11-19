@@ -81,6 +81,9 @@ mac_dl_data_result_test_helper build_valid_mac_data_result_with_all_supported_pd
 /// Builds and returns a valid PRACH occassion.
 prach_occasion_info build_valid_prach_occassion();
 
+/// Builds and returns a valid DL-PRS PDU.
+prs_info build_valid_prs_pdu();
+
 /// Helper struct to manage the pointer life cycle of a UL scheduling info.
 struct ul_sched_info_test_helper {
   bwp_configuration bwp_cfg;

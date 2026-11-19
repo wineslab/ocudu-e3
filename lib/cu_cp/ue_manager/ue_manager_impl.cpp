@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_manager_impl.h"
-#include "ocudu/cu_cp/cu_cp_configuration.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/cu_cp/security_manager_config.h"
 
 using namespace ocudu;
@@ -14,15 +14,22 @@ void cu_cp_ue::stop()
   task_sched.stop();
 }
 
-ue_manager::ue_manager(const cu_cp_configuration& cu_cp_cfg) :
-  next_i_rntis({short_i_rnti_t{cu_cp_cfg.node.gnb_id.id, 0, cu_cp_cfg.ue.nof_i_rnti_ue_bits},
-                full_i_rnti_t{cu_cp_cfg.node.gnb_id.id, 0, cu_cp_cfg.ue.nof_i_rnti_ue_bits}}),
-  cu_cp_config(cu_cp_cfg),
-  ue_config(cu_cp_cfg.ue),
-  up_config(up_resource_manager_cfg{cu_cp_cfg.bearers.drb_config, cu_cp_cfg.admission.max_nof_drbs_per_ue}),
-  sec_config(security_manager_config{cu_cp_cfg.security.int_algo_pref_list, cu_cp_cfg.security.enc_algo_pref_list}),
-  max_nof_ues(cu_cp_cfg.admission.max_nof_ues),
-  ue_task_scheds(*cu_cp_cfg.services.timers, *cu_cp_cfg.services.cu_cp_executor, logger)
+ue_manager::ue_manager(const ue_manager_config& cfg, const ue_manager_dependencies& dependencies) :
+  next_i_rntis({short_i_rnti_t{cfg.ue.short_i_rnti_prof,
+                               short_i_rnti_t::to_local_node_id(cfg.ue.short_i_rnti_prof, cfg.gnb_id.id),
+                               0},
+                full_i_rnti_t{cfg.ue.full_i_rnti_prof,
+                              full_i_rnti_t::to_local_node_id(cfg.ue.full_i_rnti_prof, cfg.gnb_id.id),
+                              0}}),
+  enable_rrc_metrics(cfg.enable_rrc_metrics),
+  ue_config(cfg.ue),
+  up_config(up_resource_manager_cfg{cfg.drb_config, cfg.max_nof_drbs_per_ue}),
+  sec_config(security_manager_config{cfg.int_algo_pref_list, cfg.enc_algo_pref_list}),
+  max_nof_ues(cfg.max_nof_ues),
+  timers(dependencies.timers),
+  cu_cp_executor(dependencies.cu_cp_executor),
+  logger(dependencies.logger),
+  ue_task_scheds(timers, dependencies.cu_cp_executor, logger)
 {
 }
 
@@ -48,15 +55,10 @@ cu_cp_ue_index_t ue_manager::add_ue(cu_cp_du_index_t du_index)
   ue_task_scheduler_impl ue_sched = ue_task_scheds.create_ue_task_sched(ue_index);
 
   // Create UE object.
-  ues.emplace(std::piecewise_construct,
-              std::forward_as_tuple(ue_index),
-              std::forward_as_tuple(ue_index,
-                                    du_index,
-                                    *cu_cp_config.services.timers,
-                                    *cu_cp_config.services.cu_cp_executor,
-                                    up_config,
-                                    sec_config,
-                                    std::move(ue_sched)));
+  ues.emplace(
+      std::piecewise_construct,
+      std::forward_as_tuple(ue_index),
+      std::forward_as_tuple(ue_index, du_index, timers, cu_cp_executor, up_config, sec_config, std::move(ue_sched)));
 
   logger.info("ue={} du_index={}: Created new CU-CP UE", ue_index, du_index);
 
@@ -68,11 +70,12 @@ bool ue_manager::ue_admission_limit_reached() const
   return ues.size() > max_nof_ues;
 }
 
-bool ue_manager::update_ue_context(cu_cp_ue_index_t ue_index,
-                                   gnb_du_id_t      du_id,
-                                   pci_t            pci,
-                                   rnti_t           rnti,
-                                   du_cell_index_t  pcell_index)
+bool ue_manager::update_ue_context(cu_cp_ue_index_t                   ue_index,
+                                   gnb_du_id_t                        du_id,
+                                   pci_t                              pci,
+                                   rnti_t                             rnti,
+                                   du_cell_index_t                    pcell_index,
+                                   std::optional<nr_cell_global_id_t> cgi)
 {
   if (ue_index == cu_cp_ue_index_t::invalid) {
     logger.warning("Can't update UE with invalid UE index");
@@ -100,7 +103,7 @@ bool ue_manager::update_ue_context(cu_cp_ue_index_t ue_index,
   }
 
   if (pcell_index == INVALID_DU_CELL_INDEX) {
-    logger.warning("Invalid pcell_index={}", fmt::underlying(pcell_index));
+    logger.warning("Invalid pcell_index={}", pcell_index);
     return false;
   }
 
@@ -111,7 +114,7 @@ bool ue_manager::update_ue_context(cu_cp_ue_index_t ue_index,
   }
 
   auto& ue = ues.at(ue_index);
-  ue.update_du_ue(du_id, pci, rnti, pcell_index);
+  ue.update_du_ue(du_id, pci, rnti, pcell_index, cgi);
 
   // Add PCI and RNTI to lookup.
   pci_rnti_to_ue_index.emplace(std::make_tuple(pci, rnti), ue_index);
@@ -121,7 +124,7 @@ bool ue_manager::update_ue_context(cu_cp_ue_index_t ue_index,
                fmt::underlying(du_id),
                pci,
                rnti,
-               fmt::underlying(pcell_index));
+               pcell_index);
 
   return true;
 }
@@ -149,6 +152,15 @@ void ue_manager::remove_ue(cu_cp_ue_index_t ue_index)
     }
   } else {
     logger.debug("ue={}: PCI not found", ue_index);
+  }
+
+  // Remove Full-I-RNTI and Short-I-RNTI from lookups, in case the UE was RRC_INACTIVE and is being removed without
+  // having gone through set_active() first (e.g. RNA update or RAN paging timeout).
+  for (auto it = full_i_rnti_to_ue_index.begin(); it != full_i_rnti_to_ue_index.end();) {
+    it = (it->second == ue_index) ? full_i_rnti_to_ue_index.erase(it) : std::next(it);
+  }
+  for (auto it = short_i_rnti_to_ue_index.begin(); it != short_i_rnti_to_ue_index.end();) {
+    it = (it->second == ue_index) ? short_i_rnti_to_ue_index.erase(it) : std::next(it);
   }
 
   // Remove CU-CP UE from database.
@@ -203,6 +215,18 @@ std::vector<cu_cp_ue*> ue_manager::find_ues(plmn_identity plmn)
   std::vector<cu_cp_ue*> found_ues;
   for (auto& ue : ues) {
     if (ue.second.get_ue_context().plmn == plmn) {
+      found_ues.push_back(&ue.second);
+    }
+  }
+
+  return found_ues;
+}
+
+std::vector<cu_cp_ue*> ue_manager::find_ues(cu_cp_du_index_t du_index, pci_t pci)
+{
+  std::vector<cu_cp_ue*> found_ues;
+  for (auto& ue : ues) {
+    if (ue.second.get_du_index() == du_index && ue.second.get_pci() == pci) {
       found_ues.push_back(&ue.second);
     }
   }
@@ -364,7 +388,7 @@ size_t ue_manager::get_nof_du_ues(cu_cp_du_index_t du_index)
 
 std::vector<cu_cp_metrics_report::ue_info> ue_manager::handle_ue_metrics_report_request() const
 {
-  if (!cu_cp_config.metrics.layers_cfg.enable_rrc) {
+  if (!enable_rrc_metrics) {
     return {};
   }
 
@@ -394,7 +418,7 @@ std::vector<cu_cp_metrics_report::ue_info> ue_manager::handle_ue_metrics_report_
 cu_cp_ue_index_t ue_manager::allocate_ue_index()
 {
   // Return invalid when no UE index is available.
-  if (ues.size() == cu_cp_ue_index_to_uint(cu_cp_ue_index_t::max)) {
+  if (ues.size() == to_underlying(cu_cp_ue_index_t::max)) {
     return cu_cp_ue_index_t::invalid;
   }
 

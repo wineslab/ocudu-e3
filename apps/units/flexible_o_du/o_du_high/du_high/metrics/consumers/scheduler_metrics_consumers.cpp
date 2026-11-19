@@ -6,6 +6,7 @@
 #include "ocudu/support/engineering_notation.h"
 #include "ocudu/support/format/custom_formattable.h"
 #include "ocudu/support/format/fmt_to_c_str.h"
+#include <cstdio>
 
 using namespace ocudu;
 
@@ -34,14 +35,14 @@ static const char* event_to_string(scheduler_cell_event::event_type ev)
   return "invalid";
 }
 
-void scheduler_cell_metrics_consumer_stdout::handle_metric(const std::optional<scheduler_metrics_report>& report)
+void scheduler_cell_metrics_consumer_stdout::handle_metric(const scheduler_metrics_report& report)
 {
-  if (!report) {
+  if (report.cells.empty()) {
     return;
   }
 
-  for (const auto& cell : report->cells) {
-    if (cell.ue_metrics.empty()) {
+  for (const auto& cell : report.cells) {
+    if (not cell.report_ue_metrics or cell.ue_metrics.empty()) {
       continue;
     }
 
@@ -54,7 +55,7 @@ void scheduler_cell_metrics_consumer_stdout::handle_metric(const std::optional<s
 
     for (const auto& ue : cell.ue_metrics) {
       fmt::print("{:>4}", ue.pci);
-      fmt::print("{:>5x}", to_value(ue.rnti));
+      fmt::print("{:>5x}", to_underlying(ue.rnti));
 
       if (ue.cqi_stats.get_nof_observations() > 0) {
         fmt::print(" | {:>3}", static_cast<unsigned>(std::round(ue.cqi_stats.get_mean())));
@@ -68,7 +69,7 @@ void scheduler_cell_metrics_consumer_stdout::handle_metric(const std::optional<s
         fmt::print(" {:>3}", "n/a");
       }
 
-      fmt::print("   {:>2}", int(ue.dl_mcs.value()));
+      fmt::print("   {:>2}", static_cast<int>(ue.dl_mcs.value()));
       if (ue.dl_brate_kbps > 0) {
         fmt::print(" {:>6.6}", float_to_eng_string(ue.dl_brate_kbps * 1e3, 1, true));
       } else {
@@ -78,7 +79,7 @@ void scheduler_cell_metrics_consumer_stdout::handle_metric(const std::optional<s
       fmt::print(" {:>4}", ue.dl_nof_nok);
       unsigned dl_total = ue.dl_nof_ok + ue.dl_nof_nok;
       if (dl_total > 0) {
-        fmt::print(" {:>3}%", int((float)100 * ue.dl_nof_nok / dl_total));
+        fmt::print(" {:>3}%", static_cast<int>(100.0f * ue.dl_nof_nok / dl_total));
       } else {
         fmt::print(" {:>3}%", 0);
       }
@@ -119,7 +120,7 @@ void scheduler_cell_metrics_consumer_stdout::handle_metric(const std::optional<s
 
       unsigned ul_total = ue.ul_nof_ok + ue.ul_nof_nok;
       if (ul_total > 0) {
-        fmt::print(" {:>3}%", int((float)100 * ue.ul_nof_nok / ul_total));
+        fmt::print(" {:>3}%", static_cast<int>(100.0f * ue.ul_nof_nok / ul_total));
       } else {
         fmt::print(" {:>3}%", 0);
       }
@@ -142,6 +143,9 @@ void scheduler_cell_metrics_consumer_stdout::handle_metric(const std::optional<s
       fmt::print("\n");
     }
   }
+
+  // stdout is fully buffered when not attached to a terminal (e.g. Docker logs); flush so tables appear on time.
+  std::fflush(stdout);
 }
 
 template <typename ResultType>
@@ -150,13 +154,9 @@ static ResultType to_percentage(unsigned numerator, unsigned denominator)
   return static_cast<ResultType>(100.0 * static_cast<double>(numerator) / static_cast<double>(denominator));
 }
 
-void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<scheduler_metrics_report>& report)
+void scheduler_cell_metrics_consumer_log::handle_metric(const scheduler_metrics_report& report)
 {
-  if (!report) {
-    return;
-  }
-
-  for (const auto& cell : report->cells) {
+  for (const auto& cell : report.cells) {
     fmt::memory_buffer buffer;
 
     unsigned sum_dl_bitrate_kbps   = 0;
@@ -195,11 +195,15 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
     fmt::format_to(
         std::back_inserter(buffer),
         "Scheduler cell pci={} metrics:"
-        " total_dl_brate={}bps total_ul_brate={}bps nof_prbs={} nof_dl_slots={} nof_ul_slots={} nof_prach_preambles={} "
+        " total_dl_brate={}bps total_ul_brate={}bps nof_prbs={} nof_dl_slots={} nof_ul_slots={} "
+        "total_prach_preambles={} "
+        "two_step_prachs_detected={} "
         "error_indications={} pdsch_rbs_per_slot={} pusch_rbs_per_slot={} pdschs_per_slot={:.3} puschs_per_slot={:.3} "
         "failed_dl_pdcch={} failed_common_dl_pdcch={} failed_ul_pdcch={} failed_common_ul_pdcch={} failed_uci={} "
+        "failed_fallback_uci_allocs={} "
         "nof_ues={} mean_latency={}usec max_latency={}usec max_latency_slot={} "
-        "latency_hist=[{}] msg3_ok={} msg3_nok={} conres_timer_expired={} late_dl_harqs={} late_ul_harqs={} "
+        "latency_hist=[{}] msg3_ok={} msg3_nok={} conres_timer_expired={} conres_ce_never_acked={} late_dl_harqs={} "
+        "late_ul_harqs={} "
         "pucch_tot_rb_usage_avg={:.3}",
         cell.pci,
         float_to_eng_string(sum_dl_bitrate_kbps * 1e3, 2, false),
@@ -207,17 +211,19 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
         cell.nof_prbs,
         cell.nof_dl_slots,
         cell.nof_ul_slots,
-        cell.nof_prach_preambles,
+        cell.total_prach_preambles,
+        cell.two_step_prachs_detected,
         cell.nof_error_indications,
         cell.nof_dl_slots > 0 ? sum_pdsch_rbs / cell.nof_dl_slots : 0,
         cell.nof_ul_slots > 0 ? sum_pusch_rbs / cell.nof_ul_slots : 0,
-        cell.nof_dl_slots > 0 ? cell.dl_grants_count / (float)cell.nof_dl_slots : 0,
-        cell.nof_ul_slots > 0 ? cell.ul_grants_count / (float)cell.nof_ul_slots : 0,
+        cell.nof_dl_slots > 0 ? cell.dl_grants_count / static_cast<float>(cell.nof_dl_slots) : 0,
+        cell.nof_ul_slots > 0 ? cell.ul_grants_count / static_cast<float>(cell.nof_ul_slots) : 0,
         cell.failed_dl_pdcch,
         cell.failed_common_dl_pdcch,
         cell.failed_ul_pdcch,
         cell.failed_common_ul_pdcch,
         cell.nof_failed_uci_allocs,
+        cell.failed_fallback_uci_allocs,
         cell.ue_metrics.size(),
         cell.average_decision_latency.count(),
         cell.max_decision_latency.count(),
@@ -226,6 +232,7 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
         cell.nof_msg3_ok,
         cell.nof_msg3_nok,
         cell.nof_conres_timer_expired,
+        cell.nof_conres_ce_never_acked,
         cell.nof_failed_pdsch_allocs_late_harqs,
         cell.nof_failed_pusch_allocs_late_harqs,
         cell.pucch_tot_rb_usage_avg);
@@ -278,13 +285,13 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
     log_chan("{}", to_c_str(buffer));
     buffer.clear();
 
-    // log ue-specific metrics
+    // Log ue-specific metrics.
+    if (not cell.report_ue_metrics) {
+      continue;
+    }
     for (const auto& ue : cell.ue_metrics) {
-      fmt::format_to(std::back_inserter(buffer),
-                     "Scheduler UE ue={} pci={} rnti={} metrics:",
-                     fmt::underlying(ue.ue_index),
-                     ue.pci,
-                     ue.rnti);
+      fmt::format_to(
+          std::back_inserter(buffer), "Scheduler UE ue={} pci={} rnti={} metrics:", ue.ue_index, ue.pci, ue.rnti);
       if (ue.cqi_stats.get_nof_observations() > 0) {
         fmt::format_to(
             std::back_inserter(buffer), " cqi={}", static_cast<unsigned>(std::round(ue.cqi_stats.get_mean())));
@@ -298,7 +305,7 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
         fmt::format_to(std::back_inserter(buffer), " dl_ri=n/a");
       }
 
-      fmt::format_to(std::back_inserter(buffer), " dl_mcs={}", int(ue.dl_mcs.value()));
+      fmt::format_to(std::back_inserter(buffer), " dl_mcs={}", static_cast<int>(ue.dl_mcs.value()));
       if (ue.dl_brate_kbps > 0) {
         fmt::format_to(
             std::back_inserter(buffer), " dl_brate={}bps", float_to_eng_string(ue.dl_brate_kbps * 1e3, 2, false));
@@ -400,13 +407,9 @@ void scheduler_cell_metrics_consumer_log::handle_metric(const std::optional<sche
   }
 }
 
-void scheduler_cell_metrics_consumer_e2::handle_metric(const std::optional<scheduler_metrics_report>& report)
+void scheduler_cell_metrics_consumer_e2::handle_metric(const scheduler_metrics_report& report)
 {
-  if (!report) {
-    return;
-  }
-
-  for (const auto& cell : report->cells) {
+  for (const auto& cell : report.cells) {
     notifier.report_metrics(cell);
   }
 }

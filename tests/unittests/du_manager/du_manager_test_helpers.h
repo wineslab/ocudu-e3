@@ -7,6 +7,7 @@
 #include "lib/du/du_high/du_manager/du_cell_manager.h"
 #include "lib/du/du_high/du_manager/ran_resource_management/du_ran_resource_manager.h"
 #include "lib/gtpu/gtpu_teid_pool_impl.h"
+#include "ocudu/du/du_high/du_manager/du_manager_mem_resources.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
 #include "ocudu/gtpu/gtpu_teid_pool.h"
 #include "ocudu/mac/mac_cell_manager.h"
@@ -15,6 +16,7 @@
 #include "ocudu/mac/mac_positioning_measurement_handler.h"
 #include "ocudu/mac/mac_subframe_time_mapper.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/rlc/rlc_window_seg_pool_factory.h"
 #include "ocudu/support/async/async_task.h"
 #include "ocudu/support/async/async_test_utils.h"
 #include "ocudu/support/executors/manual_task_worker.h"
@@ -274,13 +276,46 @@ public:
     wait_manual_event_tester<void>           wait_start;
     wait_manual_event_tester<void>           wait_stop;
     std::optional<mac_cell_reconfig_request> last_cell_recfg_req;
+    /// Deep copies of the SI PDU buffers, taken while reconfigure() runs. The request only carries a non-owning span,
+    /// so a test must copy the bytes here to inspect them after the async update completes; reading each buffer also
+    /// exercises the SI message path under ASan.
+    std::vector<byte_buffer> last_si_msg_bytes;
+    unsigned                 start_count = 0;
+    unsigned                 stop_count  = 0;
+    // Latest MIB cellBarred value applied by a reconfigure, and a snapshot of it taken at the moment start()
+    // was last called. Together these let a test assert that a cellBarred restore is applied *before* the cell
+    // is started (so no stale barred SSB is built after reactivation).
+    std::optional<bool> current_cell_barred;
+    std::optional<bool> cell_barred_at_last_start;
 
-    async_task<void>                       start() override { return wait_start.launch(); }
-    async_task<void>                       stop() override { return wait_stop.launch(); }
+    async_task<void> start() override
+    {
+      ++start_count;
+      cell_barred_at_last_start = current_cell_barred;
+      return wait_start.launch();
+    }
+    async_task<void> stop() override
+    {
+      ++stop_count;
+      return wait_stop.launch();
+    }
     async_task<mac_cell_reconfig_response> reconfigure(const mac_cell_reconfig_request& request) override
     {
       last_cell_recfg_req = request;
-      return launch_no_op_task(mac_cell_reconfig_response{true});
+      last_si_msg_bytes.clear();
+      if (request.new_si_pdu_info.has_value()) {
+        for (const byte_buffer& si_msg : request.new_si_pdu_info->si_messages) {
+          last_si_msg_bytes.push_back(si_msg.deep_copy().value());
+        }
+        // The stored request keeps a shallow copy of new_si_pdu_info->si_messages, a non-owning span into the caller's
+        // storage that dangles once the update procedure returns. Drop it so a later test cannot dereference the stale
+        // span; tests should read the deep copies in last_si_msg_bytes instead.
+        last_cell_recfg_req->new_si_pdu_info->si_messages = {};
+      }
+      if (request.cell_barred_mod.has_value()) {
+        current_cell_barred = request.cell_barred_mod;
+      }
+      return launch_no_op_task(mac_cell_reconfig_response{true, true});
     }
   };
 
@@ -306,17 +341,40 @@ public:
   std::optional<mac_ue_delete_request>                      last_ue_delete_msg{};
   std::optional<mac_dl_buffer_state_indication_message>     last_dl_bs;
   byte_buffer                                               last_pushed_ul_ccch_msg;
+  msg3_mac_ce_list                                          last_msg3_mac_ces;
   std::optional<du_ue_index_t>                              last_ue_config_applied;
   wait_manual_event_tester<mac_ue_create_response>          wait_ue_create;
   wait_manual_event_tester<mac_ue_reconfiguration_response> wait_ue_reconf;
   wait_manual_event_tester<mac_ue_delete_response>          wait_ue_delete;
   bool                                                      next_ul_ccch_msg_result = true;
+  /// System Information of the last cell created in the MAC.
+  std::optional<mac_cell_creation_request> last_cell_creation_req;
 
   mac_cell_manager&                    get_cell_manager() override { return *this; }
   mac_ue_configurator&                 get_ue_configurator() override { return *this; }
   mac_positioning_measurement_handler& get_positioning_handler() override { return *this; }
 
-  mac_cell_controller&      add_cell(const mac_cell_creation_request& cell_cfg) override { return mac_cell; }
+  mac_cell_controller& add_cell(const mac_cell_creation_request& cell_cfg) override
+  {
+    last_cell_creation_req.emplace();
+    last_cell_creation_req->cell_index                      = cell_cfg.cell_index;
+    last_cell_creation_req->sys_info.si_sched_cfg           = cell_cfg.sys_info.si_sched_cfg;
+    last_cell_creation_req->sys_info.sib1_contains_hypersfn = cell_cfg.sys_info.sib1_contains_hypersfn;
+    last_cell_creation_req->sys_info.sib1                   = cell_cfg.sys_info.sib1.copy();
+    for (const auto& msg : cell_cfg.sys_info.si_messages) {
+      auto& copied = last_cell_creation_req->sys_info.si_messages.emplace_back();
+      for (const byte_buffer& segment : msg) {
+        copied.push_back(segment.copy());
+      }
+    }
+    for (const auto& msg : cell_cfg.sys_info.pws_si_messages) {
+      auto& copied = last_cell_creation_req->sys_info.pws_si_messages.emplace_back();
+      for (const byte_buffer& segment : msg) {
+        copied.push_back(segment.copy());
+      }
+    }
+    return mac_cell;
+  }
   void                      remove_cell(du_cell_index_t cell_index) override {}
   mac_cell_controller&      get_cell_controller(du_cell_index_t cell_index) override { return mac_cell; }
   mac_subframe_time_mapper& get_subframe_time_mapper() override { return sfn_time_mapper; }
@@ -337,9 +395,14 @@ public:
     last_ue_delete_msg = msg;
     return wait_ue_delete.launch();
   }
-  bool handle_ul_ccch_msg(du_ue_index_t ue_index, byte_buffer pdu) override
+  bool handle_ul_ccch_msg(du_ue_index_t    ue_index,
+                          du_cell_index_t  cell_index,
+                          slot_point       slot_rx,
+                          byte_buffer      ul_ccch_msg,
+                          msg3_mac_ce_list mac_ces) override
   {
-    last_pushed_ul_ccch_msg = std::move(pdu);
+    last_pushed_ul_ccch_msg = std::move(ul_ccch_msg);
+    last_msg3_mac_ces       = std::move(mac_ces);
     return next_ul_ccch_msg_result;
   }
   void handle_ue_config_applied(du_ue_index_t ue_index) override { last_ue_config_applied = ue_index; }
@@ -360,6 +423,8 @@ public:
 
 class dummy_ue_resource_configurator_factory : public du_ran_resource_manager
 {
+  static constexpr unsigned max_nof_rejected_ue_ctxts = 64;
+
 public:
   class dummy_resource_updater : public ue_ran_resource_configurator::resource_updater
   {
@@ -372,6 +437,8 @@ public:
                                                        const ue_capability_summary*          reestablished_ue_caps) override;
     void                                        config_applied() override {}
     const du_ue_resource_config&                get() override;
+    void                                        set_cs_rnti(rnti_t cs_rnti) override {}
+    void                                        clear_cs_rnti() override {}
     const std::optional<ue_capability_summary>& ue_capabilities() const override;
 
     du_ue_index_t                           ue_index;
@@ -391,7 +458,15 @@ public:
   expected<ue_ran_resource_configurator, std::string>
   create_ue_resource_configurator(du_ue_index_t ue_index, du_cell_index_t pcell_index, bool has_tc_rnti) override;
 
-  unsigned get_max_nof_setup_ues(du_cell_index_t cell_index) const override { return MAX_NOF_DU_UES_PER_CELL; }
+  unsigned get_max_nof_established_ue_contexts(du_cell_index_t cell_index) const override
+  {
+    return MAX_NOF_DU_UES_PER_CELL - max_nof_rejected_ue_ctxts;
+  }
+
+  unsigned get_max_nof_rejected_ue_contexts(du_cell_index_t cell_index) const override
+  {
+    return max_nof_rejected_ue_ctxts;
+  }
 };
 
 f1ap_ue_context_update_request create_f1ap_ue_context_update_request(du_ue_index_t                   ue_idx,
@@ -416,7 +491,8 @@ public:
   mac_test_dummy      mac;
   null_rlc_pcap       rlc_pcap;
   du_manager_params   params;
-  du_cell_manager     cell_mng;
+  du_manager_mem_resources               mem_resources;
+  du_cell_manager                        cell_mng;
   dummy_ue_resource_configurator_factory cell_res_alloc;
   ocudulog::basic_logger&                logger;
 };

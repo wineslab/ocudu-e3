@@ -3,8 +3,11 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pdsch_modulator_impl.h"
+#include "pdsch_processor_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/resource_grid_mapper.h"
 #include "ocudu/phy/upper/dmrs_mapping.h"
+#include "ocudu/ran/precoding/precoding_weight_matrix_formatters.h"
 
 using namespace ocudu;
 
@@ -30,10 +33,11 @@ float pdsch_modulator_impl::modulate(span<ci8_t> d_pdsch, const bit_buffer& b_ha
   return modulator->modulate(d_pdsch, b_hat, modulation);
 }
 
-void pdsch_modulator_impl::map(resource_grid_writer& grid,
-                               span<const ci8_t>     data_re,
-                               float                 scaling,
-                               const config_t&       config)
+void pdsch_modulator_impl::map(resource_grid_writer&                      grid,
+                               span<const ci8_t>                          data_re,
+                               unsigned                                   i_codeword,
+                               const precoding_beamforming_configuration& precoding,
+                               const config_t&                            config)
 {
   ocudu_assert(config.time_alloc.stop() <= MAX_NSYMB_PER_SLOT,
                "The time allocation of the transmission {} exceeds the slot boundary.",
@@ -56,12 +60,6 @@ void pdsch_modulator_impl::map(resource_grid_writer& grid,
   // Merge DM-RS RE pattern into the reserved RE patterns.
   reserved.merge(dmrs_pattern);
 
-  if (std::isnormal(config.scaling)) {
-    scaling *= config.scaling;
-  }
-  precoding_configuration precoding2 = config.precoding;
-  precoding2 *= scaling;
-
   resource_grid_mapper::symbol_buffer_adapter buffer_adapter(data_re);
 
   // Prepare resource grid mapper allocation.
@@ -69,31 +67,54 @@ void pdsch_modulator_impl::map(resource_grid_writer& grid,
       .bwp = config.bwp, .freq_alloc = config.freq_allocation, .time_alloc = config.time_alloc};
 
   // Map into the resource grid.
-  mapper->map(grid, buffer_adapter, allocation, reserved, precoding2);
+  mapper->map(grid, buffer_adapter, allocation, reserved, precoding);
 }
 
 void pdsch_modulator_impl::modulate(resource_grid_writer&            grid,
                                     span<const bit_buffer>           codewords,
                                     const pdsch_modulator::config_t& config)
 {
-  ocudu_assert(codewords.size() == 1, "Only one PDSCH codeword is currently supported");
+  // Number of modulated codewords.
+  unsigned nof_codewords = codewords.size();
 
-  modulation_scheme mod = config.modulation1;
-  unsigned          Qm  = get_bits_per_symbol(mod);
+  // Ensure that if the second codeword is being mapped, the modulation is provided.
+  ocudu_assert((nof_codewords == 1) || (config.modulation2.has_value()),
+               "Missing second codeword modulation in a two-codeword modulation.");
 
-  // Calculate number of REs.
-  unsigned nof_bits = codewords[0].size();
-  unsigned nof_re   = nof_bits / Qm;
+  // The beams that carry the transmission are split among the codewords.
+  ocudu_assert(config.precoding_and_beamforming.get().get_nof_beams() % nof_codewords == 0,
+               "The number of beams must be divisible by the number of codewords.");
 
-  // Scramble.
-  const bit_buffer& b_hat = scramble(codewords[0], 0, config);
+  for (unsigned i_cw = 0; i_cw != nof_codewords; ++i_cw) {
+    modulation_scheme mod = (i_cw == 0) ? config.modulation1 : *config.modulation2;
+    unsigned          Qm  = get_bits_per_symbol(mod);
 
-  // View over the PDSCH symbols buffer. For a single layer, skip layer mapping and use the final destination RE buffer.
-  span<ci8_t> pdsch_symbols = span<ci8_t>(temp_pdsch_symbols).first(nof_re);
+    // Calculate number of REs.
+    unsigned nof_bits = codewords[i_cw].size();
+    unsigned nof_re   = nof_bits / Qm;
 
-  // Modulate codeword.
-  float scaling = modulate(pdsch_symbols, b_hat, mod);
+    // Scramble.
+    const bit_buffer& b_hat = scramble(codewords[i_cw], i_cw, config);
 
-  // Map resource elements.
-  map(grid, pdsch_symbols, scaling, config);
+    // View over the PDSCH symbols buffer. For a single layer, skip layer mapping and use the final destination RE
+    // buffer.
+    span<ci8_t> pdsch_symbols = span<ci8_t>(temp_pdsch_symbols).first(nof_re);
+
+    // Modulate codeword.
+    float scaling = modulate(pdsch_symbols, b_hat, mod);
+
+    // Extract the precoding and beamforming of the codeword.
+    precoding_beamforming_configuration precoding =
+        pdsch_extract_codeword_precoding(config.precoding_and_beamforming, nof_codewords, i_cw);
+
+    // Apply scaling.
+    if (std::isnormal(config.scaling)) {
+      scaling *= config.scaling;
+    }
+
+    precoding *= scaling;
+
+    // Map resource elements.
+    map(grid, pdsch_symbols, i_cw, precoding, config);
+  }
 }

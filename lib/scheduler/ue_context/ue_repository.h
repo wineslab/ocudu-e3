@@ -8,12 +8,25 @@
 #include "logical_channel_system.h"
 #include "ta_management_system.h"
 #include "ue.h"
-#include "ue_cell_repository.h"
 #include "ue_drx_controller.h"
 #include "ue_fsm_states.h"
+#include "ue_ta_report_tracker.h"
 #include "ocudu/adt/ring_buffer.h"
 
 namespace ocudu {
+
+class ue_cell_repository;
+
+/// \brief Context describing how a UE is being created, passed to \c ue_repository::add_ue.
+struct ue_creation_context {
+  /// How this UE is being created; \c ue_creation_mode::skip_fallback means it does not start in fallback mode.
+  ue_creation_mode creation_mode = ue_creation_mode::skip_fallback;
+  /// Slot at which UL-CCCH message was received, in case of RA-based UE creation. \c std::nullopt, otherwise.
+  std::optional<slot_point> ul_ccch_slot_rx;
+  /// Slot at which the PRACH preamble was received, if this UE was created following a RACH tracked by the RA
+  /// scheduler. \c std::nullopt, otherwise.
+  std::optional<slot_point> prach_slot_rx;
+};
 
 /// Container that stores all scheduler UEs.
 class ue_repository
@@ -37,22 +50,18 @@ public:
   ue&       operator[](du_ue_index_t ue_index) { return ues[ue_index]; }
   const ue& operator[](du_ue_index_t ue_index) const { return ues[ue_index]; }
 
-  ue_cell_repository& add_cell(const cell_configuration& cell_cfg, cell_metrics_handler* cell_metrics);
-  void                rem_cell(du_cell_index_t cell_index);
+  /// Register the UE repository of a cell. The repository must outlive this registration.
+  void register_cell(ue_cell_repository& cell_ue_repo);
 
-  // Access UEs per cell.
-  ue_cell_repository&       cell(du_cell_index_t cell_index) { return *cell_ues[cell_index]; }
-  const ue_cell_repository& cell(du_cell_index_t cell_index) const { return *cell_ues[cell_index]; }
+  /// Deregister the UE repository of a cell. The cell must have no UEs left.
+  void deregister_cell(du_cell_index_t cell_index);
 
   /// \brief Search UE context based on TC-RNTI/C-RNTI.
   ue*       find_by_rnti(rnti_t rnti);
   const ue* find_by_rnti(rnti_t rnti) const;
 
   /// \brief Add new UE in the UE repository.
-  void add_ue(const ue_configuration&   ue_cfg,
-              bool                      starts_in_fallback,
-              std::optional<slot_point> ul_ccch_slot_rx,
-              bool                      cfra_enabled);
+  void add_ue(const ue_configuration& ue_cfg, const ue_creation_context& creation_ctx);
 
   /// \brief Reconfigure existing UE.
   void reconfigure_ue(const ue_configuration& new_cfg, sched_ue_config_request::causes cause);
@@ -100,8 +109,8 @@ private:
 
   ocudulog::basic_logger& logger;
 
-  // List of UEs per cell.
-  slotted_id_table<du_cell_index_t, std::unique_ptr<ue_cell_repository>, MAX_NOF_DU_CELLS> cell_ues;
+  // Non-owning pointers to the UE repositories of the registered cells.
+  slotted_id_table<du_cell_index_t, ue_cell_repository*, MAX_NOF_DU_CELLS> cell_ues;
 
   /// FSM of the UE configuration stages.
   slotted_id_table<du_ue_index_t, ue_pcell_state, MAX_NOF_DU_UES> ue_fsms;
@@ -112,13 +121,17 @@ private:
   /// DRX controllers per UE.
   slotted_id_table<du_ue_index_t, ue_drx_controller, MAX_NOF_DU_UES, false> ue_drx_controllers;
 
+  /// Trackers of the uplink timing advance reported by each UE.
+  slotted_id_table<du_ue_index_t, ue_ta_report_tracker, MAX_NOF_DU_UES, false> ue_ta_report_trackers;
+
   /// UE Timing Advance Manager.
   ta_management_system ta_mgr_sys;
 
   /// Lookup of UE cells per UE.
   slotted_id_table<du_ue_index_t, ue_cell_lookup, MAX_NOF_DU_UES, false> ue_cell_lookups;
 
-  /// Repository of UE objects.
+  /// \brief Repository of UE objects.
+  /// \note Declared after \c ta_mgr_sys, as releasing the TA manager handle of a UE reaches into it.
   ue_list ues;
 
   // Mapping of RNTIs to UE indexes.

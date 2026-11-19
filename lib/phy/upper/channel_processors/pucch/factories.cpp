@@ -10,6 +10,7 @@
 #include "pucch_detector_impl.h"
 #include "pucch_processor_impl.h"
 #include "pucch_processor_pool.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/generic_functions/generic_functions_factories.h"
 #include "ocudu/phy/generic_functions/transform_precoding/transform_precoding_factories.h"
 #include "ocudu/phy/upper/channel_processors/pucch/formatters.h"
@@ -118,7 +119,7 @@ public:
   }
 
 private:
-  static constexpr unsigned                     MAX_PUCCH_RX_PORTS = 4;
+  static constexpr unsigned                     MAX_PUCCH_RX_PORTS = 8;
   std::shared_ptr<dmrs_pucch_estimator_factory> dmrs_factory;
   std::shared_ptr<pucch_detector_factory>       detector_factory;
   std::shared_ptr<pucch_demodulator_factory>    demodulator_factory;

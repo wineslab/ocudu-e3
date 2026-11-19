@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "uplink_processor_impl.h"
-#include "ocudu/adt/scope_exit.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/du_traces.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/phy/support/prach_buffer_context.h"
@@ -24,15 +24,9 @@ static prach_detector::configuration get_prach_dectector_config_from_prach_conte
   config.zero_correlation_zone = context.zero_correlation_zone;
   config.start_preamble_index  = context.start_preamble_index;
   config.nof_preamble_indices  = context.nof_preamble_indices;
-  if (config.format < prach_format_type::three) {
-    config.ra_scs = prach_subcarrier_spacing::kHz1_25;
-  } else if (config.format == prach_format_type::three) {
-    config.ra_scs = prach_subcarrier_spacing::kHz5;
-  } else {
-    config.ra_scs = to_ra_subcarrier_spacing(context.pusch_scs);
-  }
-  config.nof_rx_ports = context.ports.size();
-  config.slot         = context.slot;
+  config.ra_scs                = to_ra_subcarrier_spacing(context.pusch_scs, context.format);
+  config.nof_rx_ports          = context.ports.size();
+  config.slot                  = context.slot;
 
   return config;
 }
@@ -48,13 +42,13 @@ uplink_processor_impl::uplink_processor_impl(std::unique_ptr<prach_detector>  pr
                                              upper_phy_rx_results_notifier&   notifier_,
                                              unsigned                         max_nof_prb,
                                              unsigned                         max_nof_layers) :
-  grid_ref_counter(get_grid_ref_counter()),
-  pdu_repository(*grid_, grid_ref_counter, state_machine),
+  pdu_repository(grid_controller, state_machine),
   prach(std::move(prach_)),
   pusch_proc(std::move(pusch_proc_)),
   pucch_proc(std::move(pucch_proc_)),
   srs(std::move(srs_)),
   grid(std::move(grid_)),
+  grid_controller(*grid, get_grid_ref_counter()),
   task_executors(task_executors_),
   rm_buffer_pool(rm_buffer_pool_),
   rx_payload_pool(max_nof_prb, max_nof_layers),
@@ -72,7 +66,7 @@ uplink_processor_impl::uplink_processor_impl(std::unique_ptr<prach_detector>  pr
 uplink_slot_processor& uplink_processor_impl::get_slot_processor(slot_point slot)
 {
   // If the slot configured in the state machine does not match the given slot, give the dummy instance.
-  if (!state_machine.has_receive_request(slot)) {
+  if (!state_machine.is_ready_to_receive(slot)) {
     return alternative_processor;
   }
 
@@ -81,22 +75,29 @@ uplink_slot_processor& uplink_processor_impl::get_slot_processor(slot_point slot
 
 void uplink_processor_impl::stop()
 {
-  state_machine.stop();
+  // Wait for all asynchronous tasks to complete.
+  stop_control.stop();
 }
 
 unique_uplink_pdu_slot_repository uplink_processor_impl::get_pdu_slot_repository(slot_point slot)
 {
-  // It is not possible to configure a new slot if the resource grid is still present in a scope.
-  if (grid_ref_counter.load(std::memory_order_acquire) != 0) {
+  // It is not possible to configure a new slot if stop was requested.
+  auto stop_token = stop_control.get_token();
+  if (stop_token.is_stop_requested()) {
     return {};
   }
 
-  // Discard current slot if possible.
+  // It is not possible to configure a new slot if the resource grid is still present in a scope.
+  if (!grid_controller.is_available()) {
+    return {};
+  }
+
+  // Discard current slot if needed. When the FSM is in `wait_rx_state`, i.e., the first symbol is not received yet, the
+  // slot is discarded and the FSM is left back at idle state.
   discard_slot();
 
-  // Try to configure a new slot.
+  // Try to configure a new slot in the state machine. Return an invalid repository if not possible.
   if (!state_machine.start_new_slot(slot)) {
-    // Return an invalid repository.
     return {};
   }
 
@@ -110,20 +111,16 @@ unique_uplink_pdu_slot_repository uplink_processor_impl::get_pdu_slot_repository
   // Sets the dummy slot processor context.
   alternative_processor.activate_slot(slot);
 
-  // Create a valid unique PDU slot repository.
-  return unique_uplink_pdu_slot_repository(pdu_repository);
+  // Create a valid unique PDU slot repository. Transfer stop token to the PDU repository.
+  return pdu_repository.create_unique_pdu_repository(std::move(stop_token));
 }
 
 void uplink_processor_impl::handle_rx_symbol(unsigned end_symbol_index, bool is_valid)
 {
-  // Try locking the slot processor. This prevents that the processor handle symbols and discards from different
-  // threads concurrently.
-  if (!state_machine.start_handle_rx_symbol()) {
+  // Notify event of handling the OFDM symbol to the state machine.
+  if (!state_machine.on_handle_rx_symbol(is_valid)) {
     return;
   }
-
-  // Unlock the slot processor when returning from this method.
-  auto execute_on_exit = make_scope_exit([this]() { state_machine.finish_handle_rx_symbol(); });
 
   // Verify that the symbol index is in increasing order.
   if (end_symbol_index < nof_processed_symbols) {
@@ -149,32 +146,23 @@ void uplink_processor_impl::handle_rx_symbol(unsigned end_symbol_index, bool is_
     // Iterate all symbols that have not been processed yet. As the processor might be executing asynchronous all
     // discarded PDUs must call state_machine.on_create_pdu_task and state_machine.on_finish_processing_pdu for managing
     // the state machine correctly.
-    for (unsigned i_symbol = nof_processed_symbols; i_symbol != MAX_NSYMB_PER_SLOT; ++i_symbol) {
-      for (const auto& pdu : pdu_repository.get_pucch_pdus(i_symbol)) {
-        if (state_machine.on_create_pdu_task()) {
-          notify_discard_pucch(pdu);
-        }
+    for (; nof_processed_symbols != MAX_NSYMB_PER_SLOT; ++nof_processed_symbols) {
+      for (const auto& pdu : pdu_repository.get_pucch_pdus(nof_processed_symbols)) {
+        notify_discard_pucch(pdu);
       }
 
-      for (const auto& collection : pdu_repository.get_pucch_f1_repository(i_symbol)) {
-        if (state_machine.on_create_pdu_task()) {
-          notify_discard_pucch(collection);
-        }
+      for (const auto& collection : pdu_repository.get_pucch_f1_repository(nof_processed_symbols)) {
+        notify_discard_pucch(collection);
       }
 
-      for (const auto& pdu : pdu_repository.get_pusch_pdus(i_symbol)) {
-        if (state_machine.on_create_pdu_task()) {
-          notify_discard_pusch(pdu);
-        }
+      for (const auto& pdu : pdu_repository.get_pusch_pdus(nof_processed_symbols)) {
+        notify_discard_pusch(pdu);
       }
 
-      for ([[maybe_unused]] const auto& pdu : pdu_repository.get_srs_pdus(i_symbol)) {
-        if (state_machine.on_create_pdu_task()) {
-          state_machine.on_finish_processing_pdu();
-        }
+      for ([[maybe_unused]] const auto& pdu : pdu_repository.get_srs_pdus(nof_processed_symbols)) {
+        state_machine.on_finish_processing_pdu();
       }
     }
-
     return;
   }
 
@@ -183,6 +171,11 @@ void uplink_processor_impl::handle_rx_symbol(unsigned end_symbol_index, bool is_
        ++nof_processed_symbols) {
     // Process the PDUs belonging to the received symbols.
     process_symbol_pdus(nof_processed_symbols);
+  }
+
+  // Notify the last processed symbol to the state machine.
+  if (nof_processed_symbols == MAX_NSYMB_PER_SLOT) {
+    state_machine.on_processed_last_symbol();
   }
 }
 
@@ -234,8 +227,9 @@ void uplink_processor_impl::process_symbol_pdus(unsigned end_symbol_index)
 
 void uplink_processor_impl::process_prach(shared_prach_buffer buffer, const prach_buffer_context& context_)
 {
-  // Notify the creation of the PRACH detection task.
-  if (!state_machine.on_prach_detection()) {
+  // Skip any processing if stop was requested.
+  auto stop_token = stop_control.get_token();
+  if (stop_token.is_stop_requested()) {
     return;
   }
 
@@ -244,8 +238,11 @@ void uplink_processor_impl::process_prach(shared_prach_buffer buffer, const prac
     ul_tap->handle_prach_window(*buffer, context_);
   }
 
-  bool success = task_executors.prach_executor.execute(
-      [this, buffer_ = std::move(buffer), context_]() noexcept OCUDU_RTSAN_NONBLOCKING {
+  bool success =
+      task_executors.prach_executor.execute([this,
+                                             buffer_ = std::move(buffer),
+                                             context_,
+                                             stop_token_ = std::move(stop_token)]() noexcept OCUDU_RTSAN_NONBLOCKING {
         trace_point tp = l1_ul_tracer.now();
 
         ul_prach_results ul_results;
@@ -256,21 +253,18 @@ void uplink_processor_impl::process_prach(shared_prach_buffer buffer, const prac
         notifier.on_new_prach_results(ul_results);
 
         l1_ul_tracer << trace_event("process_prach", tp);
-
-        // Notify the end of the PRACH detection.
-        state_machine.on_end_prach_detection();
       });
 
   if (!success) {
     logger.warning(current_slot.sfn(), current_slot.slot_index(), "Failed to execute PRACH. Ignoring detection.");
-    state_machine.on_end_prach_detection();
   }
 }
 
 void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusch_pdu& pdu)
 {
-  // Notify the creation of the execution task.
-  if (!state_machine.on_create_pdu_task()) {
+  auto stop_token = stop_control.get_token();
+  if (stop_token.is_stop_requested()) {
+    notify_discard_pusch(pdu);
     return;
   }
 
@@ -280,7 +274,7 @@ void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusc
   ocudu_assert(proc_pdu.codeword.has_value(), "PUSCH PDU doesn't contain data. Currently, that mode is not supported.");
 
   // Create buffer identifier.
-  trx_buffer_identifier id(proc_pdu.rnti, pdu.harq_id);
+  trx_buffer_identifier id(proc_pdu.rnti, pdu.pdu.harq_id);
 
   // Determine the number of codeblocks from the TBS and base graph.
   unsigned nof_codeblocks = compute_nof_codeblocks(pdu.tb_size.to_bits(), proc_pdu.codeword->ldpc_base_graph);
@@ -304,28 +298,29 @@ void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusc
                    pdu.pdu.slot.slot_index(),
                    "UL rnti={} h_id={}: insufficient available payload data in the buffer pool for TB of size {}",
                    pdu.pdu.rnti,
-                   pdu.harq_id,
+                   pdu.pdu.harq_id,
                    pdu.tb_size);
     notify_discard_pusch(pdu);
     return;
   }
 
   // Try to enqueue asynchronous processing.
-  bool success = task_executors.pusch_executor.defer([this, data, rm_buffer2 = std::move(rm_buffer), &pdu]() mutable {
-    // Select and configure notifier adaptor.
-    // Assume that count_pusch_adaptors will not exceed MAX_PUSCH_PDUS_PER_SLOT.
-    unsigned                         notifier_adaptor_id = count_pusch_adaptors.fetch_add(1, std::memory_order_acq_rel);
-    pusch_processor_result_notifier& processor_notifier  = pusch_adaptors[notifier_adaptor_id].configure(
-        notifier, to_rnti(pdu.pdu.rnti), pdu.pdu.slot, to_harq_id(pdu.harq_id), data, pdu.pdu.n_rapid, [this]() {
-          state_machine.on_finish_processing_pdu();
-        });
+  bool success =
+      task_executors.pusch_executor.defer([this, data, rm_buffer2 = std::move(rm_buffer), &pdu, stop_token]() mutable {
+        // Select and configure notifier adaptor.
+        // Assume that count_pusch_adaptors will not exceed MAX_PUSCH_PDUS_PER_SLOT.
+        unsigned notifier_adaptor_id = count_pusch_adaptors.fetch_add(1, std::memory_order_acq_rel);
+        pusch_processor_result_notifier& processor_notifier = pusch_adaptors[notifier_adaptor_id].configure(
+            notifier, pdu.pdu.rnti, pdu.pdu.slot, pdu.pdu.harq_id, data, pdu.pdu.n_rapid, [this]() {
+              state_machine.on_finish_processing_pdu();
+            });
 
-    trace_point tp = l1_ul_tracer.now();
+        trace_point tp = l1_ul_tracer.now();
 
-    pusch_proc->process(data, std::move(rm_buffer2), processor_notifier, grid->get_reader(), pdu.pdu);
+        pusch_proc->process(data, std::move(rm_buffer2), processor_notifier, grid->get_reader(), pdu.pdu);
 
-    l1_ul_tracer << trace_event("process_pusch", tp);
-  });
+        l1_ul_tracer << trace_event("process_pusch", tp);
+      });
 
   // Report the execution failure.
   if (!success) {
@@ -336,12 +331,13 @@ void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusc
 
 void uplink_processor_impl::process_pucch(const uplink_pdu_slot_repository::pucch_pdu& pdu)
 {
-  // Notify the creation of the execution task.
-  if (!state_machine.on_create_pdu_task()) {
+  auto stop_token = stop_control.get_token();
+  if (stop_token.is_stop_requested()) {
+    notify_discard_pucch(pdu);
     return;
   }
 
-  bool success = task_executors.pucch_executor.defer([this, &pdu]() {
+  bool success = task_executors.pucch_executor.defer([this, &pdu, stop_token]() {
     trace_point tp = l1_ul_tracer.now();
 
     pucch_processor_result proc_result;
@@ -394,12 +390,13 @@ void uplink_processor_impl::process_pucch(const uplink_pdu_slot_repository::pucc
 
 void uplink_processor_impl::process_pucch_f1(const uplink_pdu_slot_repository_impl::pucch_f1_collection& collection)
 {
-  // Notify the creation of the execution task.
-  if (!state_machine.on_create_pdu_task()) {
+  auto stop_token = stop_control.get_token();
+  if (stop_token.is_stop_requested()) {
+    notify_discard_pucch(collection);
     return;
   }
 
-  bool success = task_executors.pucch_executor.defer([this, &collection]() {
+  bool success = task_executors.pucch_executor.defer([this, &collection, stop_token]() {
     trace_point tp = l1_ul_tracer.now();
 
     // Process all PUCCH Format 1 in one go.
@@ -452,12 +449,13 @@ void uplink_processor_impl::process_pucch_f1(const uplink_pdu_slot_repository_im
 
 void uplink_processor_impl::process_srs(const uplink_pdu_slot_repository::srs_pdu& pdu)
 {
-  // Notify the creation of the execution task.
-  if (!state_machine.on_create_pdu_task()) {
+  auto stop_token = stop_control.get_token();
+  if (stop_token.is_stop_requested()) {
+    state_machine.on_finish_processing_pdu();
     return;
   }
 
-  bool success = task_executors.srs_executor.defer([this, &pdu]() {
+  bool success = task_executors.srs_executor.defer([this, &pdu, stop_token]() {
     trace_point tp = l1_ul_tracer.now();
 
     ul_srs_results result;
@@ -482,14 +480,14 @@ void uplink_processor_impl::notify_discard_pusch(const uplink_pdu_slot_repositor
   // Report data-related discarded result if shared channel data is present.
   if (pdu.pdu.codeword.has_value()) {
     ul_pusch_results_data discarded_results =
-        ul_pusch_results_data::create_discarded(to_rnti(pdu.pdu.rnti), pdu.pdu.slot, pdu.harq_id);
+        ul_pusch_results_data::create_discarded(pdu.pdu.rnti, pdu.pdu.slot, pdu.pdu.harq_id);
     notifier.on_new_pusch_results_data(discarded_results);
   }
 
   // Report control-related discarded result if HARQ-ACK feedback is present.
   if (pdu.pdu.uci.nof_harq_ack > 0) {
     ul_pusch_results_control discarded_results =
-        ul_pusch_results_control::create_discarded(to_rnti(pdu.pdu.rnti), pdu.pdu.slot, pdu.pdu.uci.nof_harq_ack);
+        ul_pusch_results_control::create_discarded(pdu.pdu.rnti, pdu.pdu.slot, pdu.pdu.uci.nof_harq_ack);
     notifier.on_new_pusch_results_control(discarded_results);
   }
 
@@ -528,8 +526,14 @@ void uplink_processor_impl::notify_discard_pucch(const uplink_pdu_slot_repositor
 
 void uplink_processor_impl::discard_slot()
 {
+  // Skip any processing if stop was requested.
+  auto stop_token = stop_control.get_token();
+  if (stop_token.is_stop_requested()) {
+    return;
+  }
+
   // Notify to the repository the discard of the slot. It skips the discard if the current state does not require it.
-  if (!state_machine.start_discard_slot()) {
+  if (!state_machine.on_discard_slot()) {
     return;
   }
 
@@ -540,26 +544,23 @@ void uplink_processor_impl::discard_slot()
   alternative_processor.deactivate_slot();
 
   // Iterate all symbols that have not been processed yet.
-  for (unsigned i_symbol = nof_processed_symbols; i_symbol != MAX_NSYMB_PER_SLOT; ++i_symbol) {
-    for (const auto& pdu : pdu_repository.get_pucch_pdus(i_symbol)) {
+  for (; nof_processed_symbols != MAX_NSYMB_PER_SLOT; ++nof_processed_symbols) {
+    for (const auto& pdu : pdu_repository.get_pucch_pdus(nof_processed_symbols)) {
       notify_discard_pucch(pdu);
     }
 
-    for (const auto& collection : pdu_repository.get_pucch_f1_repository(i_symbol)) {
+    for (const auto& collection : pdu_repository.get_pucch_f1_repository(nof_processed_symbols)) {
       notify_discard_pucch(collection);
     }
 
-    for (const auto& pdu : pdu_repository.get_pusch_pdus(i_symbol)) {
+    for (const auto& pdu : pdu_repository.get_pusch_pdus(nof_processed_symbols)) {
       notify_discard_pusch(pdu);
     }
 
-    for ([[maybe_unused]] const auto& pdu : pdu_repository.get_srs_pdus(i_symbol)) {
+    for ([[maybe_unused]] const auto& pdu : pdu_repository.get_srs_pdus(nof_processed_symbols)) {
       state_machine.on_finish_processing_pdu();
     }
   }
-
-  // Notify the end of discarding slot. The processor becomes idle.
-  state_machine.finish_discard_slot();
 }
 
 std::optional<uplink_slot_reception_count> uplink_processor_impl::get_reception_count(slot_point slot) const

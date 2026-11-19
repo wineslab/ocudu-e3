@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pusch_default_time_allocation.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/scheduler/config/sched_bwp_config.h"
 #include "ocudu/scheduler/config/serving_cell_config.h"
 

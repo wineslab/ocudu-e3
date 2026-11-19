@@ -6,6 +6,7 @@
 #include "../../asn1_helpers.h"
 #include "../../f1ap_asn1_utils.h"
 #include "../f1ap_du_context.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
 #include "ocudu/f1ap/du/f1ap_du.h"
 #include "ocudu/ran/paging_information.h"

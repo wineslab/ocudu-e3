@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "ocudu/support/compiler.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <array>
 #include <iterator>

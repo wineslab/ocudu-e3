@@ -9,7 +9,6 @@
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/serv_cell_index.h"
-#include "ocudu/ran/slot_point.h"
 #include <optional>
 
 namespace ocudu {

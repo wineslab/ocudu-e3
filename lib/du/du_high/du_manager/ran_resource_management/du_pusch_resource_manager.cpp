@@ -3,10 +3,13 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_pusch_resource_manager.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
+#include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/pusch/tx_scheme_configuration.h"
 #include "ocudu/support/compiler.h"
 #include "ocudu/support/math/math_utils.h"
+#include <algorithm>
 
 using namespace ocudu;
 using namespace odu;
@@ -64,6 +67,14 @@ static void set_ul_harq_mode(serving_cell_config& cell_cfg, const harq_ul_mode_m
   }
 }
 
+static void set_pusch_td_alloc_list(serving_cell_config&                               cell_cfg,
+                                    std::vector<pusch_time_domain_resource_allocation> td_alloc_list)
+{
+  if (cell_cfg.ul_config.has_value() and cell_cfg.ul_config->init_ul_bwp.pusch_cfg.has_value()) {
+    cell_cfg.ul_config->init_ul_bwp.pusch_cfg->pusch_td_alloc_list = std::move(td_alloc_list);
+  }
+}
+
 du_pusch_resource_manager::du_pusch_resource_manager(span<const du_cell_config> cell_cfg_list_,
                                                      const du_test_mode_config& test_cfg_) :
   cell_cfg_list(cell_cfg_list_), test_cfg(test_cfg_)
@@ -99,6 +110,7 @@ void du_pusch_resource_manager::apply_config(cell_group_config&                 
   set_max_ul_nof_harqs(pcell_cfg.serv_cell_cfg, select_max_nof_harqs(cell_idx, ue_caps));
   set_ul_dci_harq_num_field_size(pcell_cfg.serv_cell_cfg, select_dci_harq_field_size(cell_idx, ue_caps));
   set_ul_harq_mode(pcell_cfg.serv_cell_cfg, select_harq_mode(cell_idx, ue_caps));
+  set_pusch_td_alloc_list(pcell_cfg.serv_cell_cfg, select_td_alloc_list(cell_idx, ue_caps));
 }
 
 pusch_mcs_table du_pusch_resource_manager::select_mcs_table(du_cell_index_t                             cell_idx,
@@ -230,4 +242,67 @@ harq_ul_mode_mask du_pusch_resource_manager::select_harq_mode(du_cell_index_t   
   }
 
   return ue_caps->ul_harq_mode_b_supported ? cell_mask : default_mask;
+}
+
+std::vector<pusch_time_domain_resource_allocation>
+du_pusch_resource_manager::select_td_alloc_list(du_cell_index_t                             cell_idx,
+                                                const std::optional<ue_capability_summary>& ue_caps) const
+{
+  // See TS 38.331, \c maxNrofUL-Allocations-r16.
+  static constexpr unsigned max_nof_ul_allocs = 64;
+
+  const du_cell_config& cell_cfg = cell_cfg_list[cell_idx];
+
+  // Feature disabled for the cell.
+  const unsigned max_rep = cell_cfg.ran.init_bwp.pusch.max_nof_repetitions;
+  if (max_rep <= 1) {
+    return {};
+  }
+
+  // The UE must support \e pusch-RepetitionTypeA-r16 with non-shared spectrum channel access and
+  // \e puschTypeA-RepetitionsAvailSlot-r17 in the cell UL band.
+  const nr_band band = cell_cfg.ran.ul_carrier.band;
+  if (not ue_caps.has_value() or not ue_caps->pusch_rep_type_a_supported or ue_caps->bands.count(band) == 0 or
+      not ue_caps->bands.at(band).pusch_rep_type_a_avail_slot_supported) {
+    return {};
+  }
+
+  // From the UE perspective the dedicated Rel-16 TDRA list replaces the common list for DCI format 0_1. Mirror the
+  // common list entries first, so that the DCI time-domain indices used by the scheduler keep their meaning, and
+  // append the repetition entry after them. The mirroring also keeps the two lists on the same k2 values, which the
+  // UL slice scheduler relies on: it derives the cell's candidate PUSCH slots from the common list alone.
+  if (not cell_cfg.ran.ul_cfg_common.init_ul_bwp.pusch_cfg_common.has_value()) {
+    return {};
+  }
+  const auto& common_list = cell_cfg.ran.ul_cfg_common.init_ul_bwp.pusch_cfg_common->pusch_td_alloc_list;
+  if (common_list.empty()) {
+    return {};
+  }
+  std::vector<pusch_time_domain_resource_allocation> result;
+  result.reserve(common_list.size() + 1);
+  result.insert(result.end(), common_list.begin(), common_list.end());
+
+  // Repetition entries use the worst-case (shortest) SLIV among the common list entries that span up to the last
+  // symbol of the slot, i.e. the entries meant for fully-UL slots. In case of a tie, the entry with the lowest k2 is
+  // used.
+  const unsigned symbols_per_slot = get_nsymb_per_slot(cell_cfg.ran.ul_cfg_common.init_ul_bwp.generic_params.cp);
+  const pusch_time_domain_resource_allocation* base_alloc = nullptr;
+  for (const auto& alloc : common_list) {
+    if (alloc.symbols.stop() == symbols_per_slot and
+        (base_alloc == nullptr or alloc.symbols.length() < base_alloc->symbols.length())) {
+      base_alloc = &alloc;
+    }
+  }
+  if (base_alloc == nullptr) {
+    return {};
+  }
+
+  // Append a single entry with \e numberOfRepetitions-r16 set to max_rep.
+  if (result.size() < max_nof_ul_allocs) {
+    pusch_time_domain_resource_allocation rep_alloc = *base_alloc;
+    rep_alloc.nof_repetitions                       = static_cast<uint8_t>(max_rep);
+    result.push_back(rep_alloc);
+  }
+
+  return result;
 }

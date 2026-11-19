@@ -5,17 +5,20 @@
 #pragma once
 
 #include "../../../lib/cu_cp/cu_cp_controller/amf_connection_manager.h"
-#include "../e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "test_doubles/mock_amf.h"
 #include "test_doubles/mock_cu_up.h"
 #include "test_doubles/mock_du.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/rrc/rrc_test_messages.h"
 #include "tests/unittests/cu_cp/test_doubles/mock_xnc_cu_cp.h"
 #include "ocudu/cu_cp/cu_cp.h"
 #include "ocudu/cu_cp/cu_cp_configuration.h"
 #include "ocudu/ran/cu_cp_location_reporting_types.h"
+#include "ocudu/ran/ntn_location_mapping.h"
 #include "ocudu/ran/plmn_identity.h"
+#include "ocudu/support/async/async_test_utils.h"
+#include "ocudu/xnap/xnap_message.h"
 #include <optional>
 #include <unordered_map>
 
@@ -40,13 +43,19 @@ struct cu_cp_test_env_params {
       const std::vector<std::vector<supported_tracking_area>>& amf_config_ = {{default_supported_tracking_area}},
       bool                                                     trigger_ho_from_measurements_ = true,
       bool                                                     enable_rrc_inactive_          = false,
-      bool                                                     enable_xnc_peer_              = false) :
+      bool                                                     enable_xnc_peer_              = false,
+      std::optional<std::chrono::seconds>                      rrc_reject_wait_time_         = std::nullopt,
+      std::vector<ocucp::cu_cp_logical_cell_config>            logical_cells_                = {},
+      bool                                                     add_cho_cond_trigger_         = false) :
     max_nof_cu_ups(max_nof_cu_ups_),
     max_nof_dus(max_nof_dus_),
     max_nof_ues(max_nof_ues_),
     max_nof_drbs_per_ue(max_nof_drbs_per_ue_),
     trigger_ho_from_measurements(trigger_ho_from_measurements_),
-    enable_rrc_inactive(enable_rrc_inactive_)
+    enable_rrc_inactive(enable_rrc_inactive_),
+    rrc_reject_wait_time(rrc_reject_wait_time_),
+    add_cho_cond_trigger(add_cho_cond_trigger_),
+    logical_cells(std::move(logical_cells_))
   {
     uint16_t amf_idx = 0;
     for (const auto& supported_tas : amf_config_) {
@@ -67,6 +76,14 @@ struct cu_cp_test_env_params {
   bool                                                trigger_ho_from_measurements;
   bool                                                enable_rrc_inactive;
   std::map<unsigned, std::unique_ptr<mock_xnc_cu_cp>> peer_xnc_configs;
+  std::optional<std::chrono::seconds>                 rrc_reject_wait_time;
+  /// Add a CHO conditional trigger report config to the neighbour cells of cell 1.
+  bool     add_cho_cond_trigger;
+  uint32_t pws_max_warning_message_segment_size = 150;
+  /// Operator-declared logical cells passed to the CU-CP configuration.
+  std::vector<ocucp::cu_cp_logical_cell_config> logical_cells;
+  /// Coarse UE location to TAC and Mapped Cell ID mapping, per NTN cell.
+  std::vector<ntn_cell_location_mapping> ntn_location_mappings;
 };
 
 class cu_cp_test_environment
@@ -94,6 +111,24 @@ public:
   mock_cu_up&     get_cu_up(size_t cu_up_index) { return *cu_ups.at(cu_up_index); }
   mock_xnc_cu_cp& get_xnc_cu_cp(size_t xnc_index = 0) { return *xnc_peers.at(xnc_index); }
 
+  /// Address of the SCTP association with the AMF, which the CU-CP reports to an Xn-C peer that takes over a UE.
+  const transport_layer_address amf_addr = transport_layer_address::create_from_string("10.12.1.100");
+
+  /// PCI of the cell each Xn-C peer advertises at XN setup. A UE reporting this PCI as its failure cell resolves to
+  /// the peer, which is what a UE context retrieval relies on.
+  static constexpr pci_t xnc_peer_served_pci = 42;
+
+  /// Identity of that same cell. A peer retrieving one of our UEs reports it as the cell the UE accessed, and this
+  /// node has to resolve it to derive KgNB* for the target.
+  static nr_cell_identity xnc_peer_served_nci() { return nr_cell_identity::create(0x19b0).value(); }
+
+  /// gNB ID each Xn-C peer reports at XN setup. A resuming UE's I-RNTI has to encode it for the peer holding the
+  /// context to be resolvable.
+  gnb_id_t get_xnc_peer_gnb_id() const
+  {
+    return gnb_id_t{cu_cp_cfg.node.gnb_id.id + 2, cu_cp_cfg.node.gnb_id.bit_length};
+  }
+
   /// Enqueue PDUs to automatically respond to NG/XN setup procedures and starts the CU-CP.
   void enqueue_procedure_outcome_pdus_and_start_cu_cp();
 
@@ -105,8 +140,12 @@ public:
   /// Returns true if the AMF is successfully reconnected.
   bool reconnect_amf(unsigned amf_idx);
 
-  /// Start CU-CP connection to XN-C peer CU-CP and run XN setup procedure to completion.
+  /// Start CU-CP connection to Xn-C peer CU-CP and run XN setup procedure to completion.
   void run_xn_setup();
+
+  /// Run to completion the NG-RAN Node Configuration Update the CU-CP sends to each Xn-C peer when the cells it serves
+  /// change, checking that it reports the given cells as added.
+  void run_ngran_node_cfg_update(span<const test_helpers::served_cell_item_info> added_cells);
 
   /// Establish a TNL connection between a DU and the CU-CP.
   std::optional<unsigned> connect_new_du();
@@ -135,15 +174,15 @@ public:
   /// Runs the NAS Authentication for a given UE.
   [[nodiscard]] bool authenticate_ue(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id, amf_ue_id_t amf_ue_id);
   /// Runs the Security Mode procedure for a given UE.
-  [[nodiscard]] bool setup_ue_security_and_ue_capabilies(
-      unsigned                                                  du_idx,
-      gnb_du_ue_f1ap_id_t                                       du_ue_id,
-      std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive = std::nullopt,
-      bool                                                      rrc_inactive_supported      = true,
-      std::optional<location_report_request>                    location_reporting_request  = std::nullopt);
+  [[nodiscard]] bool setup_ue_security_and_ue_capabilities(
+      unsigned                                                   du_idx,
+      gnb_du_ue_f1ap_id_t                                        du_ue_id,
+      std::optional<cu_cp_core_network_assist_info_for_inactive> cn_assist_info_for_inactive = std::nullopt,
+      bool                                                       rrc_inactive_supported      = true,
+      std::optional<location_report_request>                     location_reporting_request  = std::nullopt);
   /// Get a Location Report, if one is awaited for.
   std::optional<ngap_message>
-  get_location_report_if_required(std::optional<location_report_request> location_reporting_request);
+  get_location_report_if_required(const std::optional<location_report_request>& location_reporting_request);
   /// Finishes the registration for a given UE.
   [[nodiscard]] bool finish_ue_registration(unsigned du_idx, unsigned cu_up_idx, gnb_du_ue_f1ap_id_t du_ue_id);
   /// Requests PDU Session Resource Setup
@@ -176,10 +215,10 @@ public:
             qos_flow_id_t          qfi     = qos_flow_id_t::min,
             byte_buffer rrc_setup_complete = test_helpers::pack_ul_dcch_msg(test_helpers::create_rrc_setup_complete()),
             byte_buffer rrc_reconfiguration_complete = make_byte_buffer("00070e00cc6fcda5").value(),
-            std::optional<ngap_core_network_assist_info_for_inactive> cn_assist_info_for_inactive = std::nullopt,
-            bool                                                      rrc_inactive_supported      = true,
-            std::optional<location_report_request>                    location_reporting_request  = std::nullopt,
-            std::optional<security_indication_t>                      security_indication         = std::nullopt);
+            std::optional<cu_cp_core_network_assist_info_for_inactive> cn_assist_info_for_inactive = std::nullopt,
+            bool                                                       rrc_inactive_supported      = true,
+            std::optional<location_report_request>                     location_reporting_request  = std::nullopt,
+            std::optional<security_indication_t>                       security_indication         = std::nullopt);
   /// Reestablishes a UE connection, including RRC Reestablishment and RRC Reconfiguration procedures.
   /// \return True if the reestablishment was successful, false if RRC Setup/Reject was performed instead.
   [[nodiscard]] bool reestablish_ue(unsigned            du_idx,
@@ -195,6 +234,76 @@ public:
   /// Keep ticking the CU-CP clock until the condition provided returns true.
   bool
   tick_until(std::chrono::milliseconds timeout, const std::function<bool()>& stop_condition, bool real_time = true);
+
+  /// \brief Ticks the CU-CP clock until \c is_ready returns true, evaluating \c is_ready on the CU-CP worker
+  /// thread rather than the calling thread.
+  ///
+  /// Use this (instead of \c tick_until) when the condition reads state that is only safe to observe from the
+  /// CU-CP worker thread, e.g. an async task's completion flag. Unlike \c tick_until, \c is_ready must NOT call
+  /// tick_until() or any of the wait_for_*_tx_pdu() helpers (directly or indirectly): those recursively dispatch
+  /// a blocking task to this same worker and would deadlock if invoked while already running on it.
+  bool wait_ready_on_cu_cp_worker(std::chrono::milliseconds timeout, const std::function<bool()>& is_ready);
+
+  /// \brief Runs \c task on the CU-CP worker thread and blocks until it has completed.
+  void run_on_cu_cp_worker(const std::function<void()>& task);
+
+  /// \brief A CU-CP task that is created, launched and destroyed on the CU-CP worker thread.
+  ///
+  /// The CU-CP command handlers read and mutate CU-CP state both when their task is created and while it runs, so
+  /// the task is kept on the CU-CP worker for its whole lifetime. Pass the object to \c wait_for_task_result to
+  /// get the result of the task, once the DU/CU-UP/AMF interaction the task needs to complete has been performed.
+  template <typename T>
+  class launched_cu_cp_task
+  {
+  public:
+    launched_cu_cp_task(cu_cp_test_environment& env_, const std::function<async_task<T>()>& make_task) : env(env_)
+    {
+      env.run_on_cu_cp_worker([this, &make_task]() {
+        task.emplace(make_task());
+        launcher.emplace(task.value());
+      });
+    }
+    launched_cu_cp_task(const launched_cu_cp_task&)            = delete;
+    launched_cu_cp_task& operator=(const launched_cu_cp_task&) = delete;
+    ~launched_cu_cp_task()
+    {
+      env.run_on_cu_cp_worker([this]() {
+        launcher.reset();
+        task.reset();
+      });
+    }
+
+    lazy_task_launcher<T>& get_launcher() { return launcher.value(); }
+
+  private:
+    cu_cp_test_environment&              env;
+    std::optional<async_task<T>>         task;
+    std::optional<lazy_task_launcher<T>> launcher;
+  };
+
+  /// \brief Waits for a previously launched CU-CP task to complete, ticking the CU-CP clock as needed, and
+  /// returns its result. Callers are expected to have already launched \c launcher (e.g. via a
+  /// \c lazy_task_launcher wrapping the task returned by a CU-CP command handler) and to have performed any
+  /// DU/CU-UP/AMF interaction required for the task to reach completion.
+  template <typename T>
+  T wait_for_task_result(lazy_task_launcher<T>&    launcher,
+                         std::chrono::milliseconds timeout = std::chrono::milliseconds{500})
+  {
+    bool ready = wait_ready_on_cu_cp_worker(timeout, [&launcher]() { return launcher.ready(); });
+    ocudu_assert(ready, "CU-CP task did not complete within {}ms", timeout.count());
+    if constexpr (not std::is_void_v<T>) {
+      ocudu_assert(launcher.result.has_value(), "CU-CP task completed without a result");
+      return std::move(launcher.result).value();
+    }
+  }
+
+  /// \brief Waits for a CU-CP task launched on the CU-CP worker to complete and returns its result.
+  template <typename T>
+  T wait_for_task_result(launched_cu_cp_task<T>&   task,
+                         std::chrono::milliseconds timeout = std::chrono::milliseconds{500})
+  {
+    return wait_for_task_result(task.get_launcher(), timeout);
+  }
 
   /// Tick CU-CP timer until a NGAP PDU is sent.
   bool wait_for_ngap_tx_pdu(ngap_message&             ngap_pdu,
@@ -273,6 +382,9 @@ public:
 
   rrc_timers_t rrc_test_timer_values;
 
+  /// Last NG-RAN Node Configuration Update the CU-CP sent to an Xn-C peer.
+  xnap_message last_ngran_node_cfg_update;
+
 private:
   class worker_manager;
 
@@ -288,7 +400,7 @@ private:
   /// Notifiers for the CU-CP interface.
   std::map<unsigned, cu_cp_test_amf_config> amf_configs;
 
-  // Emulated XN-C peer CU-CP nodes.
+  // Emulated Xn-C peer CU-CP nodes.
   std::map<unsigned, std::unique_ptr<mock_xnc_cu_cp>> xnc_peers;
   unsigned                                            next_xnc_peer_idx = 0;
 

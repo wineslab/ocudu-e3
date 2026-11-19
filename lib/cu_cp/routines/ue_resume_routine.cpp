@@ -4,6 +4,7 @@
 
 #include "ue_resume_routine.h"
 #include "pdu_session_routine_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cu_cp_types.h"
 
 using namespace ocudu;
@@ -19,7 +20,7 @@ verify_rrc_resume_request(const rrc_resume_request& request, ue_manager& ue_mng,
   }
 
   if (!ue_mng.find_du_ue(request.ue_index)) {
-    logger.warning("Can't find ue={}");
+    logger.warning("Can't find ue={}", request.ue_index);
     return false;
   }
 
@@ -72,6 +73,11 @@ void ue_resume_routine::operator()(coro_context<async_task<rrc_resume_request_re
 
       // Set UE as active.
       ue_mng.set_active(request.ue_index);
+
+      // Update UE context with the new C-RNTI to make sure the C-RNTI is available for the ResumeMAC-I verification of
+      // the next resume attempt.
+      ue->get_ue_context().crnti = request.new_c_rnti;
+      ue->get_rrc_ue()->update_c_rnti(request.new_c_rnti);
 
       // Set UE as inactive to allocate new I-RNTIs.
       i_rntis = ue_mng.set_inactive(request.ue_index);
@@ -167,14 +173,16 @@ void ue_resume_routine::operator()(coro_context<async_task<rrc_resume_request_re
     // Prepare RRC Resume and return it.
     // If default DRB is being setup, SRB2 needs to be setup as well.
     {
-      if (!fill_rrc_resume_request_response(ue_context_setup_request.srbs_to_be_setup_list,
+      if (!fill_rrc_resume_request_response(response_msg,
+                                            ue_context_setup_request.srbs_to_be_setup_list,
                                             next_config.pdu_sessions_to_setup_list,
                                             {} /* No DRB to be removed */,
                                             ue_context_setup_response.du_to_cu_rrc_info,
                                             ue->get_rrc_ue()->generate_meas_config(rrc_context.meas_cfg),
                                             false /* The UE reestablished SRBs after sending the resume request */,
                                             true /* Reestablish DRBs */,
-                                            std::nullopt /* Selected algos */)) {
+                                            std::nullopt /* Selected algos */,
+                                            logger)) {
         logger.warning("ue={}: \"{}\" Failed to fill RrcReconfiguration", request.ue_index, name());
         CORO_EARLY_RETURN(response_msg);
       }
@@ -355,115 +363,4 @@ bool ue_resume_routine::handle_ue_context_setup_response()
   }
 
   return ue_context_setup_response.success;
-}
-
-bool ue_resume_routine::fill_rrc_resume_request_response(
-    const std::vector<f1ap_srb_to_setup>&                            srbs_to_be_setup_mod_list,
-    const std::map<pdu_session_id_t, up_pdu_session_context_update>& pdu_sessions,
-    const std::vector<drb_id_t>&                                     drb_to_remove,
-    const f1ap_du_to_cu_rrc_info&                                    du_to_cu_rrc_info,
-    const std::optional<rrc_meas_cfg>&                               rrc_meas_cfg,
-    bool                                                             reestablish_srbs,
-    bool                                                             reestablish_drbs,
-    std::optional<security::sec_selected_algos>                      selected_algos)
-{
-  rrc_radio_bearer_config radio_bearer_config;
-  // If default DRB is being setup, SRB2 needs to be setup as well.
-  if (!srbs_to_be_setup_mod_list.empty()) {
-    for (const f1ap_srb_to_setup& srb_to_add_mod : srbs_to_be_setup_mod_list) {
-      rrc_srb_to_add_mod srb = {};
-      srb.srb_id             = srb_to_add_mod.srb_id;
-      if (reestablish_srbs) {
-        srb.reestablish_pdcp_present = true;
-      }
-      radio_bearer_config.srb_to_add_mod_list.emplace(srb_to_add_mod.srb_id, srb);
-    }
-  }
-
-  // Verify DU container content.
-  if (!du_to_cu_rrc_info.cell_group_cfg.empty()) {
-    if (!verify_and_log_cell_group_config(du_to_cu_rrc_info.cell_group_cfg, logger)) {
-      logger.warning("Failed to verify cellGroupConfig");
-      return false;
-    }
-    // Set masterCellGroupConfig as received by DU.
-    response_msg.master_cell_group = du_to_cu_rrc_info.cell_group_cfg.copy();
-  }
-
-  for (const auto& pdu_session_to_add_mod : pdu_sessions) {
-    // Fill radio bearer config.
-    for (const auto& drb_to_add : pdu_session_to_add_mod.second.drb_to_add) {
-      rrc_drb_to_add_mod drb_to_add_mod;
-      drb_to_add_mod.drb_id = drb_to_add.first;
-      if (reestablish_drbs) {
-        drb_to_add_mod.reestablish_pdcp_present = true;
-      } else {
-        drb_to_add_mod.pdcp_cfg = drb_to_add.second.pdcp_cfg;
-
-        // Fill CN association and SDAP config.
-        rrc_cn_assoc cn_assoc;
-        cn_assoc.sdap_cfg       = drb_to_add.second.sdap_cfg;
-        drb_to_add_mod.cn_assoc = cn_assoc;
-      }
-
-      radio_bearer_config.drb_to_add_mod_list.emplace(drb_to_add.first, drb_to_add_mod);
-    }
-
-    for (const auto& drb_to_modify : pdu_session_to_add_mod.second.drb_to_modify) {
-      rrc_drb_to_add_mod drb_to_add_mod;
-      drb_to_add_mod.drb_id = drb_to_modify.first;
-      if (reestablish_drbs) {
-        drb_to_add_mod.reestablish_pdcp_present = true;
-      } else {
-        drb_to_add_mod.pdcp_cfg = drb_to_modify.second.pdcp_cfg;
-
-        // Fill CN association and SDAP config.
-        rrc_cn_assoc cn_assoc;
-        cn_assoc.sdap_cfg       = drb_to_modify.second.sdap_cfg;
-        drb_to_add_mod.cn_assoc = cn_assoc;
-      }
-
-      radio_bearer_config.drb_to_add_mod_list.emplace(drb_to_modify.first, drb_to_add_mod);
-    }
-
-    // Remove DRB from a PDU session (PDU session itself still exists with out DRBs).
-    for (const auto& drb_id : pdu_session_to_add_mod.second.drb_to_remove) {
-      radio_bearer_config.drb_to_release_list.push_back(drb_id);
-    }
-  }
-
-  // Remove DRB (if not already) that are not associated with any PDU session anymore.
-  for (const auto& drb_id : drb_to_remove) {
-    if (std::any_of(radio_bearer_config.drb_to_release_list.begin(),
-                    radio_bearer_config.drb_to_release_list.end(),
-                    [drb_id](const auto& item) { return item == drb_id; })) {
-      // The DRB is already set to be removed.
-      continue;
-    }
-
-    radio_bearer_config.drb_to_release_list.push_back(drb_id);
-  }
-
-  // If selected security algos, fill securityConfig
-  if (selected_algos) {
-    radio_bearer_config.security_cfg.emplace();
-    radio_bearer_config.security_cfg->security_algorithm_cfg.emplace();
-    radio_bearer_config.security_cfg->security_algorithm_cfg->ciphering_algorithm      = selected_algos->cipher_algo;
-    radio_bearer_config.security_cfg->security_algorithm_cfg->integrity_prot_algorithm = selected_algos->integ_algo;
-  }
-
-  if (radio_bearer_config.contains_values()) {
-    // Fill radio bearer config.
-    response_msg.radio_bearer_cfg = radio_bearer_config;
-  }
-
-  // Fill measurement config.
-  response_msg.meas_cfg = rrc_meas_cfg;
-
-  // Fill meas gap config.
-  if (!du_to_cu_rrc_info.meas_gap_cfg.empty()) {
-    response_msg.meas_gap_cfg = du_to_cu_rrc_info.meas_gap_cfg.copy();
-  }
-
-  return true;
 }

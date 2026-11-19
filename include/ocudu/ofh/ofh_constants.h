@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "ocudu/ran/antenna_topology.h"
 #include <cstddef>
 
 namespace ocudu {
@@ -12,10 +13,19 @@ namespace ofh {
 enum class message_type { control_plane, user_plane, num_ofh_types };
 
 /// Maximum number of supported eAxC. Implementation defined.
-constexpr unsigned MAX_NOF_SUPPORTED_EAXC = 4;
+constexpr unsigned MAX_NOF_SUPPORTED_EAXC = 16;
 
 /// Maximum allowed value for eAxC ID.
 constexpr size_t MAX_SUPPORTED_EAXC_ID_VALUE = 64;
+
+/// \brief Maximum number of beamforming weights of a beam, one per O-RU TRX.
+///
+/// The beamforming weights are derived from the configured antenna topology, hence the number of O-RU TRXs is bounded
+/// by the largest supported topology.
+constexpr unsigned MAX_NOF_BEAMFORMING_WEIGHTS = get_max_nof_ports();
+
+/// Maximum allowed value for the beam identifier, see O-RAN.WG4.CUS, 7.5.3.9.
+constexpr unsigned MAX_BEAM_ID_VALUE = 32767;
 
 } // namespace ofh
 } // namespace ocudu

@@ -79,6 +79,9 @@ dummy_f1c_test_client::dummy_f1c_test_client(task_executor& test_exec_, bool cel
 std::unique_ptr<f1ap_message_notifier>
 dummy_f1c_test_client::handle_du_connection_request(std::unique_ptr<f1ap_message_notifier> du_rx_pdu_notifier)
 {
+  // Note: Called from a DU thread, while the test thread can change the F1 channel state.
+  std::lock_guard<std::mutex> lock(mutex);
+
   if (not f1c_is_up) {
     // Not accepting new connections.
     return nullptr;
@@ -87,6 +90,7 @@ dummy_f1c_test_client::handle_du_connection_request(std::unique_ptr<f1ap_message
   auto ret           = std::make_unique<dummy_du_f1ap_tx_pdu_notifier>(
       test_exec, f1ap_ul_msgs, next_msg_number, std::move(du_rx_pdu_notifier), cell_start_on_f1_setup, [this]() {
         bool success = test_exec.defer([this]() {
+          std::lock_guard<std::mutex> release_lock(mutex);
           du_released_client = true;
           on_connection_loss = {};
         });
@@ -96,18 +100,31 @@ dummy_f1c_test_client::handle_du_connection_request(std::unique_ptr<f1ap_message
   return ret;
 }
 
+bool dummy_f1c_test_client::du_released_connection() const
+{
+  std::lock_guard<std::mutex> lock(mutex);
+  return du_released_client;
+}
+
 void dummy_f1c_test_client::set_f1_channel_state(bool up)
 {
-  if (up == f1c_is_up) {
-    // Nothing happens.
-    return;
+  unique_function<void()> func;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (up == f1c_is_up) {
+      // Nothing happens.
+      return;
+    }
+    f1c_is_up = up;
+    if (not up) {
+      // Remote node disconnected.
+      func = std::move(on_connection_loss);
+    }
   }
-  if (not up) {
-    // Remote node disconnected.
-    f1c_is_up = false;
-    auto func = std::move(on_connection_loss);
+
+  // Note: The callable is empty when no connection was ever established, e.g. when emulating a CU-CP that is not
+  // reachable yet. It is run outside of the critical section, because it reaches the DU.
+  if (not func.is_empty()) {
     func();
-  } else {
-    f1c_is_up = true;
   }
 }

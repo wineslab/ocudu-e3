@@ -4,6 +4,7 @@
 
 #include "reestablishment_context_modification_routine.h"
 #include "pdu_session_routine_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp_bearer_context_update.h"
 #include "ocudu/f1ap/ue_context_management_configs.h"
 

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/ran/slot_pdu_capacity_constants.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/support/shared_transport_block.h"

@@ -5,7 +5,7 @@
 
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/error_handling.h"
-#include "ocudu/support/ocudu_test.h"
+#include "ocudu/support/ocudu_assert.h"
 #include <cstdio>
 #include <random>
 
@@ -193,6 +193,11 @@ private:
   std::unique_ptr<int> val_ptr;
 };
 
+inline int format_as(const moveonly_test_object& obj)
+{
+  return obj.value();
+}
+
 /// Test object to verify correct copy ctor/assignment logic
 struct copyonly_test_object {
   copyonly_test_object() : val(object_count_impl()) { object_count_impl()++; }
@@ -263,23 +268,3 @@ private:
   ASSERT_NE((val1), (val2));
 
 } // namespace ocudu
-
-namespace fmt {
-
-/// Formatter for moveonly_test_object.
-template <>
-struct formatter<ocudu::moveonly_test_object> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::moveonly_test_object& obj, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", obj.value());
-  }
-};
-
-} // namespace fmt

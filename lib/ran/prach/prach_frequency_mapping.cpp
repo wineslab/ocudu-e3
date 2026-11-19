@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/prach/prach_frequency_mapping.h"
+#include "ocudu/ran/prach/prach_subcarrier_spacing.h"
+#include "ocudu/ran/subcarrier_spacing.h"
 
 using namespace ocudu;
 

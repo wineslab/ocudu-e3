@@ -4,6 +4,7 @@
 
 #include "pdu_session_resource_modification_routine.h"
 #include "pdu_session_routine_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/cu_cp/ue_task_scheduler.h"
 #include "ocudu/ran/cause/e1ap_cause_converters.h"
 
@@ -64,6 +65,10 @@ void pdu_session_resource_modification_routine::operator()(
     coro_context<async_task<ngap_pdu_session_resource_modify_response>>& ctx)
 {
   CORO_BEGIN(ctx);
+
+  // Snapshot the UE's measurement config at procedure start: intermediate steps regenerate it for the F1
+  // container, and the UE-facing measConfig must diff against what the UE actually holds.
+  initial_meas_cfg = rrc_ue->get_meas_config();
 
   logger.debug("ue={}: \"{}\" initialized", modify_request.ue_index, name());
 
@@ -167,7 +172,7 @@ void pdu_session_resource_modification_routine::operator()(
                                   {} /* No extra DRB to be removed */,
                                   ue_context_modification_response.du_to_cu_rrc_info,
                                   nas_pdus,
-                                  rrc_ue->generate_meas_config(),
+                                  rrc_ue->generate_meas_config(initial_meas_cfg),
                                   false,
                                   false,
                                   std::nullopt,

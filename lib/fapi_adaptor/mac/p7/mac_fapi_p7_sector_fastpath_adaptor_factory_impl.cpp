@@ -5,6 +5,7 @@
 #include "mac_fapi_p7_sector_fastpath_adaptor_factory_impl.h"
 #include "mac_fapi_p7_sector_fastpath_adaptor_impl.h"
 #include "mac_fapi_p7_sector_fastpath_adaptor_impl_config.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace fapi_adaptor;

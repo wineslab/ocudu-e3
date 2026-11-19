@@ -28,13 +28,18 @@ include:
     ENABLE_UBSAN: "" # Empty for cmake default
     ENABLE_UBSAN_MIN: "" # Empty for cmake default
     ENABLE_RTSAN: "" # Empty for cmake default
+    ENABLE_SCHEDTRACE: "" # Empty for cmake default
     ENABLE_WERROR: "" # Empty for cmake default
+    ENABLE_SPLIT_DWARF: "" # Empty for cmake default
     TEST_GDB_PRINTERS: "" # Empty for cmake default
     FORCE_DEBUG_INFO: "" # Empty for cmake default
+    OCUDU_TEST_REQUIREMENT_REPORTS: "" # Empty for cmake default
     MARCH: "" # Empty for cmake default
     MTUNE: "" # Empty for cmake default
     MCPU: ""  # Empty for cmake default
-    OCUDU_TARGET: "" # Empty for cmake default
+    LINKER: "lld"
+    OCUDU_TARGET: "all"
+    CMAKE_GENERATOR: "Ninja"
     # CACHE
     CCACHE_MAXSIZE: 3G
     # TEST
@@ -61,8 +66,9 @@ include:
         ENABLE_UHD ENABLE_DPDK ENABLE_ZEROMQ \
         ENABLE_ASAN ENABLE_TSAN ENABLE_GCOV \
         ENABLE_UBSAN ENABLE_UBSAN_MIN ENABLE_RTSAN \
-        ENABLE_WERROR TEST_GDB_PRINTERS \
-        FORCE_DEBUG_INFO MARCH MTUNE MCPU \
+        ENABLE_SCHEDTRACE \
+        ENABLE_WERROR ENABLE_SPLIT_DWARF TEST_GDB_PRINTERS \
+        FORCE_DEBUG_INFO OCUDU_TEST_REQUIREMENT_REPORTS MARCH MTUNE MCPU \
       ; do
         if [ -n "${!var}" ]; then
           BUILD_ARGS="-D${var}=${!var} ${BUILD_ARGS}"
@@ -126,19 +132,42 @@ include:
       export CPU_JOBS
     - |
       build_ocudu() {
+        clean_arg=""
+        if [ -z "${OCUDU_BUILD_DONE}" ]; then
+          clean_arg="-r"
+          OCUDU_BUILD_DONE=1
+        fi
         set -x
-        builder.sh -b "${OCUDU_BUILD_DIR}" -m "-j${CPU_JOBS} ${OCUDU_TARGET}" ${BUILD_CMD} ${OCUDU_DIR}
+        builder.sh -b "${OCUDU_BUILD_DIR}" -m "-j${CPU_JOBS} ${OCUDU_TARGET}" ${clean_arg} ${BUILD_CMD} ${OCUDU_DIR}
         { set +x; } 2>/dev/null
       }
     - |
       launch_tests_ocudu() {
         cd ${OCUDU_DIR}/${OCUDU_BUILD_DIR}
-        printf 'set(CTEST_CUSTOM_MAXIMUM_FAILED_TEST_OUTPUT_SIZE 1048576)\nset(CTEST_CUSTOM_MAXIMUM_PASSED_TEST_OUTPUT_SIZE 1048576)\n' > CTestCustom.cmake
         echo "Using LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-        set -x
-        ctest -j${CPU_JOBS} --schedule-random --output-on-failure --output-junit xunit.xml $CTEST_ARGS
-        local ctest_ret=$?
-        { set +x; } 2>/dev/null
-        grep -l "ERROR SUMMARY: 0 errors" Testing/Temporary/MemoryChecker.*.log | xargs rm || true
+        if [ -n "${OCUDU_TEST_REQUIREMENT_REPORTS}" ]; then
+          # Each test process writes its gtest XML report here, carrying the requirement tags it recorded.
+          mkdir -p gtest_xml
+          export OCUDU_GTEST_XML_DIR="${PWD}/gtest_xml"
+        fi
+        echo "+ ctest -j${CPU_JOBS} --schedule-random --output-on-failure --test-output-size-passed 1024 --test-output-size-failed 1048576 --output-junit xunit.xml --output-log ctest_output.log ${CTEST_ARGS}"
+        ctest -j${CPU_JOBS} --schedule-random --output-on-failure \
+          --test-output-size-passed 1024 --test-output-size-failed 1048576 \
+          --output-junit xunit.xml --output-log ctest_output.log $CTEST_ARGS \
+          | awk '
+              /^[[:space:]]*Start[[:space:]]+[0-9]+:/ { next }
+              /^[[:space:]]*[0-9]+\/[0-9]+[[:space:]]+Test[[:space:]]*#[0-9]+:.*(Passed|Skipped)/ {
+                printf "."
+                fflush()
+                if (++n % 100 == 0) printf "\n"
+                next
+              }
+              { if (n % 100 != 0 && n > 0) printf "\n"; n = 0; print }
+            '
+        local ctest_ret=${PIPESTATUS[0]}
+        if [ -f xunit.xml ]; then
+          OCUDU_COMMIT="${OCUDU_COMMIT:-${CI_COMMIT_SHA}}" python3 /usr/local/bin/add_junit_properties.py xunit.xml ${OCUDU_GTEST_XML_DIR:+--strict} || ctest_ret=1
+        fi
+        grep -l "ERROR SUMMARY: 0 errors" Testing/Temporary/MemoryChecker.*.log 2>/dev/null | xargs -r rm || true
         return ${ctest_ret}
       }

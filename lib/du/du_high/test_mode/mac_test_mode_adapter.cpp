@@ -69,6 +69,12 @@ public:
   {
     // Ignores all RACH indications coming from the PHY. All UEs will be created by the test mode controller.
   }
+  std::optional<rnti_t>
+  handle_msga_ccch_sdu(rnti_t ra_rnti, uint8_t rapid, slot_point sl_rx, const ue_con_res_id_t& con_res_id) override
+  {
+    return std::nullopt;
+  }
+  std::optional<ue_con_res_id_t> resolve_msga_con_res_id(rnti_t tc_rnti) override { return std::nullopt; }
 
   // -- mac_cell_manager interface --
   mac_cell_manager&    get_cell_manager() override { return *this; }
@@ -102,10 +108,15 @@ public:
   {
     return parent.handle_ue_delete_request(cfg);
   }
-  bool handle_ul_ccch_msg(du_ue_index_t ue_index, byte_buffer pdu) override
+  bool handle_ul_ccch_msg(du_ue_index_t    ue_index,
+                          du_cell_index_t  cell_index,
+                          slot_point       slot_rx,
+                          byte_buffer      ul_ccch_msg,
+                          msg3_mac_ce_list mac_ces) override
   {
     // bypasses MAC adapter.
-    return parent.mac_adapted->get_ue_configurator().handle_ul_ccch_msg(ue_index, std::move(pdu));
+    return parent.mac_adapted->get_ue_configurator().handle_ul_ccch_msg(
+        ue_index, cell_index, slot_rx, std::move(ul_ccch_msg), std::move(mac_ces));
   }
   void handle_ue_config_applied(du_ue_index_t ue_index) override
   {

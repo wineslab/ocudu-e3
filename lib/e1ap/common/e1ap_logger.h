@@ -26,25 +26,11 @@ private:
   std::string prefix;
 };
 
+inline const char* format_as(const e1ap_log_prefix& o)
+{
+  return o.to_c_str();
+}
+
 using e1ap_logger = prefixed_logger<e1ap_log_prefix>;
 
 } // namespace ocudu
-
-namespace fmt {
-
-// associated formatter
-template <>
-struct formatter<ocudu::e1ap_log_prefix> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::e1ap_log_prefix& o, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", o.to_c_str());
-  }
-};
-} // namespace fmt

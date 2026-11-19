@@ -34,6 +34,11 @@ private:
   std::string prefix;
 };
 
+inline const char* format_as(const sdap_session_trx_log_prefix& o)
+{
+  return o.to_c_str();
+}
+
 using sdap_session_trx_logger = prefixed_logger<sdap_session_trx_log_prefix>;
 
 class sdap_session_log_prefix
@@ -51,42 +56,11 @@ private:
   std::string prefix;
 };
 
+inline const char* format_as(const sdap_session_log_prefix& o)
+{
+  return o.to_c_str();
+}
+
 using sdap_session_logger = prefixed_logger<sdap_session_log_prefix>;
 
 } // namespace ocudu
-
-namespace fmt {
-
-// associated formatters
-template <>
-struct formatter<ocudu::sdap_session_trx_log_prefix> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::sdap_session_trx_log_prefix o, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", o.to_c_str());
-  }
-};
-
-// associated formatters
-template <>
-struct formatter<ocudu::sdap_session_log_prefix> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::sdap_session_log_prefix o, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", o.to_c_str());
-  }
-};
-
-} // namespace fmt

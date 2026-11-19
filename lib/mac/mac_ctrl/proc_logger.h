@@ -38,7 +38,7 @@ struct formatter<ocudu::mac_log_prefix> {
     bool first_id = true;
     auto get_sep  = [&first_id]() { return std::exchange(first_id, false) ? "" : " "; };
     if (prefix.ue_index != ocudu::INVALID_DU_UE_INDEX) {
-      format_to(ctx.out(), "{}ue={}", get_sep(), fmt::underlying(prefix.ue_index));
+      format_to(ctx.out(), "{}ue={}", get_sep(), prefix.ue_index);
     }
     if (prefix.rnti != ocudu::rnti_t::INVALID_RNTI) {
       format_to(ctx.out(), "{}crnti={}", get_sep(), prefix.rnti);

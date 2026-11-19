@@ -6,6 +6,7 @@
 
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
+#include "ocudu/ran/subcarrier_spacing.h"
 
 namespace ocudu {
 

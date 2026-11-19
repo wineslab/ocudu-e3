@@ -6,14 +6,14 @@
 
 #include "ngap_asn1_utils.h"
 #include "ocudu/asn1/ngap/ngap_ies.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
 #include "ocudu/ngap/ngap_handover.h"
+#include "ocudu/ngap/ngap_pdu_session.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/cause/ngap_cause.h"
 #include "ocudu/ran/cu_cp_location_reporting_types.h"
-#include "ocudu/ran/cu_cp_pdu_session.h"
 #include "ocudu/ran/cu_types.h"
 #include "ocudu/ran/five_g_s_tmsi.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/ran/tai.h"
 #include "ocudu/ran/up_transport_layer_info.h"
@@ -66,16 +66,16 @@ inline asn1::ngap::security_result_s cu_cp_security_result_to_ngap_security_resu
 /// \param[in] cu_cp_qos_flow The CU-CP Associated QoS Flow.
 /// \return The NGAP Associated QoS Flow Item.
 inline asn1::ngap::associated_qos_flow_item_s
-cu_cp_assoc_qos_flow_to_ngap_assoc_qos_flow_item(ngap_associated_qos_flow cu_cp_qos_flow)
+cu_cp_assoc_qos_flow_to_ngap_assoc_qos_flow_item(cu_cp_associated_qos_flow cu_cp_qos_flow)
 {
   asn1::ngap::associated_qos_flow_item_s asn1_assoc_qos_item;
 
-  asn1_assoc_qos_item.qos_flow_id = qos_flow_id_to_uint(cu_cp_qos_flow.qos_flow_id);
+  asn1_assoc_qos_item.qos_flow_id = to_underlying(cu_cp_qos_flow.qos_flow_id);
 
   if (cu_cp_qos_flow.qos_flow_map_ind.has_value()) {
     asn1_assoc_qos_item.qos_flow_map_ind_present = true;
 
-    if (cu_cp_qos_flow.qos_flow_map_ind.value() == ngap_qos_flow_map_ind::ul) {
+    if (cu_cp_qos_flow.qos_flow_map_ind.value() == cu_cp_qos_flow_map_indication::ul) {
       asn1_assoc_qos_item.qos_flow_map_ind.value =
           asn1::ngap::associated_qos_flow_item_s::qos_flow_map_ind_opts::options::ul;
     } else {
@@ -216,8 +216,11 @@ cu_cp_user_location_info_to_asn1(const cu_cp_user_location_info_nr& cu_cp_user_l
 {
   asn1::ngap::user_location_info_nr_s asn1_user_location_info;
 
-  // Fill NR CGI.
-  asn1_user_location_info.nr_cgi.nr_cell_id.from_number(cu_cp_user_location_info.nr_cgi.nci.value());
+  // Fill NR CGI. TS 38.300 sec. 16.14.5 has an NTN cell report the Mapped Cell ID of the area holding the UE
+  // in place of its Uu Cell ID. Where none applies the Uu Cell ID stands: every cell outside NTN, and an NTN cell
+  // whose areas name none for the UE position.
+  asn1_user_location_info.nr_cgi.nr_cell_id.from_number(
+      cu_cp_user_location_info.mapped_nci.value_or(cu_cp_user_location_info.nr_cgi.nci).value());
   asn1_user_location_info.nr_cgi.plmn_id = cu_cp_user_location_info.nr_cgi.plmn_id.to_bytes();
   // Fill TAI.
   asn1_user_location_info.tai.plmn_id = cu_cp_user_location_info.tai.plmn_id.to_bytes();
@@ -226,6 +229,31 @@ cu_cp_user_location_info_to_asn1(const cu_cp_user_location_info_nr& cu_cp_user_l
   if (cu_cp_user_location_info.time_stamp.has_value()) {
     asn1_user_location_info.time_stamp_present = true;
     asn1_user_location_info.time_stamp.from_number(cu_cp_user_location_info.time_stamp.value());
+  }
+  // NR NTN TAI Information, TS 38.413 sec. 9.3.3.53: the TAI above carries one TAC, so report every broadcast TAC
+  // here, plus the one derived from the UE location when known. Both are filled: an AMF that reads this IE ignores
+  // the TAI, sec. 9.3.1.16, while an older one skips the IE and uses the TAI. Broadcasting several TACs is optional,
+  // TS 38.300 sec. 16.14.3.1, so a single-TAC cell reports the IE too once a TAC is derived, sec. 16.14.5.
+  if (not cu_cp_user_location_info.tac_list.empty() or cu_cp_user_location_info.ue_location_derived_tac.has_value()) {
+    asn1_user_location_info.ie_exts_present                      = true;
+    asn1_user_location_info.ie_exts.nr_ntn_tai_info_present      = true;
+    asn1_user_location_info.ie_exts.nr_ntn_tai_info.serving_plmn = cu_cp_user_location_info.tai.plmn_id.to_bytes();
+
+    // TS 38.331: a cell broadcasting a single TAC carries it in trackingAreaCode, which the CU-CP keeps in the TAI
+    // alone. The TAC List in NR NTN takes one entry at least, TS 38.413 sec. 9.3.3.53, so report that TAC here.
+    const tac_list_t single_tac{cu_cp_user_location_info.tai.tac};
+    for (tac_t tac : cu_cp_user_location_info.tac_list.empty() ? single_tac : cu_cp_user_location_info.tac_list) {
+      asn1::fixed_octstring<3, true> asn1_tac;
+      asn1_tac.from_number(tac);
+      asn1_user_location_info.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn.push_back(asn1_tac);
+    }
+
+    // UE Location Derived TAC in NR NTN, TS 38.413 sec. 9.3.3.53: reported only when the UE location is known.
+    if (cu_cp_user_location_info.ue_location_derived_tac.has_value()) {
+      asn1_user_location_info.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present = true;
+      asn1_user_location_info.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn.from_number(
+          cu_cp_user_location_info.ue_location_derived_tac.value());
+    }
   }
 
   return asn1_user_location_info;
@@ -270,7 +298,7 @@ template <typename template_asn1_item>
 inline bool pdu_session_res_setup_response_item_to_asn1(template_asn1_item&                             asn1_resp,
                                                         const ngap_pdu_session_res_setup_response_item& resp)
 {
-  asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
+  asn1_resp.pdu_session_id = to_underlying(resp.pdu_session_id);
 
   asn1::ngap::pdu_session_res_setup_resp_transfer_s response_transfer;
 
@@ -290,7 +318,7 @@ inline bool pdu_session_res_setup_response_item_to_asn1(template_asn1_item&     
   // Fill QoS flow failed to setup list.
   for (const auto& failed_item : resp.pdu_session_resource_setup_response_transfer.qos_flow_failed_to_setup_list) {
     asn1::ngap::qos_flow_with_cause_item_s asn1_failed_item;
-    asn1_failed_item.qos_flow_id = qos_flow_id_to_uint(failed_item.qos_flow_id);
+    asn1_failed_item.qos_flow_id = to_underlying(failed_item.qos_flow_id);
     asn1_failed_item.cause       = cause_to_asn1(failed_item.cause);
     response_transfer.qos_flow_failed_to_setup_list.push_back(asn1_failed_item);
   }
@@ -321,7 +349,7 @@ template <typename template_asn1_item>
 inline bool pdu_session_res_modify_response_item_to_asn1(template_asn1_item& asn1_resp,
                                                          const ngap_pdu_session_resource_modify_response_item& resp)
 {
-  asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
+  asn1_resp.pdu_session_id = to_underlying(resp.pdu_session_id);
 
   asn1::ngap::pdu_session_res_modify_resp_transfer_s response_transfer;
 
@@ -336,9 +364,17 @@ inline bool pdu_session_res_modify_response_item_to_asn1(template_asn1_item& asn
   if (resp.transfer.qos_flow_add_or_modify_response_list.has_value()) {
     for (const auto& qos_flow : resp.transfer.qos_flow_add_or_modify_response_list.value()) {
       asn1::ngap::qos_flow_add_or_modify_resp_item_s asn1_item;
-      asn1_item.qos_flow_id = qos_flow_id_to_uint(qos_flow.qos_flow_id);
+      asn1_item.qos_flow_id = to_underlying(qos_flow.qos_flow_id);
       response_transfer.qos_flow_add_or_modify_resp_list.push_back(asn1_item);
     }
+  }
+
+  // Fill the QoS flows that failed to be added or modified.
+  for (const auto& qos_flow : resp.transfer.qos_flow_failed_to_add_or_modify_list) {
+    asn1::ngap::qos_flow_with_cause_item_s asn1_item;
+    asn1_item.qos_flow_id = to_underlying(qos_flow.qos_flow_id);
+    asn1_item.cause       = cause_to_asn1(qos_flow.cause);
+    response_transfer.qos_flow_failed_to_add_or_modify_list.push_back(asn1_item);
   }
 
   // Pack pdu_session_res_modify_resp_transfer_s.
@@ -360,7 +396,7 @@ template <typename template_asn1_item>
 inline bool pdu_session_res_failed_to_modify_item_to_asn1(template_asn1_item& asn1_resp,
                                                           const ngap_pdu_session_resource_failed_to_modify_item& resp)
 {
-  asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
+  asn1_resp.pdu_session_id = to_underlying(resp.pdu_session_id);
 
   asn1::ngap::pdu_session_res_modify_unsuccessful_transfer_s response_transfer;
   response_transfer.cause = cause_to_asn1(resp.unsuccessful_transfer.cause);
@@ -384,7 +420,7 @@ template <typename template_asn1_item>
 inline bool pdu_session_res_setup_failed_item_to_asn1(template_asn1_item&                           asn1_resp,
                                                       const ngap_pdu_session_res_setup_failed_item& resp)
 {
-  asn1_resp.pdu_session_id = pdu_session_id_to_uint(resp.pdu_session_id);
+  asn1_resp.pdu_session_id = to_underlying(resp.pdu_session_id);
 
   asn1::ngap::pdu_session_res_setup_unsuccessful_transfer_s setup_unsuccessful_transfer;
   setup_unsuccessful_transfer.cause = cause_to_asn1(resp.unsuccessful_transfer.cause);
@@ -605,14 +641,14 @@ inline void asn1_to_source_to_target_transport_container(
 
   // Fill PDU session res info list.
   for (const auto& asn1_pdu_info_item : asn1_container.pdu_session_res_info_list) {
-    ngap_pdu_session_res_info_item pdu_info_item;
+    cu_cp_pdu_session_res_info_item pdu_info_item;
 
     // Fill PDU session ID.
     pdu_info_item.pdu_session_id = uint_to_pdu_session_id(asn1_pdu_info_item.pdu_session_id);
 
     // Fill QoS flow info list.
     for (const auto& asn1_qos_flow : asn1_pdu_info_item.qos_flow_info_list) {
-      ngap_qos_flow_info_item qos_flow;
+      cu_cp_qos_flow_info_item qos_flow;
       // Fill QoS flow ID.
       qos_flow.qos_flow_id = uint_to_qos_flow_id(asn1_qos_flow.qos_flow_id);
 
@@ -626,14 +662,14 @@ inline void asn1_to_source_to_target_transport_container(
 
     // Fill DRBs to QoS flow map list.
     for (const auto& asn1_drbs_to_qos_flow_map : asn1_pdu_info_item.drbs_to_qos_flows_map_list) {
-      ngap_drbs_to_qos_flows_map_item drbs_to_qos_flow_map;
+      cu_cp_drbs_to_qos_flows_map_item drbs_to_qos_flow_map;
 
       // Fill DRB ID.
       drbs_to_qos_flow_map.drb_id = uint_to_drb_id(asn1_drbs_to_qos_flow_map.drb_id);
 
       // Fill Associated QoS flow list.
       for (const auto& asn1_assoc_qos_flow : asn1_drbs_to_qos_flow_map.associated_qos_flow_list) {
-        ngap_associated_qos_flow assoc_qos_flow;
+        cu_cp_associated_qos_flow assoc_qos_flow;
 
         // Fill QoS flow ID.
         assoc_qos_flow.qos_flow_id = uint_to_qos_flow_id(asn1_assoc_qos_flow.qos_flow_id);
@@ -642,10 +678,10 @@ inline void asn1_to_source_to_target_transport_container(
         if (asn1_assoc_qos_flow.qos_flow_map_ind_present) {
           if (asn1_assoc_qos_flow.qos_flow_map_ind ==
               asn1::ngap::associated_qos_flow_item_s::qos_flow_map_ind_opts::options::ul) {
-            assoc_qos_flow.qos_flow_map_ind = ngap_qos_flow_map_ind::ul;
+            assoc_qos_flow.qos_flow_map_ind = cu_cp_qos_flow_map_indication::ul;
           } else if (asn1_assoc_qos_flow.qos_flow_map_ind ==
                      asn1::ngap::associated_qos_flow_item_s::qos_flow_map_ind_opts::options::dl) {
-            assoc_qos_flow.qos_flow_map_ind = ngap_qos_flow_map_ind::dl;
+            assoc_qos_flow.qos_flow_map_ind = cu_cp_qos_flow_map_indication::dl;
           }
         }
 
@@ -754,7 +790,7 @@ inline bool pdu_session_res_admitted_item_to_asn1(asn1::ngap::pdu_session_res_ad
                                                   const cu_cp_ng_pdu_session_res_admitted_item& admitted_item)
 {
   // Fill PDU session ID.
-  asn1_admitted_item.pdu_session_id = pdu_session_id_to_uint(admitted_item.pdu_session_id);
+  asn1_admitted_item.pdu_session_id = to_underlying(admitted_item.pdu_session_id);
 
   // Fill HO request ACK transfer.
   asn1::ngap::ho_request_ack_transfer_s asn1_req_ack_transfer;
@@ -781,7 +817,7 @@ inline bool pdu_session_res_admitted_item_to_asn1(asn1::ngap::pdu_session_res_ad
     asn1::ngap::qos_flow_item_with_data_forwarding_s asn1_qos_flow_item;
 
     // Fill QoS flow ID.
-    asn1_qos_flow_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_item.qos_flow_id);
+    asn1_qos_flow_item.qos_flow_id = to_underlying(qos_flow_item.qos_flow_id);
 
     // Fill data forwarding accepted.
     if (qos_flow_item.data_forwarding_accepted.has_value()) {
@@ -798,7 +834,7 @@ inline bool pdu_session_res_admitted_item_to_asn1(asn1::ngap::pdu_session_res_ad
       return false;
     }
     asn1::ngap::qos_flow_with_cause_item_s asn1_qos_flow_failed_item;
-    asn1_qos_flow_failed_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_failed_item.qos_flow_id);
+    asn1_qos_flow_failed_item.qos_flow_id = to_underlying(qos_flow_failed_item.qos_flow_id);
     asn1_qos_flow_failed_item.cause       = cause_to_asn1(std::get<ngap_cause_t>(qos_flow_failed_item.cause));
     asn1_req_ack_transfer.qos_flow_failed_to_setup_list.push_back(asn1_qos_flow_failed_item);
   }
@@ -808,7 +844,7 @@ inline bool pdu_session_res_admitted_item_to_asn1(asn1::ngap::pdu_session_res_ad
     asn1::ngap::data_forwarding_resp_drb_item_s asn1_drb_item;
 
     // Fill DRB ID.
-    asn1_drb_item.drb_id = drb_id_to_uint(drb_item.drb_id);
+    asn1_drb_item.drb_id = to_underlying(drb_item.drb_id);
 
     // Fill DL forwarding UP TNL info.
     if (drb_item.dl_forwarding_up_tnl.has_value()) {
@@ -845,7 +881,7 @@ inline bool pdu_session_res_failed_to_setup_item_ho_ack_to_asn1(
     const cu_cp_pdu_session_with_cause_item&                   failed_item)
 {
   // Fill PDU session ID.
-  asn1_failed_item.pdu_session_id = pdu_session_id_to_uint(failed_item.pdu_session_id);
+  asn1_failed_item.pdu_session_id = to_underlying(failed_item.pdu_session_id);
 
   // Fill HO res alloc unsuccessful transfer.
   asn1::ngap::ho_res_alloc_unsuccessful_transfer_s asn1_ho_res_alloc_unsuccessful_transfer;
@@ -884,6 +920,42 @@ inline bool target_to_source_transport_container_to_asn1(byte_buffer& asn1_conta
   }
 
   return true;
+}
+
+/// \brief Convert an NGAP ASN.1 Handover Command Transfer to \c cu_cp_data_forwarding_info_from_target_ng_ran_node.
+/// \param[in] asn1_ho_cmd_transfer The ASN.1 Handover Command Transfer (TS 38.413 section 9.3.4.10).
+/// \return The forwarding tunnels the source shall send the data it still holds for the UE to.
+inline cu_cp_data_forwarding_info_from_target_ng_ran_node
+asn1_to_data_forwarding_info_from_target(const asn1::ngap::ho_cmd_transfer_s& asn1_ho_cmd_transfer)
+{
+  cu_cp_data_forwarding_info_from_target_ng_ran_node data_forwarding_info;
+
+  // Fill PDU session level DL forwarding UP TNL info.
+  if (asn1_ho_cmd_transfer.dl_forwarding_up_tnl_info_present) {
+    data_forwarding_info.pdu_session_level_dl_data_forwarding_info =
+        asn1_to_up_transport_layer_info(asn1_ho_cmd_transfer.dl_forwarding_up_tnl_info);
+  }
+
+  // Fill QoS flows to be forwarded over the PDU session level tunnel.
+  for (const auto& asn1_qos_flow : asn1_ho_cmd_transfer.qos_flow_to_be_forwarded_list) {
+    data_forwarding_info.qos_flows_accepted_for_data_forwarding_list.push_back(
+        uint_to_qos_flow_id(asn1_qos_flow.qos_flow_id));
+  }
+
+  // Fill data forwarding resp DRB list.
+  for (const auto& asn1_drb_item : asn1_ho_cmd_transfer.data_forwarding_resp_drb_list) {
+    cu_cp_data_forwarding_resp_drb_item drb_item;
+    drb_item.drb_id = uint_to_drb_id(asn1_drb_item.drb_id);
+    if (asn1_drb_item.dl_forwarding_up_tnl_info_present) {
+      drb_item.dl_forwarding_up_tnl = asn1_to_up_transport_layer_info(asn1_drb_item.dl_forwarding_up_tnl_info);
+    }
+    if (asn1_drb_item.ul_forwarding_up_tnl_info_present) {
+      drb_item.ul_forwarding_up_tnl = asn1_to_up_transport_layer_info(asn1_drb_item.ul_forwarding_up_tnl_info);
+    }
+    data_forwarding_info.data_forwarding_resp_drb_item_list.push_back(drb_item);
+  }
+
+  return data_forwarding_info;
 }
 
 /// \brief Convert NGAP ASN.1 to \c five_g_s_tmsi_t.
@@ -963,16 +1035,16 @@ inline asn1::ngap::pdu_session_type_e pdu_session_type_to_asn1(const pdu_session
   }
 }
 
-inline ngap_rrc_inactive_transition_report_request asn1_to_rrc_inactive_transition_report_request(
+inline cu_cp_rrc_inactive_transition_report_request asn1_to_rrc_inactive_transition_report_request(
     const asn1::ngap::rrc_inactive_transition_report_request_e& asn1_rrc_inactive_transition_report_request)
 {
   switch (asn1_rrc_inactive_transition_report_request) {
     case asn1::ngap::rrc_inactive_transition_report_request_opts::options::subsequent_state_transition_report:
-      return ngap_rrc_inactive_transition_report_request::subsequent_state_transition_report;
+      return cu_cp_rrc_inactive_transition_report_request::subsequent_state_transition_report;
     case asn1::ngap::rrc_inactive_transition_report_request_opts::options::single_rrc_connected_state_report:
-      return ngap_rrc_inactive_transition_report_request::single_rrc_connected_state_report;
+      return cu_cp_rrc_inactive_transition_report_request::single_rrc_connected_state_report;
     default:
-      return ngap_rrc_inactive_transition_report_request::cancel_report;
+      return cu_cp_rrc_inactive_transition_report_request::cancel_report;
   }
 }
 
@@ -1044,10 +1116,10 @@ asn1_to_periodic_registration_update_timer(uint8_t asn1_periodic_registration_up
   return periodic_registration_update_timer;
 }
 
-inline ngap_core_network_assist_info_for_inactive asn1_to_core_network_assist_info_for_inactive(
+inline cu_cp_core_network_assist_info_for_inactive asn1_to_core_network_assist_info_for_inactive(
     const asn1::ngap::core_network_assist_info_for_inactive_s& asn1_cn_assist_info_for_inactive)
 {
-  ngap_core_network_assist_info_for_inactive cn_assist_info_for_inactive;
+  cu_cp_core_network_assist_info_for_inactive cn_assist_info_for_inactive;
 
   if (asn1_cn_assist_info_for_inactive.ue_id_idx_value.type() ==
       asn1::ngap::ue_id_idx_value_c::types_opts::options::idx_len10) {

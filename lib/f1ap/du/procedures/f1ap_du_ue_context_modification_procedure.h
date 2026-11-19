@@ -6,6 +6,7 @@
 
 #include "../ue_context/f1ap_du_ue.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
+#include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 
 namespace ocudu {
 namespace odu {

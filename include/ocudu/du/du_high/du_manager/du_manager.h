@@ -18,6 +18,10 @@ struct ul_crnti_ce_indication_message;
 struct mac_metric_report;
 struct scheduler_cell_metrics;
 
+namespace ocudu_ntn {
+class ntn_configuration_manager;
+}
+
 namespace odu {
 
 /// Interface used to handle external events (e.g. UL CCCH).
@@ -41,6 +45,18 @@ public:
 
   /// \brief Handle the metrics report from the MAC.
   virtual void aggregate_mac_metrics_report(const mac_metric_report& report) = 0;
+};
+
+/// This class handles Write-Replace Warning (PWS) requests coming from the F1AP.
+class du_manager_pws_handler
+{
+public:
+  virtual ~du_manager_pws_handler() = default;
+
+  /// \brief Handle a Write-Replace Warning Request forwarded by the F1AP.
+  /// \return Subset of \c write_replace_warning_information::cells that accepted the broadcast.
+  virtual async_task<std::vector<du_cell_index_t>>
+  handle_write_replace_warning(const write_replace_warning_information& req) = 0;
 };
 
 /// This class handles updates in cell and UE configurations coming from the F1AP.
@@ -90,6 +106,9 @@ public:
 
   /// Retrieve handler of UE positioning.
   virtual f1ap_du_positioning_handler& get_positioning_handler() = 0;
+
+  /// Retrieve handler of F1AP Write-Replace Warning (PWS) requests.
+  virtual du_manager_pws_handler& get_pws_handler() = 0;
 };
 
 /// Interface to initiate and stop the DU manager activity.
@@ -127,6 +146,9 @@ public:
 
   /// Get configuration interface with the procedures that are triggered externally to the DU.
   virtual du_configurator& get_operation_configurator() = 0;
+
+  /// Returns the NTN configuration manager of this DU, or nullptr when no NTN cell is configured.
+  virtual ocudu_ntn::ntn_configuration_manager* get_ntn_configuration_manager() = 0;
 };
 
 } // namespace odu

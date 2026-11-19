@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "srs.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/scheduler/result/srs_info.h"
 
 using namespace ocudu;

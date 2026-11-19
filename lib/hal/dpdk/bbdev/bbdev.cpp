@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ocudu/hal/dpdk/bbdev/bbdev.h"
+#include "fmt/format.h"
 
 using namespace ocudu;
 using namespace dpdk;

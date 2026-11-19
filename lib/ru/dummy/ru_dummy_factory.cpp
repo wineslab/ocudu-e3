@@ -4,6 +4,7 @@
 
 #include "ocudu/ru/dummy/ru_dummy_factory.h"
 #include "ru_dummy_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ru/ru.h"
 #include <memory>
 

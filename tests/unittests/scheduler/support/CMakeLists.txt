@@ -10,10 +10,6 @@ add_executable(pdsch_default_time_allocation_test pdsch/pdsch_default_time_alloc
 target_link_libraries(pdsch_default_time_allocation_test ocudu_sched ocudulog gtest gtest_main)
 add_test(pdsch_default_time_allocation_test pdsch_default_time_allocation_test)
 
-add_executable(pdsch_dmrs_symbol_mask_test pdsch/pdsch_dmrs_symbol_mask_test.cpp)
-target_link_libraries(pdsch_dmrs_symbol_mask_test ocudu_sched ocudulog gtest gtest_main)
-add_test(pdsch_dmrs_symbol_mask_test pdsch_dmrs_symbol_mask_test)
-
 add_executable(pucch_support_test
         pucch/pucch_collision_info_test.cpp
         pucch/pucch_default_resource_test.cpp)
@@ -28,17 +24,13 @@ add_executable(pusch_td_resource_indices_test pusch/pusch_td_resource_indices_te
 target_link_libraries(pusch_td_resource_indices_test ocudu_sched sched_test_doubles scheduler_test_utils ocudulog gtest gtest_main)
 add_test(pusch_td_resource_indices_test pusch_td_resource_indices_test)
 
-add_executable(pusch_dmrs_symbol_mask_test pusch/pusch_dmrs_symbol_mask_test.cpp)
-target_link_libraries(pusch_dmrs_symbol_mask_test ocudu_sched ocudulog gtest gtest_main)
-add_test(pusch_dmrs_symbol_mask_test pusch_dmrs_symbol_mask_test)
-
 add_executable(prbs_calculator_test prbs_calculator_test.cpp)
 target_link_libraries(prbs_calculator_test ocudu_sched ocudulog gtest gtest_main)
 add_test(prbs_calculator_test prbs_calculator_test)
 
 add_executable(dmrs_helpers_test dmrs_helpers_test.cpp)
-target_link_libraries(dmrs_helpers_test ocudu_sched ocudulog)
-add_test(dmrs_helpers_test dmrs_helpers_test)
+target_link_libraries(dmrs_helpers_test ocudu_sched ocudulog GTest::gtest ocudu_gtest_main)
+gtest_discover_tests(dmrs_helpers_test)
 
 add_executable(mcs_calculator_test mcs_calculator_test.cpp)
 target_link_libraries(mcs_calculator_test ocudu_sched gtest gtest_main)
@@ -56,4 +48,4 @@ add_test(mcs_tbs_calculator_test mcs_tbs_calculator_test)
 
 add_executable(pdcch_aggregation_level_calculator_test pdcch_aggregation_level_calculator_test.cpp)
 target_link_libraries(pdcch_aggregation_level_calculator_test ocudu_sched gtest gtest_main)
-add_test(pdcch_aggregation_level_calculator_test.cpp pdcch_aggregation_level_calculator_test)
+gtest_discover_tests(pdcch_aggregation_level_calculator_test)

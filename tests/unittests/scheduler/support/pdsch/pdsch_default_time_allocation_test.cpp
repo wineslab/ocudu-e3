@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/support/pdsch/pdsch_default_time_allocation.h"
+#include "ocudu/adt/format.h"
 #include <gtest/gtest.h>
 
 namespace ocudu {

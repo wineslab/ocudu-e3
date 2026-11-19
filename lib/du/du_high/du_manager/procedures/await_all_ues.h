@@ -21,7 +21,9 @@ template <typename TaskFactory>
 class await_all_ues_impl
 {
 public:
-  await_all_ues_impl(du_ue_manager& ue_mng_, span<const du_ue_index_t> ues_to_update_, TaskFactory ue_task_factory_) :
+  await_all_ues_impl(du_ue_manager_repository& ue_mng_,
+                     span<const du_ue_index_t> ues_to_update_,
+                     TaskFactory               ue_task_factory_) :
     ue_mng(ue_mng_),
     ue_task_factory(std::move(ue_task_factory_)),
     ues_to_update(ues_to_update_.begin(), ues_to_update_.end())
@@ -52,8 +54,8 @@ private:
       return;
     }
 
-    // Launch UE tasks in their respective task scheduler.
-    for (unsigned ue_count = 0; ue_count != remaining_ues; ++ue_count) {
+    const unsigned nof_ues = ues_to_update.size();
+    for (unsigned ue_count = 0; ue_count != nof_ues; ++ue_count) {
       ue_mng.schedule_async_task(ues_to_update[ue_count], launch_ue_task(ues_to_update[ue_count]));
     }
   }
@@ -81,8 +83,8 @@ private:
         });
   }
 
-  du_ue_manager& ue_mng;
-  TaskFactory    ue_task_factory;
+  du_ue_manager_repository& ue_mng;
+  TaskFactory               ue_task_factory;
 
   std::vector<du_ue_index_t> ues_to_update;
 
@@ -95,8 +97,9 @@ private:
 
 /// \brief Runs an async_task in the respective task scheduler of a list of UEs.
 template <typename AsyncTaskFactory>
-auto await_all_ues(du_ue_manager& ue_mng, span<const du_ue_index_t> ues_to_update, AsyncTaskFactory ue_task_factory)
-    -> async_task<void>
+auto await_all_ues(du_ue_manager_repository& ue_mng,
+                   span<const du_ue_index_t> ues_to_update,
+                   AsyncTaskFactory          ue_task_factory) -> async_task<void>
 {
   return launch_async<detail::await_all_ues_impl<AsyncTaskFactory>>(ue_mng, ues_to_update, std::move(ue_task_factory));
 }

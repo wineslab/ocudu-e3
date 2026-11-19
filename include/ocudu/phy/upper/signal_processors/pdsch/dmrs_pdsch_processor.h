@@ -5,8 +5,8 @@
 #pragma once
 
 #include "ocudu/phy/support/mask_types.h"
-#include "ocudu/phy/support/precoding_configuration.h"
 #include "ocudu/ran/dmrs/dmrs.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/resource_allocation/rb_bitmap.h"
 #include "ocudu/ran/slot_point.h"
 
@@ -36,8 +36,8 @@ public:
     symbol_slot_mask symbols_mask;
     /// Allocation RB list, the entries set to true are used for transmission.
     crb_bitmap rb_mask;
-    /// Precoding configuration.
-    precoding_configuration precoding;
+    /// Precoding and beamforming configuration.
+    precoding_beamforming_configuration precoding_and_beamforming;
   };
 
   /// Default destructor.

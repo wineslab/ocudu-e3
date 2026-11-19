@@ -4,6 +4,7 @@
 
 #include "ocudu/ran/band_helper.h"
 #include "ssb/ssb_freq_position_generator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/ran/bs_channel_bandwidth.h"
@@ -12,6 +13,7 @@
 #include "ocudu/ran/pdcch/pdcch_type0_css_occasions.h"
 #include "ocudu/ran/ssb/ssb_gscn.h"
 #include "ocudu/ran/subcarrier_spacing.h"
+#include "ocudu/support/enum_utils.h"
 #include "ocudu/support/math/math_utils.h"
 #include "ocudu/support/ocudu_assert.h"
 #include "fmt/std.h"
@@ -38,13 +40,13 @@ struct nr_band_raster {
 
 /// From Tables 5.4.2.3-1 and 5.4.2.3-2 in TS 38.104, table with NR operating FR1 and FR2 band and related ARFCN
 /// lower-bound and upper-bound. (FDD, TDD or SDL).
-/// NTN bands from Table 5.4.2.3-1 in TS 38.108
+/// NTN bands from Table 5.4.2.3-1 in TS 38.108, version 19.4.0.
 ///
 /// NOTE: It only includes FDD, TDD, and SDL bands.
 /// NOTE: Band 2 is a subset of band 25.
 /// NOTE: Band 41 has two different Freq raster, we only consider raster 15kHz.
 /// NOTE: FR2 bands have two different Freq raster, we only consider raster 120kHz.
-static constexpr unsigned                                    nof_nr_DL_bands = 84;
+static constexpr unsigned                                    nof_nr_DL_bands = 92;
 static constexpr std::array<nr_band_raster, nof_nr_DL_bands> nr_band_table   = {{
     // clang-format off
     {nr_band::n1,    delta_freq_raster::kHz100, 384000, 20,  396000,  422000, 20,  434000},
@@ -125,6 +127,14 @@ static constexpr std::array<nr_band_raster, nof_nr_DL_bands> nr_band_table   = {
     {nr_band::n102,  delta_freq_raster::kHz15,  796334, 1 ,  828333,  796334,  1,  828333},
     {nr_band::n104,  delta_freq_raster::kHz15,  828334, 1 ,  875000,  828334,  1,  875000},
     {nr_band::n104,  delta_freq_raster::kHz30,  828334, 2 ,  875000,  828334,  2,  875000},
+    {nr_band::n247,  delta_freq_raster::kHz15, 1316667, 1,  1333333,  1113334, 1,  1250000},
+    {nr_band::n247,  delta_freq_raster::kHz30, 1316668, 2,  1333332,  1113334, 2,  1250000},
+    {nr_band::n248,  delta_freq_raster::kHz15, 1333334, 1,  1366666,  1113334, 1,  1250000},
+    {nr_band::n248,  delta_freq_raster::kHz30, 1333334, 2,  1366666,  1113334, 2,  1250000},
+    {nr_band::n250,  delta_freq_raster::kHz100, 333600, 20,  335000,  303600, 20,  311800},
+    {nr_band::n251,  delta_freq_raster::kHz100, 325300, 20,  332100,  303600, 20,  311800},
+    {nr_band::n252,  delta_freq_raster::kHz100, 400000, 20,  404000,  436000, 20,  440000},
+    {nr_band::n253,  delta_freq_raster::kHz100, 333600, 20,  335000,  303600, 20,  305000},
     {nr_band::n254,  delta_freq_raster::kHz100, 322000, 20,  325300,  496700, 20,  500000},
     {nr_band::n255,  delta_freq_raster::kHz100, 325300, 20,  332100,  305000, 20,  311800},
     {nr_band::n256,  delta_freq_raster::kHz100, 396000, 20,  402000,  434000, 20,  440000},
@@ -153,7 +163,7 @@ struct nr_operating_band {
 
 } // namespace
 
-static constexpr unsigned                                             nof_nr_operating_band = 69;
+static constexpr unsigned                                             nof_nr_operating_band = 75;
 static constexpr std::array<nr_operating_band, nof_nr_operating_band> nr_operating_bands    = {{
     // clang-format off
     {nr_band::n1,  duplex_mode::FDD},
@@ -216,6 +226,12 @@ static constexpr std::array<nr_operating_band, nof_nr_operating_band> nr_operati
     {nr_band::n101, duplex_mode::TDD},
     {nr_band::n102, duplex_mode::TDD},
     {nr_band::n104, duplex_mode::TDD},
+    {nr_band::n247, duplex_mode::FDD},
+    {nr_band::n248, duplex_mode::FDD},
+    {nr_band::n250, duplex_mode::FDD},
+    {nr_band::n251, duplex_mode::FDD},
+    {nr_band::n252, duplex_mode::FDD},
+    {nr_band::n253, duplex_mode::FDD},
     {nr_band::n254, duplex_mode::FDD},
     {nr_band::n255, duplex_mode::FDD},
     {nr_band::n256, duplex_mode::FDD},
@@ -242,7 +258,8 @@ struct nr_band_ssb_scs_case {
 
 /// NR operating bands with corresponding SSB Subcarrier Spacing and SSB pattern case, as per Table 5.4.3.3-1 for FR1
 /// and Table 5.4.3.3-1 for FR2, TS 38.104, Rel. 17, version 17.8.0.
-static constexpr unsigned                                           nof_nr_ssb_bands           = 76;
+/// NTN bands from Table 5.4.3.3-1 in TS 38.108, version 19.4.0.
+static constexpr unsigned                                           nof_nr_ssb_bands           = 85;
 static constexpr std::array<nr_band_ssb_scs_case, nof_nr_ssb_bands> nr_ssb_band_scs_case_table = {{
     // clang-format off
     {nr_band::n1,  subcarrier_spacing::kHz15, ssb_pattern_case::A},
@@ -303,8 +320,17 @@ static constexpr std::array<nr_band_ssb_scs_case, nof_nr_ssb_bands> nr_ssb_band_
     {nr_band::n101, subcarrier_spacing::kHz30, ssb_pattern_case::C},
     {nr_band::n102, subcarrier_spacing::kHz30, ssb_pattern_case::C},
     {nr_band::n104, subcarrier_spacing::kHz30, ssb_pattern_case::C},
+    {nr_band::n247, subcarrier_spacing::kHz15, ssb_pattern_case::A},
+    {nr_band::n247, subcarrier_spacing::kHz30, ssb_pattern_case::C},
+    {nr_band::n248, subcarrier_spacing::kHz15, ssb_pattern_case::A},
+    {nr_band::n248, subcarrier_spacing::kHz30, ssb_pattern_case::C},
+    {nr_band::n250, subcarrier_spacing::kHz15, ssb_pattern_case::A},
+    {nr_band::n251, subcarrier_spacing::kHz15, ssb_pattern_case::A},
+    {nr_band::n251, subcarrier_spacing::kHz30, ssb_pattern_case::B},
+    {nr_band::n252, subcarrier_spacing::kHz15, ssb_pattern_case::A},
+    {nr_band::n253, subcarrier_spacing::kHz15, ssb_pattern_case::A},
     {nr_band::n254, subcarrier_spacing::kHz15, ssb_pattern_case::A},
-    {nr_band::n254, subcarrier_spacing::kHz30, ssb_pattern_case::B},
+    {nr_band::n254, subcarrier_spacing::kHz30, ssb_pattern_case::C},
     {nr_band::n255, subcarrier_spacing::kHz15, ssb_pattern_case::A},
     {nr_band::n255, subcarrier_spacing::kHz30, ssb_pattern_case::B},
     {nr_band::n256, subcarrier_spacing::kHz15, ssb_pattern_case::A},
@@ -472,10 +498,11 @@ static constexpr std::array<n_rb_per_scs_fr2, 15> tx_bw_config_fr2 = {{
 static nr_band_raster fetch_band_raster(nr_band band, std::optional<delta_freq_raster> delta_freq_raster)
 {
   if (band == nr_band::n41 or band == nr_band::n48 or band == nr_band::n77 or band == nr_band::n78 or
-      band == nr_band::n79 or band == nr_band::n90 or band == nr_band::n104) {
-    ocudu_assert(
-        delta_freq_raster.has_value(),
-        "For band n41, n48, n77, n78, n79, n90 and n104, the band freq. raster require Delta Freq. Raster as an input");
+      band == nr_band::n79 or band == nr_band::n90 or band == nr_band::n104 or band == nr_band::n247 or
+      band == nr_band::n248) {
+    ocudu_assert(delta_freq_raster.has_value(),
+                 "For band n41, n48, n77, n78, n79, n90, n104, n247 and n248 the band freq. raster require Delta Freq. "
+                 "Raster as an input");
   }
 
   const auto* it = std::find_if(
@@ -810,7 +837,7 @@ error_type<std::string> ocudu::band_helper::is_dl_arfcn_valid_given_band(nr_band
                     cb->dl_nref_first,
                     cb->dl_nref_last,
                     cb->dl_nref_step,
-                    nr_band_to_uint(cb->band)));
+                    to_underlying(cb->band)));
   }
 
   // Validates first the bands with non-standard ARFCN values.
@@ -841,9 +868,9 @@ error_type<std::string> ocudu::band_helper::is_dl_arfcn_valid_given_band(nr_band
   // Assume standard Delta freq raster of 100kHz.
   delta_freq_raster band_delta_freq_raster = delta_freq_raster::kHz100;
 
-  // Update Delta freq raster based on SCS for bands n41, n48, n77, n78, n79 and n104.
+  // Update Delta freq raster based on SCS for bands n41, n48, n77, n78, n79, n104, n247 and n248.
   if (band == nr_band::n41 or band == nr_band::n48 or band == nr_band::n77 or band == nr_band::n78 or
-      band == nr_band::n79 or band == nr_band::n104) {
+      band == nr_band::n79 or band == nr_band::n104 or band == nr_band::n247 or band == nr_band::n248) {
     band_delta_freq_raster = scs == subcarrier_spacing::kHz15 ? delta_freq_raster::kHz15 : delta_freq_raster::kHz30;
   }
 
@@ -868,8 +895,10 @@ error_type<std::string> ocudu::band_helper::is_dl_arfcn_valid_given_band(nr_band
   return make_unexpected(fmt::format("Band {} is not valid", fmt::underlying(band)));
 }
 
-error_type<std::string>
-ocudu::band_helper::is_ul_arfcn_valid_given_band(nr_band band, arfcn_t arfcn_f_ref, bs_channel_bandwidth bw)
+error_type<std::string> ocudu::band_helper::is_ul_arfcn_valid_given_band(nr_band              band,
+                                                                         arfcn_t              arfcn_f_ref,
+                                                                         bs_channel_bandwidth bw,
+                                                                         subcarrier_spacing   scs)
 {
   if (const custom_band_config* cb = g_registry.find_by_band(band); cb != nullptr) {
     // TDD: no UL raster configured (ul_nref_first == 0), DL is used for UL, always valid.
@@ -885,7 +914,7 @@ ocudu::band_helper::is_ul_arfcn_valid_given_band(nr_band band, arfcn_t arfcn_f_r
                     cb->ul_nref_first,
                     cb->ul_nref_last,
                     cb->ul_nref_step,
-                    nr_band_to_uint(cb->band)));
+                    to_underlying(cb->band)));
   }
 
   if (get_duplex_mode(band) != duplex_mode::FDD) {
@@ -898,13 +927,19 @@ ocudu::band_helper::is_ul_arfcn_valid_given_band(nr_band band, arfcn_t arfcn_f_r
   }
 
   // Assume standard Delta freq raster of 100kHz.
-  constexpr delta_freq_raster band_delta_freq_raster = delta_freq_raster::kHz100;
+  delta_freq_raster band_delta_freq_raster = delta_freq_raster::kHz100;
+
+  // Update Delta freq raster based on SCS for bands n247 and n248. (FDD bands with non-standard Delta Freq Raster)
+  if (band == nr_band::n247 or band == nr_band::n248) {
+    band_delta_freq_raster = scs == subcarrier_spacing::kHz15 ? delta_freq_raster::kHz15 : delta_freq_raster::kHz30;
+  }
 
   for (const nr_band_raster& raster_band : nr_band_table) {
     if (raster_band.band == band and raster_band.delta_f_rast == band_delta_freq_raster) {
       // Check if the ARFCN doesn't exceed the band upper-bound for bands that support asymmetrical UL and DL channel
       // BWs.
-      if ((band == nr_band::n66 or band == nr_band::n70 or band == nr_band::n92 or band == nr_band::n94) and
+      if ((band == nr_band::n66 or band == nr_band::n70 or band == nr_band::n92 or band == nr_band::n94 or
+           band == nr_band::n247 or band == nr_band::n248) and
           (arfcn_f_ref < raster_band.ul_nref_first or arfcn_f_ref > raster_band.ul_nref_last)) {
         return make_unexpected(
             fmt::format("Asymmetrical UL and DL channel BWs are not supported. The UL ARFCN resulting from the DL "
@@ -1010,7 +1045,9 @@ bool ocudu::band_helper::is_ntn_band(nr_band band)
   if (const custom_band_config* cb = g_registry.find_by_band(band); cb != nullptr) {
     return cb->ntn;
   }
-  return band == nr_band::n254 or band == nr_band::n255 or band == nr_band::n256;
+  return band == nr_band::n247 or band == nr_band::n248 or band == nr_band::n250 or band == nr_band::n251 or
+         band == nr_band::n252 or band == nr_band::n253 or band == nr_band::n254 or band == nr_band::n255 or
+         band == nr_band::n256;
 }
 
 ssb_pattern_case ocudu::band_helper::get_ssb_pattern(nr_band band, subcarrier_spacing scs)
@@ -1139,7 +1176,9 @@ frequency_range ocudu::band_helper::get_freq_range(nr_band band)
   }
 
   ocudu_assert(band != nr_band::invalid, "Band must be a valid NR band.");
-  return (band <= nr_band::n104 || band == nr_band::n254 || band == nr_band::n255 || band == nr_band::n256)
+  return (band <= nr_band::n104 || band == nr_band::n247 || band == nr_band::n248 || band == nr_band::n250 ||
+          band == nr_band::n251 || band == nr_band::n252 || band == nr_band::n253 || band == nr_band::n254 ||
+          band == nr_band::n255 || band == nr_band::n256)
              ? frequency_range::FR1
              : frequency_range::FR2;
 }
@@ -1320,13 +1359,37 @@ min_channel_bandwidth ocudu::band_helper::get_min_channel_bw(nr_band nr_band, su
       }
       return min_channel_bandwidth::invalid;
     }
+    case nr_band::n247:
+    case nr_band::n248: {
+      if (scs <= subcarrier_spacing::kHz30) {
+        return min_channel_bandwidth::MHz10;
+      }
+      return min_channel_bandwidth::invalid;
+    }
+    case nr_band::n250:
+    case nr_band::n251:
+    case nr_band::n252: {
+      if (scs == subcarrier_spacing::kHz15) {
+        return min_channel_bandwidth::MHz5;
+      }
+      if (scs <= subcarrier_spacing::kHz60) {
+        return min_channel_bandwidth::MHz10;
+      }
+      return min_channel_bandwidth::invalid;
+    }
+    case nr_band::n253: {
+      if (scs == subcarrier_spacing::kHz15) {
+        return min_channel_bandwidth::MHz5;
+      }
+      return min_channel_bandwidth::invalid;
+    }
     case nr_band::n254:
     case nr_band::n255:
     case nr_band::n256: {
       if (scs == subcarrier_spacing::kHz15) {
         return min_channel_bandwidth::MHz5;
       }
-      if (scs == subcarrier_spacing::kHz30) {
+      if (scs <= subcarrier_spacing::kHz60) {
         return min_channel_bandwidth::MHz10;
       }
       return min_channel_bandwidth::invalid;
@@ -1664,17 +1727,22 @@ unsigned ocudu::band_helper::get_nof_coreset0_rbs_not_intersecting_ssb(coreset0_
   return cset0_cfg.nof_rb_coreset - cset0_prbs.intersect(ssb_prbs).length();
 }
 
-n_ta_offset ocudu::band_helper::get_ta_offset(nr_band band)
+n_ta_offset ocudu::band_helper::get_ta_offset(nr_band band, bool eutra_coexistence)
 {
-  return get_ta_offset(get_freq_range(band));
-}
-
-n_ta_offset ocudu::band_helper::get_ta_offset(frequency_range freq_range)
-{
-  if (freq_range == frequency_range::FR1) {
-    // Assume no LTE-NR coexistence.
-    return n_ta_offset::n25600;
+  if (get_freq_range(band) == frequency_range::FR1) {
+    if (not eutra_coexistence) {
+      // Fixed TA offset without E-UTRA-NR or NB-IoT coexistence for both TDD and FDD.
+      return n_ta_offset::n25600;
+    }
+    if (get_duplex_mode(band) == duplex_mode::FDD) {
+      // No buffer for Tx/Rx switch needed.
+      return n_ta_offset::n0;
+    } else {
+      // Sub-6 TDD bands to allow for guard time for Tx/Rx switch, as per TS 38.133 Table 7.1.2-2.
+      return n_ta_offset::n39936;
+    }
   }
+  // FR2 bands, regardless of duplex mode.
   return n_ta_offset::n13792;
 }
 

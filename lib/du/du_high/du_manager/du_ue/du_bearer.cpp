@@ -4,6 +4,7 @@
 
 #include "du_bearer.h"
 #include "../converters/rlc_config_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/f1u/du/f1u_bearer_factory.h"
 #include "ocudu/gtpu/gtpu_teid_pool.h"
 #include "ocudu/ocudulog/ocudulog.h"
@@ -113,7 +114,7 @@ void du_ue_drb::stop()
 
 std::unique_ptr<du_ue_drb> ocudu::odu::create_drb(const drb_creation_info& drb_info)
 {
-  ocudu_assert(not is_srb(drb_info.lcid), "Invalid DRB LCID={}", fmt::underlying(drb_info.lcid));
+  ocudu_assert(not is_srb(drb_info.lcid), "Invalid DRB LCID={}", drb_info.lcid);
   ocudu_assert(not drb_info.uluptnl_info_list.empty(), "Invalid UP TNL Info list");
 
   const du_ue_index_t ue_index  = drb_info.ue_index;
@@ -123,7 +124,7 @@ std::unique_ptr<du_ue_drb> ocudu::odu::create_drb(const drb_creation_info& drb_i
   // > Setup DL UP TNL info.
   expected<gtpu_teid_t> dl_teid = teid_pool.request_teid();
   if (not dl_teid.has_value()) {
-    ocudulog::fetch_basic_logger("DU-MNG").warning("ue={}: Failed to allocate DL GTP-TEID.", fmt::underlying(ue_index));
+    ocudulog::fetch_basic_logger("DU-MNG").warning("ue={}: Failed to allocate DL GTP-TEID.", ue_index);
     return nullptr;
   }
 
@@ -151,8 +152,7 @@ std::unique_ptr<du_ue_drb> ocudu::odu::create_drb(const drb_creation_info& drb_i
       timer_factory{drb_info.du_params.services.timers, drb_info.du_params.services.ue_execs.ctrl_executor(ue_index)},
       drb_info.du_params.services.ue_execs.f1u_dl_pdu_executor(ue_index));
   if (drb->f1u_gw_bearer == nullptr) {
-    ocudulog::fetch_basic_logger("DU-MNG").warning("ue={}: Failed to connect F1-U GW bearer to CU-UP.",
-                                                   fmt::underlying(ue_index));
+    ocudulog::fetch_basic_logger("DU-MNG").warning("ue={}: Failed to connect F1-U GW bearer to CU-UP.", ue_index);
     return nullptr;
   }
 
@@ -179,7 +179,7 @@ std::unique_ptr<du_ue_drb> ocudu::odu::create_drb(const drb_creation_info& drb_i
 
   drb->drb_f1u = odu::create_f1u_bearer(f1u_msg);
   if (drb->f1u_gw_bearer == nullptr) {
-    ocudulog::fetch_basic_logger("DU-MNG").warning("ue={}: Failed to create F1-U bearer.", fmt::underlying(ue_index));
+    ocudulog::fetch_basic_logger("DU-MNG").warning("ue={}: Failed to create F1-U bearer.", ue_index);
     return nullptr;
   }
 
@@ -191,8 +191,8 @@ std::unique_ptr<du_ue_drb> ocudu::odu::create_drb(const drb_creation_info& drb_i
                                                                        drb_info.rlc_cfg,
                                                                        drb_info.du_params.services,
                                                                        drb_info.rlc_rlf_notifier,
-                                                                       drb_info.du_params.rlc.rlc_metrics_notif,
-                                                                       drb_info.du_params.rlc.pcap_writer));
+                                                                       drb_info.du_params.rlc,
+                                                                       drb_info.du_mem_resources.rlc));
   if (drb->rlc_bearer == nullptr) {
     // Failed to create RLC DRB entity.
     f1u_gw.remove_du_bearer(drb->dluptnl_info_list[0]);

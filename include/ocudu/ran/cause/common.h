@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "fmt/format.h"
 #include <cstdint>
 
 namespace ocudu {
@@ -70,171 +69,116 @@ enum class resume_cause_t : uint8_t {
   unknown
 };
 
+constexpr const char* format_as(cause_protocol_t cause)
+{
+  switch (cause) {
+    case cause_protocol_t::transfer_syntax_error:
+      return "transfer_syntax_error";
+    case cause_protocol_t::abstract_syntax_error_reject:
+      return "abstract_syntax_error_reject";
+    case cause_protocol_t::abstract_syntax_error_ignore_and_notify:
+      return "abstract_syntax_error_ignore_and_notify";
+    case cause_protocol_t::msg_not_compatible_with_receiver_state:
+      return "msg_not_compatible_with_receiver_state";
+    case cause_protocol_t::semantic_error:
+      return "semantic_error";
+    case cause_protocol_t::abstract_syntax_error_falsely_constructed_msg:
+      return "abstract_syntax_error_falsely_constructed_msg";
+    case cause_protocol_t::unspecified:
+      return "unspecified";
+    default:
+      return "unknown";
+  }
+}
+
+constexpr const char* format_as(cause_misc_t cause)
+{
+  switch (cause) {
+    case cause_misc_t::ctrl_processing_overload:
+      return "ctrl_processing_overload";
+    case cause_misc_t::not_enough_user_plane_processing_res:
+      return "not_enough_user_plane_processing_res";
+    case cause_misc_t::hardware_fail:
+      return "hardware_fail";
+    case cause_misc_t::om_intervention:
+      return "om_intervention";
+    case cause_misc_t::unspecified:
+      return "unspecified";
+    default:
+      return "unknown";
+  }
+}
+
+constexpr const char* format_as(establishment_cause_t o)
+{
+  switch (o) {
+    case establishment_cause_t::emergency:
+      return "emergency";
+    case establishment_cause_t::high_prio_access:
+      return "high_prio_access";
+    case establishment_cause_t::mt_access:
+      return "mt_access";
+    case establishment_cause_t::mo_sig:
+      return "mo_sig";
+    case establishment_cause_t::mo_data:
+      return "mo_data";
+    case establishment_cause_t::mo_voice_call:
+      return "mo_voice_call";
+    case establishment_cause_t::mo_video_call:
+      return "mo_video_call";
+    case establishment_cause_t::mo_sms:
+      return "mo_sms";
+    case establishment_cause_t::mps_prio_access:
+      return "mps_prio_access";
+    case establishment_cause_t::mcs_prio_access:
+      return "mcs_prio_access";
+    default:
+      return "unknown";
+  }
+}
+
+constexpr const char* format_as(resume_cause_t o)
+{
+  switch (o) {
+    case resume_cause_t::emergency:
+      return "emergency";
+    case resume_cause_t::high_prio_access:
+      return "high_prio_access";
+    case resume_cause_t::mt_access:
+      return "mt_access";
+    case resume_cause_t::mo_sig:
+      return "mo_sig";
+    case resume_cause_t::mo_data:
+      return "mo_data";
+    case resume_cause_t::mo_voice_call:
+      return "mo_voice_call";
+    case resume_cause_t::mo_video_call:
+      return "mo_video_call";
+    case resume_cause_t::mo_sms:
+      return "mo_sms";
+    case resume_cause_t::rna_upd:
+      return "rna_upd";
+    case resume_cause_t::mps_prio_access:
+      return "mps_prio_access";
+    case resume_cause_t::mcs_prio_access:
+      return "mcs_prio_access";
+    default:
+      return "unknown";
+  }
+}
+
+constexpr const char* format_as(establishment_fail_cause_t o)
+{
+  switch (o) {
+    case establishment_fail_cause_t::network_reject:
+      return "network reject";
+    case establishment_fail_cause_t::no_reply:
+      return "no reply";
+    case establishment_fail_cause_t::other:
+      return "other";
+    default:
+      return "unknown";
+  }
+}
+
 } // namespace ocudu
-
-namespace fmt {
-
-template <>
-struct formatter<ocudu::cause_protocol_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::cause_protocol_t& cause, FormatContext& ctx) const
-  {
-    if (cause == ocudu::cause_protocol_t::transfer_syntax_error) {
-      return format_to(ctx.out(), "transfer_syntax_error");
-    }
-    if (cause == ocudu::cause_protocol_t::abstract_syntax_error_reject) {
-      return format_to(ctx.out(), "abstract_syntax_error_reject");
-    }
-    if (cause == ocudu::cause_protocol_t::abstract_syntax_error_ignore_and_notify) {
-      return format_to(ctx.out(), "abstract_syntax_error_ignore_and_notify");
-    }
-    if (cause == ocudu::cause_protocol_t::msg_not_compatible_with_receiver_state) {
-      return format_to(ctx.out(), "msg_not_compatible_with_receiver_state");
-    }
-    if (cause == ocudu::cause_protocol_t::semantic_error) {
-      return format_to(ctx.out(), "semantic_error");
-    }
-    if (cause == ocudu::cause_protocol_t::abstract_syntax_error_falsely_constructed_msg) {
-      return format_to(ctx.out(), "abstract_syntax_error_falsely_constructed_msg");
-    }
-    if (cause == ocudu::cause_protocol_t::unspecified) {
-      return format_to(ctx.out(), "unspecified");
-    }
-
-    return format_to(ctx.out(), "unknown");
-  }
-};
-
-template <>
-struct formatter<ocudu::cause_misc_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::cause_misc_t& cause, FormatContext& ctx) const
-  {
-    if (cause == ocudu::cause_misc_t::ctrl_processing_overload) {
-      return format_to(ctx.out(), "ctrl_processing_overload");
-    }
-    if (cause == ocudu::cause_misc_t::not_enough_user_plane_processing_res) {
-      return format_to(ctx.out(), "not_enough_user_plane_processing_res");
-    }
-    if (cause == ocudu::cause_misc_t::hardware_fail) {
-      return format_to(ctx.out(), "hardware_fail");
-    }
-    if (cause == ocudu::cause_misc_t::om_intervention) {
-      return format_to(ctx.out(), "om_intervention");
-    }
-    if (cause == ocudu::cause_misc_t::unspecified) {
-      return format_to(ctx.out(), "unspecified");
-    }
-
-    return format_to(ctx.out(), "unknown");
-  }
-};
-
-template <>
-struct formatter<ocudu::establishment_cause_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::establishment_cause_t o, FormatContext& ctx) const
-  {
-    if (o == ocudu::establishment_cause_t::emergency) {
-      return format_to(ctx.out(), "emergency");
-    }
-    if (o == ocudu::establishment_cause_t::high_prio_access) {
-      return format_to(ctx.out(), "high_prio_access");
-    }
-    if (o == ocudu::establishment_cause_t::mt_access) {
-      return format_to(ctx.out(), "mt_access");
-    }
-    if (o == ocudu::establishment_cause_t::mo_sig) {
-      return format_to(ctx.out(), "mo_sig");
-    }
-    if (o == ocudu::establishment_cause_t::mo_data) {
-      return format_to(ctx.out(), "mo_data");
-    }
-    if (o == ocudu::establishment_cause_t::mo_voice_call) {
-      return format_to(ctx.out(), "mo_voice_call");
-    }
-    if (o == ocudu::establishment_cause_t::mo_video_call) {
-      return format_to(ctx.out(), "mo_video_call");
-    }
-    if (o == ocudu::establishment_cause_t::mo_sms) {
-      return format_to(ctx.out(), "mo_sms");
-    }
-    if (o == ocudu::establishment_cause_t::mps_prio_access) {
-      return format_to(ctx.out(), "mps_prio_access");
-    }
-    if (o == ocudu::establishment_cause_t::mcs_prio_access) {
-      return format_to(ctx.out(), "mcs_prio_access");
-    }
-
-    return format_to(ctx.out(), "unknown");
-  }
-};
-
-template <>
-struct formatter<ocudu::resume_cause_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::resume_cause_t o, FormatContext& ctx) const
-  {
-    if (o == ocudu::resume_cause_t::emergency) {
-      return format_to(ctx.out(), "emergency");
-    }
-    if (o == ocudu::resume_cause_t::high_prio_access) {
-      return format_to(ctx.out(), "high_prio_access");
-    }
-    if (o == ocudu::resume_cause_t::mt_access) {
-      return format_to(ctx.out(), "mt_access");
-    }
-    if (o == ocudu::resume_cause_t::mo_sig) {
-      return format_to(ctx.out(), "mo_sig");
-    }
-    if (o == ocudu::resume_cause_t::mo_data) {
-      return format_to(ctx.out(), "mo_data");
-    }
-    if (o == ocudu::resume_cause_t::mo_voice_call) {
-      return format_to(ctx.out(), "mo_voice_call");
-    }
-    if (o == ocudu::resume_cause_t::mo_video_call) {
-      return format_to(ctx.out(), "mo_video_call");
-    }
-    if (o == ocudu::resume_cause_t::mo_sms) {
-      return format_to(ctx.out(), "mo_sms");
-    }
-    if (o == ocudu::resume_cause_t::rna_upd) {
-      return format_to(ctx.out(), "rna_upd");
-    }
-    if (o == ocudu::resume_cause_t::mps_prio_access) {
-      return format_to(ctx.out(), "mps_prio_access");
-    }
-    if (o == ocudu::resume_cause_t::mcs_prio_access) {
-      return format_to(ctx.out(), "mcs_prio_access");
-    }
-
-    return format_to(ctx.out(), "unknown");
-  }
-};
-
-} // namespace fmt

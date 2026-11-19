@@ -5,6 +5,7 @@
 
 #include "ocudu/adt/span.h"
 #include "ocudu/ran/uci/uci_part2_size_description.h"
+#include <vector>
 
 namespace ocudu {
 namespace fapi_adaptor {

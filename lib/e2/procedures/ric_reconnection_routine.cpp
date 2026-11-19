@@ -8,7 +8,7 @@
 
 using namespace ocudu;
 
-ric_reconnection_routine::ric_reconnection_routine(const e2ap_configuration&          cfg_,
+ric_reconnection_routine::ric_reconnection_routine(const e2ap_config&                 cfg_,
                                                    e2_node_component_config_provider& node_cfg_provider_,
                                                    e2sm_manager&                      e2sm_mngr_,
                                                    e2_connection_manager&             e2_conn_mng_,

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "asn1_csi_meas_config_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/asn1_diff_utils.h"
 #include "ocudu/asn1/rrc_nr/serving_cell.h"
 
@@ -731,14 +732,12 @@ static void make_asn1_codebook_config(codebook_cfg_s& out, const codebook_config
 
     out_tp2_cfg.subband_amplitude = tp2_cfg_val->subband_amplitude;
     switch (tp2_cfg_val->phase_alphabet_size) {
-      case 4:
+      case pmi_codebook_typeII_phase_size::qpsk:
         out_tp2_cfg.phase_alphabet_size = codebook_cfg_s::codebook_type_c_::type2_s_::phase_alphabet_size_opts::n4;
         break;
-      case 8:
+      case pmi_codebook_typeII_phase_size::psk8:
         out_tp2_cfg.phase_alphabet_size = codebook_cfg_s::codebook_type_c_::type2_s_::phase_alphabet_size_opts::n8;
         break;
-      default:
-        ocudu_assertion_failure("Invalid phase alphabet size={}", tp2_cfg_val->phase_alphabet_size);
     }
 
     switch (tp2_cfg_val->nof_beams) {

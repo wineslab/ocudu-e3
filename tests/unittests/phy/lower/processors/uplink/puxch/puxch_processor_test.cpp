@@ -5,6 +5,8 @@
 #include "../../../../support/resource_grid_test_doubles.h"
 #include "../../../modulation/ofdm_demodulator_test_doubles.h"
 #include "puxch_processor_notifier_test_doubles.h"
+#include "support/compare_sequences.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_dynamic.h"
 #include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/phy/lower/lower_phy_rx_symbol_context.h"
@@ -74,11 +76,6 @@ bool operator==(const ofdm_demodulator_configuration& left, const ofdm_demodulat
   return (left.numerology == right.numerology) && (left.bw_rb == right.bw_rb) && (left.dft_size == right.dft_size) &&
          (left.cp == right.cp) && (left.nof_samples_window_offset == right.nof_samples_window_offset) &&
          (left.scale == right.scale) && (left.center_freq_Hz == right.center_freq_Hz);
-}
-
-bool operator==(span<const cf_t> left, span<const cf_t> right)
-{
-  return std::equal(left.begin(), left.end(), right.begin(), right.end());
 }
 
 bool operator==(const baseband_gateway_buffer_reader& left, const baseband_gateway_buffer_reader& right)
@@ -277,7 +274,7 @@ TEST_P(LowerPhyUplinkProcessorFixture, FlowFloodRequest)
   puxch_processor_notifier_spy puxch_proc_notifier_spy;
   puxch_proc->connect(puxch_proc_notifier_spy);
 
-  std::vector<cf_t> cf_buffer;
+  std::vector<ci16_t> ci16_buffer;
 
   slot_point slot(to_numerology_value(scs), 0);
   for (unsigned i_frame = 0; i_frame != nof_frames_test; ++i_frame) {
@@ -294,7 +291,7 @@ TEST_P(LowerPhyUplinkProcessorFixture, FlowFloodRequest)
           unsigned cp_size = cp.get_length(i_symbol_subframe, scs).to_samples(srate.to_Hz());
           // Setup buffer.
           buffer.resize(cp_size + base_symbol_size);
-          cf_buffer.resize(cp_size + base_symbol_size);
+          ci16_buffer.resize(cp_size + base_symbol_size);
 
           // Fill buffer.
           for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
@@ -322,9 +319,12 @@ TEST_P(LowerPhyUplinkProcessorFixture, FlowFloodRequest)
           ASSERT_EQ(ofdm_demod_entries.size(), nof_rx_ports);
           for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
             const auto& ofdm_demod_entry = ofdm_demod_entries[i_port];
-            ocuduvec::convert(cf_buffer, buffer[i_port], INT16_MAX);
 
-            ASSERT_EQ(ofdm_demod_entry.input, cf_buffer);
+            {
+              error_type<std::string> compare_result =
+                  compare_sequences(span<const ci16_t>(ofdm_demod_entry.input), span<const ci16_t>(buffer[i_port]));
+              ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+            }
             ASSERT_EQ(static_cast<const void*>(ofdm_demod_entry.grid), static_cast<const void*>(&rg_writer_spy));
             ASSERT_EQ(ofdm_demod_entry.port_index, i_port);
             ASSERT_EQ(ofdm_demod_entry.symbol_index, i_symbol_subframe);
@@ -350,7 +350,7 @@ TEST_P(LowerPhyUplinkProcessorFixture, LateRequest)
   unsigned base_symbol_size = srate.get_dft_size(scs);
 
   baseband_gateway_buffer_dynamic buffer(nof_rx_ports, 2 * base_symbol_size);
-  std::vector<cf_t>               cf_buffer;
+  std::vector<ci16_t>             ci16_buffer;
 
   unsigned nof_symbols_per_slot   = get_nsymb_per_slot(cp);
   unsigned nof_slots_per_subframe = get_nof_slots_per_subframe(scs);
@@ -390,7 +390,7 @@ TEST_P(LowerPhyUplinkProcessorFixture, LateRequest)
         unsigned cp_size = cp.get_length(i_symbol_subframe, scs).to_samples(srate.to_Hz());
         // Setup buffer.
         buffer.resize(cp_size + base_symbol_size);
-        cf_buffer.resize(cp_size + base_symbol_size);
+        ci16_buffer.resize(cp_size + base_symbol_size);
 
         // Fill buffer.
         for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
@@ -420,9 +420,12 @@ TEST_P(LowerPhyUplinkProcessorFixture, LateRequest)
           ASSERT_EQ(ofdm_demod_entries.size(), nof_rx_ports);
           for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
             const auto& ofdm_demod_entry = ofdm_demod_entries[i_port];
-            ocuduvec::convert(cf_buffer, buffer[i_port], INT16_MAX);
 
-            ASSERT_EQ(ofdm_demod_entry.input, cf_buffer);
+            {
+              error_type<std::string> compare_result =
+                  compare_sequences(span<const ci16_t>(ofdm_demod_entry.input), span<const ci16_t>(buffer[i_port]));
+              ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+            }
             ASSERT_EQ(static_cast<const void*>(ofdm_demod_entry.grid), static_cast<const void*>(rg_spy_ptr));
             ASSERT_EQ(ofdm_demod_entry.port_index, i_port);
             ASSERT_EQ(ofdm_demod_entry.symbol_index, i_symbol_subframe);

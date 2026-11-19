@@ -8,6 +8,7 @@
 #include "ocudu/nrppa/nrppa.h"
 #include "ocudu/ran/aggregate_maximum_bit_rate.h"
 #include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/ran/nr_cgi.h"
 
 namespace ocudu::ocucp {
 
@@ -29,10 +30,13 @@ public:
   /// \brief Get the index of the DU where the UE is connected.
   virtual cu_cp_du_index_t get_du_index() const = 0;
 
+  /// \brief Get the global identity of the cell serving the UE.
+  virtual std::optional<nr_cell_global_id_t> get_serving_cell_id() const = 0;
+
   /// \brief Get the CU-UP index of the UE.
   virtual cu_cp_cu_up_index_t get_cu_up_index() const = 0;
 
-  /// \brief Get the XN-C peer index of the UE.
+  /// \brief Get the Xn-C peer index of the UE.
   virtual xnc_peer_index_t get_xnc_peer_index() const = 0;
 
   /// \brief Get the UP resource manager of the UE.

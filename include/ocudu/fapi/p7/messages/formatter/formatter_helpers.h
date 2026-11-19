@@ -17,7 +17,9 @@ inline auto append_time_advance(FormatContext& ctx, std::optional<phy_time_unit>
     return ctx.out();
   }
 
-  return format_to(ctx.out(), " ta={} ({:.1f}ns)", timing_advance->to_Ta(scs), timing_advance->to_seconds() * 1e9);
+  // The measured timing advance can be negative, use the signed conversion.
+  return format_to(
+      ctx.out(), " ta={} ({:.1f}ns)", timing_advance->to_Ta_signed(scs), timing_advance->to_seconds() * 1e9);
 }
 
 } // namespace fapi

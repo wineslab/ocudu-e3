@@ -11,11 +11,12 @@
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/e2/e2.h"
 #include "ocudu/e2/e2_node_component_config.h"
-#include "ocudu/e2/e2ap_configuration.h"
+#include "ocudu/e2/e2ap_config.h"
 #include "ocudu/e2/e2sm/e2sm_manager.h"
 #include "ocudu/ran/bcd_helper.h"
 #include "ocudu/ran/gnb_du_id.h"
 #include "ocudu/security/security.h"
+#include "ocudu/support/enum_utils.h"
 #include <string>
 #include <vector>
 
@@ -70,7 +71,7 @@ inline asn1::e2ap::e2node_component_interface_type_e map_interface_type(e2_node_
 
 inline void fill_asn1_e2ap_setup_request(ocudulog::basic_logger&                      logger,
                                          asn1::e2ap::e2setup_request_s&               setup,
-                                         const e2ap_configuration&                    e2ap_config,
+                                         const e2ap_config&                           e2ap_config,
                                          e2sm_manager&                                e2sm_mngr,
                                          const std::vector<e2_node_component_config>& node_cfgs)
 {
@@ -92,12 +93,12 @@ inline void fill_asn1_e2ap_setup_request(ocudulog::basic_logger&                
 
   if (e2ap_config.gnb_du_id.has_value()) {
     gnb_id.gnb_du_id_present = true;
-    gnb_id.gnb_du_id         = gnb_du_id_to_int(e2ap_config.gnb_du_id.value());
+    gnb_id.gnb_du_id         = to_underlying(e2ap_config.gnb_du_id.value());
   }
 
   if (e2ap_config.gnb_cu_up_id.has_value()) {
     gnb_id.gnb_cu_up_id_present = true;
-    gnb_id.gnb_cu_up_id         = gnb_cu_up_id_to_uint(e2ap_config.gnb_cu_up_id.value());
+    gnb_id.gnb_cu_up_id         = to_underlying(e2ap_config.gnb_cu_up_id.value());
   }
 
   // RAN functions added
@@ -151,14 +152,14 @@ inline void fill_asn1_e2ap_setup_request(ocudulog::basic_logger&                
       case e2_node_component_interface_type::f1: {
         auto& f1_id = e2node_cfg_item.e2node_component_id.set_e2node_component_interface_type_f1();
         if (std::holds_alternative<gnb_du_id_t>(cfg_item.component_id)) {
-          f1_id.gnb_du_id = gnb_du_id_to_int(std::get<gnb_du_id_t>(cfg_item.component_id));
+          f1_id.gnb_du_id = to_underlying(std::get<gnb_du_id_t>(cfg_item.component_id));
         }
         break;
       }
       case e2_node_component_interface_type::e1: {
         auto& e1_id = e2node_cfg_item.e2node_component_id.set_e2node_component_interface_type_e1();
         if (std::holds_alternative<gnb_cu_up_id_t>(cfg_item.component_id)) {
-          e1_id.gnb_cu_up_id = gnb_cu_up_id_to_uint(std::get<gnb_cu_up_id_t>(cfg_item.component_id));
+          e1_id.gnb_cu_up_id = to_underlying(std::get<gnb_cu_up_id_t>(cfg_item.component_id));
         }
         break;
       }

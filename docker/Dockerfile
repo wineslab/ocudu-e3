@@ -4,8 +4,8 @@
 
 # Build args
 ################
-# OS                    Base image name, e.g. ubuntu, debian, or fedora
-# OS_VERSION            Image tag, e.g. 24.04, bookworm, or 43 (must match OS)
+# OS                    Base image name, e.g. ubuntu, debian, fedora, or quay.io/centos/centos
+# OS_VERSION            Image tag, e.g. 24.04, bookworm, 43, or stream10 (must match OS)
 # UHD_VERSION           UHD version number
 # DPDK_VERSION          DPDK version number
 # ROHC_VERSION          ROHC version number
@@ -14,6 +14,8 @@
 # EXTRA_CMAKE_ARGS      Extra flags for OCUDU
 # COMPONENT             Which component to build: gnb | du | cu | cu-cp | cu-up | ru-emulator
 #                       Controls which single binary is compiled and installed.
+# STRIP_BIN             1 to strip OCUDU (and UHD, when present) executables in
+#                       builder / builder-lean / builder-component-uhd (default 0)
 
 ARG OS=ubuntu
 ARG OS_VERSION=26.04
@@ -23,6 +25,7 @@ ARG ROHC_VERSION=2.3.1
 ARG MARCH=native
 ARG NUM_JOBS=""
 ARG TARGETARCH
+ARG STRIP_BIN=0
 
 ################################
 # Stage 0: Common build base   #
@@ -151,6 +154,7 @@ ARG EXTRA_CMAKE_ARGS=""
 ARG COMPONENT="ocu ocucp ocuup odu odu_low odu_split_8 odu_split_7_2 gnb gnb_split_8 gnb_split_7_2 ru_emulator"
 ARG ENABLE_UHD=On
 ARG ENABLE_DPDK=On
+ARG STRIP_BIN=0
 
 ENV ROHC_DIR=/opt/rohc
 ENV UHD_DIR=/opt/uhd/${UHD_VERSION}
@@ -181,13 +185,24 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && if [ -n "${BIN}" ]; then \
          cp /src/build/${SRC} /opt/ocudu/bin/${BIN}; \
        else \
-         cmake --install /src/build; \
+         cmake --install /src/build --component Unspecified; \
          # Split targets are EXCLUDE_FROM_ALL in CMake so cmake --install skips them; copy manually. \
          cp /src/build/apps/gnb_split_8/gnb   /opt/ocudu/bin/gnb_split_8; \
          cp /src/build/apps/gnb_split_7_2/gnb /opt/ocudu/bin/gnb_split_7_2; \
          cp /src/build/apps/du_split_8/odu    /opt/ocudu/bin/odu_split_8; \
          cp /src/build/apps/du_split_7_2/odu  /opt/ocudu/bin/odu_split_7_2; \
-       fi \
+       fi
+RUN if [ "${STRIP_BIN}" = "1" ]; then \
+        command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
+        command -v strip >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires strip" >&2; exit 1; }; \
+        for dir in /opt/ocudu/bin "/opt/uhd/${UHD_VERSION}/bin"; do \
+            [ -d "$dir" ] || continue; \
+            for f in "$dir"/*; do \
+                if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
+            done; \
+        done; \
+    fi \
+    && cmake --install /src/build --component SBOM \
     && rm -rf /src
 
 ################################
@@ -203,6 +218,7 @@ ARG TARGETARCH
 ARG COMPILER=gcc
 ARG EXTRA_CMAKE_ARGS=""
 ARG COMPONENT
+ARG STRIP_BIN=0
 
 ENV ROHC_DIR=/opt/rohc
 
@@ -220,7 +236,16 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=Off -DENABLE_DPDK=Off \
        ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
-    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN} \
+    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN}
+# Strip OCUDU binaries so runtime-lean receives stripped executables when STRIP_BIN=1.
+RUN if [ "${STRIP_BIN}" = "1" ]; then \
+        command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
+        command -v strip >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires strip" >&2; exit 1; }; \
+        for f in /opt/ocudu/bin/*; do \
+            if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
+        done; \
+    fi \
+    && cmake --install /src/build --component SBOM \
     && rm -rf /src
 
 ######################################
@@ -239,6 +264,7 @@ ARG TARGETARCH
 ARG COMPILER=gcc
 ARG EXTRA_CMAKE_ARGS=""
 ARG COMPONENT
+ARG STRIP_BIN=0
 
 ENV ROHC_DIR=/opt/rohc
 ENV UHD_DIR=/opt/uhd/${UHD_VERSION}
@@ -256,7 +282,19 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=On -DENABLE_DPDK=Off \
        ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
-    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN} \
+    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN}
+# Strip OCUDU and UHD binaries so runtime-uhd receives stripped executables when STRIP_BIN=1.
+RUN if [ "${STRIP_BIN}" = "1" ]; then \
+        command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
+        command -v strip >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires strip" >&2; exit 1; }; \
+        for dir in /opt/ocudu/bin "/opt/uhd/${UHD_VERSION}/bin"; do \
+            [ -d "$dir" ] || continue; \
+            for f in "$dir"/*; do \
+                if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
+            done; \
+        done; \
+    fi \
+    && cmake --install /src/build --component SBOM \
     && rm -rf /src
 
 #######################################
@@ -275,6 +313,7 @@ ARG TARGETARCH
 ARG COMPILER=gcc
 ARG EXTRA_CMAKE_ARGS=""
 ARG COMPONENT
+ARG STRIP_BIN=0
 
 ENV ROHC_DIR=/opt/rohc
 ENV DPDK_DIR=/opt/dpdk/${DPDK_VERSION}
@@ -293,7 +332,15 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=Off -DENABLE_DPDK=On \
        ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
-    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN} \
+    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN}
+RUN if [ "${STRIP_BIN}" = "1" ]; then \
+        command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
+        command -v strip >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires strip" >&2; exit 1; }; \
+        for f in /opt/ocudu/bin/*; do \
+            if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
+        done; \
+    fi \
+    && cmake --install /src/build --component SBOM \
     && rm -rf /src
 
 ###################
@@ -306,6 +353,7 @@ ARG UHD_VERSION
 ARG DPDK_VERSION
 ARG OCUDU_IMAGE_VERSION=dev
 ARG OCUDU_IMAGE_RELEASE=1
+ARG STRIP_BIN=0
 
 LABEL name="OCUDU" \
       vendor="Software Radio Systems Limited" \
@@ -334,10 +382,11 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     /usr/local/etc/install_rohc_dependencies.sh run && \
     /usr/local/etc/install_docker_dependencies.sh run
 
-# Register DPDK/UHD/ROHC library paths system-wide.
-# When the gnb binary has file capabilities (see next RUN), ld.so enters
-# secure-execution mode on execve() and STRIPS LD_LIBRARY_PATH. The runtime
-# libs must therefore be findable via /etc/ld.so.cache instead.
+# Register DPDK/UHD/ROHC library paths for the dynamic linker.
+# When binaries have file capabilities, ld.so enters secure-execution mode and
+# STRIPS LD_LIBRARY_PATH — libs must be in /etc/ld.so.cache instead.
+# Only write the conf here; ldconfig must run in each final runtime stage
+# AFTER /opt/{rohc,uhd,dpdk} are COPY'd (those trees do not exist yet).
 RUN printf '%s\n' \
     "/opt/rohc/lib" \
     "/opt/uhd/${UHD_VERSION}/lib" \
@@ -348,8 +397,7 @@ RUN printf '%s\n' \
     "/opt/dpdk/${DPDK_VERSION}/lib64" \
     "/opt/dpdk/${DPDK_VERSION}/lib/x86_64-linux-gnu" \
     "/opt/dpdk/${DPDK_VERSION}/lib/aarch64-linux-gnu" \
-    > /etc/ld.so.conf.d/ocudu.conf && \
-    ldconfig
+    > /etc/ld.so.conf.d/ocudu.conf
 
 # Stage 3b: runtime — all components. Last stage so docker-compose lands here.
 FROM runtime-base AS runtime
@@ -374,7 +422,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     --mount=type=secret,id=rh_rhsm_conf,target=/etc/rhsm/rhsm.conf \
     --mount=type=secret,id=rh_rhsm_ca,target=/etc/rhsm/ca/redhat-uep.pem \
     if [ "${ENABLE_UHD}" = "On" ]; then /usr/local/etc/install_uhd_dependencies.sh run; fi && \
-    if [ "${ENABLE_DPDK}" = "On" ]; then /usr/local/etc/install_dpdk_dependencies.sh run; fi
+    if [ "${ENABLE_DPDK}" = "On" ]; then /usr/local/etc/install_dpdk_dependencies.sh run; fi && \
+    ldconfig
 
 # Bake minimum-privilege Linux capabilities into the binaries that need to
 # run as a non-root uid in Kubernetes. Kubernetes' capabilities.add only
@@ -394,14 +443,14 @@ RUN case "${COMPONENT}" in \
         setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/${BIN} && \
         getcap /usr/local/bin/${BIN} ;; \
       ru-emulator) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ru_emulator && getcap /usr/local/bin/ru_emulator ;; \
-      cu)    setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ocu   && getcap /usr/local/bin/ocu ;; \
-      cu-cp) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
-      cu-up) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
+      cu)    setcap cap_sys_nice,cap_ipc_lock+ep             /usr/local/bin/ocu   && getcap /usr/local/bin/ocu ;; \
+      cu-cp) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
+      cu-up) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
       *) \
-        for bin in gnb odu; do \
+        for bin in gnb odu ocucp ocuup; do \
             test -f /usr/local/bin/${bin} && setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/${bin} || true; \
         done && \
-        for bin in ocu ocucp ocuup ru_emulator; do \
+        for bin in ocu ru_emulator; do \
             test -f /usr/local/bin/${bin} && setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/${bin} || true; \
         done && \
         for bin in gnb odu ocu ocucp ocuup ru_emulator; do \
@@ -417,10 +466,11 @@ ARG COMPONENT
 COPY --from=builder-lean /opt/rohc  /opt/rohc
 COPY --from=builder-lean /opt/ocudu /usr/local
 
-RUN case "${COMPONENT}" in \
-      cu)    setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ocu   && getcap /usr/local/bin/ocu ;; \
-      cu-cp) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
-      cu-up) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
+RUN ldconfig && \
+    case "${COMPONENT}" in \
+      cu)    setcap cap_sys_nice,cap_ipc_lock+ep             /usr/local/bin/ocu   && getcap /usr/local/bin/ocu ;; \
+      cu-cp) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
+      cu-up) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
       *)     echo "Unsupported lean component: ${COMPONENT}" >&2; exit 1 ;; \
     esac
 
@@ -440,7 +490,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     --mount=type=secret,id=rh_entitlement_key,target=/etc/pki/entitlement/entitlement-key.pem \
     --mount=type=secret,id=rh_rhsm_conf,target=/etc/rhsm/rhsm.conf \
     --mount=type=secret,id=rh_rhsm_ca,target=/etc/rhsm/ca/redhat-uep.pem \
-    /usr/local/etc/install_uhd_dependencies.sh run
+    /usr/local/etc/install_uhd_dependencies.sh run && \
+    ldconfig
 
 RUN case "${COMPONENT}" in \
       gnb) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/gnb && getcap /usr/local/bin/gnb ;; \
@@ -464,7 +515,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     --mount=type=secret,id=rh_entitlement_key,target=/etc/pki/entitlement/entitlement-key.pem \
     --mount=type=secret,id=rh_rhsm_conf,target=/etc/rhsm/rhsm.conf \
     --mount=type=secret,id=rh_rhsm_ca,target=/etc/rhsm/ca/redhat-uep.pem \
-    /usr/local/etc/install_dpdk_dependencies.sh run
+    /usr/local/etc/install_dpdk_dependencies.sh run && \
+    ldconfig
 
 RUN case "${COMPONENT}" in \
       gnb)         setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/gnb && getcap /usr/local/bin/gnb ;; \

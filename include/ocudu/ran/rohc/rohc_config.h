@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ocudu/support/ocudu_assert.h"
-#include "fmt/std.h"
 #include <cstdint>
 
 namespace ocudu {
@@ -19,6 +18,11 @@ constexpr const char* to_string(rohc_type_t rohc_type)
 {
   constexpr const char* rohc_type_names[] = {"rohc", "uplink_only_rohc"};
   return rohc_type_names[static_cast<uint8_t>(rohc_type)];
+}
+
+constexpr const char* format_as(rohc_type_t rohc_type)
+{
+  return to_string(rohc_type);
 }
 
 /// \brief ROHC profile selector.
@@ -66,6 +70,11 @@ constexpr const char* to_string(rohc_profile profile)
                                            "v2-ESP/IP",     // profile0x0103
                                            "v2-IP"};        // profile0x0104
   return profile_names[static_cast<uint8_t>(profile)];
+}
+
+constexpr const char* format_as(rohc_profile profile)
+{
+  return to_string(profile);
 }
 
 /// \brief Translate ROHC profile into number (see \c rohc_profile).
@@ -160,36 +169,6 @@ struct rohc_config {
 // Formatters
 //
 namespace fmt {
-
-template <>
-struct formatter<ocudu::rohc_type_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::rohc_type_t rohc_type, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", ocudu::to_string(rohc_type));
-  }
-};
-
-template <>
-struct formatter<ocudu::rohc_profile> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::rohc_profile profile, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", ocudu::to_string(profile));
-  }
-};
 
 template <>
 struct formatter<ocudu::rohc_profile_config> {

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/carrier_configuration.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/pdcch/search_space.h"
@@ -49,65 +48,17 @@ struct cell_config_builder_params {
   uint8_t min_k2 = 4;
   /// Defines the TDD DL-UL pattern and periodicity. If no value is set, the cell is in FDD mode.
   std::optional<tdd_ul_dl_config_common> tdd_ul_dl_cfg_common;
-  /// Maximum number of DL layers.
-  std::optional<unsigned> max_nof_layers;
+  /// \brief Maximum rank limit configured by the user. If unset, the maximum number of DL layers is derived from the
+  /// number of DL antenna ports. It is resolved into \ref cell_config_builder_params_extended::max_nof_layers.
+  std::optional<unsigned> max_rank;
   /// SSB subcarrier spacing.
   std::optional<subcarrier_spacing> scs_ssb;
+  /// Whether UL frequency shift of 7.5 kHz is enabled.
+  bool freq_shift_7p5khz = false;
 
-  /// \brief Helper builder method to auto-derive dependent parameters, namely band, SSB SCS, nof DL layers,
+  /// \brief Helper builder method to auto-derive dependent parameters, namely band, SSB SCS,
   /// offset-to-pointA, k_SSB and coreset0 index.
-  cell_config_builder_params& auto_derive_params()
-  {
-    // Auto-derive band if not derived yet.
-    if (dl_carrier.band == nr_band::invalid) {
-      dl_carrier.band = band_helper::get_band_from_dl_arfcn(dl_carrier.arfcn_f_ref);
-    } else {
-      auto err = band_helper::is_dl_arfcn_valid_given_band(
-          dl_carrier.band, dl_carrier.arfcn_f_ref, scs_common, dl_carrier.carrier_bw);
-      report_error_if_not(err.has_value(),
-                          "DL ARFCN {} is not valid for band {}. Cause: {}\n",
-                          dl_carrier.arfcn_f_ref,
-                          static_cast<unsigned>(dl_carrier.band),
-                          err.error());
-    }
-
-    // Auto-derive nof layers if not provided.
-    if (not max_nof_layers.has_value()) {
-      max_nof_layers = dl_carrier.nof_ant;
-    }
-
-    // Auto-derive SSB SCS.
-    if (not scs_ssb.has_value()) {
-      scs_ssb = band_helper::get_most_suitable_ssb_scs(dl_carrier.band, scs_common);
-    }
-
-    // Auto-derive offset_to_pointA, k_ssb and coreset0 index.
-    if (not cs0_index.has_value() or not offset_to_point_a.has_value() or not k_ssb.has_value()) {
-      if (offset_to_point_a.has_value() or k_ssb.has_value()) {
-        report_error("The user either sets {controlResourceSetZero, offsetToPointA, kSSB} or just "
-                     "{controlResourceSetZero}, or none of them.\n");
-      }
-      const unsigned nof_crbs = band_helper::get_n_rbs_from_bw(
-          dl_carrier.carrier_bw, scs_common, band_helper::get_freq_range(dl_carrier.band));
-      ocudu_assert(nof_crbs > 0, "Invalid builder params");
-
-      std::optional<band_helper::ssb_coreset0_freq_location> ssb_freq_loc;
-      if (cs0_index.has_value()) {
-        ssb_freq_loc = band_helper::get_ssb_coreset0_freq_location_for_cset0_idx(
-            dl_carrier.arfcn_f_ref, dl_carrier.band, nof_crbs, scs_common, *scs_ssb, ss0_index, *cs0_index);
-      } else {
-        ssb_freq_loc = band_helper::get_ssb_coreset0_freq_location(
-            dl_carrier.arfcn_f_ref, dl_carrier.band, nof_crbs, scs_common, *scs_ssb, ss0_index, max_coreset0_duration);
-      }
-      report_error_if_not(
-          ssb_freq_loc.has_value(), "Unable to derive a valid SSB pointA and k_SSB for cell id ({}).\n", pci);
-      offset_to_point_a = ssb_freq_loc->offset_to_point_A;
-      k_ssb             = ssb_freq_loc->k_ssb;
-      cs0_index         = ssb_freq_loc->coreset0_idx;
-    }
-
-    return *this;
-  }
+  cell_config_builder_params& auto_derive_params();
 };
 
 } // namespace ocudu

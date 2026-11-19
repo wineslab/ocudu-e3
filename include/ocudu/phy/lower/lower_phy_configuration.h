@@ -14,6 +14,7 @@
 #include "ocudu/phy/lower/modulation/ofdm_demodulator.h"
 #include "ocudu/phy/lower/modulation/ofdm_modulator.h"
 #include "ocudu/phy/lower/sampling_rate.h"
+#include "ocudu/ran/antenna_topology.h"
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/n_ta_offset.h"
 #include "ocudu/ran/subcarrier_spacing.h"
@@ -52,8 +53,8 @@ struct lower_phy_configuration {
   double dl_freq_hz;
   /// Indicates the uplink frequency.
   double ul_freq_hz;
-  /// Number of transmit ports.
-  unsigned nof_tx_ports;
+  /// Transmit antenna topology.
+  antenna_topology tx_ant_topology;
   /// Number of receive ports.
   unsigned nof_rx_ports;
   /// Shifts the DFT window by a fraction of the cyclic prefix [0, 1).

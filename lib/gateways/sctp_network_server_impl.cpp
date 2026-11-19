@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "sctp_network_server_impl.h"
+#include "sctp_dtls.h"
+#include "sctp_dtls_ssl.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/synchronization/sync_event.h"
 #include <netinet/sctp.h>
@@ -15,13 +17,15 @@ class sctp_network_server_impl::sctp_send_notifier : public sctp_association_sdu
 {
 public:
   sctp_send_notifier(sctp_network_server_impl&                                parent,
-                     const sctp_network_server_impl::sctp_associaton_context& assoc,
+                     const sctp_network_server_impl::sctp_associaton_context& assoc_,
                      ocudulog::basic_logger&                                  logger_) :
     ppid(parent.node_cfg.ppid),
-    fd(parent.socket.fd().value()),
+    fd(assoc_.fd),
     if_name(parent.node_cfg.if_name),
-    assoc_id(assoc.assoc_id),
+    assoc_id(assoc_.assoc_id),
+    assoc(assoc_),
     client_addr(assoc.addr),
+    ssl_enabled(parent.node_cfg.dtls_cfg.has_value()),
     assoc_shutdown_flag(assoc.association_shutdown_received),
     logger(logger_)
   {
@@ -47,25 +51,26 @@ public:
     span<const uint8_t> pdu_span = to_span(sdu, send_buffer);
 
     transport_layer_address::native_type dest_addr  = client_addr.native();
-    int                                  bytes_sent = ::sctp_sendmsg(fd,
-                                    pdu_span.data(),
-                                    pdu_span.size(),
-                                    const_cast<struct sockaddr*>(dest_addr.addr),
-                                    dest_addr.addrlen,
-                                    htonl(ppid),
-                                    0,
-                                    stream_no,
-                                    0,
-                                    0);
-    if (bytes_sent == -1) {
-      logger.error("{} assoc={}: Closing SCTP association. Cause: Couldn't send {} B of data. errno={}",
-                   if_name,
-                   assoc_id,
-                   pdu_span.size_bytes(),
-                   ::strerror(errno));
+    int                                  bytes_sent = -1;
+    if (not ssl_enabled) {
+      bytes_sent = ::sctp_sendmsg(
+          fd, pdu_span.data(), pdu_span.size(), dest_addr.addr, dest_addr.addrlen, htonl(ppid), 0, stream_no, 0, 0);
+      if (bytes_sent <= 0) {
+        logger.error("{} assoc={}: Closing SCTP association. Cause: Couldn't send {} B of data. errno={}",
+                     if_name,
+                     assoc_id,
+                     pdu_span.size_bytes(),
+                     ::strerror(errno));
+      }
+    } else {
+      bytes_sent = assoc.ssl->write(pdu_span);
+    }
+
+    if (bytes_sent <= 0) {
       close();
       return false;
     }
+
     return true;
   }
 
@@ -78,17 +83,37 @@ private:
     }
 
     // Send EOF to SCTP client.
-    transport_layer_address::native_type dest_addr  = client_addr.native();
-    int                                  bytes_sent = ::sctp_sendmsg(fd,
-                                    nullptr,
-                                    0,
-                                    const_cast<struct sockaddr*>(dest_addr.addr),
-                                    dest_addr.addrlen,
-                                    htonl(ppid),
-                                    SCTP_EOF,
-                                    stream_no,
-                                    0,
-                                    0);
+    transport_layer_address::native_type dest_addr = client_addr.native();
+    struct sctp_sndinfo                  sndinfo{};
+    sndinfo.snd_sid   = stream_no;
+    sndinfo.snd_ppid  = htonl(ppid);
+    sndinfo.snd_flags = SCTP_EOF;
+
+    char control[CMSG_SPACE(sizeof(sndinfo))];
+
+    struct iovec iov{};
+    iov.iov_base = nullptr;
+    iov.iov_len  = 0;
+
+    struct msghdr msg{};
+    msg.msg_name    = dest_addr.addr;
+    msg.msg_namelen = dest_addr.addrlen;
+    msg.msg_iov     = &iov;
+    msg.msg_iovlen  = 1;
+
+    msg.msg_control    = control;
+    msg.msg_controllen = sizeof(control);
+
+    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level     = IPPROTO_SCTP;
+    cmsg->cmsg_type      = SCTP_SNDINFO;
+    cmsg->cmsg_len       = CMSG_LEN(sizeof(sndinfo));
+
+    memcpy(CMSG_DATA(cmsg), &sndinfo, sizeof(sndinfo));
+
+    msg.msg_controllen = cmsg->cmsg_len;
+
+    ssize_t bytes_sent = sendmsg(fd, &msg, MSG_NOSIGNAL);
 
     if (bytes_sent == -1) {
       // Failed to send EOF.
@@ -104,12 +129,13 @@ private:
     assoc_shutdown_flag->store(true, std::memory_order_relaxed);
   }
 
-  // Note: We copy all the required params by value to avoid race conditions with the server thread.
-  const uint32_t                ppid;
-  const int                     fd;
-  std::string                   if_name;
-  const int                     assoc_id;
-  const transport_layer_address client_addr;
+  const uint32_t                                           ppid;
+  const int                                                fd;
+  std::string                                              if_name;
+  const int                                                assoc_id;
+  const sctp_network_server_impl::sctp_associaton_context& assoc;
+  const transport_layer_address                            client_addr;
+  bool                                                     ssl_enabled;
   // This flag is shared by the server main class and this notifier and is used to signal the association shut down.
   // Note: shared_ptr copy used to avoid the case when the notifier outlives the association.
   std::shared_ptr<std::atomic<bool>> assoc_shutdown_flag;
@@ -119,7 +145,108 @@ private:
   std::array<uint8_t, network_gateway_sctp_max_len> send_buffer;
 };
 
-sctp_network_server_impl::sctp_associaton_context::sctp_associaton_context(int assoc_id_) : assoc_id(assoc_id_) {}
+sctp_network_server_impl::sctp_associaton_context::sctp_associaton_context(int                       assoc_id_,
+                                                                           int                       fd_,
+                                                                           sctp_network_server_impl& parent_) :
+  assoc_id(assoc_id_), fd(fd_), parent(parent_)
+{
+}
+
+void sctp_network_server_impl::sctp_associaton_context::receive()
+{
+  if (parent.node_cfg.dtls_cfg.has_value()) {
+    receive_dtls();
+  } else {
+    receive_plain();
+  }
+}
+
+void sctp_network_server_impl::sctp_associaton_context::receive_plain()
+{
+  struct sctp_sndrcvinfo                            sri       = {};
+  int                                               msg_flags = 0;
+  std::array<uint8_t, network_gateway_sctp_max_len> temp_recv_buffer;
+
+  // fromlen is an in/out variable in sctp_recvmsg.
+  sockaddr_storage msg_src_addr;
+  socklen_t        msg_src_addrlen = sizeof(msg_src_addr);
+
+  int rx_bytes = ::sctp_recvmsg(fd,
+                                temp_recv_buffer.data(),
+                                temp_recv_buffer.size(),
+                                (struct sockaddr*)&msg_src_addr,
+                                &msg_src_addrlen,
+                                &sri,
+                                &msg_flags);
+
+  if (rx_bytes == -1) {
+    if (errno != EAGAIN) {
+      parent.logger.error("Error reading from SCTP socket: {}", ::strerror(errno));
+      while (not parent.app_exec.defer([this, keepalive = parent.keepalive_token]() {
+        if (*keepalive) {
+          parent.handle_sctp_comm_lost(assoc_id);
+        }
+      })) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    } else {
+      if (!parent.node_cfg.non_blocking_mode) {
+        parent.logger.debug("Socket timeout reached");
+      }
+    }
+    return;
+  }
+
+  /// We pass the actual data and association handling back to the parent, to avoid code duplication.
+  auto payload = std::vector<uint8_t>(temp_recv_buffer.begin(), temp_recv_buffer.begin() + rx_bytes);
+  parent.receive_impl(std::move(payload), sri, msg_flags, msg_src_addr, msg_src_addrlen);
+}
+
+void sctp_network_server_impl::sctp_associaton_context::receive_dtls()
+{
+  ocudu_assert(parent.node_cfg.dtls_cfg.has_value(), "Receive DTLS called, but no DTLS config provided");
+
+  if (ssl == nullptr) {
+    return;
+  }
+  if (not ssl->is_init_finished()) {
+    if (ssl->handshake()) {
+      while (not parent.app_exec.defer([this, keepalive = parent.keepalive_token]() {
+        if (*keepalive) {
+          parent.mark_connection_as_complete(addr);
+        }
+      })) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return;
+  }
+
+  expected<byte_buffer, dtls_ssl_read_error> plain = ssl->receive();
+  if (not plain.has_value()) {
+    dtls_ssl_read_error err = plain.error();
+    if (err == dtls_ssl_read_error::shutdown) {
+      parent.logger.debug("Got read error due to DTLS shutdown. Attempting plain read to handle notifications.");
+      receive_plain();
+    } else if (err == dtls_ssl_read_error::not_connected) {
+      parent.logger.debug("Got read error due to connection already terminated.");
+    } else {
+      parent.logger.error("Got read error in DTLS read");
+    }
+    return;
+  }
+
+  auto payload_holder = std::make_shared<byte_buffer>(std::move(*plain));
+  if (plain.has_value()) {
+    while (not parent.app_exec.defer([this, keepalive = parent.keepalive_token, payload_holder]() mutable {
+      if (*keepalive) {
+        sctp_data_recv_notifier->on_new_sdu(std::move(*payload_holder));
+      }
+    })) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+}
 
 sctp_network_server_impl::sctp_network_server_impl(const ocudu::sctp_network_gateway_config& sctp_cfg_,
                                                    io_broker&                                broker_,
@@ -138,28 +265,31 @@ sctp_network_server_impl::sctp_network_server_impl(const ocudu::sctp_network_gat
 sctp_network_server_impl::~sctp_network_server_impl()
 {
   if (*keepalive_token) {
-    logger.error("stop() must be called before destroying the SCTP server");
-    report_error("stop() must be called before destroying the SCTP server");
+    logger.error("{}: stop() must be called before destroying the SCTP server", node_cfg.if_name);
+    report_error("{}: stop() must be called before destroying the SCTP server", node_cfg.if_name);
   }
 }
 
 void sctp_network_server_impl::stop()
 {
   sync_event ev;
-  while (not app_exec.defer([this, keepalive = keepalive_token, token = ev.get_token()]() {
-    if (*keepalive) {
-      *keepalive = false;
-      handle_socket_shutdown(nullptr);
-    }
-  })) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  defer_socket_shutdown(nullptr, ev.get_token());
   ev.wait();
 }
 
 bool sctp_network_server_impl::create_and_bind()
 {
-  return this->create_and_bind_common();
+  if (not this->create_and_bind_common(SOCK_SEQPACKET)) {
+    return false;
+  }
+  if (OCUDU_DTLS_SCTP_SUPPORT and node_cfg.dtls_cfg.has_value()) {
+    dtls_ctxt = create_dtls_context(*node_cfg.dtls_cfg);
+    if (not dtls_ctxt->init(socket.fd().value())) {
+      report_error("Could not initialize DTLS context in SCTP gateway. if={}", node_cfg.if_name);
+    }
+    logger.debug("Created DTLS context. if={} cert={}", node_cfg.if_name, node_cfg.dtls_cfg->cert_filename);
+  }
+  return true;
 }
 
 void sctp_network_server_impl::receive()
@@ -184,14 +314,7 @@ void sctp_network_server_impl::receive()
   if (rx_bytes == -1) {
     if (errno != EAGAIN) {
       logger.error("Error reading from SCTP socket: {}", ::strerror(errno));
-      while (not app_exec.defer([this, keepalive = keepalive_token]() {
-        if (*keepalive) {
-          *keepalive = false;
-          handle_socket_shutdown(nullptr);
-        }
-      })) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+      defer_socket_shutdown(nullptr);
     } else {
       if (!node_cfg.non_blocking_mode) {
         logger.debug("Socket timeout reached");
@@ -202,22 +325,30 @@ void sctp_network_server_impl::receive()
 
   // Defer all processing after sctp_recvmsg to app_exec.
   auto payload = std::vector<uint8_t>(temp_recv_buffer.begin(), temp_recv_buffer.begin() + rx_bytes);
-  while (not app_exec.defer([this,
-                             keepalive = keepalive_token,
-                             payload   = std::move(payload),
-                             msg_flags,
-                             sri,
-                             msg_src_addr,
-                             msg_src_addrlen]() {
-    if (!*keepalive) {
-      return;
-    }
-    if (msg_flags & MSG_NOTIFICATION) {
-      handle_notification(payload, sri, reinterpret_cast<const sockaddr&>(msg_src_addr), msg_src_addrlen);
-    } else {
-      handle_data(sri.sinfo_assoc_id, payload);
-    }
-  })) {
+  receive_impl(std::move(payload), sri, msg_flags, msg_src_addr, msg_src_addrlen);
+}
+
+void sctp_network_server_impl::receive_impl(std::vector<uint8_t>   payload,
+                                            struct sctp_sndrcvinfo sri,
+                                            int                    msg_flags,
+                                            sockaddr_storage       msg_src_addr,
+                                            socklen_t              msg_src_addrlen)
+{
+  // The task is rebuilt on every retry, so the payload must survive a failed dispatch: hold it behind a shared_ptr
+  // instead of moving it into the lambda. Costs one small allocation and never copies the payload bytes.
+  auto payload_holder = std::make_shared<const std::vector<uint8_t>>(std::move(payload));
+  while (not app_exec.defer(
+      [this, keepalive = keepalive_token, payload = payload_holder, msg_flags, sri, msg_src_addr, msg_src_addrlen]() {
+        if (!*keepalive) {
+          return;
+        }
+        if (msg_flags & MSG_NOTIFICATION) {
+          handle_notification(
+              *payload, sri.sinfo_assoc_id, reinterpret_cast<const sockaddr&>(msg_src_addr), msg_src_addrlen);
+        } else {
+          handle_data(sri.sinfo_assoc_id, *payload);
+        }
+      })) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 }
@@ -233,6 +364,20 @@ void sctp_network_server_impl::handle_socket_shutdown(const char* cause)
 
   // Stop handling new SCTP events.
   io_sub.reset();
+}
+
+void sctp_network_server_impl::defer_socket_shutdown(const char* cause, const std::optional<scoped_sync_token>& token)
+{
+  // Capture the token by copy rather than by move: defer() consumes the task on failure, so a moved token would be
+  // gone on the next retry. scoped_sync_token is reference counted, so each attempt just bumps the count.
+  while (not app_exec.defer([this, keepalive = keepalive_token, token]() {
+    if (*keepalive) {
+      *keepalive = false;
+      handle_socket_shutdown(nullptr);
+    }
+  })) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
 }
 
 void sctp_network_server_impl::handle_data(int assoc_id, span<const uint8_t> payload)
@@ -263,7 +408,8 @@ async_task<bool> sctp_network_server_impl::connect(std::vector<transport_layer_a
       CORO_EARLY_RETURN(false);
     }
 
-    // fmt::format of fmt::join view is required before passing to the logger, otherwise TSAN may report use-after-free.
+    // fmt::format of fmt::join view is required before passing to the logger, otherwise TSAN may report
+    // use-after-free.
     logger.info(
         "{}: Initiating SCTP connection to [{}]", node_cfg.if_name, fmt::format("{}", fmt::join(dest_addrs, ", ")));
 
@@ -331,18 +477,18 @@ async_task<bool> sctp_network_server_impl::connect(std::vector<transport_layer_a
   });
 }
 
-void sctp_network_server_impl::handle_notification(span<const uint8_t>           payload,
-                                                   const struct sctp_sndrcvinfo& sri,
-                                                   const sockaddr&               src_addr,
-                                                   socklen_t                     src_addr_len)
+void sctp_network_server_impl::handle_notification(span<const uint8_t> payload,
+                                                   sctp_assoc_t        assoc,
+                                                   const sockaddr&     src_addr,
+                                                   socklen_t           src_addr_len)
 {
   if (not validate_and_log_sctp_notification(payload)) {
     // Handle error.
-    handle_association_shutdown(sri.sinfo_assoc_id, "The received message is invalid");
+    handle_association_shutdown(assoc, "The received message is invalid");
     return;
   }
-
   const auto* notif = reinterpret_cast<const union sctp_notification*>(payload.data());
+
   switch (notif->sn_header.sn_type) {
     case SCTP_ASSOC_CHANGE: {
       const struct sctp_assoc_change* n = &notif->sn_assoc_change;
@@ -374,6 +520,48 @@ void sctp_network_server_impl::handle_notification(span<const uint8_t>          
   }
 }
 
+void sctp_network_server_impl::handle_dtls_notification(const union sctp_notification* notif, int assoc_id)
+{
+  logger.debug("{} assoc={}: received SCTP notification from DTLS association. type={}",
+               node_cfg.if_name,
+               assoc_id,
+               static_cast<sctp_sn_type>(notif->sn_header.sn_type));
+
+  if (notif->sn_header.sn_length > sizeof(sctp_notification)) {
+    logger.error("{} assoc={}: received SCTP notification with larger length then allowed. type={} len={}",
+                 node_cfg.if_name,
+                 assoc_id,
+                 static_cast<sctp_sn_type>(notif->sn_header.sn_type),
+                 notif->sn_header.sn_length);
+    return;
+  }
+
+  // Copy notification from DTLS buffers to our own.
+  std::vector<uint8_t> payload;
+  payload.resize(notif->sn_header.sn_length);
+  memcpy(payload.data(), notif, payload.size());
+
+  // The task is rebuilt on every retry, so the payload must survive a failed dispatch: hold it behind a shared_ptr
+  // instead of moving it into the lambda. Costs one small allocation and never copies the payload bytes.
+  auto payload_holder = std::make_shared<const std::vector<uint8_t>>(std::move(payload));
+
+  while (not app_exec.defer([this, assoc_id, payload_holder, keepalive = keepalive_token]() {
+    if (not *keepalive) {
+      return;
+    }
+    auto it = associations.find(assoc_id);
+    if (it == associations.end()) {
+      logger.warning("{} assoc={}: not handling DTLS notification. Cause: Association does not exist.",
+                     node_cfg.if_name,
+                     assoc_id);
+      return;
+    }
+    handle_notification(*payload_holder, assoc_id, *it->second.addr.native().addr, it->second.addr.native().addrlen);
+  })) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+
 void sctp_network_server_impl::handle_sctp_comm_up(const struct sctp_assoc_change& assoc_change,
                                                    const sockaddr&                 src_addr,
                                                    socklen_t                       src_addr_len)
@@ -385,8 +573,26 @@ void sctp_network_server_impl::handle_sctp_comm_up(const struct sctp_assoc_chang
     return;
   }
 
+  /// Peel-off a socket. This is required to support DTLS.
+  int assoc_fd_raw = sctp_peeloff(socket.fd().value(), assoc_id);
+  if (assoc_fd_raw == -1) {
+    logger.error(
+        "{} assoc={}: Could not peel off new association. err={}", node_cfg.if_name, assoc_id, ::strerror(errno));
+    /// Remove association as if it was lost. Do it directly, as we are running in the app excutor already.
+    handle_association_shutdown(assoc_id, "Peel-off error");
+    remove_association(assoc_id);
+    return;
+  }
+  auto assoc_fd = unique_fd(assoc_fd_raw);
+
+  /// Make sure peeled-off socket follows the blocking mode of the parent.
+  if (node_cfg.non_blocking_mode) {
+    ::set_non_blocking(assoc_fd, logger);
+  }
+
   // Add an entry for the association in the lookup
-  auto result = associations.emplace(assoc_id, assoc_id);
+  auto result = associations.emplace(
+      std::piecewise_construct, std::forward_as_tuple(assoc_id), std::forward_as_tuple(assoc_id, assoc_fd_raw, *this));
   if (not result.second) {
     logger.error("{} assoc={}: Unable to create new SCTP association", node_cfg.if_name, assoc_id);
     return;
@@ -408,21 +614,62 @@ void sctp_network_server_impl::handle_sctp_comm_up(const struct sctp_assoc_chang
     return;
   }
 
+  if (node_cfg.dtls_cfg.has_value()) {
+    auto addr = assoc_ctxt.addr;
+    addr.set_port(0); // Ignore port from peer.
+    auto      mode_it = node_cfg.dtls_cfg->mode_map.find(addr);
+    dtls_mode mode    = (mode_it != node_cfg.dtls_cfg->mode_map.end()) ? mode_it->second : node_cfg.dtls_cfg->mode;
+    assoc_ctxt.ssl    = create_dtls_ssl(dtls_ssl_config{mode, assoc_ctxt.assoc_id}, {*dtls_ctxt, *this});
+    if (not assoc_ctxt.ssl->init(assoc_ctxt.fd)) {
+      logger.error("{} assoc={}: Could not initialize DTLS context for new association", node_cfg.if_name, assoc_id);
+      /// Remove association as if it was lost. Do it directly, as we are running in the app executor already.
+      handle_association_shutdown(assoc_id, "DTLS error");
+      remove_association(assoc_id);
+      return;
+    }
+  }
+
   logger.info("{} assoc={}: New client SCTP association (client_addr={})", node_cfg.if_name, assoc_id, assoc_ctxt.addr);
 
-  // If this was a pending outgoing connection, defer to enqueue the success signal so that any tasks enqueued by the
-  // assoc_factory.create() callback can run before the awaiting coroutine resumes.
-  // Signaling inline here would resume the coroutine within this task, before the enqueued tasks that connect the
-  // notifiers have a chance to finish.
-  while (not app_exec.defer([this, addr = assoc_ctxt.addr]() {
+  // If this was a pending outgoing connection, defer to enqueue the success signal so that any tasks enqueued by
+  // the assoc_factory.create() callback can run before the awaiting coroutine resumes. Signaling inline here would
+  // resume the coroutine within this task, before the enqueued tasks that connect the notifiers have a chance to
+  // finish. unique_fd is move-only and defer() consumes the task on failure, so moving the fd into the lambda would
+  // close it on the first failed dispatch and leave later retries subscribing an already closed socket. Hold it
+  // behind a shared_ptr so ownership survives until an attempt is actually enqueued.
+  auto fd_holder = std::make_shared<unique_fd>(std::move(assoc_fd));
+  while (not app_exec.defer([this, addr = assoc_ctxt.addr, fd_holder, &assoc_ctxt]() mutable {
     auto pending_it = std::find_if(pending_connects.begin(),
                                    pending_connects.end(),
                                    [&addr](const pending_connect& pending) { return pending.contains(addr); });
-    if (pending_it != pending_connects.end()) {
+
+    /// If DTLS is not configured, mark connection as complete. Otherwise, wait for the DTLS handshake before
+    /// signaling the connection is set up to upper layers.
+    if (pending_it != pending_connects.end() && !node_cfg.dtls_cfg.has_value()) {
       pending_it->event.set(true);
+    }
+    /// Register peeled-off socket in IO broker.
+    if (not subscribe_association_to_broker(std::move(*fd_holder), assoc_ctxt)) {
+      logger.error("Connection loss due to IO broker subscription failure");
+      handle_association_shutdown(assoc_ctxt.assoc_id, "IO broker error");
+      remove_association(assoc_ctxt.assoc_id);
+      return;
     }
   })) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+
+void sctp_network_server_impl::mark_connection_as_complete(const transport_layer_address& addr)
+{
+  auto pending_it = std::find_if(pending_connects.begin(),
+                                 pending_connects.end(),
+                                 [&addr](const pending_connect& pending) { return pending.contains(addr); });
+
+  /// If DTLS is not configured, mark connection as complete. Otherwise, wait for the DTLS handshake before
+  /// signaling the connection is set up to upper layers.
+  if (pending_it != pending_connects.end()) {
+    pending_it->event.set(true);
   }
 }
 
@@ -529,16 +776,22 @@ bool sctp_network_server_impl::subscribe_to_broker()
       [this]() { receive(); },
       [this](io_broker::error_code code) {
         logger.info("Connection loss due to IO error code={}.", (int)code);
-        while (not app_exec.defer([this, keepalive = keepalive_token]() {
-          if (*keepalive) {
-            *keepalive = false;
-            handle_socket_shutdown(nullptr);
-          }
-        })) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+        defer_socket_shutdown(nullptr);
       });
   return io_sub.registered();
+}
+
+bool sctp_network_server_impl::subscribe_association_to_broker(unique_fd assoc_fd, sctp_associaton_context& assoc_ctxt)
+{
+  assoc_ctxt.io_sub = broker.register_fd(
+      std::move(assoc_fd),
+      io_rx_executor,
+      [&assoc_ctxt]() { assoc_ctxt.receive(); },
+      [this](io_broker::error_code code) {
+        logger.info("Connection loss due to IO error code={}.", (int)code);
+        defer_socket_shutdown(nullptr);
+      });
+  return assoc_ctxt.io_sub.registered();
 }
 
 std::unique_ptr<sctp_network_server> sctp_network_server_impl::create(const sctp_network_gateway_config& sctp_cfg,

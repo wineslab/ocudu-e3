@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/phy/support/time_alignment_estimator/time_alignment_measurement.h"
+#include "ocudu/phy/upper/signal_processors/srs/doa_estimator_result.h"
 #include "ocudu/ran/srs/srs_channel_matrix.h"
 #include <optional>
 
@@ -27,6 +28,8 @@ struct srs_estimator_result {
   std::optional<float> noise_variance;
   /// Measured time alignment.
   time_alignment_measurement time_alignment;
+  /// Estimated direction of arrival (DOA) components.
+  std::optional<doa_estimator_result> doa_result;
 };
 
 } // namespace ocudu

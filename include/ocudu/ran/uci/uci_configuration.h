@@ -72,7 +72,8 @@ struct uci_on_pusch {
   using beta_offsets_dynamic     = static_vector<beta_offsets, max_nof_beta_offsets>;
 
   std::optional<std::variant<beta_offsets_dynamic, beta_offsets_semi_static>> beta_offsets_cfg;
-  alpha_scaling_opt                                                           scaling;
+  /// This value is not used for Configured Grant.
+  alpha_scaling_opt scaling = alpha_scaling_opt::f1;
 
   bool operator==(const uci_on_pusch& rhs) const
   {

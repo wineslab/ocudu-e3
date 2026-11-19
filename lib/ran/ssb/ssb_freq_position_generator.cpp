@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ssb_freq_position_generator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/ran/band_helper_constants.h"
 #include "ocudu/ran/ssb/ssb_gscn.h"

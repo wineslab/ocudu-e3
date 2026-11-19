@@ -5,6 +5,7 @@
 #include "cu_up_unit_config_yaml_writer.h"
 #include "apps/helpers/metrics/metrics_config_yaml_writer.h"
 #include "apps/helpers/network/udp_config_yaml_writer.h"
+#include "apps/helpers/xnu/xnu_config_yaml_writer.h"
 #include "cu_up_unit_config.h"
 #include "ocudu/adt/span.h"
 
@@ -39,6 +40,22 @@ static void fill_cu_up_ngu_socket_section(YAML::Node node, const std::vector<cu_
   }
 }
 
+static void fill_cu_up_xnu_gtpu_section(YAML::Node& node, const cu_up_unit_xnu_gtpu_config& config)
+{
+  auto gtpu_node                        = node["gtpu"];
+  gtpu_node["queue_size"]               = config.gtpu_queue_size;
+  gtpu_node["batch_size"]               = config.gtpu_batch_size;
+  gtpu_node["reordering_timer"]         = config.gtpu_reordering_timer_ms;
+  gtpu_node["rate_limiter_period"]      = config.rate_limiter_period.count();
+  gtpu_node["teid_release_linger_time"] = config.gtpu_teid_release_linger_time.count();
+}
+
+static void fill_cu_up_xnu_section(YAML::Node& node, const cu_up_unit_xnu_config& config)
+{
+  fill_cu_up_xnu_gtpu_section(node, config.gtpu_cfg);
+  fill_xnu_config_yaml_schema(node, config.sockets_cfg);
+}
+
 static void fill_cu_up_ngu_section(YAML::Node node, const cu_up_unit_ngu_config& config)
 {
   node["no_core"] = config.no_core;
@@ -56,8 +73,8 @@ static void fill_cu_up_metrics_layers_section(YAML::Node node, const cu_up_unit_
 
 static void fill_cu_up_metrics_section(YAML::Node node, const cu_up_unit_metrics_config& config)
 {
-  auto perdiodicity_node                   = node["periodicity"];
-  perdiodicity_node["cu_up_report_period"] = config.cu_up_report_period;
+  auto periodicity_node                   = node["periodicity"];
+  periodicity_node["cu_up_report_period"] = config.cu_up_report_period.count();
 
   fill_cu_up_metrics_layers_section(node["layers"], config.layers_cfg);
 }
@@ -70,8 +87,9 @@ static void fill_cu_up_trace_section(YAML::Node node, const cu_up_unit_trace_con
 
 static void fill_cu_up_pcap_section(YAML::Node node, const cu_up_unit_pcap_config& config)
 {
-  node["n3_filename"]   = config.n3.filename;
-  node["n3_enable"]     = config.n3.enabled;
+  // TODO: Rename prefix from n3_ to ngu_
+  node["n3_filename"]   = config.ngu.filename;
+  node["n3_enable"]     = config.ngu.enabled;
   node["f1u_filename"]  = config.f1u.filename;
   node["f1u_enable"]    = config.f1u.enabled;
   node["e1ap_filename"] = config.e1ap.filename;
@@ -105,17 +123,17 @@ static void fill_cu_up_f1_qos_section(YAML::Node node, const cu_cp_unit_f1u_conf
 
 static void fill_cu_up_qos_entry(YAML::Node node, const cu_up_unit_qos_config& config)
 {
-  node["five_qi"] = five_qi_to_uint(config.five_qi);
+  node["five_qi"] = to_underlying(config.five_qi);
   fill_cu_up_f1_qos_section(node["f1u_cu_up"], config.f1u_cu_up);
 }
 
 static YAML::Node get_last_entry(YAML::Node node)
 {
   auto it = node.begin();
-  for (unsigned i = 1; i != node.size(); ++i) {
+  for (unsigned i = 1, e = node.size(); i != e; ++i) {
     ++it;
   }
-  return *it;
+  return static_cast<YAML::Node>(*it);
 }
 
 static void fill_cu_up_qos_section(YAML::Node node, span<const cu_up_unit_qos_config> qos_cfg)
@@ -151,6 +169,8 @@ void ocudu::fill_cu_up_config_in_yaml_schema(YAML::Node& node, const cu_up_unit_
   YAML::Node cu_up_node = node["cu_up"];
   fill_cu_up_section(cu_up_node, config);
   fill_cu_up_ngu_section(cu_up_node["ngu"], config.ngu_cfg);
+  YAML::Node xnu_node = cu_up_node["xnu"];
+  fill_cu_up_xnu_section(xnu_node, config.xnu_cfg);
 
   fill_cu_up_qos_section(cu_up_node, config.qos_cfg);
 }

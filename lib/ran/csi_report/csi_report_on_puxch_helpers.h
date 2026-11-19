@@ -10,33 +10,9 @@
 #include "ocudu/ran/csi_report/csi_report_packed.h"
 #include "ocudu/ran/csi_report/csi_report_size.h"
 #include "ocudu/ran/precoding/precoding_codebook_configuration.h"
+#include "ocudu/ran/precoding/precoding_codebook_type2_helpers.h"
 
 namespace ocudu {
-
-/// Collects the RI, LI, wideband CQI, and CSI fields bit-widths.
-struct ri_li_cqi_cri_sizes {
-  unsigned ri;
-  unsigned li;
-  unsigned wideband_cqi_first_tb;
-  unsigned wideband_cqi_second_tb;
-  unsigned subband_diff_cqi_first_tb;
-  unsigned subband_diff_cqi_second_tb;
-  unsigned cri;
-};
-
-/// \brief Gets the bit-widths of the RI, LI, wideband CQI, and CRI fields.
-///
-/// The bit-width of each of the fields is given in TS38.214 Table 6.3.1.1.2-5.
-///
-/// \param[in] pmi_codebook         PMI codebook configuration.
-/// \param[in] ri_restriction       The number of allowed rank indicator values, parameter \f$n_{RI}\f$.
-/// \param[in] ri                   The value of the rank, parameter \f$\nu\f$.
-/// \param[in] nof_csi_rs_resources The number of CSI-RS resources in the corresponding resource set, parameter
-///                                 \f$K_{s}^{CSI-RS}\f$.
-ri_li_cqi_cri_sizes get_ri_li_cqi_cri_sizes(const pmi_codebook_config& pmi_codebook,
-                                            const ri_restriction_type& ri_restriction,
-                                            csi_report_data::ri_type   ri,
-                                            unsigned                   nof_csi_rs_resources);
 
 /// Collects the CRI (or SSBRI), RSRP, and differential RSRP fields bit-widths.
 struct cri_ssbri_rsrp_sizes {
@@ -70,16 +46,22 @@ csi_report_size
 get_csi_report_size_cri_ssbri_rsrp(unsigned                                             nof_csi_rs_resources,
                                    bounded_integer<uint8_t, 1, csi_max_nof_reported_rs> nof_reported_rs);
 
-/// Gets the PMI field bit-width.
-unsigned csi_report_get_size_pmi(const pmi_codebook_config& codebook, csi_report_data::ri_type ri);
-
 /// Unpacks the wideband CQI field from a packed CSI report.
 csi_report_data::wideband_cqi_type csi_report_unpack_wideband_cqi(csi_report_packed packed);
 
-/// Unpacks the PMI fields from a packed CSI report.
-precoding_matrix_indicator csi_report_unpack_pmi(const csi_report_packed&   packed,
-                                                 const pmi_codebook_config& codebook,
-                                                 csi_report_data::ri_type   ri);
+/// \brief Unpacks the PMI fields from a packed CSI report.
+///
+/// \param[in] packed         Packed PMI fields.
+/// \param[in] codebook       PMI codebook configuration.
+/// \param[in] ri             The value of the rank.
+/// \param[in] nof_amplitudes Number of non-zero wideband amplitude coefficients \f$M_l\f$ for each of the reported
+///                           layers. It is only required by the Type II codebook.
+///
+/// \return Unpacked Precoding Matrix Indicator.
+precoding_matrix_indicator csi_report_unpack_pmi(const csi_report_packed&     packed,
+                                                 const pmi_codebook_config&   codebook,
+                                                 csi_report_data::ri_type     ri,
+                                                 const typeII_nof_amplitudes& nof_amplitudes = {});
 
 /// Unpacks RI as per TS38.212 Section 6.3.1.1.2. and TS38.214 Section 5.2.2.2.1.
 csi_report_data::ri_type csi_report_unpack_ri(const csi_report_packed&   ri_packed,

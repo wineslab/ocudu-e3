@@ -34,26 +34,12 @@ private:
   std::string prefix;
 };
 
+inline const char* format_as(const f1u_bearer_log_prefix& o)
+{
+  return o.to_c_str();
+}
+
 using f1u_bearer_logger = prefixed_logger<f1u_bearer_log_prefix>;
 
 } // namespace odu
 } // namespace ocudu
-
-namespace fmt {
-
-// associated formatter
-template <>
-struct formatter<ocudu::odu::f1u_bearer_log_prefix> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::odu::f1u_bearer_log_prefix o, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", o.to_c_str());
-  }
-};
-} // namespace fmt

@@ -9,23 +9,42 @@
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/ngap/ngap_ies.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
 #include "ocudu/ngap/ngap_context.h"
 #include "ocudu/ngap/ngap_handover.h"
 #include "ocudu/ngap/ngap_init_context_setup.h"
 #include "ocudu/ngap/ngap_nas.h"
 #include "ocudu/ngap/ngap_rrc_inactive_transition.h"
 #include "ocudu/ngap/ngap_ue_context_mod.h"
+#include "ocudu/ngap/ngap_warning.h"
 #include "ocudu/ran/cu_cp_location_reporting_types.h"
 #include "ocudu/ran/cu_cp_pdu_session.h"
+#include "ocudu/ran/cu_cp_ue_context_release.h"
 #include "ocudu/ran/cu_types.h"
 #include "ocudu/ran/five_g_s_tmsi.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/ran/tac.h"
 #include <string>
 #include <variant>
 #include <vector>
 
 namespace ocudu::ocucp {
+
+/// \brief Converts a satellite RAT type into the RAT Information of a supported TA, as per TS 38.413,
+/// Section 9.3.1.125.
+inline asn1::ngap::rat_info_e satellite_rat_type_to_asn1(satellite_rat_type rat)
+{
+  switch (rat) {
+    case satellite_rat_type::nr_leo:
+      return asn1::ngap::rat_info_opts::nr_leo;
+    case satellite_rat_type::nr_meo:
+      return asn1::ngap::rat_info_opts::nr_meo;
+    case satellite_rat_type::nr_geo:
+      return asn1::ngap::rat_info_opts::nr_geo;
+    case satellite_rat_type::nr_othersat:
+      return asn1::ngap::rat_info_opts::nr_othersat;
+  }
+  return asn1::ngap::rat_info_opts::nulltype;
+}
 
 /// \brief Fills ASN.1 NGSetupRequest struct.
 /// \param[out] asn1_request The NGSetupRequest ASN.1 struct to fill.
@@ -66,6 +85,14 @@ inline void fill_asn1_ng_setup_request(asn1::ngap::ng_setup_request_s& asn1_requ
         asn1_broadcast_plmn_item.tai_slice_support_list.push_back(asn1_slice_support_item);
       }
       asn1_supported_ta_item.broadcast_plmn_list.push_back(asn1_broadcast_plmn_item);
+    }
+
+    // Fill the RAT Information of an NTN tracking area, from which the AMF derives the satellite RAT type of the UEs
+    // it serves (TS 23.501, Section 5.4.10).
+    if (supported_ta_item.satellite_rat.has_value()) {
+      asn1_supported_ta_item.ie_exts_present          = true;
+      asn1_supported_ta_item.ie_exts.rat_info_present = true;
+      asn1_supported_ta_item.ie_exts.rat_info         = satellite_rat_type_to_asn1(*supported_ta_item.satellite_rat);
     }
 
     asn1_request->supported_ta_list.push_back(asn1_supported_ta_item);
@@ -135,6 +162,65 @@ inline void fill_asn1_ul_nas_transport(asn1::ngap::ul_nas_transport_s& asn1_msg,
   user_loc_info_nr       = cu_cp_user_location_info_to_asn1(msg.user_location_info);
 }
 
+/// Converts the NGAP ASN.1 QoS Flow Level QoS Parameters IE to common type.
+inline qos_flow_level_qos_parameters
+ngap_asn1_to_qos_flow_level_qos_parameters(const asn1::ngap::qos_flow_level_qos_params_s& asn1_qos_params)
+{
+  qos_flow_level_qos_parameters qos_params;
+
+  if (asn1_qos_params.qos_characteristics.type() == asn1::ngap::qos_characteristics_c::types::dyn5qi) {
+    const auto& asn1_dyn_5qi = asn1_qos_params.qos_characteristics.dyn5qi();
+
+    dyn_5qi_descriptor dyn_5qi  = {};
+    dyn_5qi.qos_prio_level      = qos_prio_level_t{asn1_dyn_5qi.prio_level_qos};
+    dyn_5qi.packet_delay_budget = asn1_dyn_5qi.packet_delay_budget;
+    dyn_5qi.per.exponent        = asn1_dyn_5qi.packet_error_rate.per_exponent;
+    dyn_5qi.per.scalar          = asn1_dyn_5qi.packet_error_rate.per_scalar;
+
+    if (asn1_dyn_5qi.five_qi_present) {
+      dyn_5qi.five_qi = uint_to_five_qi(asn1_dyn_5qi.five_qi);
+    }
+    // The Delay Critical and Averaging Window IEs are only present for GBR QoS flows.
+    if (asn1_dyn_5qi.delay_crit_present) {
+      dyn_5qi.is_delay_critical = asn1_dyn_5qi.delay_crit.value == asn1::ngap::delay_crit_opts::delay_crit;
+    }
+    if (asn1_dyn_5qi.averaging_win_present) {
+      dyn_5qi.averaging_win = asn1_dyn_5qi.averaging_win;
+    }
+    if (asn1_dyn_5qi.max_data_burst_volume_present) {
+      dyn_5qi.max_data_burst_volume = asn1_dyn_5qi.max_data_burst_volume;
+    }
+
+    qos_params.qos_desc = dyn_5qi;
+  } else if (asn1_qos_params.qos_characteristics.type() == asn1::ngap::qos_characteristics_c::types::non_dyn5qi) {
+    non_dyn_5qi_descriptor non_dyn_5qi = {};
+    non_dyn_5qi.five_qi                = uint_to_five_qi(asn1_qos_params.qos_characteristics.non_dyn5qi().five_qi);
+    qos_params.qos_desc                = non_dyn_5qi;
+
+    // TODO: Add optional values.
+  }
+
+  // Fill allocation and retention priority.
+  qos_params.alloc_retention_prio.prio_level_arp         = asn1_qos_params.alloc_and_retention_prio.prio_level_arp;
+  qos_params.alloc_retention_prio.may_trigger_preemption = asn1_qos_params.alloc_and_retention_prio.pre_emption_cap ==
+                                                           asn1::ngap::pre_emption_cap_opts::may_trigger_pre_emption;
+  qos_params.alloc_retention_prio.is_preemptable = asn1_qos_params.alloc_and_retention_prio.pre_emption_vulnerability ==
+                                                   asn1::ngap::pre_emption_vulnerability_opts::pre_emptable;
+
+  // Fill optional parameters.
+  if (asn1_qos_params.add_qos_flow_info_present) {
+    qos_params.add_qos_flow_info = asn1_qos_params.add_qos_flow_info.to_string();
+  }
+  if (asn1_qos_params.gbr_qos_info_present) {
+    qos_params.gbr_qos_info = ngap_asn1_to_gbr_qos_flow_information(asn1_qos_params.gbr_qos_info);
+  }
+  if (asn1_qos_params.reflective_qos_attribute_present) {
+    qos_params.reflective_qos_attribute_subject_to = true;
+  }
+
+  return qos_params;
+}
+
 /// Helper function to fill the CU-CP PDU Session Resource Setup Item for both, PDUSessionResourceSetupItemSUReq and
 /// PDUSessionResourceSetupItemCxtReq. Note that the NAS-PDU is added in separate functions
 /// \param[out] setup_item The cu_cp_pdu_session_res_setup_item struct to fill.
@@ -183,6 +269,11 @@ inline bool fill_cu_cp_pdu_session_resource_setup_item_base(cu_cp_pdu_session_re
 
   setup_item.ul_ngu_up_tnl_info = asn1_to_up_transport_layer_info(asn1_setup_req_transfer->ul_ngu_up_tnl_info);
 
+  // Fill data forwarding not possible.
+  if (asn1_setup_req_transfer->data_forwarding_not_possible_present) {
+    setup_item.data_forwarding_not_possible = true;
+  }
+
   // Fill PDU session type.
   if (!asn1_to_pdu_session_type(setup_item.pdu_session_type, asn1_setup_req_transfer->pdu_session_type)) {
     ocudulog::fetch_basic_logger("NGAP").error(
@@ -205,53 +296,8 @@ inline bool fill_cu_cp_pdu_session_resource_setup_item_base(cu_cp_pdu_session_re
     qos_flow_setup_req_item.qos_flow_id = uint_to_qos_flow_id(asn1_flow_item.qos_flow_id);
 
     // Fill QoS flow level QoS parameters.
-    if (asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.type() ==
-        asn1::ngap::qos_characteristics_c::types::dyn5qi) {
-      dyn_5qi_descriptor dyn_5qi = {};
-      if (asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.dyn5qi().five_qi_present) {
-        dyn_5qi.five_qi =
-            uint_to_five_qi(asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.dyn5qi().five_qi);
-      }
-      // TODO: Add optional values.
-
-      qos_flow_setup_req_item.qos_flow_level_qos_params.qos_desc = dyn_5qi;
-
-      // TODO: Add optional values.
-
-    } else if (asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.type() ==
-               asn1::ngap::qos_characteristics_c::types::non_dyn5qi) {
-      non_dyn_5qi_descriptor non_dyn_5qi = {};
-      non_dyn_5qi.five_qi =
-          uint_to_five_qi(asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.non_dyn5qi().five_qi);
-      qos_flow_setup_req_item.qos_flow_level_qos_params.qos_desc = non_dyn_5qi;
-
-      // TODO: Add optional values.
-    }
-
-    // Fill allocation and retention priority.
-    qos_flow_setup_req_item.qos_flow_level_qos_params.alloc_retention_prio.prio_level_arp =
-        asn1_flow_item.qos_flow_level_qos_params.alloc_and_retention_prio.prio_level_arp;
-    qos_flow_setup_req_item.qos_flow_level_qos_params.alloc_retention_prio.may_trigger_preemption =
-        asn1_flow_item.qos_flow_level_qos_params.alloc_and_retention_prio.pre_emption_cap ==
-        asn1::ngap::pre_emption_cap_opts::may_trigger_pre_emption;
-    qos_flow_setup_req_item.qos_flow_level_qos_params.alloc_retention_prio.is_preemptable =
-        asn1_flow_item.qos_flow_level_qos_params.alloc_and_retention_prio.pre_emption_vulnerability ==
-        asn1::ngap::pre_emption_vulnerability_opts::pre_emptable;
-
-    // Optional parameters.
-    if (asn1_flow_item.qos_flow_level_qos_params.add_qos_flow_info_present) {
-      qos_flow_setup_req_item.qos_flow_level_qos_params.add_qos_flow_info =
-          asn1_flow_item.qos_flow_level_qos_params.add_qos_flow_info.to_string();
-    }
-
-    if (asn1_flow_item.qos_flow_level_qos_params.gbr_qos_info_present) {
-      qos_flow_setup_req_item.qos_flow_level_qos_params.gbr_qos_info =
-          ngap_asn1_to_gbr_qos_flow_information(asn1_flow_item.qos_flow_level_qos_params.gbr_qos_info);
-    }
-
-    if (asn1_flow_item.qos_flow_level_qos_params.reflective_qos_attribute_present) {
-      qos_flow_setup_req_item.qos_flow_level_qos_params.reflective_qos_attribute_subject_to = true;
-    }
+    qos_flow_setup_req_item.qos_flow_level_qos_params =
+        ngap_asn1_to_qos_flow_level_qos_parameters(asn1_flow_item.qos_flow_level_qos_params);
 
     if (asn1_flow_item.erab_id_present) {
       qos_flow_setup_req_item.erab_id = asn1_flow_item.erab_id;
@@ -527,38 +573,8 @@ inline bool fill_ngap_pdu_session_resource_modify_item_base(
 
       // Fill QoS flow level QoS parameters.
       if (asn1_flow_item.qos_flow_level_qos_params_present) {
-        if (asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.type() ==
-            asn1::ngap::qos_characteristics_c::types::dyn5qi) {
-          dyn_5qi_descriptor dyn_5qi = {};
-          if (asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.dyn5qi().five_qi_present) {
-            dyn_5qi.five_qi =
-                uint_to_five_qi(asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.dyn5qi().five_qi);
-          }
-          // TODO: Add optional values.
-
-          qos_flow_add_item.qos_flow_level_qos_params.qos_desc = dyn_5qi;
-
-          // TODO: Add optional values.
-
-        } else if (asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.type() ==
-                   asn1::ngap::qos_characteristics_c::types::non_dyn5qi) {
-          non_dyn_5qi_descriptor non_dyn_5qi = {};
-          non_dyn_5qi.five_qi =
-              uint_to_five_qi(asn1_flow_item.qos_flow_level_qos_params.qos_characteristics.non_dyn5qi().five_qi);
-          qos_flow_add_item.qos_flow_level_qos_params.qos_desc = non_dyn_5qi;
-
-          // TODO: Add optional values.
-        }
-
-        // Fill allocation and retention priority.
-        qos_flow_add_item.qos_flow_level_qos_params.alloc_retention_prio.prio_level_arp =
-            asn1_flow_item.qos_flow_level_qos_params.alloc_and_retention_prio.prio_level_arp;
-        qos_flow_add_item.qos_flow_level_qos_params.alloc_retention_prio.may_trigger_preemption =
-            asn1_flow_item.qos_flow_level_qos_params.alloc_and_retention_prio.pre_emption_cap.value ==
-            asn1::ngap::pre_emption_cap_opts::may_trigger_pre_emption;
-        qos_flow_add_item.qos_flow_level_qos_params.alloc_retention_prio.is_preemptable =
-            asn1_flow_item.qos_flow_level_qos_params.alloc_and_retention_prio.pre_emption_vulnerability.value ==
-            asn1::ngap::pre_emption_vulnerability_opts::pre_emptable;
+        qos_flow_add_item.qos_flow_level_qos_params =
+            ngap_asn1_to_qos_flow_level_qos_parameters(asn1_flow_item.qos_flow_level_qos_params);
       }
 
       modify_item.transfer.qos_flow_add_or_modify_request_list.emplace(qos_flow_add_item.qos_flow_id,
@@ -652,7 +668,7 @@ inline void fill_asn1_ue_context_release_request(asn1::ngap::ue_context_release_
     asn1_msg->pdu_session_res_list_cxt_rel_req_present = true;
     for (const auto& session_id : msg.pdu_session_res_list_cxt_rel_req) {
       asn1::ngap::pdu_session_res_item_cxt_rel_req_s pdu_session_item;
-      pdu_session_item.pdu_session_id = pdu_session_id_to_uint(session_id);
+      pdu_session_item.pdu_session_id = to_underlying(session_id);
       asn1_msg->pdu_session_res_list_cxt_rel_req.push_back(pdu_session_item);
     }
   }
@@ -730,10 +746,9 @@ inline void fill_asn1_ue_context_release_complete(asn1::ngap::ue_context_release
       asn1::ngap::recommended_cell_item_s asn1_recommended_cell_item;
 
       // Fill NG RAN CGI.
-      asn1_recommended_cell_item.ngran_cgi.set_nr_cgi().nr_cell_id.from_number(
-          cu_cp_recommended_cell_item.ngran_cgi.nci.value());
-      asn1_recommended_cell_item.ngran_cgi.set_nr_cgi().plmn_id =
-          cu_cp_recommended_cell_item.ngran_cgi.plmn_id.to_bytes();
+      auto& asn1_nr_cgi = asn1_recommended_cell_item.ngran_cgi.set_nr_cgi();
+      asn1_nr_cgi.nr_cell_id.from_number(cu_cp_recommended_cell_item.ngran_cgi.nci.value());
+      asn1_nr_cgi.plmn_id = cu_cp_recommended_cell_item.ngran_cgi.plmn_id.to_bytes();
 
       // Fill time stayed in cell.
       if (cu_cp_recommended_cell_item.time_stayed_in_cell.has_value()) {
@@ -779,7 +794,7 @@ inline void fill_asn1_ue_context_release_complete(asn1::ngap::ue_context_release
 
     for (auto pdu_session_id : cu_cp_resp.pdu_session_res_list_cxt_rel_cpl) {
       asn1::ngap::pdu_session_res_item_cxt_rel_cpl_s asn1_rel_item;
-      asn1_rel_item.pdu_session_id = pdu_session_id_to_uint(pdu_session_id);
+      asn1_rel_item.pdu_session_id = to_underlying(pdu_session_id);
       asn1_resp->pdu_session_res_list_cxt_rel_cpl.push_back(asn1_rel_item);
     }
   }
@@ -1054,15 +1069,11 @@ inline bool fill_asn1_handover_resource_allocation_response(asn1::ngap::ho_fail_
 
 /// \brief Fill the Handover Notify to ASN.1 struct.
 /// \param[out] asn1_msg The Handover Notify ASN1 struct to fill.
-/// \param[in] cgi The nr_cell_global_id common type struct of the UE.
-/// \param[in] tac The tac of the UE.
-inline void
-fill_asn1_handover_notify(asn1::ngap::ho_notify_s& asn1_msg, const nr_cell_global_id_t& cgi, const tac_t tac)
+/// \param[in] user_location_info The User Location Information of the UE in the target cell.
+inline void fill_asn1_handover_notify(asn1::ngap::ho_notify_s&           asn1_msg,
+                                      const cu_cp_user_location_info_nr& user_location_info)
 {
-  auto& user_loc_info_nr       = asn1_msg->user_location_info.set_user_location_info_nr();
-  user_loc_info_nr.nr_cgi      = nr_cgi_to_ngap_asn1(cgi);
-  user_loc_info_nr.tai.plmn_id = cgi.plmn_id.to_bytes();
-  user_loc_info_nr.tai.tac.from_number(tac);
+  asn1_msg->user_location_info.set_user_location_info_nr() = cu_cp_user_location_info_to_asn1(user_location_info);
 }
 
 /// \brief Convert the UL RAN Status Transfer struct to ASN.1.
@@ -1076,7 +1087,7 @@ inline void fill_asn1_ul_ran_status_transfer(
       asn1_msg->ran_status_transfer_transparent_container.drbs_subject_to_status_transfer_list;
   for (const cu_cp_drbs_subject_to_status_transfer_item& drb : drb_list) {
     asn1::ngap::drbs_subject_to_status_transfer_item_s asn1_drb_item = {};
-    asn1_drb_item.drb_id                                             = drb_id_to_uint(drb.drb_id);
+    asn1_drb_item.drb_id                                             = to_underlying(drb.drb_id);
     if (drb.drb_status_ul.sn_size == pdcp_sn_size::size12bits) {
       asn1_drb_item.drb_status_ul.set_drb_status_ul12();
       asn1_drb_item.drb_status_ul.drb_status_ul12().ul_count_value.hfn_pdcp_sn12 = drb.drb_status_ul.ul_count.hfn;
@@ -1174,6 +1185,90 @@ inline bool ue_context_modification_request_from_asn1(ngap_ue_context_modificati
   /// TODO: Fill missing optional values.
 
   return true;
+}
+
+/// \brief Convert NGAP ASN.1 Write-Replace Warning Request to common type.
+/// \param[out] req  The common-type struct to fill.
+/// \param[in]  msg  The ASN.1 Write-Replace Warning Request.
+inline void fill_ngap_write_replace_warning_request(ngap_write_replace_warning_request&                req,
+                                                    const asn1::ngap::write_replace_warning_request_s& msg)
+{
+  // Mandatory IEs.
+  req.msg_id                   = static_cast<uint16_t>(msg->msg_id.to_number());
+  req.serial_num               = static_cast<uint16_t>(msg->serial_num.to_number());
+  req.repeat_period            = msg->repeat_period;
+  req.nof_broadcasts_requested = msg->nof_broadcasts_requested;
+
+  // Warning Area List (optional).
+  if (msg->warning_area_list_present) {
+    const auto& wal = msg->warning_area_list;
+    switch (wal.type()) {
+      case asn1::ngap::warning_area_list_c::types_opts::nr_cgi_list_for_warning: {
+        ngap_nr_cgi_list_for_warning cgi_list;
+        for (const auto& asn1_cgi : wal.nr_cgi_list_for_warning()) {
+          nr_cell_global_id_t cgi;
+          cgi.plmn_id = plmn_identity::from_bytes(asn1_cgi.plmn_id.to_bytes()).value();
+          cgi.nci     = nr_cell_identity::create(asn1_cgi.nr_cell_id.to_number()).value();
+          cgi_list.push_back(cgi);
+        }
+        req.warning_area_list = std::move(cgi_list);
+        break;
+      }
+      case asn1::ngap::warning_area_list_c::types_opts::tai_list_for_warning: {
+        ngap_tai_list_for_warning tai_list;
+        for (const auto& asn1_tai : wal.tai_list_for_warning()) {
+          tai_t tai;
+          tai.plmn_id = plmn_identity::from_bytes(asn1_tai.plmn_id.to_bytes()).value();
+          tai.tac     = asn1_tai.tac.to_number();
+          tai_list.push_back(tai);
+        }
+        req.warning_area_list = std::move(tai_list);
+        break;
+      }
+      case asn1::ngap::warning_area_list_c::types_opts::emergency_area_id_list: {
+        ngap_emergency_area_id_list eaid_list;
+        for (const auto& asn1_eaid : wal.emergency_area_id_list()) {
+          eaid_list.push_back(asn1_eaid.to_bytes());
+        }
+        req.warning_area_list = std::move(eaid_list);
+        break;
+      }
+      default:
+        // EUTRA CGI list and choice extensions not supported; treat as absent.
+        break;
+    }
+  }
+
+  // Warning Type (optional, fixed_octstring<2>).
+  if (msg->warning_type_present) {
+    req.warning_type = static_cast<uint16_t>(msg->warning_type.to_number());
+  }
+
+  // Data Coding Scheme (optional, 8-bit bitstring).
+  if (msg->data_coding_scheme_present) {
+    req.data_coding_scheme = static_cast<uint8_t>(msg->data_coding_scheme.to_number());
+  }
+
+  // Warning Message Contents (optional, bounded_octstring<1,9600>).
+  if (msg->warning_msg_contents_present) {
+    const auto& wmc          = msg->warning_msg_contents;
+    req.warning_msg_contents = byte_buffer::create(wmc.data(), wmc.data() + wmc.size()).value();
+  }
+
+  // Concurrent Warning Message Indication (optional).
+  if (msg->concurrent_warning_msg_ind_present) {
+    req.concurrent_warning_msg_ind = true;
+  }
+}
+
+/// \brief Fill ASN.1 Write-Replace Warning Response from common type.
+/// \param[out] asn1_resp  The ASN.1 struct to fill.
+/// \param[in]  resp       The common-type response.
+inline void fill_asn1_write_replace_warning_response(asn1::ngap::write_replace_warning_resp_s&  asn1_resp,
+                                                     const ngap_write_replace_warning_response& resp)
+{
+  asn1_resp->msg_id.from_number(resp.msg_id, 16);
+  asn1_resp->serial_num.from_number(resp.serial_num, 16);
 }
 
 } // namespace ocudu::ocucp

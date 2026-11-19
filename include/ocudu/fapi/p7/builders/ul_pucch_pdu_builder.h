@@ -126,6 +126,16 @@ public:
 
     return *this;
   }
+
+  /// \brief Sets the PUCCH PDU multi-slot TX indicator and returns a reference to the builder.
+  ///
+  /// This parameter is specified in SCF-222 v4.0 section 3.4.3.3 in table PUCCH PDU, common to all PUCCH formats.
+  ul_pucch_pdu_builder& set_multi_slot_tx_indicator(pucch_repetition_tx_slot indicator)
+  {
+    pdu.multi_slot_tx_indicator = indicator;
+
+    return *this;
+  }
 };
 
 } // namespace fapi

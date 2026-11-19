@@ -38,7 +38,7 @@ f1u_bearer_impl::f1u_bearer_impl(uint32_t                       ue_index,
 {
   if (metrics_agg.get_metrics_period().count()) {
     metrics_timer = ue_ctrl_timer_factory.create_timer();
-    metrics_timer.set(std::chrono::milliseconds(metrics_agg.get_metrics_period().count()), [this](timer_id_t tid) {
+    metrics_timer.set(std::chrono::milliseconds(metrics_agg.get_metrics_period().count()), [this]() {
       if (stopped) {
         return;
       }
@@ -49,8 +49,7 @@ f1u_bearer_impl::f1u_bearer_impl(uint32_t                       ue_index,
     metrics_timer.run();
   }
 
-  dl_notif_timer.set(std::chrono::milliseconds(config.dl_t_notif_timer),
-                     [this](timer_id_t tid) { on_expired_dl_notif_timer(); });
+  dl_notif_timer.set(std::chrono::milliseconds(config.dl_t_notif_timer), [this]() { on_expired_dl_notif_timer(); });
 
   auto dispatch_fn = [this](span<nru_ul_message> msg_span) {
     for (nru_ul_message& msg : msg_span) {
@@ -65,6 +64,9 @@ f1u_bearer_impl::f1u_bearer_impl(uint32_t                       ue_index,
 
 void f1u_bearer_impl::handle_pdu(nru_ul_message msg)
 {
+  if (stopped) {
+    return;
+  }
   if (not ul_batched_queue->try_push(std::move(msg))) {
     if (!cfg.warn_on_drop) {
       logger.log_info("Dropped F1-U PDU, queue is full.");
@@ -197,13 +199,21 @@ void f1u_bearer_impl::discard_sdu(uint32_t pdcp_sn)
     logger.log_debug("Queued first SDU discard block with pdcp_sn={}", pdcp_sn);
   } else {
     nru_pdcp_sn_discard_block& last_block = discard_blocks.back();
-    if (last_block.pdcp_sn_start + last_block.block_size == pdcp_sn) {
+    if (last_block.pdcp_sn_start + last_block.block_size == pdcp_sn &&
+        last_block.block_size < nru_max_discard_block_size) {
       last_block.block_size++;
       logger.log_debug("Expanded previous SDU discard block with pdcp_sn={}. pdcp_sn_start={} block_size={}",
                        pdcp_sn,
                        last_block.pdcp_sn_start,
                        last_block.block_size);
     } else {
+      if (discard_blocks.full()) {
+        // This part should never happen because of immediate flush when reaching full capacity (see below).
+        logger.log_warning("Cannot discard SDU. Maximum number of discard blocks reached. pdcp_sn={} nof_blocks={}",
+                           pdcp_sn,
+                           discard_blocks.size());
+        return;
+      }
       discard_blocks.push_back(nru_pdcp_sn_discard_block{});
       nru_pdcp_sn_discard_block& block = discard_blocks.back();
       block.pdcp_sn_start              = pdcp_sn;

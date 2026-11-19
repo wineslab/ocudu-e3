@@ -45,7 +45,7 @@ protected:
   // Creates an SCTP socket with the provided protocol.
   [[nodiscard]] expected<sctp_socket> create_socket(int ai_family, int ai_socktype) const;
 
-  bool create_and_bind_common();
+  bool create_and_bind_common(int sock_type);
 
   [[nodiscard]] bool validate_and_log_sctp_notification(span<const uint8_t> payload) const;
 
@@ -58,3 +58,56 @@ protected:
 };
 
 } // namespace ocudu
+
+template <>
+struct fmt::formatter<sctp_sn_type> : fmt::formatter<std::string_view> {
+  auto format(sctp_sn_type v, fmt::format_context& ctx) const
+  {
+    std::string_view name = "UNKNOWN";
+    switch (v) {
+      case SCTP_DATA_IO_EVENT:
+        name = "SCTP_DATA_IO_EVENT";
+        break;
+      case SCTP_ASSOC_CHANGE:
+        name = "SCTP_ASSOC_CHANGE";
+        break;
+      case SCTP_PEER_ADDR_CHANGE:
+        name = "SCTP_PEER_ADDR_CHANGE";
+        break;
+      case SCTP_SEND_FAILED:
+        name = "SCTP_SEND_FAILED";
+        break;
+      case SCTP_REMOTE_ERROR:
+        name = "SCTP_REMOTE_ERROR";
+        break;
+      case SCTP_SHUTDOWN_EVENT:
+        name = "SCTP_SHUTDOWN_EVENT";
+        break;
+      case SCTP_PARTIAL_DELIVERY_EVENT:
+        name = "SCTP_PARTIAL_DELIVERY_EVENT";
+        break;
+      case SCTP_ADAPTATION_INDICATION:
+        name = "SCTP_ADAPTATION_INDICATION";
+        break;
+      case SCTP_AUTHENTICATION_EVENT:
+        name = "SCTP_AUTHENTICATION_EVENT";
+        break;
+      case SCTP_SENDER_DRY_EVENT:
+        name = "SCTP_SENDER_DRY_EVENT";
+        break;
+      case SCTP_STREAM_RESET_EVENT:
+        name = "SCTP_STREAM_RESET_EVENT";
+        break;
+      case SCTP_ASSOC_RESET_EVENT:
+        name = "SCTP_ASSOC_RESET_EVENT";
+        break;
+      case SCTP_STREAM_CHANGE_EVENT:
+        name = "SCTP_STREAM_CHANGE_EVENT";
+        break;
+      case SCTP_SEND_FAILED_EVENT:
+        name = "SCTP_SEND_FAILED_EVENT";
+        break;
+    }
+    return fmt::formatter<std::string_view>::format(name, ctx);
+  }
+};

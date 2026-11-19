@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pucch_detector_format0.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/dot_prod.h"
 #include "ocudu/phy/support/resource_grid_reader.h"
 #include <algorithm>
@@ -61,22 +62,26 @@ static float pick_threshold(unsigned nof_ports, unsigned nof_symbols, unsigned n
   //
   // Thresholds marked as TS38.104 correspond to the cases evaluated in the 3GPP conformance tests.
   // Thresholds marked as TBR (to be refined) haven't been tested yet.
-  static constexpr std::array<threshold_entry, 16> pucch_detector_format0_thresholds = {{{{1, 1}, 0.5373},
-                                                                                         {{1, 2}, 0.6460},
-                                                                                         {{1, 4}, 0.7556},
-                                                                                         {{1, 8}, 1.6818},   // TBR
-                                                                                         {{2, 1}, 0.5273},   // TBR
-                                                                                         {{2, 2}, 0.4038},   // TS38.104
-                                                                                         {{2, 4}, 0.7273},   // TBR
-                                                                                         {{2, 8}, 0.8364},   // TBR
-                                                                                         {{4, 1}, 0.3455},   // TBR
-                                                                                         {{4, 2}, 0.2800},   // TS38.104
-                                                                                         {{4, 4}, 0.4455},   // TBR
-                                                                                         {{4, 8}, 0.5000},   // TBR
-                                                                                         {{8, 1}, 0.2545},   // TBR
-                                                                                         {{8, 2}, 0.2083},   // TS38.104
-                                                                                         {{8, 4}, 0.3000},   // TBR
-                                                                                         {{8, 8}, 0.3273}}}; // TBR
+  static constexpr std::array<threshold_entry, 20> pucch_detector_format0_thresholds = {{{{1, 1}, 0.5373},  //
+                                                                                         {{1, 2}, 0.6460},  //
+                                                                                         {{1, 4}, 0.7556},  //
+                                                                                         {{1, 8}, 1.6818},  // TBR
+                                                                                         {{2, 1}, 0.5273},  // TBR
+                                                                                         {{2, 2}, 0.4038},  // TS38.104
+                                                                                         {{2, 4}, 0.7273},  // TBR
+                                                                                         {{2, 8}, 0.8364},  // TBR
+                                                                                         {{4, 1}, 0.3455},  // TBR
+                                                                                         {{4, 2}, 0.2800},  // TS38.104
+                                                                                         {{4, 4}, 0.4455},  // TBR
+                                                                                         {{4, 8}, 0.5000},  // TBR
+                                                                                         {{8, 1}, 0.2545},  // TBR
+                                                                                         {{8, 2}, 0.2083},  // TS38.104
+                                                                                         {{8, 4}, 0.3000},  // TBR
+                                                                                         {{8, 8}, 0.3273},  // TBR
+                                                                                         {{16, 1}, 0.1550}, // TBR
+                                                                                         {{16, 2}, 0.1700}, // TS38.104
+                                                                                         {{16, 4}, 0.2240}, // TBR
+                                                                                         {{16, 8}, 0.2500}}}; // TBR
   // Number of degrees of freedom.
   unsigned nof_degrees = nof_ports * nof_symbols;
 

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ocudu/phy/support/precoding_configuration.h"
 #include "ocudu/ran/cyclic_prefix.h"
+#include "ocudu/ran/precoding_beamforming_configuration.h"
 #include "ocudu/ran/prs/prs.h"
 #include "ocudu/ran/slot_point.h"
 
@@ -64,8 +64,8 @@ struct prs_generator_configuration {
   interval<uint16_t> freq_alloc;
   /// Ratio of PRS data EPRE to SSS EPRE in decibels.
   float power_offset_dB;
-  /// Precoding configuration.
-  precoding_configuration precoding;
+  /// Precoding and beamforming configuration.
+  precoding_beamforming_configuration precoding_and_beamforming;
 };
 
 } // namespace ocudu

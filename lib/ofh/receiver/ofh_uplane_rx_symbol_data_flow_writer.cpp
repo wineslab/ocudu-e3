@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ofh_uplane_rx_symbol_data_flow_writer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
 #include "ocudu/ofh/serdes/ofh_uplane_message_decoder_properties.h"
 

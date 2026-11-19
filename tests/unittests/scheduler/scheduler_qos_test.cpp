@@ -3,11 +3,12 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "test_utils/scheduler_test_simulator.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/cell_config_builder_profiles.h"
-#include "tests/test_doubles/scheduler/pucch_res_test_builder_helper.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/scheduler/config/sched_cell_config_helpers.h"
+#include "ocudu/scheduler/rrm/pucch_resource_manager.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -72,7 +73,7 @@ public:
     cell_cfg_req.ran.init_bwp.pucch.resources = pucch_basic_params;
     this->add_cell(cell_cfg_req);
 
-    pucch_cfg_builder.setup(cell_cfg().params);
+    pucch_cfg_builder.add_cell(to_du_cell_index(0), cell_cfg().params);
   }
 
   void add_ue_with_drb_qos(logical_channel_config::qos_info drb_qos)
@@ -85,7 +86,7 @@ public:
     ue_cfg.crnti                                                = to_rnti(0x4601 + (unsigned)next_ue_idx);
     ue_cfg.cfg.lc_config_list.value()[2].rrm_policy.s_nssai.sst = slice_service_type{1};
     ue_cfg.cfg.lc_config_list.value()[2].qos                    = drb_qos;
-    report_fatal_error_if_not(pucch_cfg_builder.add_build_new_ue_pucch_cfg(ue_cfg.cfg.cells.value()[0]),
+    report_fatal_error_if_not(pucch_cfg_builder.alloc_resources(ue_cfg.cfg.cells.value()[0]),
                               "Failed to allocate PUCCH resources");
     scheduler_test_simulator::add_ue(ue_cfg);
 
@@ -156,7 +157,7 @@ public:
 
   cell_config_builder_params params;
 
-  pucch_res_builder_test_helper pucch_cfg_builder;
+  pucch_resource_manager pucch_cfg_builder{64};
 
   std::vector<ue_stats> ue_stats_map;
 
@@ -169,6 +170,8 @@ class scheduler_1_gbr_ue_qos_test : public scheduler_qos_test
 public:
   scheduler_1_gbr_ue_qos_test()
   {
+    OCUDU_TEST_REQUIREMENTS("DU-QOS-1");
+
     auto gbr_qos     = make_qos(qos_prio_level_t::max(),
                             arp_prio_level_t::max(),
                             std::chrono::milliseconds(2000),
@@ -225,6 +228,8 @@ class scheduler_saturated_gbr_ue_qos_test : public scheduler_qos_test
 public:
   scheduler_saturated_gbr_ue_qos_test()
   {
+    OCUDU_TEST_REQUIREMENTS("DU-QOS-1");
+
     auto gbr_qos     = make_qos(qos_prio_level_t::max(),
                             arp_prio_level_t::max(),
                             std::chrono::milliseconds(2000),

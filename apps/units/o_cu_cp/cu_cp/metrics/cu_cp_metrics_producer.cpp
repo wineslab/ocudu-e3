@@ -4,6 +4,7 @@
 
 #include "cu_cp_metrics_producer.h"
 #include "cu_cp_metrics.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

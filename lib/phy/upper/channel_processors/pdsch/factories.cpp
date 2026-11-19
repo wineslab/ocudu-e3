@@ -13,6 +13,7 @@
 #include "pdsch_processor_impl.h"
 #include "pdsch_processor_pool.h"
 #include "pdsch_processor_validator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/support_factories.h"
 #include <memory>
 
@@ -306,7 +307,9 @@ public:
 
   std::unique_ptr<pdsch_processor> create() override
   {
-    return std::make_unique<pdsch_processor_flexible_impl>(segmenter_factory->create(),
+    std::array<std::unique_ptr<ldpc_segmenter_tx>, pdsch_processor::MAX_NOF_TRANSPORT_BLOCKS> segmenters;
+    std::generate(segmenters.begin(), segmenters.end(), [this]() { return segmenter_factory->create(); });
+    return std::make_unique<pdsch_processor_flexible_impl>(std::move(segmenters),
                                                            rg_mapper_factory->create(),
                                                            block_pool_factory.create(),
                                                            dmrs_pool_factory.create(),

@@ -3,10 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "resource_grid_mapper_impl.h"
-#include "ocudu/ocuduvec/sc_prod.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/antenna_ports.h"
-#include "ocudu/phy/support/precoding_configuration.h"
 #include "ocudu/phy/support/re_pattern.h"
+#include "ocudu/ran/beamforming/beam_identifier_helpers.h"
 
 using namespace ocudu;
 
@@ -27,14 +27,41 @@ static const re_prb_mask& get_re_mask_type_1(unsigned cdm_group_id)
   return re_mask_type1[cdm_group_id];
 }
 
+/// \brief Helper to convert a list of beam identifiers into the list of resource grid ports that carry the beams.
+///
+/// \param[in] beams List of beam identifiers.
+/// \return The list of resource grid ports, following the order of the given beam list.
+/// \remark An assertion is triggered if the number of beams exceeds \c precoding_constants::MAX_NOF_PORTS.
+/// \remark An assertion is triggered if any of the beam identifiers exceeds \c get_max_nof_beams().
+static static_vector<unsigned, precoding_constants::MAX_NOF_PORTS> to_grid_ports(span<const beam_identifier> beams)
+{
+  ocudu_assert(beams.size() <= precoding_constants::MAX_NOF_PORTS,
+               "The number of beams (i.e., {}) exceeds the maximum (i.e., {}).",
+               beams.size(),
+               precoding_constants::MAX_NOF_PORTS);
+
+  static_vector<unsigned, precoding_constants::MAX_NOF_PORTS> ports;
+  for (beam_identifier beam_id : beams) {
+    ocudu_assert(beam_id < beam_identifier::invalid,
+                 "The beam identifier (i.e., {}) exceed the valid maximum (i.e., {}).",
+                 to_underlying(beam_id),
+                 to_underlying(beam_identifier::invalid) - 1);
+
+    ports.push_back(to_underlying(beam_id));
+  }
+
+  return ports;
+}
+
 /// Optimized mapping for PDSCH DM-RS Type 1 mapped on contiguous RBs. It derives the CDM group ID of the input symbols
 /// from the RE allocation pattern.
-static void map_dmrs_type1_contiguous(resource_grid_writer&          writer,
-                                      precoding_buffer_type&         precoding_buffer,
-                                      const re_buffer_reader<>&      input,
-                                      const re_pattern&              pattern,
-                                      const precoding_configuration& precoding,
-                                      const channel_precoder&        precoder)
+static void map_dmrs_type1_contiguous(resource_grid_writer&                      writer,
+                                      precoding_buffer_type&                     precoding_buffer,
+                                      const re_buffer_reader<>&                  input,
+                                      const re_pattern&                          pattern,
+                                      span<const unsigned>                       ports,
+                                      const precoding_beamforming_configuration& precoding,
+                                      const channel_precoder&                    precoder)
 {
   // Obtain the DM-RS CDM group ID.
   unsigned cdm_group_id = pattern.re_mask == get_re_mask_type_1(0) ? 0 : 1;
@@ -43,7 +70,7 @@ static void map_dmrs_type1_contiguous(resource_grid_writer&          writer,
   static constexpr unsigned re_stride       = 2;
   static constexpr unsigned nof_dmrs_re_prb = NOF_SUBCARRIERS_PER_RB / re_stride;
 
-  unsigned nof_precoding_ports = precoding.get_nof_ports();
+  unsigned nof_precoding_ports = precoding.get_nof_beams();
 
   // PRG size in number of RB.
   unsigned prg_size = precoding.get_prg_size();
@@ -80,7 +107,7 @@ static void map_dmrs_type1_contiguous(resource_grid_writer&          writer,
     unsigned first_prg = first_crb / prg_size;
     for (unsigned i_prg = first_prg, nof_prg = precoding.get_nof_prg(); i_prg != nof_prg; ++i_prg) {
       // Get the precoding matrix for the current PRG.
-      const precoding_weight_matrix& prg_weights = precoding.get_prg_coefficients(i_prg);
+      const precoding_weight_matrix& prg_weights = precoding.get_prg(i_prg).mimo;
 
       // First PRB in the PRG used by the allocation pattern.
       unsigned prg_prb_start = std::max(i_prg * prg_size, first_crb);
@@ -112,17 +139,18 @@ static void map_dmrs_type1_contiguous(resource_grid_writer&          writer,
     for (unsigned i_tx_port = 0; i_tx_port != nof_precoding_ports; ++i_tx_port) {
       // Map the precoded REs to each port for the current symbol.
       span<const cbf16_t> port_data = precoding_buffer.get_slice(i_tx_port);
-      writer.put(i_tx_port, i_symbol, first_subcarrier, re_stride, port_data);
+      writer.put(ports[i_tx_port], i_symbol, first_subcarrier, re_stride, port_data);
     }
   }
 }
 
 void resource_grid_mapper_impl::map_re_block(resource_grid_writer&                      writer,
                                              const bounded_bitset<max_nof_subcarriers>& block_mask,
+                                             span<const unsigned>                       ports,
                                              const precoding_weight_matrix&             prg_weights,
                                              span<const ci8_t>                          block,
                                              unsigned                                   i_symbol,
-                                             unsigned                                   i_subc)
+                                             unsigned                                   i_subc) const
 {
   // Temporary intermediate buffer for storing precoded symbols.
   static_re_buffer<precoding_constants::MAX_NOF_PORTS, MAX_NOF_SUBCARRIERS, cbf16_t> precoding_buffer_copy;
@@ -137,8 +165,9 @@ void resource_grid_mapper_impl::map_re_block(resource_grid_writer&              
   if (OCUDU_LIKELY(is_contiguous)) {
     precoding_buffer_view.resize(nof_antennas, nof_re_block);
     int i_subc_begin = block_mask.find_lowest();
-    for (unsigned i_port = 0; i_port != nof_antennas; ++i_port) {
-      precoding_buffer_view.set_slice(i_port,
+    for (unsigned i_slice = 0; i_slice != nof_antennas; ++i_slice) {
+      unsigned i_port = ports[i_slice];
+      precoding_buffer_view.set_slice(i_slice,
                                       writer.get_view(i_port, i_symbol).subspan(i_subc + i_subc_begin, nof_re_block));
     }
   } else {
@@ -151,8 +180,9 @@ void resource_grid_mapper_impl::map_re_block(resource_grid_writer&              
 
   // Map for each port it the allocation is not contiguous.
   if (!is_contiguous) {
-    for (unsigned i_port = 0; i_port != nof_antennas; ++i_port) {
-      writer.put(i_port, i_symbol, i_subc, block_mask, precoding_buffer.get().get_slice(i_port));
+    for (unsigned i_slice = 0; i_slice != nof_antennas; ++i_slice) {
+      unsigned i_port = ports[i_slice];
+      writer.put(i_port, i_symbol, i_subc, block_mask, precoding_buffer.get().get_slice(i_slice));
     }
   }
 }
@@ -162,10 +192,10 @@ resource_grid_mapper_impl::resource_grid_mapper_impl(std::unique_ptr<channel_pre
 {
 }
 
-void resource_grid_mapper_impl::map(resource_grid_writer&          writer,
-                                    const re_buffer_reader<>&      input,
-                                    const re_pattern&              pattern,
-                                    const precoding_configuration& precoding)
+void resource_grid_mapper_impl::map(resource_grid_writer&                      writer,
+                                    const re_buffer_reader<>&                  input,
+                                    const re_pattern&                          pattern,
+                                    const precoding_beamforming_configuration& precoding)
 {
   unsigned nof_layers = precoding.get_nof_layers();
 
@@ -174,10 +204,13 @@ void resource_grid_mapper_impl::map(resource_grid_writer&          writer,
                input.get_nof_slices(),
                nof_layers);
 
-  unsigned nof_precoding_ports = precoding.get_nof_ports();
+  // Select the resource grid ports that carry the transmission beams.
+  static_vector<unsigned, precoding_constants::MAX_NOF_PORTS> ports = to_grid_ports(precoding.get_prg(0).beams);
+
+  unsigned nof_precoding_ports = precoding.get_nof_beams();
   ocudu_assert(nof_precoding_ports <= writer.get_nof_ports(),
-               "The precoding number of ports (i.e., {}) exceeds the grid number of ports (i.e., {}).",
-               precoding.get_nof_ports(),
+               "The precoding number of beams (i.e., {}) exceeds the grid number of ports (i.e., {}).",
+               nof_precoding_ports,
                writer.get_nof_ports());
 
   // Temporary intermediate buffer for storing precoded symbols.
@@ -188,7 +221,7 @@ void resource_grid_mapper_impl::map(resource_grid_writer&          writer,
 
   if (is_dmrs_type1) {
     // Optimized contiguous DM-RS Type 1 mapping.
-    map_dmrs_type1_contiguous(writer, precoding_buffer, input, pattern, precoding, *precoder);
+    map_dmrs_type1_contiguous(writer, precoding_buffer, input, pattern, ports, precoding, *precoder);
     return;
   }
 
@@ -229,12 +262,12 @@ void resource_grid_mapper_impl::map(resource_grid_writer&          writer,
 
     // Bypass precoding if it has no effect on the signal.
     if ((nof_layers == 1) && (nof_precoding_ports == 1) && (precoding.get_nof_prg() == 1) &&
-        (precoding.get_coefficient(0, 0, 0) == 1.0F)) {
+        (precoding.get_prg(0).mimo.get_coefficient(0, 0) == 1.0F)) {
       // View over the input RE belonging to the current symbol.
       re_buffer_reader_view input_re_symbol(input, i_re_buffer, nof_re_symbol);
 
       // Map directly to the grid.
-      span<const cf_t> unmapped = writer.put(0, i_symbol, 0, symbol_re_mask, input_re_symbol.get_slice(0));
+      span<const cf_t> unmapped = writer.put(ports[0], i_symbol, 0, symbol_re_mask, input_re_symbol.get_slice(0));
       ocudu_assert(unmapped.empty(), "Not all REs have been mapped to the grid.");
       i_re_buffer += nof_re_symbol;
       continue;
@@ -244,7 +277,7 @@ void resource_grid_mapper_impl::map(resource_grid_writer&          writer,
     unsigned i_precoding_buffer = 0;
     for (unsigned i_prg = 0, nof_prg = precoding.get_nof_prg(), i_subc = 0; i_prg != nof_prg; ++i_prg) {
       // Get the precoding matrix for the current PRG.
-      const precoding_weight_matrix& prg_weights = precoding.get_prg_coefficients(i_prg);
+      const precoding_weight_matrix& prg_weights = precoding.get_prg(i_prg).mimo;
 
       // Number of grid RE belonging to the current PRG for the provided allocation pattern dimensions.
       unsigned nof_subc_prg = std::min(prg_size, static_cast<unsigned>(symbol_re_mask.size()) - i_subc);
@@ -279,7 +312,7 @@ void resource_grid_mapper_impl::map(resource_grid_writer&          writer,
     for (unsigned i_tx_port = 0; i_tx_port != nof_precoding_ports; ++i_tx_port) {
       // Map the precoded REs to each port for the current symbol.
       span<const cbf16_t> port_data = precoding_buffer.get_slice(i_tx_port);
-      span<const cbf16_t> unmapped  = writer.put(i_tx_port, i_symbol, 0, symbol_re_mask, port_data);
+      span<const cbf16_t> unmapped  = writer.put(ports[i_tx_port], i_symbol, 0, symbol_re_mask, port_data);
       ocudu_assert(unmapped.empty(), "Not all REs have been mapped to the grid.");
     }
   }
@@ -291,21 +324,26 @@ void resource_grid_mapper_impl::map(resource_grid_writer&          writer,
                input.get_nof_re());
 }
 
-void resource_grid_mapper_impl::map(resource_grid_writer&           writer,
-                                    symbol_buffer&                  buffer,
-                                    const allocation_configuration& allocation,
-                                    const re_pattern_list&          reserved,
-                                    const precoding_configuration&  precoding,
-                                    unsigned                        re_skip)
+void resource_grid_mapper_impl::map(resource_grid_writer&                      writer,
+                                    symbol_buffer&                             buffer,
+                                    const allocation_configuration&            allocation,
+                                    const re_pattern_list&                     reserved,
+                                    const precoding_beamforming_configuration& precoding,
+                                    unsigned                                   re_skip) const
 {
+  // Select the resource grid ports that carry the transmission beams.
+  ocudu_assert(precoding.get_nof_prg() == 1,
+               "Currently, only one PRG is supported by the precoder and beamforming framework.");
+  static_vector<unsigned, precoding_constants::MAX_NOF_PORTS> ports = to_grid_ports(precoding.get_prg(0).beams);
+
   // The number of layers is equal to the number of ports.
   unsigned nof_layers = precoding.get_nof_layers();
 
   // Extract number of antennas.
-  unsigned nof_antennas = precoding.get_nof_ports();
+  unsigned nof_antennas = precoding.get_nof_beams();
 
   // Get the precoding matrix for the first PRG (only one precoding PRG is supported).
-  const precoding_weight_matrix& prg_weights = precoding.get_prg_coefficients(0);
+  const precoding_weight_matrix& prg_weights = precoding.get_prg(0).mimo;
 
   // Verify that the number of layers is consistent with the number of ports.
   interval<unsigned, true> nof_antennas_range(1, writer.get_nof_ports());
@@ -429,7 +467,7 @@ void resource_grid_mapper_impl::map(resource_grid_writer&           writer,
           span<const ci8_t> block = buffer.pop_symbols(nof_symbols_block);
 
           // Apply layer mapping, precoding and map the resources in the grid.
-          map_re_block(writer, block_mask, prg_weights, block, i_symbol, map_subc_interval.start());
+          map_re_block(writer, block_mask, ports, prg_weights, block, i_symbol, map_subc_interval.start());
         }
 
         // Advance subcarrier interval.

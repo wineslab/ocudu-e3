@@ -4,6 +4,7 @@
 
 #include "ssb_coreset0_freq_pos_checker.h"
 #include "lib/ran/ssb/ssb_freq_position_generator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_coreset_config.h"
 #include <gtest/gtest.h>

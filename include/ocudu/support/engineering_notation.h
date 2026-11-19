@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <sstream>
 #include <string>
 
 namespace ocudu {
@@ -18,9 +19,9 @@ namespace ocudu {
 
 inline std::string scaled_fmt_integer(uint64_t num, bool right_align)
 {
-  static constexpr std::array<const char*, 8> suffixes = {"", "k", "M", "G", "T", "P", "E", "Z"};
-  static const std::array<uint64_t, 8>        max_nums = []() {
-    std::array<uint64_t, 8> nums{0};
+  static constexpr std::array<const char*, 7> suffixes = {"", "k", "M", "G", "T", "P", "E"};
+  static const std::array<uint64_t, 7>        max_nums = []() {
+    std::array<uint64_t, 7> nums{0};
     for (unsigned i = 0, e = nums.size(); i != e; ++i) {
       nums[i] = (uint64_t)std::pow(10, i * 3);
     }

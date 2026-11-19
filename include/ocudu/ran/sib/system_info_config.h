@@ -8,6 +8,9 @@
 #include "ocudu/ran/ntn.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/ran/sib/cell_reselection.h"
+#include "ocudu/ran/sib/sib_constants.h"
+#include "ocudu/ran/sib/sib_type.h"
+#include <algorithm>
 #include <variant>
 #include <vector>
 
@@ -25,20 +28,6 @@ struct cell_selection_info {
 struct cell_access_related_info {
   /// Additional PLMNs that the UE can use to access the cell besides the cell primary PLMN. See TS 38.331, \c SIB1.
   std::vector<plmn_identity> additional_plmns;
-};
-
-enum class sib_type : uint8_t {
-  sib1        = 1,
-  sib2        = 2,
-  sib3        = 3,
-  sib4        = 4,
-  sib5        = 5,
-  sib6        = 6,
-  sib7        = 7,
-  sib8        = 8,
-  sib16       = 16,
-  sib19       = 19,
-  sib_invalid = 255
 };
 
 /// Cell reselection information common to all cell reselection types.
@@ -68,16 +57,18 @@ struct sib2_info {
 /// Intra-frequency cell reselection information SIB contents (see TS38.331 Section 6.3.2, Information Element \e
 /// SIB3).
 struct sib3_info {
-  /// List of intra-frequency neighbouring cells with specific cell reselection parameters.
+  /// List of intra-frequency neighbouring cells with specific cell reselection parameters. Max size
+  /// \c MAX_NOF_SIB3_INTRA_FREQ_CELLS.
   std::vector<intra_freq_neigh_cell_info> intra_freq_neigh_cell_list;
-  /// List of excluded intra-frequency neighbouring cells.
+  /// List of excluded intra-frequency neighbouring cells. Max size \c MAX_NOF_SIB3_INTRA_FREQ_CELLS.
   std::vector<pci_range_t> intra_freq_excluded_cell_list;
 };
 
 /// Inter-frequency cell reselection information SIB contents (see TS38.331 Section 6.3.2, Information Element \e
 /// SIB4).
 struct sib4_info {
-  /// List of neighbouring carrier frequencies and frequency specific cell reselection information.
+  /// List of neighbouring carrier frequencies and frequency specific cell reselection information. Max size
+  /// \c MAX_NOF_SIB4_INTER_FREQ_CARRIERS.
   std::vector<inter_freq_carrier_freq_info> inter_freq_carrier_freq_list;
 };
 
@@ -271,6 +262,22 @@ struct si_message_sched_info {
   std::optional<unsigned> si_window_position;
 };
 
+/// \brief Parameters of an SI message that carries a warning (SIB6, SIB7 or SIB8).
+///
+/// Its schedulingInfoList entry is only listed while its warning is on air, which the MAC takes care of, so it holds no
+/// position in \ref si_scheduling_info_config::si_sched_info.
+struct pws_si_message_config {
+  /// SIB the SI message carries. A warning SIB is never mapped together with another SIB.
+  sib_type sib;
+  /// Periodicity of the SI message, in radio frames. Values: {8, 16, 32, 64, 128, 256, 512}.
+  unsigned si_period_radio_frames = 64;
+  /// \brief Whether the cell broadcasts the configured content from its start, rather than waiting for a
+  /// Write-Replace Warning.
+  ///
+  /// Used for test_mode-configured ETWS/CMAS content.
+  bool auto_broadcast = false;
+};
+
 /// This struct contains the information required for the generation of the SI messages sent by the network and the
 /// generation of the SIB1 "SI-SchedulingInfo" field of the SIB1. See TS 38.331, "SystemInformation" and
 /// "SI-SchedulingInfo".
@@ -280,6 +287,8 @@ struct si_scheduling_info_config {
   unsigned si_window_len_slots;
   /// List of SI-messages and associated scheduling information.
   std::vector<si_message_sched_info> si_sched_info;
+  /// SI messages that carry a warning, which the cell only broadcasts while one is on air.
+  std::vector<pws_si_message_config> pws_si_messages;
   /// Information included in each SIB that is scheduled as part of one of the SI-messages, with associated value tags.
   std::vector<sib_type_info> sibs;
 };
@@ -308,6 +317,10 @@ struct ue_timers_and_constants_config {
   /// t319
   /// Values (in ms): {100, 200, 300, 400, 600, 1000, 1500, 2000}
   std::chrono::milliseconds t319{1000};
+  /// \brief Timer used by the UE during handover/reconfiguration with sync, as per TS 38.331, 7.1.1. Configured by
+  /// the DU in the \c ReconfigurationWithSync IE of the RRCReconfiguration message.
+  /// Values (in ms): {50, 100, 150, 200, 500, 1000, 2000, 10000}
+  std::chrono::milliseconds t304{2000};
 };
 
 /// Parameters related to SIB1 and other-SI scheduling information.

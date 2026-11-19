@@ -8,12 +8,13 @@
 #include "ocudu/ran/csi_rs/csi_report_config.h"
 #include "ocudu/ran/csi_rs/csi_resource_config.h"
 #include "ocudu/ran/csi_rs/csi_rs_id.h"
-#include "ocudu/ran/csi_rs/csi_rs_pattern.h"
 #include "ocudu/ran/csi_rs/csi_rs_types.h"
 #include "ocudu/ran/csi_rs/frequency_allocation_type.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/tci.h"
+#include "ocudu/support/enum_utils.h"
 #include <variant>
+#include <vector>
 
 namespace ocudu {
 
@@ -57,7 +58,7 @@ struct csi_rs_resource_mapping {
 /// semi-persistent reporting on PUCCH.
 ///
 /// \remark See TS 38.331, \c CSI-ResourcePeriodicityAndOffset.
-enum class csi_resource_periodicity {
+enum class csi_resource_periodicity : unsigned {
   slots4   = 4,
   slots5   = 5,
   slots8   = 8,
@@ -72,11 +73,6 @@ enum class csi_resource_periodicity {
   slots320 = 320,
   slots640 = 640
 };
-
-constexpr unsigned csi_resource_periodicity_to_uint(csi_resource_periodicity val)
-{
-  return static_cast<unsigned>(val);
-}
 
 inline span<const csi_resource_periodicity> csi_resource_periodicity_options()
 {
@@ -193,6 +189,20 @@ struct csi_im_resource {
   }
   bool operator!=(const csi_im_resource& rhs) const { return !(rhs == *this); }
 };
+
+/// \brief Number of consecutive REs in frequency occupied by a CSI-IM resource element pattern, i.e., the first
+/// parameter of the pattern name, Pattern0 (2,2) or Pattern1 (4,1). See TS 38.214, Section 5.2.2.4.
+constexpr unsigned get_csi_im_pattern_nof_subcarriers(csi_im_resource::csi_im_resource_element_pattern_type pattern)
+{
+  return pattern == csi_im_resource::csi_im_resource_element_pattern_type::pattern0 ? 2 : 4;
+}
+
+/// \brief Number of consecutive OFDM symbols occupied by a CSI-IM resource element pattern, i.e., the second
+/// parameter of the pattern name, Pattern0 (2,2) or Pattern1 (4,1). See TS 38.214, Section 5.2.2.4.
+constexpr unsigned get_csi_im_pattern_nof_symbols(csi_im_resource::csi_im_resource_element_pattern_type pattern)
+{
+  return pattern == csi_im_resource::csi_im_resource_element_pattern_type::pattern0 ? 2 : 1;
+}
 
 /// CSI-IM-ResourceSet is used to configure a set of one or more CSI Interference Management (IM) resources (their IDs)
 /// and set-specific parameters

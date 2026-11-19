@@ -6,6 +6,7 @@
 
 #include "cell_dl_harq_buffer_pool.h"
 #include "dl_sch_pdu_assembler.h"
+#include "mac_cell_pcap_writer.h"
 #include "mac_dl_metric_handler.h"
 #include "mac_dl_ue_repository.h"
 #include "mac_scheduler_cell_info_handler.h"
@@ -21,7 +22,7 @@ namespace ocudu {
 
 class timer_manager;
 
-class mac_cell_processor final : public mac_cell_slot_handler, public mac_cell_controller
+class mac_cell_processor final : public mac_cell_slot_handler, public mac_dl_cell_controller
 {
 public:
   mac_cell_processor(const mac_cell_creation_request& cell_cfg_req,
@@ -42,7 +43,13 @@ public:
   /// Stops configured cell.
   async_task<void> stop() override;
 
-  async_task<mac_cell_reconfig_response> reconfigure(const mac_cell_reconfig_request& request) override;
+  void start_broadcast(std::shared_ptr<si_message_extension_handler> ext_handler,
+                       const si_update_command&                      cmd,
+                       std::unique_ptr<pws_broadcast_end_notifier>   pws_end_notifier) override;
+
+  void handle_si_update(const si_update_command& cmd) override;
+
+  async_task<void> reconfigure(const mac_dl_cell_reconfig_request& request) override;
 
   void handle_slot_indication(const mac_cell_timing_context& context) noexcept override;
   void handle_error_indication(slot_point sl_tx, error_event event) noexcept override;
@@ -79,8 +86,6 @@ private:
 
   /// Update DL buffer states of the allocated DL bearers.
   void update_logical_channel_dl_buffer_states(const dl_sched_result& dl_res);
-
-  void write_tx_pdu_pcap(slot_point sl_tx, const sched_result& sl_res, const mac_dl_data_result& dl_res);
 
   // Dependencies.
   ocudulog::basic_logger&         logger;
@@ -120,13 +125,10 @@ private:
   enum class cell_state { inactive, active } state = cell_state::inactive;
   manual_event_flag stop_completed;
 
-  mac_pcap& pcap;
+  mac_cell_pcap_writer pcap_writer;
 
   /// Reference to the subframe time mapper shared across all cells.
   mac_slot_time_handler& sfn_time_mapper;
-
-  unsigned                              sib1_pcap_dumped_version;
-  std::array<unsigned, MAX_SI_MESSAGES> si_pcap_dumped_version;
 };
 
 } // namespace ocudu

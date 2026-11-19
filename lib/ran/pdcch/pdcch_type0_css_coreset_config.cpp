@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/pdcch/pdcch_type0_css_coreset_config.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/bs_channel_bandwidth.h"

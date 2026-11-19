@@ -3,7 +3,9 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/du_types.h"
+#include "ocudu/ran/pusch/pusch_antenna_ports_mapping.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
 #include "ocudu/scheduler/config/bwp_builder_params.h"
 #include "ocudu/scheduler/config/cell_bwp_res_config.h"
@@ -93,8 +95,7 @@ static std::optional<radio_link_monitoring_config> make_default_rlm_config(const
 
   rlm_helper::rlm_builder_params rlm_params;
   if (rlm_type == rlm_resource_type::ssb || rlm_type == rlm_resource_type::ssb_and_csi_rs) {
-    rlm_params =
-        rlm_helper::rlm_builder_params(rlm_type, l_max, cell_cfg.ssb_cfg.ssb_bitmap, cell_cfg.ssb_cfg.beam_ids);
+    rlm_params = rlm_helper::rlm_builder_params(rlm_type, l_max, cell_cfg.ssb_cfg.ssb_beams.get_ssb_bitmap());
   } else {
     rlm_params = rlm_helper::rlm_builder_params(rlm_type, l_max);
   }
@@ -112,6 +113,17 @@ static std::optional<radio_link_monitoring_config> make_default_rlm_config(const
     return std::nullopt;
   }
   return rlm_cfg;
+}
+
+static beta_offsets make_default_beta_uci_on_pusch()
+{
+  return beta_offsets{.beta_offset_ack_idx_1    = 9,
+                      .beta_offset_ack_idx_2    = 9,
+                      .beta_offset_ack_idx_3    = 9,
+                      .beta_offset_csi_p1_idx_1 = 9,
+                      .beta_offset_csi_p1_idx_2 = 9,
+                      .beta_offset_csi_p2_idx_1 = 9,
+                      .beta_offset_csi_p2_idx_2 = 9};
 }
 
 static pusch_config make_default_pusch_config(const ran_cell_config& cell_cfg, const ue_bwp_config& ue_bwp_cfg)
@@ -141,26 +153,20 @@ static pusch_config make_default_pusch_config(const ran_cell_config& cell_cfg, c
   // > UCI on PUSCH config.
   auto& uci_cfg = cfg.uci_cfg.emplace();
   if (cell_pusch_cfg.uci_beta_offsets.has_value()) {
+    uci_cfg.scaling          = alpha_scaling_opt::f1;
     uci_cfg.beta_offsets_cfg = uci_on_pusch::beta_offsets_semi_static{cell_pusch_cfg.uci_beta_offsets.value()};
   } else {
-    uci_cfg.scaling = alpha_scaling_opt::f1;
-    beta_offsets b_offset{};
-    b_offset.beta_offset_ack_idx_1    = 9;
-    b_offset.beta_offset_ack_idx_2    = 9;
-    b_offset.beta_offset_ack_idx_3    = 9;
-    b_offset.beta_offset_csi_p1_idx_1 = 9;
-    b_offset.beta_offset_csi_p1_idx_2 = 9;
-    b_offset.beta_offset_csi_p2_idx_1 = 9;
-    b_offset.beta_offset_csi_p2_idx_2 = 9;
-    uci_cfg.beta_offsets_cfg          = uci_on_pusch::beta_offsets_semi_static{b_offset};
+    uci_cfg.scaling          = alpha_scaling_opt::f1;
+    uci_cfg.beta_offsets_cfg = make_default_beta_uci_on_pusch();
   }
 
   // > PUSCH power control config.
-  cfg.pusch_pwr_ctrl = pusch_config::pusch_power_control{.msg3_alpha               = alpha::alpha1,
-                                                         .p0_nominal_without_grant = -76,
-                                                         .p0_alphasets             = {},
-                                                         .pathloss_ref_rs          = {},
-                                                         .sri_pusch_mapping        = {}};
+  cfg.pusch_pwr_ctrl =
+      pusch_config::pusch_power_control{.msg3_alpha               = alpha::alpha1,
+                                        .p0_nominal_without_grant = cell_pusch_cfg.p0_nominal_without_grant,
+                                        .p0_alphasets             = {},
+                                        .pathloss_ref_rs          = {},
+                                        .sri_pusch_mapping        = {}};
   cfg.pusch_pwr_ctrl->p0_alphasets.emplace_back(pusch_config::pusch_power_control::p0_pusch_alphaset{
       .id = static_cast<p0_pusch_alphaset_id>(0), .p0 = 0, .p0_pusch_alpha = alpha::alpha1});
   cfg.pusch_pwr_ctrl->pathloss_ref_rs.emplace_back(pusch_config::pusch_power_control::pusch_pathloss_ref_rs{
@@ -251,6 +257,47 @@ static srs_config make_default_srs_config(const ran_cell_config& cell_cfg, const
   return cfg;
 }
 
+static cg_configuration make_default_cg_config(const cg_builder_params& cg_params)
+{
+  cg_configuration cfg{};
+
+  ocudu_assert(cg_params.periodicity.has_value(),
+               "This function cannot be called if Configuration Grant is not enabled");
+
+  cfg.periodicity        = cg_params.periodicity.value();
+  cfg.nof_harq_processes = static_cast<uint8_t>(cg_params.nof_harq_processes);
+  cfg.mcs_table          = pusch_mcs_table::qam64;
+
+  // TODO: add other DMRS options.
+  cfg.cg_dmrs_cfg = dmrs_uplink_config{};
+  cfg.cg_dmrs_cfg.trans_precoder_disabled.emplace();
+  cfg.trans_precoder.emplace(false);
+
+  // > UCI on PUSCH config.
+  auto& uci_cfg            = cfg.uci_on_pusch_cfg;
+  uci_cfg.scaling          = alpha_scaling_opt::f1;
+  uci_cfg.beta_offsets_cfg = make_default_beta_uci_on_pusch();
+
+  // > RRC-configured uplink grant (Type 1 CG).
+  cg_configuration::rrc_configured_ul_grant grant{};
+  constexpr unsigned                        nof_layers      = 1U;
+  constexpr bool                            trans_precoding = false;
+  grant.antenna_port                                        = get_pusch_antenna_port_mapping_row_index(
+      nof_layers, trans_precoding, dmrs_config_type::type1, dmrs_max_length::len1);
+  grant.dmrs_seq_initialization  = 0;
+  grant.precoding_and_nof_layers = 0;
+  // The values below will be overwritten when at the moment we create the UE specific config.
+  grant.time_domain_offset     = 0;
+  grant.time_domain_allocation = 0;
+  grant.mcs                    = static_cast<uint8_t>(cg_params.mcs);
+  // This is only a default value, which is overwritten by the scheduler when the actual configuration is generated.
+  constexpr unsigned default_nof_rbs = 10U;
+  grant.freq_domain_res              = ra_frequency_type1_configuration{0, 10, default_nof_rbs};
+  cfg.rrc_configured_ul_grant_cfg.emplace(grant);
+
+  return cfg;
+}
+
 static uplink_config make_default_ue_uplink_config(const ran_cell_config&     cell_cfg,
                                                    const cell_bwp_res_config& cell_bwp_cfg,
                                                    const ue_bwp_config&       ue_bwp_cfg)
@@ -270,6 +317,16 @@ static uplink_config make_default_ue_uplink_config(const ran_cell_config&     ce
   // > SRS config.
   ul_config.init_ul_bwp.srs_cfg.emplace(make_default_srs_config(cell_cfg, ue_bwp_cfg));
 
+  // > CG-PUSCH config.
+  if (cell_cfg.init_bwp.cg_cfg.has_value()) {
+    auto cg_cfg = make_default_cg_config(*cell_cfg.init_bwp.cg_cfg);
+    if (cg_cfg.rrc_configured_ul_grant_cfg.has_value()) {
+      std::get<ra_frequency_type1_configuration>(cg_cfg.rrc_configured_ul_grant_cfg->freq_domain_res).N_bwp_size =
+          cell_cfg.ul_cfg_common.init_ul_bwp.generic_params.crbs.length();
+    }
+    ul_config.init_ul_bwp.cg_cfg.emplace(cg_cfg);
+  }
+
   return ul_config;
 }
 
@@ -277,7 +334,7 @@ static pdsch_serving_cell_config make_default_pdsch_serving_cell_config(const pd
 {
   pdsch_serving_cell_config cfg;
   cfg.nof_harq_proc   = static_cast<pdsch_serving_cell_config::nof_harq_proc_for_pdsch>(pdsch_params.max_harq_procs);
-  cfg.max_mimo_layers = 1;
+  cfg.max_mimo_layers = pdsch_params.max_nof_layers;
   cfg.dl_harq_feedback_disabled = pdsch_params.dl_harq_feedback_disabled;
 
   return cfg;

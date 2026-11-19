@@ -11,14 +11,14 @@ RUN TZ=Europe/Madrid && \
     dnf update -y && \
     dnf install -y \
     which git \
-    clang llvm \
-    ccache gcovr valgrind \
+    clang llvm lld mold \
+    ccache gcovr valgrind ninja-build \
     python3-devel python3-virtualenv && \
     dnf install -y libstdc++-static && \
     dnf autoremove -y && dnf clean all && rm -rf /var/cache/dnf
 
-ADD install_dependencies.sh builder.sh changed_tests.py get_available_cores.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/install_dependencies.sh /usr/local/bin/builder.sh /usr/local/bin/changed_tests.py /usr/local/bin/get_available_cores.sh && \
+ADD install_dependencies.sh common.sh builder.sh changed_tests.py add_junit_properties.py get_available_cores.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/install_dependencies.sh /usr/local/bin/builder.sh /usr/local/bin/changed_tests.py /usr/local/bin/add_junit_properties.py /usr/local/bin/get_available_cores.sh && \
     /usr/local/bin/install_dependencies.sh && \
     dnf autoremove -y && dnf clean all && rm -rf /var/cache/dnf && \
     python3 -m venv /usr/local/builder_tools && \

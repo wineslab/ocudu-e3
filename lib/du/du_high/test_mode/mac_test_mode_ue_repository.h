@@ -6,8 +6,6 @@
 
 #include "mac_test_mode_event_handler.h"
 #include "ocudu/adt/flat_map.h"
-#include "ocudu/adt/mpmc_queue.h"
-#include "ocudu/adt/unique_function.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/scheduler/scheduler_configurator.h"
@@ -37,10 +35,6 @@ public:
     return rnti_val / nof_ues == cell_idx;
   }
 
-  const sched_ue_config_request& get_sched_ue_cfg_request(rnti_t rnti) const;
-
-  const sched_ue_config_request* find_sched_ue_cfg_request(rnti_t rnti) const;
-
   bool is_msg4_rxed(rnti_t rnti) const;
 
   bool msg4_rxed(rnti_t rnti, bool msg4_rx_flag_);
@@ -52,13 +46,9 @@ public:
   du_ue_index_t rnti_to_du_ue_idx(rnti_t rnti) const;
 
 private:
-  using cell_event_queue =
-      concurrent_queue<unique_task, concurrent_queue_policy::lockfree_mpmc, concurrent_queue_wait_policy::non_blocking>;
-
   struct test_ue_info {
-    du_ue_index_t                            ue_idx;
-    std::unique_ptr<sched_ue_config_request> sched_ue_cfg_req;
-    bool                                     msg4_rx_flag;
+    du_ue_index_t ue_idx;
+    bool          msg4_rx_flag;
   };
 
   struct cell_info {

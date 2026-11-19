@@ -64,7 +64,7 @@ inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du
   for (const auto& du_info : report) {
     // log RRC metrics
     fmt::format_to(std::back_inserter(buffer), "[");
-    fmt::format_to(std::back_inserter(buffer), " gnb_du_id={}", gnb_du_id_to_int(du_info.id));
+    fmt::format_to(std::back_inserter(buffer), " gnb_du_id={}", to_underlying(du_info.id));
 
     fmt::format_to(std::back_inserter(buffer),
                    " mean_nof_rrc_connections={} max_nof_rrc_connections={} mean_nof_inactive_rrc_connections={} "
@@ -92,6 +92,17 @@ inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du
       fmt::format_to(std::back_inserter(buffer),
                      " {}={}",
                      du_info.rrc_metrics.successful_rrc_connection_establishments.get_cause(cause_index),
+                     cause_count);
+      ++cause_index;
+    }
+    fmt::format_to(std::back_inserter(buffer), " ]");
+
+    fmt::format_to(std::back_inserter(buffer), " failed_rrc_connection_establishments=[");
+    cause_index = 0;
+    for (const auto& cause_count : du_info.rrc_metrics.failed_rrc_connection_establishments) {
+      fmt::format_to(std::back_inserter(buffer),
+                     " {}={}",
+                     du_info.rrc_metrics.failed_rrc_connection_establishments.get_cause(cause_index),
                      cause_count);
       ++cause_index;
     }

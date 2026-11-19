@@ -57,6 +57,14 @@ public:
   bool next_ue_setup_response          = true;
   bool next_ue_setup_complete_response = true;
 
+  /// Outcome and payload the dummy answers a UE context retrieval with, plus the last request it saw.
+  bool                                            context_retrieval_succeeds = false;
+  bool                                            path_switch_requested      = false;
+  bool                                            path_switch_succeeds       = true;
+  security::security_context                      retrieved_sec_context;
+  byte_buffer                                     retrieved_rrc_context;
+  std::optional<rrc_ue_context_retrieval_request> last_context_retrieval_request;
+
   bool on_ue_setup_request() override { return next_ue_setup_response; }
 
   bool on_ue_setup_complete_received(const plmn_identity& plmn) override { return next_ue_setup_complete_response; }
@@ -66,6 +74,35 @@ public:
     logger.info("old_pci={} old_c-rnti={}: Received RRC Reestablishment Request", old_pci, old_c_rnti);
 
     return reest_context;
+  }
+
+  async_task<rrc_ue_context_retrieval_response>
+  on_ue_context_retrieval_required(const rrc_ue_context_retrieval_request& request) override
+  {
+    logger.info("Received UE Context Retrieval Required");
+    last_context_retrieval_request = request;
+
+    rrc_ue_context_retrieval_response response;
+    response.success     = context_retrieval_succeeds;
+    response.sec_context = retrieved_sec_context;
+    response.rrc_context = retrieved_rrc_context.copy();
+
+    return launch_async(
+        [resp = std::move(response)](coro_context<async_task<rrc_ue_context_retrieval_response>>& ctx) mutable {
+          CORO_BEGIN(ctx);
+          CORO_RETURN(std::move(resp));
+        });
+  }
+
+  async_task<bool> on_retrieved_context_path_switch_required() override
+  {
+    logger.info("Received Retrieved Context Path Switch Required");
+    path_switch_requested = true;
+
+    return launch_async([this](coro_context<async_task<bool>>& ctx) mutable {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(path_switch_succeeds);
+    });
   }
 
   async_task<bool> on_rrc_reestablishment_context_modification_required() override
@@ -110,10 +147,16 @@ public:
 
   void on_up_context_setup_required(const up_context& ctxt) override { logger.info("UP context setup requested"); }
 
+  void on_ue_location_update() override
+  {
+    logger.info("UE location update reported");
+    ++nof_ue_location_updates;
+  }
+
   up_context on_up_context_required() override
   {
     logger.info("UP context requested");
-    return up_context{};
+    return up_ctxt;
   }
 
   async_task<void> on_ue_removal_required() override
@@ -150,7 +193,13 @@ public:
   /// If set, on_measurement_config_request() returns this value; allows tests to inject a real config.
   std::optional<rrc_meas_cfg> next_meas_cfg;
 
+  /// Returned by on_up_context_required(); allows tests to inject the UE's active DRBs.
+  up_context up_ctxt;
+
   cu_cp_ue_context_release_request last_cu_cp_ue_context_release_request;
+
+  /// Counts the coarse UE location updates reported to the CU-CP.
+  unsigned nof_ue_location_updates = 0;
 
 private:
   rrc_ue_reestablishment_context_response reest_context = {};
@@ -161,10 +210,6 @@ class dummy_rrc_ue_rrc_du_adapter : public rrc_ue_event_notifier
 {
 public:
   void on_new_rrc_connection() override {}
-
-  void on_successful_rrc_release(bool is_inactive) override {}
-
-  void on_rrc_inactive() override {}
 
   void on_attempted_rrc_connection_establishment(establishment_cause_t cause) override {}
 
@@ -177,8 +222,6 @@ public:
   void on_successful_rrc_connection_reestablishment() override {}
 
   void on_successful_rrc_connection_reestablishment_fallback() override {}
-
-  void on_attempted_rrc_connection_resume(resume_cause_t cause) override {}
 
   void on_successful_rrc_connection_resume(resume_cause_t cause) override {}
 

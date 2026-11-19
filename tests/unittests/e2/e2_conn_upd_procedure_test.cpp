@@ -6,8 +6,8 @@
 #include "lib/e2/e2sm/e2sm_kpm/e2sm_kpm_cu_meas_provider_impl.h"
 #include "lib/e2/e2sm/e2sm_kpm/e2sm_kpm_du_meas_provider_impl.h"
 #include "tests/unittests/e2/common/e2_test_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/executors/task_worker.h"
-#include "ocudu/support/ocudu_test.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -42,14 +42,16 @@ protected:
     node_component_config_collector = std::make_unique<e2_node_component_config_collector>(task_worker, 1);
     // Pre-deliver a dummy F1 config so the setup coroutine is not blocked awaiting it.
     node_component_config_collector->deliver(e2_node_component_interface_type::f1, {}, {});
-    e2agent = create_e2_du_agent(cfg,
-                                 *e2_client,
-                                 du_metrics.get(),
-                                 f1ap_ue_id_mapper.get(),
-                                 du_rc_param_configurator.get(),
-                                 factory,
-                                 task_worker,
-                                 std::move(node_component_config_collector));
+    e2agent = create_e2_du_agent(
+        cfg,
+        e2ap_dependencies{.e2_client                      = *e2_client,
+                          .e2_metrics_var                 = du_metrics.get(),
+                          .f1ap_ue_id_translator          = f1ap_ue_id_mapper.get(),
+                          .du_configurator                = du_rc_param_configurator.get(),
+                          .timers                         = factory,
+                          .e2_exec                        = task_worker,
+                          .node_component_config_provider = std::move(node_component_config_collector),
+                          .logger                         = ocudulog::fetch_basic_logger("TEST")});
     task_worker.run_pending_tasks();
     if (external_pcap_writer) {
       packer = std::make_unique<e2ap_asn1_packer>(*gw, e2agent->get_e2_interface(), *external_pcap_writer);

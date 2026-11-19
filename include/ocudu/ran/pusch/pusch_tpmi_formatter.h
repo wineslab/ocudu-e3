@@ -26,7 +26,7 @@ public:
     for (unsigned i_nof_layers = 1; i_nof_layers <= max_nof_layers; ++i_nof_layers) {
       const auto& info = context.get_tpmi_select(i_nof_layers);
       helper.format_always(ctx,
-                           "{}_layer: tpmi={} sinr=({:+.1f})dB",
+                           "{}_layer: tpmi={} sinr={::+.1f}dB",
                            i_nof_layers,
                            info.tpmi,
                            ocudu::span<const float>(info.sinr_dB_layer));

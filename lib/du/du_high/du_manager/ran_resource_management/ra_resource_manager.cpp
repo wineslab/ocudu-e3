@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ra_resource_manager.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace odu;

@@ -128,7 +128,7 @@ class pdxch_processor_spy : public pdxch_processor, private lower_phy_center_fre
 {
 public:
   pdxch_processor_spy(const pdxch_processor_configuration& config_) :
-    config(config_), baseband(config.scs, config.cp, config.srate, config.nof_tx_ports)
+    config(config_), baseband(config.scs, config.cp, config.srate, get_total_nof_ports(config.tx_ant_topology))
   {
   }
 

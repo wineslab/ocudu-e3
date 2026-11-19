@@ -7,6 +7,7 @@
 #include "prs_generator_impl.h"
 #include "prs_generator_pool_factory.h"
 #include "prs_generator_validator_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

@@ -20,24 +20,26 @@ struct ngap_ue_ids {
 };
 
 struct ngap_ue_context {
-  ngap_ue_ids                                               ue_ids;
-  ngap_cu_cp_ue_notifier*                                   ue = nullptr;
-  guami_t                                                   serving_guami;
-  unique_timer                                              request_pdu_session_timer;
-  bool                                                      release_requested                     = false;
-  bool                                                      release_scheduled                     = false;
-  std::optional<ngap_core_network_assist_info_for_inactive> core_network_assist_info_for_inactive = std::nullopt;
-  ngap_rrc_inactive_transition_report_request               rrc_inactive_transition_report_request =
-      ngap_rrc_inactive_transition_report_request::cancel_report;
+  ngap_ue_ids                                                ue_ids;
+  ngap_cu_cp_ue_notifier*                                    ue = nullptr;
+  guami_t                                                    serving_guami;
+  unique_timer                                               request_pdu_session_timer;
+  bool                                                       release_requested                     = false;
+  bool                                                       release_scheduled                     = false;
+  std::optional<cu_cp_core_network_assist_info_for_inactive> core_network_assist_info_for_inactive = std::nullopt;
+  cu_cp_rrc_inactive_transition_report_request               rrc_inactive_transition_report_request =
+      cu_cp_rrc_inactive_transition_report_request::cancel_report;
   byte_buffer last_pdu_session_resource_modify_request; // To check if a received modify request is a duplicate
-  ngap_ue_transaction_manager ev_mng;
+  // Declare the logger before the transaction manager. Destroying "ev_mng" cancels its pending transactions, which
+  // resumes the awaiting procedures from within the destructor, and those procedures log the cancellation.
   ngap_ue_logger              logger;
+  ngap_ue_transaction_manager ev_mng;
 
   ngap_ue_context(cu_cp_ue_index_t        ue_index_,
                   ran_ue_id_t             ran_ue_id_,
                   ngap_cu_cp_ue_notifier& ue_notifier_,
                   timer_factory&          timers_) :
-    ue_ids({ue_index_, ran_ue_id_}), ue(&ue_notifier_), ev_mng(timers_), logger("NGAP", {ue_index_, ran_ue_id_})
+    ue_ids({ue_index_, ran_ue_id_}), ue(&ue_notifier_), logger("NGAP", {ue_index_, ran_ue_id_}), ev_mng(timers_)
   {
     request_pdu_session_timer = timers_.create_timer();
   }
@@ -103,7 +105,7 @@ public:
   {
     ocudu_assert(amf_ue_id_to_ran_ue_id.find(amf_ue_id) != amf_ue_id_to_ran_ue_id.end(),
                  "amf_ue={}: RAN-UE-ID not found",
-                 fmt::underlying(amf_ue_id));
+                 amf_ue_id);
     ocudu_assert(ues.find(amf_ue_id_to_ran_ue_id.at(amf_ue_id)) != ues.end(),
                  "ran_ue={}: NGAP UE context not found",
                  fmt::underlying(amf_ue_id_to_ran_ue_id.at(amf_ue_id)));
@@ -146,10 +148,10 @@ public:
 
   ngap_ue_context& add_ue(cu_cp_ue_index_t ue_index, ran_ue_id_t ran_ue_id, ngap_cu_cp_ue_notifier& ue_notifier)
   {
-    ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", fmt::underlying(ue_index));
+    ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
     ocudu_assert(ran_ue_id != ran_ue_id_t::invalid, "Invalid ran_ue={}", fmt::underlying(ran_ue_id));
 
-    logger.debug("ue={} ran_ue={}: NGAP UE context created", fmt::underlying(ue_index), fmt::underlying(ran_ue_id));
+    logger.debug("ue={} ran_ue={}: NGAP UE context created", ue_index, fmt::underlying(ran_ue_id));
     ues.emplace(std::piecewise_construct,
                 std::forward_as_tuple(ran_ue_id),
                 std::forward_as_tuple(ue_index, ran_ue_id, ue_notifier, timers));
@@ -159,7 +161,7 @@ public:
 
   void update_amf_ue_id(ran_ue_id_t ran_ue_id, amf_ue_id_t amf_ue_id)
   {
-    ocudu_assert(amf_ue_id != amf_ue_id_t::invalid, "Invalid amf_ue={}", fmt::underlying(amf_ue_id));
+    ocudu_assert(amf_ue_id != amf_ue_id_t::invalid, "Invalid amf_ue={}", amf_ue_id);
     ocudu_assert(ran_ue_id != ran_ue_id_t::invalid, "Invalid ran_ue={}", fmt::underlying(ran_ue_id));
     ocudu_assert(ues.find(ran_ue_id) != ues.end(), "ran_ue={}: NGAP UE context not found", fmt::underlying(ran_ue_id));
 
@@ -172,13 +174,13 @@ public:
 
     if (ue.ue_ids.amf_ue_id == amf_ue_id_t::invalid) {
       // If it was not set before, we add it.
-      ue.logger.log_debug("Setting AMF-UE-NGAP-ID={}", fmt::underlying(amf_ue_id));
+      ue.logger.log_debug("Setting AMF-UE-NGAP-ID={}", amf_ue_id);
       ue.ue_ids.amf_ue_id = amf_ue_id;
       amf_ue_id_to_ran_ue_id.emplace(amf_ue_id, ran_ue_id);
     } else if (ue.ue_ids.amf_ue_id != amf_ue_id) {
       // If it was set before, we update it.
       amf_ue_id_t old_amf_ue_id = ue.ue_ids.amf_ue_id;
-      ue.logger.log_info("Updating AMF-UE-NGAP-ID={}", fmt::underlying(amf_ue_id));
+      ue.logger.log_info("Updating AMF-UE-NGAP-ID={}", amf_ue_id);
       ue.ue_ids.amf_ue_id = amf_ue_id;
       amf_ue_id_to_ran_ue_id.emplace(amf_ue_id, ran_ue_id);
       amf_ue_id_to_ran_ue_id.erase(old_amf_ue_id);
@@ -233,6 +235,8 @@ public:
     }
 
     ues.at(ran_ue_id).logger.log_debug("Removing NGAP UE context");
+
+    ues.at(ran_ue_id).request_pdu_session_timer.stop();
 
     if (ues.at(ran_ue_id).ue_ids.amf_ue_id != amf_ue_id_t::invalid) {
       amf_ue_id_to_ran_ue_id.erase(ues.at(ran_ue_id).ue_ids.amf_ue_id);
@@ -294,7 +298,7 @@ private:
       next_ran_ue_id = ran_ue_id_t::min;
     } else {
       // Increase RAN-UE-ID counter.
-      next_ran_ue_id = uint_to_ran_ue_id(ran_ue_id_to_uint(next_ran_ue_id) + 1);
+      next_ran_ue_id = uint_to_ran_ue_id(to_underlying(next_ran_ue_id) + 1);
     }
   }
 

@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "ocudu/adt/bounded_integer.h"
-
 namespace ocudu {
 
 /// Phase Tracking Reference Signals (PT-RS) frequency domain density.
@@ -24,7 +22,7 @@ inline const char* to_string(ptrs_frequency_density freq_density)
 }
 
 /// Converts PT-RS frequency domain density to an integer.
-inline unsigned to_value(ptrs_frequency_density freq_density)
+inline unsigned to_underlying(ptrs_frequency_density freq_density)
 {
   return static_cast<unsigned>(freq_density);
 }
@@ -47,7 +45,7 @@ inline const char* to_string(ptrs_time_density time_density)
 }
 
 /// Converts PT-RS time domain density to an integer.
-inline unsigned to_value(ptrs_time_density time_density)
+inline unsigned to_underlying(ptrs_time_density time_density)
 {
   return static_cast<unsigned>(time_density);
 }
@@ -72,7 +70,7 @@ inline const char* to_string(ptrs_re_offset re_offset)
 }
 
 /// Converts PT-RS RE offset to an integer.
-inline unsigned to_value(ptrs_re_offset re_offset)
+inline unsigned to_underlying(ptrs_re_offset re_offset)
 {
   return static_cast<unsigned>(re_offset);
 }

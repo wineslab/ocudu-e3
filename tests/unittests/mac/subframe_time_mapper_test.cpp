@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/mac/mac_dl/mac_subframe_time_mapper_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/test_utils.h"
 #include <atomic>
 #include <gtest/gtest.h>

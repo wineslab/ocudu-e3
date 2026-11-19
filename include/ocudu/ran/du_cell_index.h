@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ocudu/ran/gnb_constants.h"
-#include "fmt/format.h"
 #include <cstdint>
 #include <type_traits>
 
@@ -25,26 +24,9 @@ constexpr du_cell_index_t to_du_cell_index(std::underlying_type_t<du_cell_index_
   return static_cast<du_cell_index_t>(idx);
 }
 
+constexpr std::underlying_type_t<du_cell_index_t> format_as(du_cell_index_t cell_idx)
+{
+  return static_cast<std::underlying_type_t<du_cell_index_t>>(cell_idx);
+}
+
 } // namespace ocudu
-
-namespace fmt {
-
-template <>
-struct formatter<ocudu::du_cell_index_t> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::du_cell_index_t cell_idx, FormatContext& ctx) const
-  {
-    if (cell_idx < ocudu::du_cell_index_t::MAX_NOF_DU_CELLS) {
-      return format_to(ctx.out(), "{}", underlying(cell_idx));
-    }
-    return format_to(ctx.out(), "invalid");
-  }
-};
-
-} // namespace fmt

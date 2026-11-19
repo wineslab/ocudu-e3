@@ -7,6 +7,7 @@
 #include "ocudu/phy/support/complex_exponential_table.h"
 #include "ocudu/phy/support/time_alignment_estimator/time_alignment_estimator.h"
 #include "ocudu/phy/upper/sequence_generators/low_papr_sequence_generator.h"
+#include "ocudu/phy/upper/signal_processors/srs/doa_estimator.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator.h"
 #include <memory>
 
@@ -22,6 +23,8 @@ public:
     std::unique_ptr<low_papr_sequence_generator> sequence_generator;
     /// Time alignment estimator.
     std::unique_ptr<time_alignment_estimator> ta_estimator;
+    /// Direction of arrival estimator.
+    std::unique_ptr<doa_estimator> direction_estimator;
   };
 
   srs_estimator_generic_impl(dependencies deps_, unsigned max_nof_prb_) :
@@ -29,6 +32,8 @@ public:
   {
     ocudu_assert(deps.sequence_generator, "Invalid sequence generator.");
     ocudu_assert(deps.ta_estimator, "Invalid TA estimator.");
+
+    // We don't check for the DOA estimator since it's empty if DOA not configured.
   }
 
   srs_estimator_result estimate(const resource_grid_reader& grid, const srs_estimator_configuration& config) override;

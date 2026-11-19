@@ -4,7 +4,9 @@
 
 #pragma once
 
-#include "ocudu/support/ocudu_assert.h"
+#include <cstdint>
+#include <cstring>
+#include <type_traits>
 
 namespace ocudu {
 

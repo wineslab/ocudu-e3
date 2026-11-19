@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/ran/i_rnti.h"
 #include <chrono>
 
 namespace ocudu::ocucp {
@@ -16,11 +17,13 @@ struct ue_configuration {
   /// When set to false, UEs will not be set to RRC inactive.
   bool enable_rrc_inactive = false;
   /// RAN Paging cycle for RRC inactive UEs in number of radio frames.
-  uint8_t ran_paging_cycle = 32;
+  uint16_t ran_paging_cycle = 32;
   /// T380 timer value in minutes.
   std::chrono::minutes t380 = std::chrono::minutes{10};
-  /// Number of bits used for UE ID in I-RNTI.
-  uint8_t nof_i_rnti_ue_bits = 13;
+  /// I-RNTI profile used to compose the Full-I-RNTI of a suspended UE (TS 38.300 table F-1).
+  full_i_rnti_profile full_i_rnti_prof = full_i_rnti_profile::profile_0;
+  /// I-RNTI profile used to compose the Short-I-RNTI of a suspended UE (TS 38.300 table F-2).
+  short_i_rnti_profile short_i_rnti_prof = short_i_rnti_profile::profile_0;
 };
 
 } // namespace ocudu::ocucp

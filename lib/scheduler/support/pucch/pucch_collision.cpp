@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pucch_collision.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/pucch/pucch_constants.h"
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 

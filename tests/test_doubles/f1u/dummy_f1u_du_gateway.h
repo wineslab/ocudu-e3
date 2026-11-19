@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/f1u/du/f1u_gateway.h"
+#include "ocudu/ran/rb_id.h"
 #include <map>
 
 namespace ocudu::odu {

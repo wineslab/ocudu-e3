@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "tests/ocudu_test_requirements.h"
 #include "ocudu/ran/pdcch/dci_packing.h"
+#include "ocudu/support/math/math_utils.h"
 #include <gtest/gtest.h>
 #include <random>
 
@@ -77,6 +79,8 @@ protected:
   // Even though 2 bits are reserved for the TB scaling field, only the
   // 0b00, 0b01 and 0b10 bit words are mapped to scaling factor values.
   uniform_distribution tb_scaling_dist{0, pow2(1)};
+
+  uniform_distribution lsb_sfn_dist{0, pow2(2) - 1};
 
   void SetUp() override
   {
@@ -239,6 +243,7 @@ protected:
     config.interleaved_vrb_prb_mapping   = vrb_to_prb_mapping_dist(rgen) > 0;
     config.modulation_coding_scheme      = modulation_coding_scheme_dist(rgen);
     config.tb_scaling                    = tb_scaling_dist(rgen);
+    config.lsb_sfn                       = lsb_sfn_dist(rgen);
 
     return config;
   }
@@ -1002,8 +1007,11 @@ static dci_payload build_dci_1_0_ra_rnti_expected(const dci_1_0_ra_rnti_configur
   // Transport Block scaling - 2 bits.
   expected_pack(expected, config.tb_scaling, 2);
 
-  // Reserved bits - 16 bits.
-  std::fill_n(std::back_inserter(expected), 16, 0);
+  // LSBs of SFN - 2 bits.
+  expected_pack(expected, config.lsb_sfn, 2);
+
+  // Reserved bits - 14 bits.
+  std::fill_n(std::back_inserter(expected), 14, 0);
 
   // No padding, since DCI Format 1_0 scrambled by RA-RNTI is used in common search space.
 
@@ -1321,6 +1329,8 @@ static dci_payload build_dci_1_1_expected(const dci_1_1_configuration& config)
 
 TEST_P(DciFallbackPackingFixture, DciFormatZeroZeroPacking)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-PHY-2");
+
   for (unsigned i = 0; i != nof_repetitions; ++i) {
     // Generate DCI Format 0_0 scrambled by TC-RNTI configuration.
     dci_0_0_tc_rnti_configuration dci0_0_tc_rnti_cfg =
@@ -1367,6 +1377,8 @@ TEST_P(DciFallbackPackingFixture, DciFormatZeroZeroPacking)
 
 TEST_P(DciFallbackPackingFixture, DciFormatOneZeroPacking)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-PHY-2");
+
   for (unsigned i = 0; i != nof_repetitions; ++i) {
     // BW used to generate the DCI 1_0 configurations. It is set to the CORESET 0 bandwidth if configured, otherwise the
     // initial DL BWP bandwidth.
@@ -1478,6 +1490,8 @@ TEST_P(DciFallbackPackingFixture, DciFormatOneZeroPacking)
 
 TEST_P(DciNonFallbackPackingFixture, DciFormatZeroOnePacking)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-PHY-2");
+
   for (unsigned i = 0; i != nof_repetitions; ++i) {
     // Randomize DCI size configuration parameters that are not in the test case and generate the aligned DCI sizes.
     dci_sizes aligned_sizes = generate_dci_sizes();
@@ -1514,6 +1528,8 @@ TEST_P(DciNonFallbackPackingFixture, DciFormatZeroOnePacking)
 
 TEST_P(DciNonFallbackPackingFixture, DciFormatOneOnePacking)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-PHY-2");
+
   for (unsigned i = 0; i != nof_repetitions; ++i) {
     // Randomize DCI size configuration parameters and generate the aligned DCI sizes.
     dci_sizes aligned_sizes = generate_dci_sizes();
@@ -1545,6 +1561,8 @@ TEST_P(DciNonFallbackPackingFixture, DciFormatOneOnePacking)
 
 TEST_F(DciRarPackingFixture, DciRarPacking)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-PHY-2");
+
   for (unsigned i = 0; i != nof_repetitions; ++i) {
     // Test DCI RAR packing.
     dci_rar_configuration config    = {};

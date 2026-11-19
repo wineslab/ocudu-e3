@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/bounded_bitset.h"
+#include "ocudu/ran/csi_rs/csi_rs_constants.h"
 #include "ocudu/ran/csi_rs/csi_rs_types.h"
 
 namespace ocudu {

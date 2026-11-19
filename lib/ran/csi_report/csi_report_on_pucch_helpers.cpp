@@ -4,6 +4,7 @@
 
 #include "ocudu/ran/csi_report/csi_report_on_pucch_helpers.h"
 #include "csi_report_on_puxch_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/csi_report/csi_report_config_helpers.h"
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
 #include "ocudu/ran/csi_report/csi_report_data.h"
@@ -298,6 +299,10 @@ csi_report_size ocudu::get_csi_report_pucch_size(const csi_report_configuration&
 {
   using namespace units::literals;
 
+  // The Type II CSI reporting is restricted to PUSCH, as per TS38.214 Section 5.2.1.4.
+  ocudu_assert(!std::holds_alternative<pmi_codebook_typeII>(config.pmi_codebook),
+               "Type II CSI reports are not supported on PUCCH.");
+
   unsigned nof_csi_antenna_ports = get_precoding_codebook_antenna_ports(config.pmi_codebook);
 
   if (config.subband.has_value()) {
@@ -352,8 +357,17 @@ csi_report_size ocudu::get_csi_report_pucch_size(const csi_report_configuration&
 
       units::bits csi_report_size(0);
 
+      // The RI restriction is only populated for codebooks that carry it (type-I single panel); it is empty for
+      // 1-/2-port codebooks, in which case all ranks are allowed.
+      const bool has_ri_restriction = config.ri_restriction.size() >= nof_csi_antenna_ports;
+
       // For each possible RI, find the largest CSI report size.
       for (unsigned ri = 1, ri_end = nof_csi_antenna_ports + 1; ri != ri_end; ++ri) {
+        // Skip ranks the UE is restricted from reporting.
+        if (has_ri_restriction && !config.ri_restriction.test(ri - 1)) {
+          continue;
+        }
+
         csi_report_size = std::max(csi_report_size, get_csi_report_size_ri(config, ri));
       }
 
@@ -382,6 +396,11 @@ bool ocudu::validate_pucch_csi_payload(const csi_report_packed& packed, const cs
 {
   // CSI report configuration is invalid.
   if (!is_valid(config)) {
+    return false;
+  }
+
+  // The Type II CSI reporting is restricted to PUSCH, as per TS38.214 Section 5.2.1.4.
+  if (std::holds_alternative<pmi_codebook_typeII>(config.pmi_codebook)) {
     return false;
   }
 
@@ -415,6 +434,10 @@ bool ocudu::validate_pucch_csi_payload(const csi_report_packed& packed, const cs
 
 csi_report_data ocudu::csi_report_unpack_pucch(const csi_report_packed& packed, const csi_report_configuration& config)
 {
+  // The Type II CSI reporting is restricted to PUSCH, as per TS38.214 Section 5.2.1.4.
+  ocudu_assert(!std::holds_alternative<pmi_codebook_typeII>(config.pmi_codebook),
+               "Type II CSI reports are not supported on PUCCH.");
+
   if (config.subband.has_value()) {
     ocudu_assert(!std::holds_alternative<std::monostate>(config.pmi_codebook), "Unsupported PMI codebook type.");
 

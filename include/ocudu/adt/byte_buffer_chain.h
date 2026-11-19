@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/adt/byte_buffer.h"
+#include <memory>
 
 namespace ocudu {
 
@@ -375,20 +376,3 @@ private:
 };
 
 } // namespace ocudu
-
-namespace fmt {
-
-/// \brief Custom formatter for byte_buffer_chain.
-template <>
-struct formatter<ocudu::byte_buffer_chain> : public formatter<ocudu::byte_buffer_view> {
-  template <typename FormatContext>
-  auto format(const ocudu::byte_buffer_chain& buf, FormatContext& ctx) const
-  {
-    if (mode == hexadecimal) {
-      return format_to(ctx.out(), "{:0>2x}", fmt::join(buf.begin(), buf.end(), " "));
-    }
-    return format_to(ctx.out(), "{:0>8b}", fmt::join(buf.begin(), buf.end(), " "));
-  }
-};
-
-} // namespace fmt

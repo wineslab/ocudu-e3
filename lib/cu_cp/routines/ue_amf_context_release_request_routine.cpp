@@ -4,6 +4,7 @@
 
 #include "ue_amf_context_release_request_routine.h"
 #include "ue_context_release_routine.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ocucp;

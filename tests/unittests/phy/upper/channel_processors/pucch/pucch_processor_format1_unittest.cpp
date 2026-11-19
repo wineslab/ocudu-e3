@@ -6,6 +6,7 @@
 #include "../../signal_processors/pucch/dmrs_pucch_estimator_test_doubles.h"
 #include "../uci/uci_decoder_test_doubles.h"
 #include "pucch_detector_test_doubles.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/upper/channel_processors/pucch/pucch_processor.h"
 #include "ocudu/ran/pucch/pucch_constants.h"
 #include <gtest/gtest.h>
@@ -125,6 +126,7 @@ protected:
     unsigned numerology = (config.cp == cyclic_prefix::EXTENDED) ? 2 : num_dist(rgen);
     unsigned slot       = slot_dist(rgen) % slot_point(numerology, 0).nof_slots_per_hyper_system_frame();
     config.slot         = slot_point(numerology, slot);
+    config.slot_offset  = std::uniform_int_distribution<unsigned>(0, 512)(rgen);
     config.bwp_size_rb  = bwp_size_dist(rgen);
     config.starting_prb = std::min(starting_prb_dist(rgen), config.bwp_size_rb - 1);
     if (bool_dist(rgen)) {
@@ -183,6 +185,7 @@ create_full_config(const pucch_processor::format1_common_configuration&         
   return {
       .context              = ue.context,
       .slot                 = common.slot,
+      .slot_offset          = common.slot_offset,
       .bwp_size_rb          = common.bwp_size_rb,
       .bwp_start_rb         = common.bwp_start_rb,
       .cp                   = common.cp,
@@ -219,7 +222,7 @@ TEST_P(PucchProcessorFormat1Fixture, UnitTest)
   const auto& detector_entry = detector_spy->get_entries_format1().back();
 
   // Verify PUCCH detector.
-  ASSERT_EQ(detector_entry.config.slot, batch_config.common_config.slot);
+  ASSERT_EQ(detector_entry.config.slot, batch_config.common_config.slot - batch_config.common_config.slot_offset);
   ASSERT_EQ(detector_entry.config.cp, batch_config.common_config.cp);
   ASSERT_EQ(detector_entry.config.starting_prb,
             batch_config.common_config.starting_prb + batch_config.common_config.bwp_start_rb);

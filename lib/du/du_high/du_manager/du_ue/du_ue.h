@@ -87,7 +87,7 @@ public:
   virtual void schedule_async_task(async_task<void> task) = 0;
 
   /// \brief Handle detection of RLF in MAC or RLC.
-  virtual void handle_rlf_detection(rlf_cause cause) = 0;
+  virtual void handle_rlf_detection(rlf_cause cause, std::optional<rb_id_t> rb_id) = 0;
 
   /// \brief Handle the detection of a C-RNTI MAC CE for this UE.
   virtual void handle_crnti_ce_detection() = 0;

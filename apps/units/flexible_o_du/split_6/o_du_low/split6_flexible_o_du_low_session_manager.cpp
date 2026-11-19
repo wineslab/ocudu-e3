@@ -4,6 +4,7 @@
 
 #include "split6_flexible_o_du_low_session_manager.h"
 #include "split6_flexible_o_du_low_session_factory.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

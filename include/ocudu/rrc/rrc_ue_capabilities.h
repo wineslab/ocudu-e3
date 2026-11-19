@@ -4,7 +4,25 @@
 
 #pragma once
 
+#include "ocudu/adt/byte_buffer.h"
+#include "ocudu/adt/static_vector.h"
+
 namespace ocudu::ocucp {
+
+/// Maximum number of RAT containers in a UE-CapabilityRAT-ContainerList (TS 38.331 section 6.2.2).
+constexpr size_t MAX_NOF_UE_CAP_RAT_CONTAINERS = 8;
+
+/// RAT type of a UE capability container (TS 38.331 section 5.6.1.3).
+enum class rat_type_t { nr, eutra_nr, eutra, utra_fdd_v1610, nulltype };
+
+/// \brief UE capability container for a single RAT (UE-CapabilityRAT-Container in TS 38.331 section 6.2.2).
+struct rrc_ue_cap_rat_container_t {
+  rat_type_t  rat_type = rat_type_t::nulltype;
+  byte_buffer ue_cap_rat_container;
+};
+
+/// List of per-RAT UE capability containers (UE-CapabilityRAT-ContainerList in TS 38.331 section 6.2.2).
+using rrc_ue_cap_rat_container_list_t = static_vector<rrc_ue_cap_rat_container_t, MAX_NOF_UE_CAP_RAT_CONTAINERS>;
 
 struct rrc_ue_capabilities_t {
   bool rrc_inactive_supported = false;

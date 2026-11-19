@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ofdm_demodulator_impl.h"
+#include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ocuduvec/prod.h"
 #include "ocudu/ocuduvec/sc_prod.h"
@@ -75,7 +76,7 @@ unsigned ofdm_symbol_demodulator_impl::get_cp_offset(unsigned symbol_index, unsi
 }
 
 void ofdm_symbol_demodulator_impl::demodulate(resource_grid_writer& grid,
-                                              span<const cf_t>      input,
+                                              span<const ci16_t>    input,
                                               unsigned              port_index,
                                               unsigned              symbol_index)
 {
@@ -103,7 +104,9 @@ void ofdm_symbol_demodulator_impl::demodulate(resource_grid_writer& grid,
                scs_to_khz(scs));
 
   // Prepare the DFT inputs, while skipping the cyclic prefix.
-  ocuduvec::copy(dft->get_input().first(dft_size), input.subspan(cp_len - nof_samples_window_offset, dft_size));
+  ocuduvec::convert(dft->get_input().first(dft_size),
+                    input.subspan(cp_len - nof_samples_window_offset, dft_size),
+                    ocuduvec::scaling_factor_ci16_to_cf);
 
   // Execute DFT.
   span<const cf_t> dft_output = dft->run();
@@ -142,7 +145,7 @@ unsigned ofdm_slot_demodulator_impl::get_slot_size(unsigned slot_index) const
 }
 
 void ofdm_slot_demodulator_impl::demodulate(resource_grid_writer& grid,
-                                            span<const cf_t>      input,
+                                            span<const ci16_t>    input,
                                             unsigned              port_index,
                                             unsigned              slot_index)
 {

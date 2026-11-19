@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/pdcch/pdcch_type0_css_occasions.h"
-#include "ocudu/support/ocudu_test.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;

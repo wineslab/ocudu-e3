@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace ocudu {
 
 /// \brief NR operating bands in FR1 and FR2.
@@ -11,7 +13,7 @@ namespace ocudu {
 /// This enumeration abstracts the NR operating bands for FR1 and FR2 described in TS 38.104, Table 5.2-1 and
 /// Table 5.2-2, respectively.
 /// \remark: This is based on Rel. 17, version 17.8.0.
-enum class nr_band {
+enum class nr_band : uint16_t {
   invalid = 0,
   // FR1 bands.
   n1   = 1,
@@ -75,6 +77,12 @@ enum class nr_band {
   n102 = 102,
   n104 = 104,
   // NTN bands
+  n247 = 247,
+  n248 = 248,
+  n250 = 250,
+  n251 = 251,
+  n252 = 252,
+  n253 = 253,
   n254 = 254,
   n255 = 255,
   n256 = 256,

@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/pusch/ulsch_info.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ran/dmrs/dmrs.h"
 #include "ocudu/ran/resource_block.h"
 #include "ocudu/ran/sch/sch_segmentation.h"
 #include "ocudu/ran/uci/uci_info.h"

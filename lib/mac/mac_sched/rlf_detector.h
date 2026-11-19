@@ -45,7 +45,7 @@ public:
 
   void add_ue(du_ue_index_t ue_index, mac_ue_radio_link_notifier& notifier)
   {
-    ocudu_assert(ue_index < MAX_NOF_DU_UES, "Invalid ue_index={}", fmt::underlying(ue_index));
+    ocudu_assert(ue_index < MAX_NOF_DU_UES, "Invalid ue_index={}", ue_index);
 
     // Reset UE counters. As they are not under use, we can use relaxed memory ordering.
     ues[ue_index].ko_counters[0].store(0, std::memory_order_relaxed);
@@ -58,7 +58,7 @@ public:
 
   void rem_ue(du_ue_index_t ue_index, du_cell_index_t cell_index)
   {
-    ocudu_assert(ue_index < MAX_NOF_DU_UES, "Invalid ue_index={}", fmt::underlying(ue_index));
+    ocudu_assert(ue_index < MAX_NOF_DU_UES, "Invalid ue_index={}", ue_index);
 
     // We store max+1, meaning that no NOK will reach counter==max, and trigger the notifier.
     auto& cell = max_consecutive_kos[cell_index];

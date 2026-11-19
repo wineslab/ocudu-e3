@@ -207,12 +207,12 @@ bool ocudu::ocucp::fill_rrc_reconfig_args(rrc_reconfiguration_procedure_request&
 }
 
 bool ocudu::ocucp::fill_f1ap_drb_setup_mod_item(
-    f1ap_drb_to_setup&                                          drb_setup_mod_item, // Request to setup DRB at DU.
-    slotted_id_vector<qos_flow_id_t, ngap_associated_qos_flow>* response_flow_list,
-    pdu_session_id_t                                            psi,
-    drb_id_t                                                    drb_id,
-    up_drb_context&                                             next_drb_config, // DRB config (info is written back).
-    const e1ap_drb_setup_item_ng_ran&                           e1ap_drb_item,   // Response from CU-UP.
+    f1ap_drb_to_setup&                                           drb_setup_mod_item, // Request to setup DRB at DU.
+    slotted_id_vector<qos_flow_id_t, cu_cp_associated_qos_flow>* response_flow_list,
+    pdu_session_id_t                                             psi,
+    drb_id_t                                                     drb_id,
+    up_drb_context&                                              next_drb_config, // DRB config (info is written back).
+    const e1ap_drb_setup_item_ng_ran&                            e1ap_drb_item,   // Response from CU-UP.
     const slotted_id_vector<qos_flow_id_t, qos_flow_setup_request_item>&
                                   ngap_qos_flow_setup_items, // Initial request from AMF.
     const ocudulog::basic_logger& logger)
@@ -264,7 +264,7 @@ bool ocudu::ocucp::fill_f1ap_drb_setup_mod_item(
 
     if (response_flow_list) {
       // Fill flow to NGAP response.
-      ngap_associated_qos_flow qos_flow;
+      cu_cp_associated_qos_flow qos_flow;
       qos_flow.qos_flow_id = e1ap_flow.qos_flow_id;
       response_flow_list->emplace(e1ap_flow.qos_flow_id, qos_flow);
     }
@@ -421,6 +421,207 @@ void ocudu::ocucp::fill_e1ap_pdu_session_res_to_setup_list(
 
     pdu_session_res_to_setup_list.emplace(e1ap_pdu_session_item.pdu_session_id, e1ap_pdu_session_item);
   }
+}
+
+bool ocudu::ocucp::update_setup_list_with_bearer_ctxt_setup_response(
+    std::vector<f1ap_drb_to_setup>&                                              drb_setup_mod_list,
+    up_config_update&                                                            next_config,
+    const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& ngap_setup_list,
+    const e1ap_bearer_context_setup_response&                                    bearer_context_setup_resp,
+    up_resource_manager&                                                         up_resource_mng,
+    const security_indication_t&                                                 default_sec_ind,
+    const ocudulog::basic_logger&                                                logger)
+{
+  for (const auto& e1ap_item : bearer_context_setup_resp.pdu_session_resource_setup_list) {
+    const auto& psi = e1ap_item.pdu_session_id;
+
+    // Sanity check - make sure this session ID is present in the original setup message.
+    if (!ngap_setup_list.contains(e1ap_item.pdu_session_id)) {
+      logger.warning("PduSessionResourceSetupRequest doesn't include setup for {}", e1ap_item.pdu_session_id);
+      return false;
+    }
+    // Also check if PDU session is included in expected next configuration.
+    if (next_config.pdu_sessions_to_setup_list.find(e1ap_item.pdu_session_id) ==
+        next_config.pdu_sessions_to_setup_list.end()) {
+      logger.warning("Didn't expect setup for {}", e1ap_item.pdu_session_id);
+      return false;
+    }
+
+    // Determine the security settings applied to this PDU session. The Handover Request carries the Security
+    // Indication in the PDU Session Resource Setup Request Transfer, so the result is derived the same way as during
+    // PDU session setup.
+    const security_indication_t& sec_ind =
+        ngap_setup_list[psi].security_ind.has_value() ? ngap_setup_list[psi].security_ind.value() : default_sec_ind;
+    bool integrity_enabled = sec_ind.integrity_protection_ind == integrity_protection_indication_t::required;
+    bool ciphering_enabled =
+        sec_ind.confidentiality_protection_ind == confidentiality_protection_indication_t::required;
+    if (security_result_required(sec_ind)) {
+      // Apply the security settings decided by the CU-UP.
+      if (!e1ap_item.security_result.has_value()) {
+        logger.warning("Missing security result in E1AP response for {}", psi);
+        return false;
+      }
+      const auto& sec_res = e1ap_item.security_result.value();
+      integrity_enabled   = sec_res.integrity_protection_result == integrity_protection_result_t::performed;
+      ciphering_enabled   = sec_res.confidentiality_protection_result == confidentiality_protection_result_t::performed;
+    }
+
+    up_pdu_session_context_update& next_cfg_pdu_session = next_config.pdu_sessions_to_setup_list.at(psi);
+    next_cfg_pdu_session.integrity_protection_result =
+        integrity_enabled ? integrity_protection_result_t::performed : integrity_protection_result_t::not_performed;
+    next_cfg_pdu_session.confidentiality_protection_result = ciphering_enabled
+                                                                 ? confidentiality_protection_result_t::performed
+                                                                 : confidentiality_protection_result_t::not_performed;
+
+    for (const auto& e1ap_drb_item : e1ap_item.drb_setup_list_ng_ran) {
+      const auto& drb_id = e1ap_drb_item.drb_id;
+      if (next_cfg_pdu_session.drb_to_add.find(drb_id) == next_cfg_pdu_session.drb_to_add.end()) {
+        logger.warning("{} not part of next configuration", drb_id);
+        return false;
+      }
+
+      // Update security settings of each DRB.
+      up_drb_context& drb_ctxt                        = next_cfg_pdu_session.drb_to_add.at(drb_id);
+      drb_ctxt.pdcp_cfg.integrity_protection_required = integrity_enabled;
+      drb_ctxt.pdcp_cfg.ciphering_required            = ciphering_enabled;
+
+      // Prepare DRB item for DU.
+      f1ap_drb_to_setup drb_setup_mod_item;
+      if (!fill_f1ap_drb_setup_mod_item(drb_setup_mod_item,
+                                        {},
+                                        e1ap_item.pdu_session_id,
+                                        drb_id,
+                                        drb_ctxt,
+                                        e1ap_drb_item,
+                                        ngap_setup_list[e1ap_item.pdu_session_id].qos_flow_setup_request_items,
+                                        logger)) {
+        logger.warning("Couldn't populate DRB setup/mod item {}", e1ap_drb_item.drb_id);
+        return false;
+      }
+      drb_setup_mod_list.push_back(drb_setup_mod_item);
+    }
+
+    // Fail on any DRB that fails to be setup.
+    if (!e1ap_item.drb_failed_list_ng_ran.empty()) {
+      logger.warning("Non-empty DRB failed list not supported");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool ocudu::ocucp::fill_rrc_resume_request_response(
+    rrc_resume_request_response&                                     response_msg,
+    const std::vector<f1ap_srb_to_setup>&                            srbs_to_be_setup_mod_list,
+    const std::map<pdu_session_id_t, up_pdu_session_context_update>& pdu_sessions,
+    const std::vector<drb_id_t>&                                     drb_to_remove,
+    const f1ap_du_to_cu_rrc_info&                                    du_to_cu_rrc_info,
+    const std::optional<rrc_meas_cfg>&                               rrc_meas_cfg,
+    bool                                                             reestablish_srbs,
+    bool                                                             reestablish_drbs,
+    std::optional<security::sec_selected_algos>                      selected_algos,
+    const ocudulog::basic_logger&                                    logger)
+{
+  rrc_radio_bearer_config radio_bearer_config;
+  // If default DRB is being setup, SRB2 needs to be setup as well.
+  if (!srbs_to_be_setup_mod_list.empty()) {
+    for (const f1ap_srb_to_setup& srb_to_add_mod : srbs_to_be_setup_mod_list) {
+      rrc_srb_to_add_mod srb = {};
+      srb.srb_id             = srb_to_add_mod.srb_id;
+      if (reestablish_srbs) {
+        srb.reestablish_pdcp_present = true;
+      }
+      radio_bearer_config.srb_to_add_mod_list.emplace(srb_to_add_mod.srb_id, srb);
+    }
+  }
+
+  // Verify DU container content.
+  if (!du_to_cu_rrc_info.cell_group_cfg.empty()) {
+    if (!verify_and_log_cell_group_config(du_to_cu_rrc_info.cell_group_cfg, logger)) {
+      logger.warning("Failed to verify cellGroupConfig");
+      return false;
+    }
+    // Set masterCellGroupConfig as received by DU.
+    response_msg.master_cell_group = du_to_cu_rrc_info.cell_group_cfg.copy();
+  }
+
+  for (const auto& pdu_session_to_add_mod : pdu_sessions) {
+    // Fill radio bearer config.
+    for (const auto& drb_to_add : pdu_session_to_add_mod.second.drb_to_add) {
+      rrc_drb_to_add_mod drb_to_add_mod;
+      drb_to_add_mod.drb_id = drb_to_add.first;
+      if (reestablish_drbs) {
+        drb_to_add_mod.reestablish_pdcp_present = true;
+      } else {
+        drb_to_add_mod.pdcp_cfg = drb_to_add.second.pdcp_cfg;
+
+        // Fill CN association and SDAP config.
+        rrc_cn_assoc cn_assoc;
+        cn_assoc.sdap_cfg       = drb_to_add.second.sdap_cfg;
+        drb_to_add_mod.cn_assoc = cn_assoc;
+      }
+
+      radio_bearer_config.drb_to_add_mod_list.emplace(drb_to_add.first, drb_to_add_mod);
+    }
+
+    for (const auto& drb_to_modify : pdu_session_to_add_mod.second.drb_to_modify) {
+      rrc_drb_to_add_mod drb_to_add_mod;
+      drb_to_add_mod.drb_id = drb_to_modify.first;
+      if (reestablish_drbs) {
+        drb_to_add_mod.reestablish_pdcp_present = true;
+      } else {
+        drb_to_add_mod.pdcp_cfg = drb_to_modify.second.pdcp_cfg;
+
+        // Fill CN association and SDAP config.
+        rrc_cn_assoc cn_assoc;
+        cn_assoc.sdap_cfg       = drb_to_modify.second.sdap_cfg;
+        drb_to_add_mod.cn_assoc = cn_assoc;
+      }
+
+      radio_bearer_config.drb_to_add_mod_list.emplace(drb_to_modify.first, drb_to_add_mod);
+    }
+
+    // Remove DRB from a PDU session (PDU session itself still exists with out DRBs).
+    for (const auto& drb_id : pdu_session_to_add_mod.second.drb_to_remove) {
+      radio_bearer_config.drb_to_release_list.push_back(drb_id);
+    }
+  }
+
+  // Remove DRB (if not already) that are not associated with any PDU session anymore.
+  for (const auto& drb_id : drb_to_remove) {
+    if (std::any_of(radio_bearer_config.drb_to_release_list.begin(),
+                    radio_bearer_config.drb_to_release_list.end(),
+                    [drb_id](const auto& item) { return item == drb_id; })) {
+      // The DRB is already set to be removed.
+      continue;
+    }
+
+    radio_bearer_config.drb_to_release_list.push_back(drb_id);
+  }
+
+  // If selected security algos, fill securityConfig
+  if (selected_algos) {
+    radio_bearer_config.security_cfg.emplace();
+    radio_bearer_config.security_cfg->security_algorithm_cfg.emplace();
+    radio_bearer_config.security_cfg->security_algorithm_cfg->ciphering_algorithm      = selected_algos->cipher_algo;
+    radio_bearer_config.security_cfg->security_algorithm_cfg->integrity_prot_algorithm = selected_algos->integ_algo;
+  }
+
+  if (radio_bearer_config.contains_values()) {
+    // Fill radio bearer config.
+    response_msg.radio_bearer_cfg = radio_bearer_config;
+  }
+
+  // Fill measurement config.
+  response_msg.meas_cfg = rrc_meas_cfg;
+
+  // Fill meas gap config.
+  if (!du_to_cu_rrc_info.meas_gap_cfg.empty()) {
+    response_msg.meas_gap_cfg = du_to_cu_rrc_info.meas_gap_cfg.copy();
+  }
+
+  return true;
 }
 
 bool ocudu::ocucp::update_setup_list_with_ue_ctxt_setup_response(

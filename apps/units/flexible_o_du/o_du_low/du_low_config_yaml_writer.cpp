@@ -14,13 +14,19 @@ static void fill_du_low_log_section(YAML::Node node, const du_low_unit_logger_co
   node["hal_level"]         = ocudulog::basic_level_to_string(config.hal_level);
   node["broadcast_enabled"] = config.broadcast_enabled;
   node["hex_max_size"]      = config.hex_max_size;
-  if (!config.phy_rx_symbols_filename.empty()) {
-    node["phy_rx_symbols_filename"] = config.phy_rx_symbols_filename;
+  if (!config.phy_rx_symbol_printer.filename.empty()) {
+    node["phy_rx_symbols_filename"] = config.phy_rx_symbol_printer.filename;
   }
-  if (config.phy_rx_symbols_port.has_value()) {
-    node["phy_rx_symbols_port"] = config.phy_rx_symbols_port.value();
+  if (config.phy_rx_symbol_printer.port.has_value()) {
+    node["phy_rx_symbols_port"] = config.phy_rx_symbol_printer.port.value();
   }
-  node["phy_rx_symbols_prach"] = config.phy_rx_symbols_prach;
+  node["phy_rx_symbols_prach_threshold_rssi_dB"] =
+      fmt::format("{}", config.phy_rx_symbol_printer.triggers.prach_threshold_rssi_dB);
+  node["phy_rx_symbols_pusch_on_ko"] = config.phy_rx_symbol_printer.triggers.pusch_on_ko;
+  node["phy_rx_symbols_pusch_threshold_sinr_dB"] =
+      fmt::format("{}", config.phy_rx_symbol_printer.triggers.pusch_threshold_sinr_dB);
+  node["phy_rx_symbols_pusch_threshold_iter"] =
+      fmt::format("{}", config.phy_rx_symbol_printer.triggers.pusch_threshold_iter);
 }
 
 static void fill_du_low_tracer_layers_section(YAML::Node node, const du_low_unit_tracer_config& config)
@@ -33,22 +39,37 @@ static void fill_du_low_trace_section(YAML::Node node, const du_low_unit_tracer_
   fill_du_low_tracer_layers_section(node["layers"], config);
 }
 
+/// Converts a concurrency value into its YAML representation, using the 'unlimited'/'auto' aliases for the
+/// respective sentinel values so that dumped configurations use the same vocabulary as the CLI11 parser.
+static std::string concurrency_to_yaml_value(unsigned concurrency)
+{
+  if (concurrency == du_low_unit_expert_threads_config::concurrency_unlimited) {
+    return "unlimited";
+  }
+  if (concurrency == du_low_unit_expert_threads_config::concurrency_auto) {
+    return "auto";
+  }
+  return std::to_string(concurrency);
+}
+
 static void fill_du_low_expert_execution_section(YAML::Node node, const du_low_unit_expert_execution_config& config)
 {
   {
-    YAML::Node threads_node                     = node["threads"];
-    YAML::Node upper_node                       = threads_node["upper_phy"];
-    upper_node["pdsch_processor_type"]          = config.threads.pdsch_processor_type;
-    upper_node["pdsch_cb_batch_length"]         = config.threads.pdsch_cb_batch_length;
-    upper_node["max_pucch_concurrency"]         = config.threads.max_pucch_concurrency;
-    upper_node["max_pusch_and_srs_concurrency"] = config.threads.max_pusch_and_srs_concurrency;
-    upper_node["max_pdsch_concurrency"]         = config.threads.max_pdsch_concurrency;
+    YAML::Node threads_node             = node["threads"];
+    YAML::Node upper_node               = threads_node["upper_phy"];
+    upper_node["pdsch_processor_type"]  = config.threads.pdsch_processor_type;
+    upper_node["pdsch_cb_batch_length"] = config.threads.pdsch_cb_batch_length;
+    upper_node["max_pucch_concurrency"] = concurrency_to_yaml_value(config.threads.max_pucch_concurrency);
+    upper_node["max_pusch_and_srs_concurrency"] =
+        concurrency_to_yaml_value(config.threads.max_pusch_and_srs_concurrency);
+    upper_node["max_pdsch_concurrency"] = concurrency_to_yaml_value(config.threads.max_pdsch_concurrency);
   }
 }
 
 static void fill_du_low_expert_section(YAML::Node node, const du_low_unit_expert_upper_phy_config& config)
 {
   node["max_proc_delay"]                           = config.max_processing_delay_slots;
+  node["prach_th_correction_factor"]               = config.prach_th_correction_factor;
   node["pusch_dec_max_iterations"]                 = config.pusch_decoder_max_iterations;
   node["pusch_dec_enable_early_stop"]              = config.pusch_decoder_early_stop;
   node["pusch_decoder_force_decoding"]             = config.pusch_decoder_force_decoding;
@@ -121,6 +142,14 @@ static void fill_du_low_metrics_section(YAML::Node node, const du_low_unit_metri
   layers_node["enable_du_low"] = config.enable_du_low;
 }
 
+static void fill_du_low_power_calibration_section(YAML::Node node,
+                                                  float      dbfs_to_dbm_conversion_factor,
+                                                  float      db_to_dbfs_conversion_factor)
+{
+  node["dbfs_to_dbm_conversion_factor"] = dbfs_to_dbm_conversion_factor;
+  node["db_to_dbfs_conversion_factor"]  = db_to_dbfs_conversion_factor;
+}
+
 void ocudu::fill_du_low_config_in_yaml_schema(YAML::Node& node, const du_low_unit_config& config)
 {
   fill_du_low_metrics_section(node, config.metrics_cfg);
@@ -131,4 +160,7 @@ void ocudu::fill_du_low_config_in_yaml_schema(YAML::Node& node, const du_low_uni
   if (config.hal_config) {
     fill_du_low_hal_section(node["hal"], config.hal_config.value());
   }
+  fill_du_low_power_calibration_section(node["power_calibration"],
+                                        config.power_calibration.dbfs_to_dbm_conversion_factor,
+                                        config.power_calibration.db_to_dbfs_conversion_factor);
 }

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pusch.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi_adaptor/uci_part2_correspondence_repository.h"
 #include "ocudu/ran/pusch/pusch_uci_beta_offset.h"
 
@@ -19,8 +20,8 @@ static void fill_codeword(uplink_pdu_slot_repository::pusch_pdu& pdu, const fapi
   cw.rv              = fapi_pdu.pusch_data->rv_index;
   cw.ldpc_base_graph = fapi_pdu.ldpc_base_graph;
   cw.new_data        = fapi_pdu.pusch_data->new_data;
+  cw.last_repetition = !fapi_pdu.repetitions.has_value() || (fapi_pdu.repetitions->tb_over_ms_remaining_slots == 0);
 
-  pdu.harq_id = fapi_pdu.pusch_data->harq_process_id;
   pdu.tb_size = fapi_pdu.pusch_data->tb_size;
 
   pdu.pdu.codeword = std::optional<pusch_processor::codeword_description>(cw);
@@ -80,12 +81,14 @@ void ocudu::fapi_adaptor::convert_pusch_fapi_to_phy(uplink_pdu_slot_repository::
                                                     const fapi::ul_pusch_pdu&              fapi_pdu,
                                                     slot_point                             slot,
                                                     uint16_t                               num_rx_ant,
-                                                    uci_part2_correspondence_repository&   part2_repo)
+                                                    uci_part2_correspondence_repository&   part2_repo,
+                                                    unsigned                               ntn_k_mac_slots)
 {
   // Fill the PUSCH processor parameters.
   pusch_processor::pdu_t& proc_pdu    = pdu.pdu;
   proc_pdu.slot                       = slot;
-  proc_pdu.rnti                       = to_value(fapi_pdu.rnti);
+  proc_pdu.slot_offset                = ntn_k_mac_slots;
+  proc_pdu.rnti                       = fapi_pdu.rnti;
   proc_pdu.bwp_start_rb               = fapi_pdu.bwp.start();
   proc_pdu.bwp_size_rb                = fapi_pdu.bwp.length();
   proc_pdu.cp                         = fapi_pdu.cp;
@@ -122,9 +125,11 @@ void ocudu::fapi_adaptor::convert_pusch_fapi_to_phy(uplink_pdu_slot_repository::
 
   fill_uci(proc_pdu, fapi_pdu, part2_repo);
 
-  proc_pdu.context = fapi_pdu.context;
+  proc_pdu.harq_id = fapi_pdu.harq_id;
 
   // Fill the antenna port indices starting from 0.
   proc_pdu.rx_ports.resize(num_rx_ant);
   std::iota(proc_pdu.rx_ports.begin(), proc_pdu.rx_ports.end(), 0);
+
+  proc_pdu.n_rapid = fapi_pdu.rapid;
 }

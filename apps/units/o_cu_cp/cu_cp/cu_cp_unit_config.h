@@ -5,17 +5,29 @@
 #pragma once
 
 #include "apps/helpers/metrics/metrics_config.h"
+#include "apps/helpers/network/dtls_appconfig.h"
 #include "apps/helpers/network/sctp_appconfig.h"
+#include "apps/helpers/ntn/ntn_satellite_config.h"
 #include "apps/units/o_cu_cp/cu_cp/cu_cp_unit_pcap_config.h"
 #include "cu_cp_unit_logger_config.h"
+#include "ocudu/cu_cp/cell_state.h"
 #include "ocudu/ran/arfcn.h"
+#include "ocudu/ran/cu_types.h"
 #include "ocudu/ran/gnb_id.h"
+#include "ocudu/ran/meas_types.h"
 #include "ocudu/ran/nr_band.h"
+#include "ocudu/ran/ntn.h"
 #include "ocudu/ran/pci.h"
+#include "ocudu/ran/pdcp/pdcp_discard_timer.h"
+#include "ocudu/ran/pdcp/pdcp_sn_size.h"
+#include "ocudu/ran/pdcp/pdcp_t_reordering.h"
 #include "ocudu/ran/qos/five_qi.h"
+#include "ocudu/ran/rlc_mode.h"
 #include "ocudu/ran/s_nssai.h"
+#include "ocudu/ran/supported_tracking_area.h"
 #include "ocudu/ran/tac.h"
-#include "ocudu/rrc/meas_types.h"
+#include "ocudu/security/security.h"
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <vector>
@@ -36,6 +48,8 @@ struct cu_cp_unit_plmn_item {
 struct cu_cp_unit_supported_ta_item {
   tac_t                             tac;
   std::vector<cu_cp_unit_plmn_item> plmn_list;
+  /// Satellite RAT type signalled to the AMF for an NTN tracking area. Left empty for a terrestrial tracking area.
+  std::optional<std::string> satellite_rat;
 };
 
 struct cu_cp_unit_amf_config_item {
@@ -66,32 +80,78 @@ struct cu_cp_unit_report_config {
   unsigned    report_cfg_id;
   std::string report_type;
   unsigned    report_interval_ms;
+  /// Whether the UE includes its coarse location in every report, \c coarseLocationRequest, TS 38.331 sec. 5.5.5.
+  /// Only an NTN UE is expected to have one, and it reports one only if available.
+  bool coarse_location_request = false;
 
-  std::optional<std::string> event_triggered_report_type;
-  std::optional<std::string> meas_trigger_quantity;              ///< "rsrp", "rsrq", "sinr"
-  std::optional<int>         meas_trigger_quantity_threshold_db; ///< Threshold for A5: RSRP[-156..-31],
-                                                                 ///< RSRQ[-43..20], SINR[-23..40]
-  std::optional<int> meas_trigger_quantity_threshold_2_db;       ///< Threshold 2 for A5: RSRP[-156..-31],
-                                                                 /// <RSRQ[-43..20], SINR[-23..40]
-  std::optional<int>      meas_trigger_quantity_offset_db;       ///< [-15..15] dB
-  std::optional<unsigned> hysteresis_db;                         ///< [0..15] dB (0.5 dB steps in ASN.1)
-  std::optional<unsigned> time_to_trigger_ms;                    ///< Enumerated values
+  std::optional<ocucp::rrc_event_id::event_id_t> event_triggered_report_type;
+  /// "rsrp", "rsrq", "sinr".
+  std::optional<std::string> meas_trigger_quantity;
+  /// Threshold for A5: RSRP[-156..-31], RSRQ[-43..20], SINR[-23..40].
+  std::optional<int> meas_trigger_quantity_threshold_db;
+  /// Threshold 2 for A5: RSRP[-156..-31], RSRQ[-43..20], SINR[-23..40].
+  std::optional<int> meas_trigger_quantity_threshold_2_db;
+  /// [-15..15] dB-
+  std::optional<int> meas_trigger_quantity_offset_db;
+  /// [0..15] dB (0.5 dB steps in ASN.1).
+  std::optional<unsigned> hysteresis_db;
+  std::optional<unsigned> time_to_trigger_ms;
   std::optional<unsigned> t312_ms;
-  int                     periodic_ho_rsrp_offset =
-      -1; ///< -1 disables handovers from periodic measurements. [0..30] Note the actual value is field value * 0.5 dB.
-          ///< E.g. putting a value of -6 here results in -3dB offset.
+  /// -1 disables handovers from periodic measurements. [0..30] Note the actual value is field value * 0.5 dB. E.g.
+  /// putting a value of -6 here results in -3dB offset.
+  int periodic_ho_rsrp_offset = -1;
 
-  // D1/D2 conditional event fields
-  std::optional<double> distance_thresh_from_ref1_km;            ///< D1/D2: distance threshold 1 in km [0..3276.75]
-  std::optional<double> distance_thresh_from_ref2_km;            ///< D1/D2: distance threshold 2 in km [0..3276.75]
-  std::optional<ocucp::rrc_geo_location> ref_location1;          ///< D1: reference location for serving cell
-  std::optional<ocucp::rrc_geo_location> ref_location2;          ///< D1: reference location for target cell
-  std::optional<double>                  hysteresis_location_km; ///< D1/D2: hysteresis in km (10m steps, max 327.68)
+  /// D1/D2 conditional event fields.
+  /// D1/D2: distance threshold 1 in km [0..3276.75].
+  std::optional<double> distance_thresh_from_ref1_km;
+  /// D1/D2: distance threshold 2 in km [0..3276.75].
+  std::optional<double> distance_thresh_from_ref2_km;
+  /// D1: reference location for serving cell.
+  std::optional<reference_location> ref_location1;
+  /// D1: reference location for target cell.
+  std::optional<reference_location> ref_location2;
+  /// D1/D2: hysteresis in km (10m steps, max 327.68).
+  std::optional<double> hysteresis_location_km;
 
-  // T1 conditional event fields
-  std::optional<std::chrono::system_clock::time_point> t1_thres; ///< T1: UTC time threshold
-  std::optional<std::chrono::duration<double>>
-      duration; ///< T1: duration in seconds (each step=100ms, range [0.1..600])
+  /// T1 conditional event fields.
+  /// T1: UTC time threshold.
+  std::optional<std::chrono::system_clock::time_point> t1_thres;
+  /// T1: duration in seconds (each step=100ms, range [0.1..600]).
+  std::optional<std::chrono::duration<double>> duration;
+};
+
+/// NTN configuration of a cell. When this cell is listed as a neighbour of another cell, it is used to periodically
+/// generate ntn-NeighbourCellInfo-r18 in that cell's MeasObjectNR. The satellite is either a reference to a
+/// globally-defined satellite_idx or an inline definition, the same way as in the DU NTN cell configuration.
+struct cu_cp_unit_cell_ntn_config {
+  /// Reference to the cell's satellite (global reference or inline definition).
+  ntn_satellite_config sat_ref;
+  /// 2-D reference location of the cell (lat/lon degrees). Optional.
+  std::optional<geodetic_coordinates_t> reference_location;
+  /// Service link DL/UL polarization (ntn-PolarizationDL/UL-r17). Optional.
+  std::optional<ntn_polarization_t> polarization;
+};
+
+/// One geographic area of an NTN cell, mapped to a TAC for the UE Location Derived TAC in NR NTN IE of TS 38.413, to
+/// a Mapped Cell ID of TS 38.300 sec. 16.14.5, or to both. A TAC may be repeated to cover an area that is not a single
+/// rectangle.
+struct cu_cp_unit_ntn_location_area {
+  /// TAC reported for a UE inside this area. Absent to derive no TAC, leaving the AMF the broadcast TAI.
+  std::optional<tac_t> tac;
+  /// Mapped Cell ID reported for a UE inside this area. Absent to report the Uu Cell ID of the serving cell.
+  std::optional<uint64_t> mapped_nr_cell_id;
+  double                  lat_min = 0.0;
+  double                  lat_max = 0.0;
+  double                  lon_min = 0.0;
+  double                  lon_max = 0.0;
+};
+
+/// Coarse UE location to TAC mapping of one NTN cell.
+struct cu_cp_unit_ntn_location_mapping_item {
+  /// Cell id.
+  uint64_t nr_cell_id = 0;
+  /// Areas in configuration order. The first area containing the position wins.
+  std::vector<cu_cp_unit_ntn_location_area> location_areas;
 };
 
 struct cu_cp_unit_neighbor_cell_config_item {
@@ -128,9 +188,30 @@ struct cu_cp_unit_cell_config_item {
   std::optional<unsigned> ssb_offset;
   /// SSB duration.
   std::optional<unsigned> ssb_duration;
+  /// NTN configuration of this cell (ntn-NeighbourCellInfo-r18 generated when this cell is a neighbour). Optional.
+  std::optional<cu_cp_unit_cell_ntn_config> ntn_cfg;
   /// Vector of cells that are a neighbor of this cell.
   std::vector<cu_cp_unit_neighbor_cell_config_item> ncells;
   // TODO: Add optional SSB parameters.
+};
+
+/// \brief Logical cell configuration item, parsed by the CU-CP from the logical_cells list of the cu_cp section.
+///
+/// Declares a cell to the CU-CP together with its administrative intent. The NR Cell Identity is derived as
+/// gnb_id concatenated with sector_id, matching the DU's NCI derivation, so the entry addresses the DU cell
+/// with the same sector ID. Distinct from the DU's top-level cells section, which carries the radio
+/// configuration.
+struct cu_cp_unit_logical_cell_config {
+  /// Sector ID (4-14 bits), concatenated with the gNB Id to form the NCI. Must match the sector ID of the
+  /// corresponding DU cell.
+  unsigned sector_id = 0;
+  /// Administrative state of the cell: locked (the CU-CP does not activate the cell until unlocked by
+  /// command) or unlocked. Only these two values are accepted at parse; shutting_down is held by the CU-CP
+  /// itself during a graceful stop and cannot be configured.
+  ocucp::cell_admin_state admin_state = ocucp::cell_admin_state::unlocked;
+  /// Intended MIB cellBarred state (same key the DU uses for the initial MIB value; the CU-CP maintains it
+  /// at runtime via the F1AP Cells to be Barred List).
+  bool cell_barred = false;
 };
 
 /// All mobility related configuration parameters.
@@ -145,6 +226,8 @@ struct cu_cp_unit_mobility_config {
   bool trigger_cho_on_ue_setup = false;
   /// Timeout used for auto-triggered CHO and as default timeout for manual CHO command in milliseconds.
   unsigned cho_timeout_ms = 10000;
+  /// Period, in milliseconds, of the NTN neighbour cell info updates in the measurement configuration.
+  unsigned ntn_update_period_ms = 1000;
 };
 
 /// RRC specific configuration parameters.
@@ -152,29 +235,90 @@ struct cu_cp_unit_rrc_config {
   bool force_reestablishment_fallback = false;
   bool force_resume_fallback          = false;
   /// Guard time in ms that is added to the RRC procedure timeout.
-  /// NOTE: Guard time needs to be larger then SRB max retx thres * t-PollRetransmit.
+  /// NOTE: Guard time needs to be larger than SRB max retx thres * t-PollRetransmit.
   /// (2 * default SRB maxRetxThreshold * t-PollRetransmit = 2 * 8 * 45ms = 720ms, see TS 38.331 Sec 9.2.1)
   unsigned rrc_procedure_guard_time_ms = 1000;
+  /// waitTime [s] (1..16) for the RRC Reject waitTime IE.
+  /// waitTime is Optional, -- Need N.
+  /// If not provided, no waitTime field will be sent with RRC Reject.
+  std::optional<unsigned> rrc_reject_wait_time_s;
 };
 
 /// Security configuration parameters.
 struct cu_cp_unit_security_config {
-  std::string integrity_protection       = "not_needed";
-  std::string confidentiality_protection = "required";
-  std::string nea_preference_list        = "nea0,nea2,nea1,nea3";
-  std::string nia_preference_list        = "nia2,nia1,nia3";
+  integrity_protection_indication_t       integrity_protection = integrity_protection_indication_t::not_needed;
+  confidentiality_protection_indication_t confidentiality_protection =
+      confidentiality_protection_indication_t::required;
+  security::preferred_ciphering_algorithms nea_preference_list = {security::ciphering_algorithm::nea0,
+                                                                  security::ciphering_algorithm::nea2,
+                                                                  security::ciphering_algorithm::nea1,
+                                                                  security::ciphering_algorithm::nea3};
+  security::preferred_integrity_algorithms nia_preference_list = {security::integrity_algorithm::nia2,
+                                                                  security::integrity_algorithm::nia1,
+                                                                  security::integrity_algorithm::nia3};
 };
+
+/// Converts a ciphering algorithm preference list to its "nea0,nea1,..." string representation.
+///
+/// The parser pads any slots beyond the configured ones by repeating the highest-priority configured
+/// algorithm (see configure_cli11_security_args), rather than leaving them unconfigured, so a slot that
+/// repeats an earlier entry marks the end of the actually configured list and is not written back.
+inline std::string to_string(const security::preferred_ciphering_algorithms& algos)
+{
+  std::string out;
+  for (unsigned i = 0; i != algos.size(); ++i) {
+    if (std::find(algos.begin(), algos.begin() + i, algos[i]) != algos.begin() + i) {
+      break;
+    }
+    out += fmt::format("{}nea{}", i == 0 ? "" : ",", security::to_number(algos[i]));
+  }
+  return out;
+}
+
+/// Converts an integrity algorithm preference list to its "nia1,nia2,..." string representation.
+///
+/// NIA0 cannot be explicitly selected, so a NIA0 slot is always an unconfigured/default one and stops the
+/// string. In addition, the parser pads any slots beyond the configured ones by repeating the
+/// highest-priority configured algorithm (see configure_cli11_security_args) rather than leaving them
+/// unconfigured, so a slot that repeats an earlier entry also marks the end of the actually configured list.
+inline std::string to_string(const security::preferred_integrity_algorithms& algos)
+{
+  std::string out;
+  for (unsigned i = 0; i != algos.size(); ++i) {
+    if (algos[i] == security::integrity_algorithm::nia0 ||
+        std::find(algos.begin(), algos.begin() + i, algos[i]) != algos.begin() + i) {
+      break;
+    }
+    out += fmt::format("{}nia{}", i == 0 ? "" : ",", security::to_number(algos[i]));
+  }
+  return out;
+}
 
 /// F1AP-CU configuration parameters.
 struct cu_cp_unit_f1ap_config {
   /// Timeout for the F1AP procedures in milliseconds.
   unsigned procedure_timeout = 1000;
+  /// Enable sending a REFERENCE TIME INFORMATION REPORTING CONTROL to each DU on connection (TS 38.473 section 8.12).
+  bool ref_time_reporting_enabled = false;
+  /// Reporting mode: "on_demand" (single report) or "periodic" (recurring reports).
+  std::string ref_time_reporting_event_type = "periodic";
+  /// Reporting period in radio frames (1 RF = 10 ms). Range: 1..512. Used only when event_type is "periodic".
+  uint16_t ref_time_reporting_periodicity_rf = 100;
 };
 
 /// E1AP-CU-CP configuration parameters.
 struct cu_cp_unit_e1ap_config {
   /// Timeout for the E1AP procedures in milliseconds.
   unsigned procedure_timeout = 1000;
+};
+
+/// Public Warning System (PWS) configuration parameters.
+struct cu_cp_unit_pws_config {
+  /// Maximum number of bytes carried in a single SIB7 or SIB8 warning message segment.
+  /// The Warning Message Contents (up to 9600 bytes per TS 38.413 section 9.3.1.42) is split into chunks of this
+  /// size; each chunk is encoded as a separate SIB and carried in the Additional SIB Message List IE
+  /// (TS 38.473 section 9.3.1.86). Must be >= 1.
+  uint32_t max_warning_message_segment_size = 150;
 };
 
 /// XnAP peer configuration parameters.
@@ -191,6 +335,7 @@ struct cu_cp_unit_xnap_gateway_config {
   std::vector<std::string>                 bind_addrs = {"127.0.30.1"};
   std::vector<cu_cp_unit_xnap_peer_config> connections;
   sctp_appconfig                           sctp;
+  dtls_appconfig                           dtls;
 };
 
 struct cu_cp_unit_xnap_config {
@@ -222,7 +367,7 @@ struct cu_cp_unit_rlc_rx_um_config {
   int32_t t_reassembly;
 };
 
-/// RLC UM configuration
+/// RLC UM configuration.
 struct cu_cp_unit_rlc_um_config {
   cu_cp_unit_rlc_tx_um_config tx;
   cu_cp_unit_rlc_rx_um_config rx;
@@ -246,7 +391,7 @@ struct cu_cp_unit_rlc_tx_am_config {
   uint32_t queue_size = 4096;
 };
 
-/// RLC UM RX configuration
+/// RLC UM RX configuration.
 struct cu_cp_unit_rlc_rx_am_config {
   /// Number of bits used for sequence number.
   uint16_t sn_field_length;
@@ -255,21 +400,21 @@ struct cu_cp_unit_rlc_rx_am_config {
   /// Timer used by rx to prohibit tx of status PDU (ms).
   int32_t t_status_prohibit;
 
-  /// Implementation-specific parameters that are not specified by 3GPP
+  /// Implementation-specific parameters that are not specified by 3GPP.
 
   /// Maximum number of visited SNs in the RX window when building a status report. 0 means no limit.
   uint32_t max_sn_per_status = 0;
 };
 
-/// RLC AM configuration
+/// RLC AM configuration.
 struct cu_cp_unit_rlc_am_config {
   cu_cp_unit_rlc_tx_am_config tx;
   cu_cp_unit_rlc_rx_am_config rx;
 };
 
-/// RLC configuration
+/// RLC configuration.
 struct cu_cp_unit_rlc_config {
-  std::string              mode = "am";
+  rlc_mode                 mode = rlc_mode::am;
   cu_cp_unit_rlc_um_config um;
   cu_cp_unit_rlc_am_config am;
 };
@@ -295,44 +440,45 @@ struct cu_cp_unit_pdcp_rohc_config {
   cu_cp_unit_pdcp_rohc_type rohc_type = cu_cp_unit_pdcp_rohc_type::none;
   /// Maximum CID.
   uint16_t max_cid = 15;
-  /// Configure profile0x0001 (ROHCv1 RTP/UDP/IP)
+  /// Configure profile0x0001 (ROHCv1 RTP/UDP/IP).
   bool profile0x0001 = false;
-  /// Configure profile0x0002 (ROHCv1 UDP/IP)
+  /// Configure profile0x0002 (ROHCv1 UDP/IP).
   bool profile0x0002 = false;
-  /// Configure profile0x0003 (ROHCv1 ESP/IP)
+  /// Configure profile0x0003 (ROHCv1 ESP/IP).
   bool profile0x0003 = false;
-  /// Configure profile0x0004 (ROHCv1 IP)
+  /// Configure profile0x0004 (ROHCv1 IP).
   bool profile0x0004 = false;
-  /// Configure profile0x0006 (ROHCv1 TCP/IP)
+  /// Configure profile0x0006 (ROHCv1 TCP/IP).
   bool profile0x0006 = false;
-  /// Configure profile0x0101 (ROHCv2 RTP/UDP/IP)
+  /// Configure profile0x0101 (ROHCv2 RTP/UDP/IP).
   bool profile0x0101 = false;
-  /// Configure profile0x0102 (ROHCv2 UDP/IP)
+  /// Configure profile0x0102 (ROHCv2 UDP/IP).
   bool profile0x0102 = false;
-  /// Configure profile0x0103 (ROHCv2 ESP/IP)
+  /// Configure profile0x0103 (ROHCv2 ESP/IP).
   bool profile0x0103 = false;
-  /// Configure profile0x0104 (ROHCv2 IP)
+  /// Configure profile0x0104 (ROHCv2 IP).
   bool profile0x0104 = false;
 };
 
 struct cu_cp_unit_pdcp_rx_config {
   /// Number of bits used for sequence number.
-  uint16_t sn_field_length;
+  pdcp_sn_size sn_field_length;
   /// Timer used to detect PDUs losses (ms).
-  int32_t t_reordering;
+  pdcp_t_reordering t_reordering;
   /// Whether out-of-order delivery to upper layers is enabled.
   bool out_of_order_delivery;
 };
 
 struct cu_cp_unit_pdcp_tx_config {
   /// Number of bits used for sequence number.
-  uint16_t sn_field_length;
+  pdcp_sn_size sn_field_length;
   /// Timer used to notify lower layers to discard PDUs (ms).
-  int32_t discard_timer;
+  pdcp_discard_timer discard_timer;
   /// Whether PDCP status report is required.
   bool status_report_required;
 };
 
+/// CU-CP unit PDCP configuration.
 struct cu_cp_unit_pdcp_config {
   cu_cp_unit_pdcp_rohc_config rohc;
   cu_cp_unit_pdcp_tx_config   tx;
@@ -348,13 +494,13 @@ struct cu_cp_unit_qos_config {
 
 /// Configuration to enable/disable metrics per layer.
 struct cu_cp_unit_metrics_layer_config {
-  bool enable_ngap           = false;
-  bool enable_pdcp           = false;
-  bool enable_rrc            = false;
+  bool enable_ngap_metrics   = false;
+  bool enable_pdcp_metrics   = false;
+  bool enable_rrc_metrics    = false;
   bool enable_cu_cp_executor = false;
 
   /// Returns true if one or more layers are enabled, false otherwise.
-  bool are_metrics_enabled() const { return enable_ngap || enable_pdcp || enable_rrc; }
+  bool are_metrics_enabled() const { return enable_ngap_metrics || enable_pdcp_metrics || enable_rrc_metrics; }
 };
 
 /// Metrics configuration.
@@ -384,11 +530,13 @@ struct cu_cp_unit_config {
   /// Enable RRC inactive state.
   bool enable_rrc_inactive = false;
   /// RAN Paging cycle for RRC inactive UEs in number of radio frames.
-  uint8_t ran_paging_cycle = 32;
+  uint16_t ran_paging_cycle = 32;
+  /// I-RNTI profile used to compose the Full-I-RNTI of a suspended UE (TS 38.300 table F-1).
+  std::string full_i_rnti_profile = "profile0";
+  /// I-RNTI profile used to compose the Short-I-RNTI of a suspended UE (TS 38.300 table F-2).
+  std::string short_i_rnti_profile = "profile0";
   /// T380 timer value in minutes.
   int t380 = 10;
-  /// Number of bits used for the UE id in short and full I-RNTI.
-  uint8_t nof_i_rnti_ue_bits = 13;
   /// PDU session request timeout in seconds (must be larger than T310).
   unsigned request_pdu_session_timeout = 3;
   /// Loggers configuration.
@@ -405,6 +553,8 @@ struct cu_cp_unit_config {
   cu_cp_unit_xnap_config xnap_config;
   /// Mobility configuration.
   cu_cp_unit_mobility_config mobility_config;
+  /// Coarse UE location to TAC mappings, one entry per NTN cell.
+  std::vector<cu_cp_unit_ntn_location_mapping_item> ntn_location_mapping;
   /// RRC configuration.
   cu_cp_unit_rrc_config rrc_config;
   /// Security configuration.
@@ -413,10 +563,18 @@ struct cu_cp_unit_config {
   cu_cp_unit_f1ap_config f1ap_config;
   /// E1AP configuration.
   cu_cp_unit_e1ap_config e1ap_config;
+  /// Public Warning System configuration.
+  cu_cp_unit_pws_config pws_config;
   /// QoS configuration.
   std::vector<cu_cp_unit_qos_config> qos_cfg;
   /// Network slice configuration.
   std::vector<s_nssai_t> slice_cfg = {s_nssai_t{slice_service_type{1}}};
+  /// Globally-defined NTN satellites, referenced by satellite_idx from the neighbor cell NTN configs. In the gnb
+  /// application this list is shared with the DU (parsed once from the global ntn section); the standalone CU-CP
+  /// application parses it from its own ntn section.
+  std::vector<ntn_satellite_config> ntn_satellites;
+  /// Logical cells declared to the CU-CP, parsed from the logical_cells list of the cu_cp section.
+  std::vector<cu_cp_unit_logical_cell_config> cells_cfg;
 };
 
 } // namespace ocudu

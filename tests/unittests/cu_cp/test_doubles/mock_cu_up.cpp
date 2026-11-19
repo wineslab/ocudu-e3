@@ -3,7 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "mock_cu_up.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "ocudu/adt/mutexed_mpmc_queue.h"
 #include "ocudu/asn1/e1ap/common.h"
 #include "ocudu/asn1/e1ap/e1ap.h"

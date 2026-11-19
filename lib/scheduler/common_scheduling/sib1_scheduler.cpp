@@ -9,8 +9,8 @@
 #include "../support/pdsch/pdsch_default_time_allocation.h"
 #include "../support/pdsch/pdsch_resource_allocation.h"
 #include "../support/prbs_calculator.h"
-#include "../support/rb_helper.h"
 #include "../support/sch_pdu_builder.h"
+#include "ocudu/scheduler/support/rb_helper.h"
 #include "ocudu/support/enum_utils.h"
 #include <algorithm>
 
@@ -28,7 +28,7 @@ sib1_scheduler::sib1_scheduler(const cell_configuration& cfg_,
   cell_cfg{cfg_},
   pdcch_sched{pdcch_sch},
   sib1_payload_size{sib1_payload_size_},
-  L_max(cfg_.params.ssb_cfg.ssb_bitmap.get_L_max())
+  L_max(cfg_.params.ssb_cfg.ssb_beams.get_L_max())
 {
   const auto coreset0 = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.get_coreset0();
   ocudu_assert(coreset0.has_value(), "CORESET#0 not configured");
@@ -38,11 +38,11 @@ sib1_scheduler::sib1_scheduler(const cell_configuration& cfg_,
 
   // Compute derived SIB1 parameters.
   sib1_rtx_period = std::chrono::milliseconds{
-      std::max<unsigned>(to_value(cfg_.params.ssb_cfg.ssb_period), to_value(expert_cfg.sib1_retx_period))};
+      std::max<unsigned>(to_underlying(cfg_.params.ssb_cfg.ssb_period), to_underlying(expert_cfg.sib1_retx_period))};
 
-  // Only the first L_max SSB beams can be used.
+  // Only the first L_max SSB candidates can be used.
   for (size_t i_ssb = 0; i_ssb != L_max; ++i_ssb) {
-    if (not cell_cfg.params.ssb_cfg.ssb_bitmap.test(i_ssb)) {
+    if (not cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(i_ssb)) {
       continue;
     }
     // NOTE:
@@ -85,21 +85,21 @@ void sib1_scheduler::run_slot(cell_slot_resource_allocator& res_grid)
   const unsigned sib1_rtx_period_slots   = sib1_rtx_period.count() * sl_point.nof_slots_per_subframe();
   const unsigned sib1_newtx_period_slots = sib1_newtx_period.count() * sl_point.nof_slots_per_subframe();
 
-  // For each beam, check if the SIB1 needs to be allocated in this slot.
+  // For each SSB candidate, check if the SIB1 needs to be allocated in this slot.
   for (unsigned ssb_idx = 0; ssb_idx != L_max; ++ssb_idx) {
     // Do not schedule the SIB1 for the SSB indices that are not used.
-    if (not cell_cfg.params.ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+    if (not cell_cfg.params.ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
       continue;
     }
 
-    if (sl_point.to_uint() % sib1_rtx_period_slots == sib1_type0_pdcch_css_slots[ssb_idx].to_uint()) {
+    if (sl_point.count() % sib1_rtx_period_slots == sib1_type0_pdcch_css_slots[ssb_idx].count()) {
       // Ensure slot for SIB1 has DL enabled.
       if (not cell_cfg.is_dl_enabled(sl_point)) {
-        logger.error("Could not allocate SIB1 for beam idx {} as slot is not DL enabled.", ssb_idx);
+        logger.error("Could not allocate SIB1 for SSB index {} as slot is not DL enabled.", ssb_idx);
         return;
       }
 
-      if ((sl_point.to_uint() % sib1_newtx_period_slots) == sib1_type0_pdcch_css_slots[ssb_idx].to_uint()) {
+      if ((sl_point.count() % sib1_newtx_period_slots) == sib1_type0_pdcch_css_slots[ssb_idx].count()) {
         // If it is a new Tx, apply a new SIB1 PDU version, if it is pending.
         handle_pending_sib1_update();
       }
@@ -144,7 +144,7 @@ void sib1_scheduler::stop()
 
 //  ------   Private methods   ------ .
 
-bool sib1_scheduler::allocate_sib1(cell_slot_resource_allocator& res_grid, unsigned beam_idx, unsigned time_resource)
+bool sib1_scheduler::allocate_sib1(cell_slot_resource_allocator& res_grid, unsigned ssb_idx, unsigned time_resource)
 {
   const auto& pdsch_td_res_alloc_list = get_si_rnti_pdsch_time_domain_list(
       cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.cp, cell_cfg.params.dmrs_typeA_pos);
@@ -174,7 +174,7 @@ bool sib1_scheduler::allocate_sib1(cell_slot_resource_allocator& res_grid, unsig
     sib1_crbs = rb_helper::find_empty_interval_of_length(used_crbs, nof_sib1_rbs);
     if (sib1_crbs.length() < nof_sib1_rbs) {
       // early exit
-      logger.error("Not enough PDSCH space for SIB1 in beam idx: {}", beam_idx);
+      logger.error("Not enough PDSCH space for SIB1 for SSB index {}", ssb_idx);
       return false;
     }
   }
@@ -184,9 +184,10 @@ bool sib1_scheduler::allocate_sib1(cell_slot_resource_allocator& res_grid, unsig
       pdcch_sched.alloc_dl_pdcch_common(res_grid,
                                         rnti_t::SI_RNTI,
                                         cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.sib1_search_space_id,
-                                        expert_cfg.sib1_dci_aggr_lev);
+                                        expert_cfg.sib1_dci_aggr_lev,
+                                        cell_cfg.params.ssb_cfg.ssb_beams.get_beam(ssb_idx));
   if (pdcch == nullptr) {
-    logger.warning("Could not allocated SIB1's DCI in PDCCH for beam idx: {}", beam_idx);
+    logger.warning("Could not allocated SIB1's DCI in PDCCH for SSB index {}", ssb_idx);
     return false;
   }
 
@@ -198,11 +199,12 @@ bool sib1_scheduler::allocate_sib1(cell_slot_resource_allocator& res_grid, unsig
       grant_info{cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.scs, sib1_ofdm_symbols, sib1_crbs});
 
   // 4. Delegate filling SIB1 grants to helper function.
-  fill_sib1_grant(res_grid, sib1_crbs, time_resource, dmrs_info, sib1_prbs_tbs.tbs_bytes);
+  fill_sib1_grant(res_grid, ssb_idx, sib1_crbs, time_resource, dmrs_info, sib1_prbs_tbs.tbs_bytes);
   return true;
 }
 
 void sib1_scheduler::fill_sib1_grant(cell_slot_resource_allocator& res_grid,
+                                     unsigned                      ssb_idx,
                                      crb_interval                  sib1_crbs_grant,
                                      unsigned                      time_resource,
                                      const dmrs_information&       dmrs_info,
@@ -241,6 +243,9 @@ void sib1_scheduler::fill_sib1_grant(cell_slot_resource_allocator& res_grid,
                            sib1_crbs_grant,
                            pdsch_td_res_alloc_list[sib1_pdcch.dci.as_si_rnti_f1_0().time_resource].symbols,
                            dmrs_info);
+
+  // The UE reads the SIB1 of the SS/PBCH block that it found the cell on, so the block and its SIB1 share a beam.
+  pdsch.precoding_and_beamforming = make_single_beam_precoding(cell_cfg.params.ssb_cfg.ssb_beams.get_beam(ssb_idx));
 }
 
 void sib1_scheduler::handle_pending_sib1_update()

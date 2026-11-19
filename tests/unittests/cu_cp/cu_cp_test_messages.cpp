@@ -4,7 +4,7 @@
 
 #include "cu_cp_test_messages.h"
 #include "lib/e1ap/cu_cp/e1ap_cu_cp_asn1_helpers.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "ocudu/e1ap/common/e1ap_message.h"
 
 using namespace ocudu;

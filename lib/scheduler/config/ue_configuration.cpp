@@ -5,10 +5,11 @@
 #include "ue_configuration.h"
 #include "../support/pdsch/pdsch_default_time_allocation.h"
 #include "../support/pdsch/pdsch_resource_allocation.h"
-#include "../support/pucch/pucch_k1_helper.h"
 #include "../support/pusch/pusch_default_time_allocation.h"
 #include "../support/pusch/pusch_resource_allocation.h"
 #include "sched_config_params.h"
+#include "time_domain_mapper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/pdcch/dci_format.h"
 #include "ocudu/ran/resource_allocation/vrb_to_prb.h"
 #include "ocudu/support/math/math_utils.h"
@@ -39,12 +40,11 @@ void search_space_info::update_pdcch_candidates(
 
 void search_space_info::update_pdsch_time_domain_list(const ue_cell_configuration& ue_cell_cfg)
 {
-  pdsch_time_domain_list =
-      get_c_rnti_pdsch_time_domain_list(*cfg, *bwp, ue_cell_cfg.cell_cfg_common.params.dmrs_typeA_pos);
+  const auto pdsch_td_res_list = bwp->dl.td_mapper().pdsch_td_resources(get_dl_dci_format());
 
-  pdsch_cfg_list.resize(pdsch_time_domain_list.size());
-  for (unsigned i = 0; i != pdsch_time_domain_list.size(); ++i) {
-    const auto& pdsch_td_res = pdsch_time_domain_list[i];
+  pdsch_cfg_list.resize(pdsch_td_res_list.size());
+  for (unsigned i = 0, nof_res = pdsch_td_res_list.size(); i != nof_res; ++i) {
+    const auto& pdsch_td_res = pdsch_td_res_list[i];
     switch (get_dl_dci_format()) {
       case dci_dl_format::f1_0: {
         pdsch_cfg_list[i].resize(1);
@@ -52,7 +52,7 @@ void search_space_info::update_pdsch_time_domain_list(const ue_cell_configuratio
             ue_cell_cfg.cell_cfg_common, ue_cell_cfg.pdsch_serving_cell_cfg(), pdsch_td_res);
       } break;
       case dci_dl_format::f1_1: {
-        pdsch_cfg_list[i].resize(ue_cell_cfg.get_nof_dl_ports());
+        pdsch_cfg_list[i].resize(ue_cell_cfg.cell_cfg_common.params.init_bwp.pdsch.max_nof_layers);
         for (unsigned j = 0, je = pdsch_cfg_list[i].size(); j != je; ++j) {
           pdsch_cfg_list[i][j] = sched_helper::get_pdsch_config_f1_1_c_rnti(ue_cell_cfg.cell_cfg_common,
                                                                             *bwp->dl.pdsch().ded(),
@@ -147,7 +147,7 @@ static dci_size_config get_dci_size_config(const ue_cell_configuration& ue_cell_
   // Fill out parameters for Format 0_1.
   // TODO: Once additional UL BWPs are added to uplinkConfig, populate below field from configs.
   dci_sz_cfg.nof_ul_bwp_rrc         = 0;
-  dci_sz_cfg.nof_ul_time_domain_res = ue_cell_cfg.search_space(ss_id).pusch_time_domain_list.size();
+  dci_sz_cfg.nof_ul_time_domain_res = active_bwp.ul.td_mapper().pusch_td_resources(ss_info.get_ul_dci_format()).size();
   dci_sz_cfg.report_trigger_size    = 0;
   if (opt_csi_meas_cfg != nullptr and opt_csi_meas_cfg->report_trigger_size.has_value()) {
     dci_sz_cfg.report_trigger_size = opt_csi_meas_cfg->report_trigger_size.value();
@@ -266,14 +266,15 @@ static dci_size_config get_dci_size_config(const ue_cell_configuration& ue_cell_
 
   // Fill out parameters for Format 1_1.
   dci_sz_cfg.nof_dl_bwp_rrc         = ue_cell_cfg.bwps().size() - (ue_cell_cfg.has_bwp_id(to_bwp_id(0)) ? 1 : 0);
-  dci_sz_cfg.nof_dl_time_domain_res = ue_cell_cfg.search_space(ss_id).pdsch_time_domain_list.size();
+  dci_sz_cfg.nof_dl_time_domain_res = active_bwp.dl.td_mapper().pdsch_td_resources(ss_info.get_dl_dci_format()).size();
   dci_sz_cfg.nof_aperiodic_zp_csi   = 0;
-  dci_sz_cfg.nof_pdsch_ack_timings =
-      get_k1_candidates(ss_info.get_dl_dci_format(), ue_cell_cfg.cell_cfg_common.dl_data_to_ul_ack).size();
-  dci_sz_cfg.dynamic_prb_bundling      = false;
-  dci_sz_cfg.rm_pattern_group1         = false;
-  dci_sz_cfg.rm_pattern_group2         = false;
-  dci_sz_cfg.pdsch_two_codewords       = false;
+  dci_sz_cfg.nof_pdsch_ack_timings  = ss_info.get_dl_dci_format() == dci_dl_format::f1_0
+                                          ? pucch_td_helper::get_common_k1_candidates().size()
+                                          : active_bwp.ul.td_mapper().dedicated_k1_candidates().size();
+  dci_sz_cfg.dynamic_prb_bundling   = false;
+  dci_sz_cfg.rm_pattern_group1      = false;
+  dci_sz_cfg.rm_pattern_group2      = false;
+  dci_sz_cfg.pdsch_two_codewords    = false;
   dci_sz_cfg.pdsch_res_allocation_type = resource_allocation::resource_allocation_type_1;
   if (opt_pdsch_cfg != nullptr) {
     dci_sz_cfg.dynamic_prb_bundling =
@@ -684,7 +685,6 @@ void ue_cell_configuration::configure_bwp_cfg(bwp_id_t bwpid, const sched_bwp_co
         ss.get_dl_dci_format(), cell_cfg_common.init_bwp.dl.common(), bwp.dl.cfg(), *ss.cfg, ss.coreset->cfg());
     ss.update_pdsch_mappings(cell_cfg_common.expert_cfg.ue.pdsch_interleaving_bundle_size);
     // UL
-    ss.pusch_time_domain_list                    = get_c_rnti_pusch_time_domain_list(ss_cfg->cfg(), bwp);
     const dci_ul_rnti_config_type crnti_dci_type = ss.get_ul_dci_format() == dci_ul_format::f0_0
                                                        ? dci_ul_rnti_config_type::c_rnti_f0_0
                                                        : dci_ul_rnti_config_type::c_rnti_f0_1;
@@ -699,17 +699,44 @@ bool ue_cell_configuration::is_cfg_dedicated_complete() const
   return bwp.dl.has_ded_cfg() and bwp.ul.ded() != nullptr and bwp.ul.ded()->pucch_cfg.has_value();
 }
 
-bool ue_cell_configuration::is_ul_enabled(slot_point ul_slot) const
+bool ue_cell_configuration::is_ul_enabled(slot_point                               ul_slot,
+                                          std::optional<std::chrono::microseconds> reported_ul_ta) const
 {
   if (not cell_cfg_common.is_ul_enabled(ul_slot)) {
     return false;
   }
   if (meas_gap_cfg.has_value()) {
-    if (is_inside_meas_gap(meas_gap_cfg.value(), ul_slot)) {
+    // The UE uplink is advanced by T_TA with respect to the downlink timing the gap is anchored to, so the gap has to
+    // be tested at the shifted position. In an NTN cell the shift is tens of slots; ignoring it makes us grant in
+    // slots where the UE drops the transmission (TS 38.321, Sections 5.4.2.2 and 5.4.4).
+    //
+    // The cell reference location estimate is preferred, as it is recomputed as the satellite moves. A UE report only
+    // refreshes while tar-Config is configured (TS 38.321, Section 5.4.8); without it the UE reports once at random
+    // access and the value then ages at tens of microseconds per second. So the report serves as the fallback for a
+    // cell that has no estimate at all, i.e. one with no reference location.
+    const std::optional<std::chrono::microseconds> ul_ta =
+        cell_cfg_common.ntn_ref_location_ul_ta.has_value() ? cell_cfg_common.ntn_ref_location_ul_ta : reported_ul_ta;
+    if (is_inside_ul_meas_gap(meas_gap_cfg.value(), ul_slot, ul_ta)) {
       return false;
     }
   }
   return true;
+}
+
+bool ue_cell_configuration::is_cg_slot(slot_point slot) const
+{
+  // TODO: support type 2.
+  if (init_bwp().ul.cg_cfg() != nullptr) {
+    const auto& cg_cfg = init_bwp().ul.cg_cfg();
+    if (cg_cfg->rrc_configured_ul_grant_cfg.has_value()) {
+      const auto& rrc_cg_cfg = cg_cfg->rrc_configured_ul_grant_cfg.value();
+      if (slot.count() % static_cast<unsigned>(cg_cfg->periodicity) == rrc_cg_cfg.time_domain_offset) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 //
@@ -724,7 +751,7 @@ ue_configuration::ue_configuration(du_ue_index_t                         ue_inde
 }
 
 ue_configuration::ue_configuration(const ue_configuration& other) :
-  ue_index(other.ue_index), crnti(other.crnti), lc_list(other.lc_list)
+  ue_index(other.ue_index), crnti(other.crnti), lc_list(other.lc_list), cs_rnti(other.cs_rnti)
 {
   // Update UE dedicated cell config.
   for (const std::unique_ptr<ue_cell_configuration>& cell_cfg : other.du_cells) {
@@ -740,6 +767,11 @@ void ue_configuration::update(const cell_common_configuration_list& common_cells
   // Update UE logical channels.
   if (params.lc_ch_list.has_value()) {
     lc_list = params.lc_ch_list.value();
+  }
+
+  // Update CS-RNTI.
+  if (params.cs_rnti.has_value()) {
+    cs_rnti = params.cs_rnti;
   }
 
   // Update DRX config.

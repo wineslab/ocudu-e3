@@ -4,6 +4,7 @@
 
 #include "ocudu/phy/upper/signal_processors/pdsch/factories.h"
 #include "dmrs_pdsch_processor_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

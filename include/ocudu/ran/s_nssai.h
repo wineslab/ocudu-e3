@@ -7,7 +7,6 @@
 #include "ocudu/adt/expected.h"
 #include "fmt/format.h"
 #include <cstdint>
-#include <optional>
 
 namespace ocudu {
 

@@ -9,6 +9,7 @@
 
 #include "ocudu/phy/upper/equalization/channel_equalizer.h"
 #include "ocudu/phy/upper/equalization/channel_equalizer_algorithm_type.h"
+#include <memory>
 
 namespace ocudu {
 

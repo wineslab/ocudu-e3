@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/support_factories.h"
 #include "ocudu/phy/upper/channel_processors/prach/factories.h"
 #include "ocudu/phy/upper/channel_processors/prach/formatters.h"
@@ -69,7 +70,7 @@ static prach_detector_factory& get_detector_factory()
     return *prach_det_factory;
   }
 
-  std::shared_ptr<dft_processor_factory> dft_proc_factory = create_dft_processor_factory_fftw_fast();
+  std::shared_ptr<dft_processor_factory> dft_proc_factory = create_dft_processor_factory();
   report_fatal_error_if_not(dft_proc_factory, "Failed to create DFT processor factory.");
 
   std::shared_ptr<prach_generator_factory> prach_gen_factory = create_prach_generator_factory_sw();

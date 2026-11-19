@@ -5,6 +5,8 @@
 #include "srs_scheduler_impl.h"
 #include "../cell/resource_grid.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/srs/srs_bandwidth_configuration.h"
+#include "ocudu/scheduler/sched_consts.h"
 
 using namespace ocudu;
 
@@ -47,14 +49,14 @@ static srs_info create_srs_pdu(rnti_t                          rnti,
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-srs_scheduler_impl::srs_scheduler_impl(const cell_configuration& cell_cfg_, ue_repository& ues_) :
-  cell_cfg(cell_cfg_), ues(ues_), logger(ocudulog::fetch_basic_logger("SCHED"))
+srs_scheduler_impl::srs_scheduler_impl(const cell_configuration& cell_cfg_, ue_cell_repository& ue_cell_db_) :
+  cell_cfg(cell_cfg_), ue_cell_db(ue_cell_db_), logger(ocudulog::fetch_basic_logger("SCHED"))
 {
   // Max size of the SRS resource slot wheel, dimensioned based on the maximum SRS periods.
   periodic_srs_slot_wheel.resize(static_cast<unsigned>(srs_periodicity::sl2560));
 
   // Pre-reserve space for the UEs that will be added.
-  updated_ues.reserve(MAX_NOF_DU_UES);
+  updated_ues.reserve(cell_cfg.max_nof_ue_contexts);
 }
 
 srs_scheduler_impl::~srs_scheduler_impl() = default;
@@ -204,8 +206,8 @@ void srs_scheduler_impl::handle_positioning_measurement_request(
 {
   ocudu_assert(cell_req.cell_index == cell_cfg.cell_index,
                "Received positioning request for wrong cell: expected {}, got {}",
-               fmt::underlying(cell_cfg.cell_index),
-               fmt::underlying(cell_req.cell_index));
+               cell_cfg.cell_index,
+               cell_req.cell_index);
 
   // Ensure uniqueness of RNTI in the \c pending_pos_requests.
   if (std::any_of(pending_pos_requests.begin(),
@@ -222,22 +224,23 @@ void srs_scheduler_impl::handle_positioning_measurement_request(
 
   if (cell_req.ue_index.has_value()) {
     // It is a positioning request for a connected UE.
-    if (not ues.contains(cell_req.ue_index.value())) {
+    const ue_cell* ue_cc = ue_cell_db.find(cell_req.ue_index.value());
+    if (ue_cc == nullptr) {
       logger.warning("ue={}: Positioning measurement request discarded. Cause: Non-existent UE",
-                     fmt::underlying(cell_req.ue_index.value()));
+                     cell_req.ue_index.value());
       return;
     }
-    auto& u = ues[cell_req.ue_index.value()];
-    if (u.crnti != cell_req.pos_rnti) {
+    if (ue_cc->rnti() != cell_req.pos_rnti) {
       logger.warning("ue={}: Positioning measurement request discarded. Cause: Incorrect C-RNTI",
-                     fmt::underlying(cell_req.ue_index.value()));
+                     cell_req.ue_index.value());
       return;
     }
-    const auto* ul_cfg = u.get_pcell().cfg().init_bwp().ul.ded();
+    ocudu_sanity_check(ue_cc->is_pcell(), "The SRS of a UE is only scheduled in its PCell");
+    const auto* ul_cfg = ue_cc->cfg().init_bwp().ul.ded();
 
     if (ul_cfg == nullptr or not ul_cfg->srs_cfg.has_value()) {
       logger.warning("ue={}: Positioning measurement request discarded. Cause: UE has no configured SRS config",
-                     fmt::underlying(cell_req.ue_index.value()));
+                     cell_req.ue_index.value());
       return;
     }
 
@@ -308,7 +311,7 @@ void srs_scheduler_impl::handle_positioning_measurement_stop(rnti_t pos_rnti)
 void srs_scheduler_impl::schedule_slot_srs(ocudu::cell_slot_resource_allocator& slot_alloc)
 {
   // For the provided slot, check if there are any pending SRS resources to allocate, and allocate them.
-  auto& slot_srss = periodic_srs_slot_wheel[slot_alloc.slot.to_uint() % periodic_srs_slot_wheel.size()];
+  auto& slot_srss = periodic_srs_slot_wheel[slot_alloc.slot.count() % periodic_srs_slot_wheel.size()];
   for (auto srs_info_it : slot_srss) {
     allocate_srs_opportunity(slot_alloc, srs_info_it);
   }
@@ -320,7 +323,7 @@ void srs_scheduler_impl::schedule_updated_ues_srs(cell_resource_allocator& cell_
     // Schedule SRS up to the farthest slot.
     for (unsigned n = 0; n != cell_alloc.max_ul_slot_alloc_delay; ++n) {
       cell_slot_resource_allocator& slot_alloc = cell_alloc[n];
-      auto& slot_srss = periodic_srs_slot_wheel[(cell_alloc.slot_tx() + n).to_uint() % periodic_srs_slot_wheel.size()];
+      auto& slot_srss = periodic_srs_slot_wheel[(cell_alloc.slot_tx() + n).count() % periodic_srs_slot_wheel.size()];
 
       // Positioning was requested/stopped. Set positioning flag for already allocated PDUs in the grid.
       for (const ue_update& ue_upd : updated_ues) {
@@ -330,6 +333,14 @@ void srs_scheduler_impl::schedule_updated_ues_srs(cell_resource_allocator& cell_
             pdu.positioning_report_requested = ue_upd.type == ue_update::type_t::positioning_request;
           }
         }
+      }
+
+      // Note: Allocations in slots closer than SCHEDULER_MAX_K2 are skipped, as UL grants for them may already have
+      // been scheduled in a previous slot_indication call (PUSCH k2 can be as large as SCHEDULER_MAX_K2), before this
+      // SRS resource existed. Allocating into them now would risk a resource collision with those already-committed
+      // grants.
+      if (n < SCHEDULER_MAX_K2) {
+        continue;
       }
 
       // For all the periodic SRS info element at this slot, allocate only those that belong to the UE updated_ues.
@@ -361,7 +372,7 @@ bool srs_scheduler_impl::allocate_srs_opportunity(cell_slot_resource_allocator& 
 
   if (slot_alloc.result.ul.srss.full()) {
     logger.warning("cell={} c-rnti={}: SRS resource id={} cannot be allocated for slot={}. Cause: SRS list is full",
-                   fmt::underlying(cell_cfg.cell_index),
+                   cell_cfg.cell_index,
                    srs_opportunity.rnti,
                    fmt::underlying(srs_opportunity.srs_res_id),
                    sl_srs);
@@ -381,25 +392,25 @@ bool srs_scheduler_impl::allocate_srs_opportunity(cell_slot_resource_allocator& 
   if (is_crnti(srs_opportunity.rnti)) {
     // SRS of UE connected to the cell.
 
-    // Fetch UE config.
-    const ue_cell_configuration* ue_cfg = get_ue_cfg(srs_opportunity.rnti);
-    if (ue_cfg == nullptr) {
+    // Fetch UE cell.
+    const ue_cell* ue_cc = get_ue_cell(srs_opportunity.rnti);
+    if (ue_cc == nullptr) {
       logger.error("cell={} c-rnti={}: UE for which SRS is being scheduled was not found",
-                   fmt::underlying(cell_cfg.cell_index),
+                   cell_cfg.cell_index,
                    srs_opportunity.rnti);
       return false;
     }
 
-    if (not ue_cfg->is_ul_enabled(sl_srs)) {
+    if (not ue_cc->is_ul_enabled(sl_srs)) {
       logger.warning("cell={} c-rnti={}: slot={} for SRS resource id={} is being scheduled is not UL enabled",
-                     fmt::underlying(cell_cfg.cell_index),
+                     cell_cfg.cell_index,
                      srs_opportunity.rnti,
                      sl_srs,
                      fmt::underlying(srs_opportunity.srs_res_id));
       return false;
     }
 
-    srs_res_list = ue_cfg->init_bwp().ul.ded()->srs_cfg.value().srs_res_list;
+    srs_res_list = ue_cc->cfg().init_bwp().ul.ded()->srs_cfg.value().srs_res_list;
 
   } else {
     // SRS for UE of neighbor cell.
@@ -416,7 +427,7 @@ bool srs_scheduler_impl::allocate_srs_opportunity(cell_slot_resource_allocator& 
   if (srs_res == srs_res_list.end()) {
     logger.warning("cell={} c-rnti={}: SRS resource id={} cannot be allocated for slot={}. Cause: SRS resource not "
                    "found in UE ded. config",
-                   fmt::underlying(cell_cfg.cell_index),
+                   cell_cfg.cell_index,
                    srs_opportunity.rnti,
                    fmt::underlying(srs_opportunity.srs_res_id),
                    sl_srs);
@@ -426,12 +437,18 @@ bool srs_scheduler_impl::allocate_srs_opportunity(cell_slot_resource_allocator& 
   const bwp_configuration& ul_bwp_cfg         = cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params;
   const unsigned           nof_symbs_per_slot = get_nsymb_per_slot(ul_bwp_cfg.cp);
   const unsigned           starting_symb      = nof_symbs_per_slot - srs_res->res_mapping.start_pos - 1;
-  // Fill all the RBs in UL BW grid, even though the SRS is configured as narrowband; if there are SRS grants allocated,
-  // the scheduler is not yet capable of allocating PUSCH on any of the symbols that are used by the SRS.
-  slot_alloc.ul_res_grid.fill(
-      grant_info(ul_bwp_cfg.scs,
-                 ofdm_symbol_range{starting_symb, starting_symb + static_cast<unsigned>(srs_res->res_mapping.nof_symb)},
-                 ul_bwp_cfg.crbs));
+  // Fill only the RBs actually used by the SRS resource; this avoids the SRS symbols spuriously colliding with the
+  // common PUCCH resources located at the edges of the UL BWP.
+  // Note: We do not check for collisions because SRSs of multiple UEs can use the same RBs and symbols.
+  const std::optional<srs_configuration> srs_bw_cfg =
+      srs_configuration_get(srs_res->freq_hop.c_srs, srs_res->freq_hop.b_srs);
+  ocudu_assert(srs_bw_cfg.has_value(), "Invalid SRS bandwidth configuration");
+  const crb_interval srs_crbs{srs_res->freq_domain_shift, srs_res->freq_domain_shift + srs_bw_cfg.value().m_srs};
+  const grant_info   srs_grant{
+      ul_bwp_cfg.scs,
+      ofdm_symbol_range{starting_symb, starting_symb + static_cast<unsigned>(srs_res->res_mapping.nof_symb)},
+      srs_crbs};
+  slot_alloc.ul_res_grid.fill(srs_grant);
 
   // Add SRS PDU into results.
   slot_alloc.result.ul.srss.emplace_back(
@@ -505,14 +522,7 @@ void srs_scheduler_impl::rem_resource(rnti_t                 crnti,
 
 /////////////////////          Helper functions        ////////////////////////////
 
-const ue_cell_configuration* srs_scheduler_impl::get_ue_cfg(rnti_t rnti) const
+const ue_cell* srs_scheduler_impl::get_ue_cell(rnti_t rnti) const
 {
-  auto* u = ues.find_by_rnti(rnti);
-  if (u != nullptr) {
-    const auto* ue_cc = u->find_cell(cell_cfg.cell_index);
-    if (ue_cc != nullptr) {
-      return &ue_cc->cfg();
-    }
-  }
-  return nullptr;
+  return ue_cell_db.find_by_rnti(rnti);
 }

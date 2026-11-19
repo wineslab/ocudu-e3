@@ -20,9 +20,9 @@ orbital_elements eci_to_orbital(const state_vector& eci_state);
 
 /// \brief Convert orbital parameters to ECI state vector.
 ///
-/// \param params orbital_elements struct
+/// \param oe Classical orbital elements
 /// \return state_vector in ECI frame
-state_vector orbital_to_eci(const orbital_elements& params);
+state_vector orbital_to_eci(const orbital_elements& oe);
 
 } // namespace ephemeris_info_converter
 } // namespace ocudu_ntn

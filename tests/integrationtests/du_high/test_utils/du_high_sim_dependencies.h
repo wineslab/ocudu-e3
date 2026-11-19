@@ -8,6 +8,7 @@
 #include "ocudu/f1ap/gateways/f1c_connection_client.h"
 #include "ocudu/support/executors/task_executor.h"
 #include <map>
+#include <mutex>
 
 namespace ocudu {
 namespace odu {
@@ -31,7 +32,7 @@ public:
   message_number next_ul_message_number() const { return next_msg_number; }
 
   /// Whether the DU signalled to the connection client its disconnection.
-  bool du_released_connection() const { return du_released_client; }
+  bool du_released_connection() const;
 
   /// \brief Sets the state of the F1 channel (up or down).
   /// If the channel is set down, any on-going connection is lost, and no new connection attempts are accepted.
@@ -41,6 +42,8 @@ private:
   task_executor& test_exec;
   /// Number to be assigned to the next F1AP message sent by the DU to the CU.
   message_number next_msg_number = 0;
+  /// Protects the state below, which the test thread and the DU threads access.
+  mutable std::mutex mutex;
   /// Callable to trigger F1 connection losses.
   unique_function<void()> on_connection_loss;
   /// Current F1 channel state.

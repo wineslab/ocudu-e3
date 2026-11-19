@@ -40,5 +40,7 @@ fi
 echo "Using clang-format version:"
 "$clang_format" --version
 
+# Search for a configuration next to each file, so the per-directory overrides of third-party code keep applying, and
+# leave a file alone when the search finds none instead of falling back to the LLVM style
 # Run clang-format for those files and apply changes
-[ "$files" ] && "$clang_format" -style=file -i ${files} || echo "No files changed"
+[ "$files" ] && "$clang_format" -style=file -fallback-style=none -i ${files} || echo "No files changed"

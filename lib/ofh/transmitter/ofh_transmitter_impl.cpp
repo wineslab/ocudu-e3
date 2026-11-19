@@ -3,6 +3,8 @@
 
 #include "ofh_transmitter_impl.h"
 #include "ofh_uplane_fragment_size_calculator.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ofh/ofh_sector_executor_mapper.h"
 
 using namespace ocudu;
 using namespace ofh;
@@ -50,6 +52,7 @@ static downlink_handler_impl_config generate_downlink_handler_config(const trans
   out_cfg.dl_processing_time            = tx_config.dl_processing_time;
   out_cfg.tx_timing_params              = tx_config.tx_timing_params;
   out_cfg.enable_log_warnings_for_lates = tx_config.enable_log_warnings_for_lates;
+  out_cfg.is_cat_b_enabled              = tx_config.beamforming.has_value();
 
   return out_cfg;
 }
@@ -72,7 +75,11 @@ transmitter_impl::transmitter_impl(const transmitter_config& config, transmitter
   dl_handler(generate_downlink_handler_config(config), resolve_downlink_handler_impl_dependencies(dependencies)),
   ul_request_handler(generate_uplink_request_handler_config(config),
                      resolve_uplink_request_handler_dependencies(dependencies)),
-  ul_task_dispatcher(config.sector, *dependencies.logger, ul_request_handler, *dependencies.dl_executor),
+  ul_task_dispatcher(config.sector,
+                     *dependencies.logger,
+                     ul_request_handler,
+                     dependencies.exec_mapper.get_ul_cp_executor(),
+                     ul_request_handler.get_metrics_collector()),
   msg_transmitter(*dependencies.logger,
                   config.tx_timing_params,
                   config.are_metrics_enabled,

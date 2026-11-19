@@ -7,6 +7,7 @@
 #include "du_low_config.h"
 #include "du_low_config_translator.h"
 #include "du_low_hal_factory.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_low/o_du_low_factory.h"
 #include "ocudu/ran/slot_pdu_capacity_constants.h"
 

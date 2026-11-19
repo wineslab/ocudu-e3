@@ -7,6 +7,7 @@
 #include "apps/helpers/metrics/json_generators/generator_helpers.h"
 #include "apps/services/remote_control/remote_server_metrics_gateway.h"
 #include "cu_cp_metrics.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/e2/e2_cu.h"
 
 using namespace ocudu;

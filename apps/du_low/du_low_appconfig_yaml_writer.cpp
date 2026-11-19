@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_low_appconfig_yaml_writer.h"
+#include "apps/helpers/hal/hal_appconfig_yaml_writer.h"
 #include "apps/helpers/logger/logger_appconfig_yaml_writer.h"
 #include "apps/helpers/tracing/tracer_appconfig_yaml_writer.h"
 #include "apps/services/app_execution_metrics/executor_metrics_config_yaml_writer.h"
@@ -12,6 +13,14 @@
 
 using namespace ocudu;
 
+static void fill_du_low_appconfig_hal_section(YAML::Node node, const std::optional<hal_appconfig>& config)
+{
+  if (!config.has_value()) {
+    return;
+  }
+  fill_hal_appconfig_section(node, *config);
+}
+
 static void fill_du_appconfig_expert_execution_section(YAML::Node node, const expert_execution_appconfig& config)
 {
   {
@@ -19,7 +28,7 @@ static void fill_du_appconfig_expert_execution_section(YAML::Node node, const ex
 
     if (config.affinities.main_pool_cpu_cfg.mask.any()) {
       affinities_node["main_pool_cpus"] =
-          fmt::format("{:,}", span<const size_t>(config.affinities.main_pool_cpu_cfg.mask.get_cpu_ids()));
+          fmt::format("{:n}", span<const size_t>(config.affinities.main_pool_cpu_cfg.mask.get_cpu_ids()));
     }
     affinities_node["main_pool_pinning"] = to_string(config.affinities.main_pool_cpu_cfg.pinning_policy);
   }
@@ -49,6 +58,7 @@ void ocudu::fill_du_low_appconfig_in_yaml_schema(YAML::Node& node, const du_low_
   app_services::fill_app_exec_metrics_config_in_yaml_schema(node, config.metrics_cfg.executors_metrics_cfg);
   fill_logger_appconfig_in_yaml_schema(node, config.log_cfg);
   fill_tracer_appconfig_in_yaml_schema(node, config.trace_cfg);
+  fill_du_low_appconfig_hal_section(node, config.hal_config);
   fill_du_appconfig_expert_execution_section(node["expert_execution"], config.expert_execution_cfg);
   fill_du_appconfig_remote_control_section(node["remote_control"], config.remote_control_config);
 }

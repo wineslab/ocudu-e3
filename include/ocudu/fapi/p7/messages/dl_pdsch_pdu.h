@@ -7,6 +7,7 @@
 #include "ocudu/fapi/p7/messages/power_control_offset_ss.h"
 #include "ocudu/fapi/p7/messages/resource_allocation_types.h"
 #include "ocudu/fapi/p7/messages/tx_precoding_and_beamforming_pdu.h"
+#include "ocudu/fapi/p7/messages/tx_precoding_and_beamforming_pdu_formatters.h"
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/dmrs/dmrs.h"
 #include "ocudu/ran/pdsch/pdsch_constants.h"
@@ -19,6 +20,7 @@
 #include "ocudu/ran/sch/modulation_scheme.h"
 #include "ocudu/ran/sch/sch_mcs.h"
 #include "ocudu/ran/subcarrier_spacing.h"
+#include <optional>
 #include <variant>
 
 namespace ocudu {
@@ -124,7 +126,7 @@ struct formatter<ocudu::fapi::dl_pdsch_pdu> {
         ctx.out(),
         "\n\t- PDSCH rnti={} bwp={} scs={} cp={} nid_pdsch={} num_layers={} ref_point={} dl_dmrs_symb_pos={} "
         "pdsch_dmrs_scrambling_id={} dmrs_type={} nscid={} num_dmrs_cdm_grps_no_data={} dmrs_ports={} "
-        "vrb_to_prb_mapping={} symb={} precoding_and_beamforming.pm_index={} precoding_and_beamforming.prg_size={} "
+        "vrb_to_prb_mapping={} symb={} precoding_and_beamforming.{} precoding_and_beamforming.prg_size={} "
         "tb_size_lbrm={} ldpc_base_graph={} nof_csi_pdus_for_rm={} CW: mod={} mcs_index={} mcs_table={} rv_idx={} "
         "tbs={}",
         pdu.rnti,
@@ -142,7 +144,7 @@ struct formatter<ocudu::fapi::dl_pdsch_pdu> {
         pdu.dmrs_ports,
         underlying(pdu.vrb_to_prb_mapping),
         pdu.symbols,
-        pdu.precoding_and_beamforming.prg.pm_index,
+        pdu.precoding_and_beamforming.prg.precoding,
         pdu.precoding_and_beamforming.prg_size,
         pdu.tb_size_lbrm,
         underlying(pdu.ldpc_base_graph),

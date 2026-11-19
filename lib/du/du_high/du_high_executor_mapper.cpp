@@ -128,8 +128,9 @@ public:
       cell_strands[i].mac_cell_exec =
           &decorator.decorate(execs[0], is_sync, trace_enabled, std::nullopt, metric_channel_registry, exec_name);
       exec_name = trace_enabled or metric_channel_registry ? fmt::format("rlc_lower_exec#{}", i) : "";
+      // always async, avoid backpressure in upper layers that would interfere with the PDCP-RLC flow control loop.
       cell_strands[i].rlc_lower_exec =
-          &decorator.decorate(execs[1], is_sync, trace_enabled, std::nullopt, metric_channel_registry, exec_name);
+          &decorator.decorate(execs[1], false, trace_enabled, std::nullopt, metric_channel_registry, exec_name);
     }
   }
 
@@ -318,7 +319,7 @@ public:
 
   void rebind_executors(du_ue_index_t ue_index, du_cell_index_t pcell_index) override
   {
-    ocudu_sanity_check(is_du_ue_index_valid(ue_index), "Invalid ue id={}", fmt::underlying(ue_index));
+    ocudu_sanity_check(is_du_ue_index_valid(ue_index), "Invalid ue id={}", ue_index);
     ue_idx_to_exec_index[ue_index] = pcell_index % max_strands;
     while (strands.size() <= ue_idx_to_exec_index[ue_index]) {
       add_strand(pool_exec, ctrl_queue_size, pdu_queue_size, trace_enabled, metrics_channel_registry);

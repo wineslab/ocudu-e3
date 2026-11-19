@@ -6,6 +6,7 @@
 #include "ocudu/asn1/ngap/common.h"
 #include "ocudu/asn1/ngap/ngap_pdu_contents.h"
 #include "ocudu/ngap/ngap_message.h"
+#include "ocudu/ran/cu_types.h"
 
 using namespace ocudu;
 

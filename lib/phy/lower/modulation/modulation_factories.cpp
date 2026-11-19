@@ -8,6 +8,7 @@
 #include "ofdm_modulator_impl.h"
 #include "ofdm_modulator_pool.h"
 #include "ofdm_prach_demodulator_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 
@@ -29,6 +30,7 @@ public:
   {
     ofdm_modulator_dependencies deps = {
         .dft = dft_factory->create({.size = config.dft_size, .dir = dft_processor::direction::INVERSE})};
+    report_fatal_error_if_not(deps.dft != nullptr, "Failed to create the DFT processor.");
     return std::make_unique<ofdm_symbol_modulator_impl>(config, std::move(deps));
   }
 
@@ -125,6 +127,7 @@ public:
   {
     ofdm_demodulator_dependencies deps = {.dft =
                                               dft_factory->create({config.dft_size, dft_processor::direction::DIRECT})};
+    report_fatal_error_if_not(deps.dft != nullptr, "Failed to create the DFT processor.");
     return std::make_unique<ofdm_symbol_demodulator_impl>(config, std::move(deps));
   }
 

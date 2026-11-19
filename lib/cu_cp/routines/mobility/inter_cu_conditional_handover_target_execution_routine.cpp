@@ -4,7 +4,8 @@
 
 #include "inter_cu_conditional_handover_target_execution_routine.h"
 #include "../pdu_session_routine_helpers.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
+#include "ocudu/adt/format.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/security/security.h"
 #include "ocudu/support/async/coroutine.h"
 #include "ocudu/xnap/xnap.h"
@@ -166,8 +167,26 @@ bool inter_cu_conditional_handover_target_execution_routine::fill_e1ap_bearer_co
   slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_res_to_modify_item>& pdu_sessions =
       ng_request->pdu_session_res_to_modify_list;
   for (const cu_cp_drbs_subject_to_status_transfer_item& ngap_drb : sn_status->drbs_subject_to_status_transfer_list) {
+    // TS 38.423 Section 8.2.2.1: the list reflects the source's DRB configuration and is not guaranteed to be a
+    // subset of the DRBs admitted at this target. DRB IDs are allocated independently by each RAN node (TS 38.300
+    // Section 9.2.3.2.3). A numeric ID match is therefore only trustworthy when admission actually confirmed it against
+    // the source's own DRB-to-QoS-flow mapping (see up_old_drb_association); an unconfirmed match must not be trusted,
+    // even if the ID happens to exist here.
+    if (!ue->get_up_resource_manager().has_drb(ngap_drb.drb_id)) {
+      logger.warning("ue={}: Ignoring SN Status Transfer for {}. Cause: DRB not admitted at this target",
+                     ue->get_ue_index(),
+                     ngap_drb.drb_id);
+      continue;
+    }
     const up_drb_context& drb_ctx = ue->get_up_resource_manager().get_drb_context(ngap_drb.drb_id);
-    pdu_session_id_t      psi     = drb_ctx.pdu_session_id;
+    if (!drb_ctx.source_drb_id_confirmed) {
+      logger.warning("ue={}: Ignoring SN Status Transfer for {}. Cause: DRB ID at this target was not confirmed to "
+                     "match the source's bearer",
+                     ue->get_ue_index(),
+                     ngap_drb.drb_id);
+      continue;
+    }
+    pdu_session_id_t psi = drb_ctx.pdu_session_id;
 
     if (not pdu_sessions.contains(psi)) {
       e1ap_pdu_session_res_to_modify_item ps_item;
@@ -244,9 +263,13 @@ cu_cp_path_switch_request inter_cu_conditional_handover_target_execution_routine
   path_switch_request.ue_index              = execution_ctxt.ue_index;
   path_switch_request.source_amf_ue_ngap_id = execution_ctxt.amf_ue_id;
 
-  path_switch_request.user_location_info.nr_cgi = {ue->get_ue_context().plmn,
-                                                   ue->get_rrc_ue()->get_cell_context().cgi.nci};
-  path_switch_request.user_location_info.tai    = {ue->get_ue_context().plmn, ue->get_rrc_ue()->get_cell_context().tac};
+  // Note: get_cell_context() returns by value, so keep a copy rather than a reference into a temporary.
+  const rrc_cell_context cell_context = ue->get_rrc_ue()->get_cell_context();
+
+  path_switch_request.user_location_info.nr_cgi   = {ue->get_ue_context().plmn, cell_context.cgi.nci};
+  path_switch_request.user_location_info.tai      = {ue->get_ue_context().plmn, cell_context.tac};
+  path_switch_request.user_location_info.tac_list = cell_context.tac_list;
+  ue->get_rrc_ue()->fill_ue_derived_location(path_switch_request.user_location_info);
 
   path_switch_request.supported_enc_algos = ue->get_security_manager().get_security_context().supported_enc_algos;
   path_switch_request.supported_int_algos = ue->get_security_manager().get_security_context().supported_int_algos;

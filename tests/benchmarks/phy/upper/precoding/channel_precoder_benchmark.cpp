@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/generic_functions/precoding/precoding_factories.h"
 #include "ocudu/support/benchmark_utils.h"
-#include "ocudu/support/ocudu_test.h"
+#include "ocudu/support/error_handling.h"
 #include <getopt.h>
 #include <random>
 
@@ -65,10 +66,10 @@ int main(int argc, char** argv)
   parse_args(argc, argv);
 
   std::shared_ptr<channel_precoder_factory> precoder_factory = create_channel_precoder_factory(precoder_type);
-  TESTASSERT(precoder_factory);
+  report_fatal_error_if_not(precoder_factory, "precoder_factory");
 
   std::unique_ptr<channel_precoder> precoder = precoder_factory->create();
-  TESTASSERT(precoder);
+  report_fatal_error_if_not(precoder, "precoder");
 
   // Symbol distribution.
   std::uniform_real_distribution<float> cf_symbol_dist(-2.0F, 2.0F);

@@ -10,6 +10,7 @@
 #include "apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_cli11_schema.h"
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_config_cli11_schema.h"
 #include "dynamic_o_du_unit_config.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/cli11_utils.h"
 #include "ocudu/support/config_parsers.h"
 
@@ -29,7 +30,7 @@ static void configure_cli11_ru_dummy_args(CLI::App& app, ru_dummy_unit_config& c
              "Time scaling factor applied to the slot duration. Must be greater than zero. "
              "A value greater than one slows down the RU, while a value between zero and one speeds it up.")
       ->capture_default_str()
-      ->check(CLI::NonNegativeNumber);
+      ->non_negative();
 }
 
 static void configure_cli11_cell_affinity_args(CLI::App& app, ru_dummy_cpu_affinities_cell_unit_config& config)
@@ -40,7 +41,8 @@ static void configure_cli11_cell_affinity_args(CLI::App& app, ru_dummy_cpu_affin
       [&config](const std::string& value) { parse_affinity_mask(config.ru_cpu_cfg.mask, value, "ru_cpus"); },
       "Number of CPUs used for the Radio Unit tasks");
 
-  app.add_option_function<std::string>(
+  add_option_function<std::string>(
+      app,
       "--ru_pinning",
       [&config](const std::string& value) {
         config.ru_cpu_cfg.pinning_policy = to_affinity_mask_policy(value);
@@ -54,22 +56,11 @@ static void configure_cli11_cell_affinity_args(CLI::App& app, ru_dummy_cpu_affin
 static void configure_cli11_expert_execution_args(CLI::App& app, ru_dummy_unit_config& config)
 {
   // Cell affinity section.
-  add_option_cell(
+  add_option_object_list<ru_dummy_cpu_affinities_cell_unit_config>(
       app,
       "--cell_affinities",
-      [&config](const std::vector<std::string>& values) {
-        config.cell_affinities.resize(values.size());
-
-        for (unsigned i = 0, e = values.size(); i != e; ++i) {
-          CLI::App subapp("Dummy RU expert execution cell CPU affinities",
-                          "Dummy RUexpert execution cell CPU affinities config, item #" + std::to_string(i));
-          subapp.config_formatter(create_yaml_config_parser());
-          subapp.allow_config_extras();
-          configure_cli11_cell_affinity_args(subapp, config.cell_affinities[i]);
-          std::istringstream ss(values[i]);
-          subapp.parse_from_stream(ss);
-        }
-      },
+      config.cell_affinities,
+      configure_cli11_cell_affinity_args,
       "Sets the cell CPU affinities configuration on a per cell basis");
 }
 
@@ -140,14 +131,25 @@ static void manage_ru(CLI::App& app, dynamic_o_du_unit_config& parsed_cfg)
   ofh_subcmd->disabled();
 }
 
+static bool
+get_is_rt_mode_enabled(const std::variant<ru_sdr_unit_config, ru_ofh_unit_parsed_config, ru_dummy_unit_config>& ru_cfg)
+{
+  if (std::holds_alternative<ru_dummy_unit_config>(ru_cfg)) {
+    return true;
+  }
+
+  if (std::holds_alternative<ru_ofh_unit_parsed_config>(ru_cfg)) {
+    return true;
+  }
+
+  return std::get<ru_sdr_unit_config>(ru_cfg).device_driver != "zmq";
+}
+
 void ocudu::autoderive_dynamic_o_du_parameters_after_parsing(CLI::App& app, dynamic_o_du_unit_config& parsed_cfg)
 {
   const unsigned nof_cells = parsed_cfg.odu_high_cfg.du_high_cfg.config.cells_cfg.size();
-  autoderive_o_du_high_parameters_after_parsing(app, parsed_cfg.odu_high_cfg);
   // Auto derive SDR parameters.
   autoderive_ru_sdr_parameters_after_parsing(app, sdr_cfg, nof_cells);
-  // Auto derive OFH parameters.
-  autoderive_ru_ofh_parameters_after_parsing(app, ofh_cfg);
 
   // Set the parsed RU.
   manage_ru(app, parsed_cfg);
@@ -158,6 +160,10 @@ void ocudu::autoderive_dynamic_o_du_parameters_after_parsing(CLI::App& app, dyna
       dummy.cell_affinities.resize(nof_cells);
     }
   }
+
+  // Derive the O-DU high parameters.
+  autoderive_o_du_high_parameters_after_parsing(
+      app, parsed_cfg.odu_high_cfg, get_is_rt_mode_enabled(parsed_cfg.ru_cfg));
 
   // Auto derive DU low parameters.
   const auto&   cell = parsed_cfg.odu_high_cfg.du_high_cfg.config.cells_cfg.front().cell;

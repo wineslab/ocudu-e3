@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/uci_scheduling/uci_indication_selector.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -36,20 +37,27 @@ protected:
   static constexpr rnti_t   first_rnti    = to_rnti(0x4601);
   static constexpr rnti_t   second_rnti   = to_rnti(0x4602);
 
+  explicit uci_indication_selector_test(std::optional<float> pucch_sinr_threshold_dB = std::nullopt) :
+    selector(timeout_notifier, timeout_slots, MAX_PUCCH_PDUS_PER_SLOT, MAX_NOF_DU_UES_PER_CELL, pucch_sinr_threshold_dB)
+  {
+  }
+
   static sched_result make_sched_result(std::initializer_list<pucch_info> pucchs)
   {
     sched_result result{};
     for (const auto& pucch : pucchs) {
-      result.ul.pucchs.push_back(pucch);
+      result.ul.pucchs.emplace(pucch);
     }
     return result;
   }
 
-  static pucch_info make_pucch_grant(rnti_t       crnti,
-                                     pucch_format format,
-                                     unsigned     nof_harq_bits,
-                                     bool         sr           = false,
-                                     unsigned     nof_csi_bits = 0)
+  static pucch_info make_pucch_grant(rnti_t                   crnti,
+                                     pucch_format             format,
+                                     unsigned                 nof_harq_bits,
+                                     bool                     sr              = false,
+                                     unsigned                 nof_csi_bits    = 0,
+                                     pucch_repetition_tx_slot rep_state       = pucch_repetition_tx_slot::no_multi_slot,
+                                     slot_point               rep_anchor_slot = {})
   {
     pucch_info pucch{};
     pucch.crnti                       = crnti;
@@ -57,8 +65,34 @@ protected:
     pucch.uci_bits.harq_ack_nof_bits  = nof_harq_bits;
     pucch.uci_bits.sr_bits            = sr ? sr_nof_bits::one : sr_nof_bits::no_sr;
     pucch.uci_bits.csi_part1_nof_bits = nof_csi_bits;
+    pucch.repetition                  = rep_state != pucch_repetition_tx_slot::no_multi_slot
+                                            ? std::optional<pucch_info::repetition_info>({rep_anchor_slot, rep_state})
+                                            : std::nullopt;
     pucch.set_format(format);
     return pucch;
+  }
+
+  /// \brief Schedules a multi-slot PUCCH HARQ-ACK repetition burst spanning \c nof_slots consecutive slots, starting
+  /// at the next slot to be processed.
+  /// \return The slots the burst spans.
+  std::vector<slot_point> schedule_burst(rnti_t crnti, unsigned nof_slots, unsigned nof_harq_bits = 1)
+  {
+    const slot_point        anchor_slot = next_sl_tx;
+    std::vector<slot_point> burst_slots;
+    for (unsigned i = 0; i != nof_slots; ++i) {
+      pucch_repetition_tx_slot rep_state = pucch_repetition_tx_slot::continues;
+      if (i == 0) {
+        rep_state = pucch_repetition_tx_slot::starts;
+      } else if (i + 1 == nof_slots) {
+        rep_state = pucch_repetition_tx_slot::ends;
+      }
+      burst_slots.push_back(next_sl_tx);
+      selector.handle_result(next_sl_tx,
+                             make_sched_result({make_pucch_grant(
+                                 crnti, pucch_format::FORMAT_1, nof_harq_bits, false, 0, rep_state, anchor_slot)}));
+      ++next_sl_tx;
+    }
+    return burst_slots;
   }
 
   static uci_indication::uci_pdu make_f0_or_f1_pdu(rnti_t                                            crnti,
@@ -117,7 +151,7 @@ protected:
   }
 
   test_timeout_notifier   timeout_notifier;
-  uci_indication_selector selector{timeout_notifier, timeout_slots, MAX_PUCCH_PDUS_PER_SLOT};
+  uci_indication_selector selector;
 
   slot_point next_sl_tx{
       subcarrier_spacing::kHz30,
@@ -536,6 +570,275 @@ TEST_F(uci_indication_selector_test, on_slot_discard_multiple_ucis_timeout)
     }
   }
   ASSERT_TRUE(visited_rntis.all());
+}
+
+TEST_F(uci_indication_selector_test, first_valid_repetition_of_burst_is_forwarded_without_waiting_for_the_rest)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  // Event: A PUCCH repetition burst spanning 3 slots is scheduled.
+  const std::vector<slot_point> burst_slots = schedule_burst(first_rnti, 3);
+
+  // Event: The feedback of the first repetition arrives with nothing detected.
+  auto first_action =
+      selector.handle_uci_ind_pdu(burst_slots[0], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::dtx}));
+
+  // Test: Nothing is forwarded yet, as the remaining repetitions may still be decoded.
+  ASSERT_FALSE(first_action.has_value());
+
+  // Event: The feedback of the second repetition arrives with a valid ACK.
+  auto second_action = selector.handle_uci_ind_pdu(
+      burst_slots[1], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::ack}, false, 10.0F));
+
+  // Test: The outcome is forwarded right away, and reported against the slot of the UCI grant (i.e. the first slot of
+  // the burst), which is the one the DL HARQ processes are keyed on.
+  ASSERT_TRUE(second_action.has_value());
+  ASSERT_TRUE(second_action->uci_valid);
+  ASSERT_TRUE(second_action->harq_ack_bits.test(0));
+  ASSERT_EQ(second_action->uci_slot, burst_slots[0]);
+
+  // Test: The feedback of the last repetition does not lead to a second action.
+  auto third_action = selector.handle_uci_ind_pdu(
+      burst_slots[2], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::nack}, false, 20.0F));
+  ASSERT_FALSE(third_action.has_value());
+
+  // Test: No timeout is ever triggered.
+  advance_slots(timeout_slots);
+  ASSERT_TRUE(timeout_notifier.events.empty());
+}
+
+TEST_F(uci_indication_selector_test, burst_without_valid_repetition_is_forwarded_after_the_last_one)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  const std::vector<slot_point> burst_slots = schedule_burst(first_rnti, 3, 2);
+
+  // Event: The feedback of all the repetitions arrives with nothing detected.
+  for (unsigned i = 0; i != burst_slots.size() - 1; ++i) {
+    auto action = selector.handle_uci_ind_pdu(
+        burst_slots[i],
+        make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::dtx, mac_harq_ack_report_status::dtx}));
+    ASSERT_FALSE(action.has_value()) << "repetition " << i << " should not have concluded the burst";
+  }
+  auto last_action = selector.handle_uci_ind_pdu(
+      burst_slots.back(),
+      make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::dtx, mac_harq_ack_report_status::dtx}));
+
+  // Test: Once no repetition is left, the DL HARQ processes are NACKed without waiting for any timeout.
+  ASSERT_TRUE(last_action.has_value());
+  ASSERT_FALSE(last_action->uci_valid);
+  ASSERT_EQ(last_action->uci_slot, burst_slots[0]);
+  ASSERT_EQ(last_action->harq_ack_bits.size(), 2U);
+  ASSERT_TRUE(last_action->harq_ack_bits.none());
+
+  // Test: No timeout is triggered afterwards.
+  advance_slots(timeout_slots);
+  ASSERT_TRUE(timeout_notifier.events.empty());
+}
+
+TEST_F(uci_indication_selector_test, burst_with_missing_feedback_times_out_after_its_last_repetition)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  const std::vector<slot_point> burst_slots = schedule_burst(first_rnti, 3);
+
+  // Event: Only the feedback of the first repetition arrives, with nothing detected.
+  ASSERT_FALSE(
+      selector.handle_uci_ind_pdu(burst_slots[0], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::dtx}))
+          .has_value());
+
+  // Test: The timeout is counted from the last repetition of the burst, not from the first one.
+  while (next_sl_tx != burst_slots.back() + uci_indication_selector::SHORT_PUCCH_TIMEOUT_SLOTS) {
+    ASSERT_TRUE(timeout_notifier.events.empty());
+    advance_slots(1);
+  }
+  advance_slots(1);
+
+  // Test: The DL HARQ processes are NACKed, against the slot of the UCI grant.
+  ASSERT_EQ(timeout_notifier.events.size(), 1U);
+  const auto& ev = timeout_notifier.events.front();
+  ASSERT_EQ(ev.crnti, first_rnti);
+  ASSERT_EQ(ev.sl_rx, burst_slots[0]);
+  ASSERT_FALSE(ev.action.uci_valid);
+  ASSERT_EQ(ev.action.harq_ack_bits.size(), 1U);
+  ASSERT_TRUE(ev.action.harq_ack_bits.none());
+}
+
+TEST_F(uci_indication_selector_test, burst_whose_outcome_was_already_forwarded_does_not_time_out)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  const std::vector<slot_point> burst_slots = schedule_burst(first_rnti, 4);
+
+  // Event: The first repetition is decoded, but the feedback of the remaining ones never arrives.
+  auto action = selector.handle_uci_ind_pdu(
+      burst_slots[0], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::ack}, false, 10.0F));
+  ASSERT_TRUE(action.has_value());
+
+  // Test: The DL HARQ processes are not NACKed on top of the ACK that was already forwarded.
+  advance_slots(2 * timeout_slots);
+  ASSERT_TRUE(timeout_notifier.events.empty());
+
+  // Test: A late repetition of a burst that is not tracked anymore is discarded.
+  ASSERT_FALSE(
+      selector.handle_uci_ind_pdu(burst_slots.back(), make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::ack}))
+          .has_value());
+}
+
+TEST_F(uci_indication_selector_test, discarded_repetition_slot_does_not_discard_the_whole_burst)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  const std::vector<slot_point> burst_slots = schedule_burst(first_rnti, 3);
+
+  // Event: An error indication arrives for the slot of the second repetition.
+  selector.handle_discarded_ucis(burst_slots[1]);
+
+  // Test: The burst is not concluded, as the remaining repetitions may still be decoded.
+  ASSERT_TRUE(timeout_notifier.events.empty());
+
+  // Test: The feedback of the last repetition still determines the outcome of the burst.
+  auto action = selector.handle_uci_ind_pdu(
+      burst_slots[2], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::ack}, false, 10.0F));
+  ASSERT_TRUE(action.has_value());
+  ASSERT_TRUE(action->uci_valid);
+  ASSERT_EQ(action->uci_slot, burst_slots[0]);
+
+  advance_slots(timeout_slots);
+  ASSERT_TRUE(timeout_notifier.events.empty());
+}
+
+TEST_F(uci_indication_selector_test, discarded_first_slot_of_burst_keeps_tracking_the_remaining_repetitions)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  const std::vector<slot_point> burst_slots = schedule_burst(first_rnti, 3);
+
+  // Event: An error indication arrives for the first slot of the burst, which is the one the UCI grant is anchored at
+  // and where the state of the burst is kept.
+  selector.handle_discarded_ucis(burst_slots[0]);
+
+  // Test: The burst is not concluded, as the remaining repetitions may still be decoded.
+  ASSERT_TRUE(timeout_notifier.events.empty());
+
+  // Test: The feedback of the remaining repetitions still determines the outcome of the burst.
+  ASSERT_FALSE(
+      selector.handle_uci_ind_pdu(burst_slots[1], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::dtx}))
+          .has_value());
+  auto action = selector.handle_uci_ind_pdu(
+      burst_slots[2], make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::ack}, false, 10.0F));
+  ASSERT_TRUE(action.has_value());
+  ASSERT_TRUE(action->uci_valid);
+  ASSERT_EQ(action->uci_slot, burst_slots[0]);
+
+  advance_slots(timeout_slots);
+  ASSERT_TRUE(timeout_notifier.events.empty());
+}
+
+TEST_F(uci_indication_selector_test, burst_with_all_its_slots_discarded_forces_nack)
+{
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BW-17-1");
+
+  const std::vector<slot_point> burst_slots = schedule_burst(first_rnti, 3);
+
+  // Event: An error indication arrives for every slot of the burst.
+  for (unsigned i = 0; i != burst_slots.size() - 1; ++i) {
+    selector.handle_discarded_ucis(burst_slots[i]);
+    ASSERT_TRUE(timeout_notifier.events.empty()) << "the burst was concluded before all its slots were discarded";
+  }
+  selector.handle_discarded_ucis(burst_slots.back());
+
+  // Test: The DL HARQ processes are NACKed right away, rather than after the full timeout.
+  ASSERT_EQ(timeout_notifier.events.size(), 1U);
+  const auto& ev = timeout_notifier.events.front();
+  ASSERT_EQ(ev.crnti, first_rnti);
+  ASSERT_EQ(ev.sl_rx, burst_slots[0]);
+  ASSERT_FALSE(ev.action.uci_valid);
+  ASSERT_EQ(ev.action.harq_ack_bits.size(), 1U);
+
+  // Test: No other timeout is triggered.
+  timeout_notifier.events.clear();
+  advance_slots(timeout_slots);
+  ASSERT_TRUE(timeout_notifier.events.empty());
+}
+
+class uci_indication_selector_sinr_threshold_test : public uci_indication_selector_test
+{
+protected:
+  static constexpr float sinr_threshold_dB = 0.0F;
+
+  uci_indication_selector_sinr_threshold_test() : uci_indication_selector_test(sinr_threshold_dB) {}
+
+  /// Schedules a PUCCH grant with one HARQ-ACK bit plus SR and processes an ACK+SR UCI PDU with the given SINR.
+  std::optional<uci_action> handle_harq_sr_pdu_with_sinr(std::optional<float> sinr_dB)
+  {
+    selector.handle_result(next_sl_tx,
+                           make_sched_result({make_pucch_grant(first_rnti, pucch_format::FORMAT_1, 1, true)}));
+    return selector.handle_uci_ind_pdu(next_sl_tx,
+                                       make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::ack}, true, sinr_dB));
+  }
+};
+
+TEST_F(uci_indication_selector_sinr_threshold_test, pdu_with_sinr_below_threshold_is_invalidated)
+{
+  auto action = handle_harq_sr_pdu_with_sinr(sinr_threshold_dB - 1.0F);
+
+  // Test: The UCI is treated as if nothing was detected.
+  ASSERT_TRUE(action.has_value());
+  ASSERT_FALSE(action->uci_valid);
+  ASSERT_FALSE(action->sr_detected);
+  ASSERT_TRUE(action->harq_ack_bits.none());
+}
+
+TEST_F(uci_indication_selector_sinr_threshold_test, pdu_with_sinr_at_threshold_is_valid)
+{
+  auto action = handle_harq_sr_pdu_with_sinr(sinr_threshold_dB);
+
+  ASSERT_TRUE(action.has_value());
+  ASSERT_TRUE(action->uci_valid);
+  ASSERT_TRUE(action->sr_detected);
+  ASSERT_TRUE(action->harq_ack_bits.test(0));
+}
+
+TEST_F(uci_indication_selector_sinr_threshold_test, pdu_without_sinr_is_not_filtered)
+{
+  auto action = handle_harq_sr_pdu_with_sinr(std::nullopt);
+
+  ASSERT_TRUE(action.has_value());
+  ASSERT_TRUE(action->uci_valid);
+  ASSERT_TRUE(action->sr_detected);
+  ASSERT_TRUE(action->harq_ack_bits.test(0));
+}
+
+TEST_F(uci_indication_selector_sinr_threshold_test, csi_pdu_with_sinr_below_threshold_is_discarded)
+{
+  // Note: CSI-only PUCCHs are not registered for timeout tracking, so no grant needs to be scheduled.
+  auto action =
+      selector.handle_uci_ind_pdu(next_sl_tx, make_f2_pdu(first_rnti, {}, {false}, true, sinr_threshold_dB - 1.0F));
+
+  ASSERT_TRUE(action.has_value());
+  ASSERT_FALSE(action->uci_valid);
+  ASSERT_FALSE(action->csi.has_value());
+}
+
+TEST_F(uci_indication_selector_sinr_threshold_test, below_threshold_pdu_does_not_override_valid_pdu)
+{
+  // Event: Two PUCCH grants (HARQ and HARQ+SR) got scheduled for the same RNTI. The first UCI arrives with an SINR
+  // above the threshold, the second one below.
+  selector.handle_result(next_sl_tx,
+                         make_sched_result({make_pucch_grant(first_rnti, pucch_format::FORMAT_1, 1),
+                                            make_pucch_grant(first_rnti, pucch_format::FORMAT_1, 1, true)}));
+  auto first_action = selector.handle_uci_ind_pdu(
+      next_sl_tx, make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::ack}, false, sinr_threshold_dB + 1.0F));
+  auto second_action = selector.handle_uci_ind_pdu(
+      next_sl_tx, make_f0_or_f1_pdu(first_rnti, {mac_harq_ack_report_status::nack}, true, sinr_threshold_dB - 1.0F));
+
+  // Test: The action is derived from the valid UCI PDU only.
+  ASSERT_FALSE(first_action.has_value());
+  ASSERT_TRUE(second_action.has_value());
+  ASSERT_TRUE(second_action->uci_valid);
+  ASSERT_TRUE(second_action->harq_ack_bits.test(0));
+  ASSERT_FALSE(second_action->sr_detected);
 }
 
 } // namespace

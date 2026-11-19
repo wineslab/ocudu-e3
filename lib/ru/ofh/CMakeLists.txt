@@ -17,4 +17,4 @@ set(SOURCES
         ru_ofh_uplink_plane_handler_proxy.cpp)
 
 add_library(ocudu_ru_ofh STATIC ${SOURCES})
-target_link_libraries(ocudu_ru_ofh ocudu_ofh ocudu_ofh_ethernet ocudu_ofh_ecpri)
+target_link_libraries(ocudu_ru_ofh ocudu_ofh ocudu_ofh_compression ocudu_ofh_ethernet ocudu_ofh_ecpri)

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "support/compare_sequences.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/zero.h"
 #include "ocudu/phy/generic_functions/precoding/precoding_factories.h"
 #include "ocudu/phy/support/re_pattern.h"
@@ -37,21 +39,6 @@ static float get_tolerance(cf_t expected_value)
   return std::max(std::abs(expected_value) / 256.0F, 1e-5F);
 }
 
-static std::ostream& operator<<(std::ostream& os, span<const cf_t> data)
-{
-  fmt::print(os, "{}", data);
-  return os;
-}
-
-static bool operator==(span<const cf_t> lhs, span<const cf_t> rhs)
-{
-  return std::equal(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), [](cf_t lhs_val, cf_t rhs_val) {
-    float expected_error = std::min(get_tolerance(lhs_val), get_tolerance(rhs_val));
-    float error          = std::abs(lhs_val - rhs_val);
-    return (error < expected_error);
-  });
-}
-
 } // namespace ocudu
 
 // Asserts that the contents of the resource grid match the golden symbols for the give allocation pattern.
@@ -78,7 +65,17 @@ static void assert_grid(const re_buffer_reader<>&   golden,
       grid.get(grid_symbols, i_port, i_symbol, 0, re_mask);
 
       // Assert symbols.
-      ASSERT_EQ(span<const cf_t>(golden_symbol.get_slice(i_port)), span<const cf_t>(grid_symbols));
+      {
+        error_type<std::string> compare_result = compare_sequences(
+            span<const cf_t>(grid_symbols),
+            span<const cf_t>(golden_symbol.get_slice(i_port)),
+            [](const cf_t& actual, const cf_t& expected) {
+              // Each element carries its own tolerance depending on its magnitude.
+              return std::abs(actual - expected) / std::min(get_tolerance(actual), get_tolerance(expected));
+            },
+            1.0F);
+        ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+      }
 
       // Get the rest of the symbols from the grid.
       std::vector<cf_t> grid_zeros(re_mask.size() - re_count);
@@ -90,7 +87,11 @@ static void assert_grid(const re_buffer_reader<>&   golden,
       grid.get(grid_zeros, i_port, i_symbol, 0, ~re_mask);
 
       // Assert that all the grid locations not included in the grid allocation are set to zero.
-      ASSERT_EQ(span<const cf_t>(golden_zeros), span<const cf_t>(grid_zeros));
+      {
+        error_type<std::string> compare_result =
+            compare_sequences(span<const cf_t>(grid_zeros), span<const cf_t>(golden_zeros));
+        ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+      }
     }
 
     // Advance views.
@@ -345,7 +346,10 @@ TEST_F(ResourceGridMapperFixture, SinglePort)
   std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
   // Map into the resource grid.
-  mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+  mapper->map(grid->get_writer(),
+              input_data,
+              allocation.get_re_patterns().front(),
+              to_precoding_beamforming_configuration(precoding_config));
 
   // Generate the golden precoded data.
   const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -385,7 +389,10 @@ TEST_F(ResourceGridMapperFixture, OneLayerToOnePort)
     std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
     // Map into the resource grid.
-    mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+    mapper->map(grid->get_writer(),
+                input_data,
+                allocation.get_re_patterns().front(),
+                to_precoding_beamforming_configuration(precoding_config));
 
     // Generate the golden precoded data.
     const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -423,7 +430,10 @@ TEST_F(ResourceGridMapperFixture, OneLayerAllPorts)
     std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
     // Map into the resource grid.
-    mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+    mapper->map(grid->get_writer(),
+                input_data,
+                allocation.get_re_patterns().front(),
+                to_precoding_beamforming_configuration(precoding_config));
 
     // Generate the golden precoded data.
     const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -457,7 +467,10 @@ TEST_F(ResourceGridMapperFixture, Identity)
     std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
     // Map into the resource grid.
-    mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+    mapper->map(grid->get_writer(),
+                input_data,
+                allocation.get_re_patterns().front(),
+                to_precoding_beamforming_configuration(precoding_config));
 
     // Generate the golden precoded data.
     const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -467,8 +480,7 @@ TEST_F(ResourceGridMapperFixture, Identity)
   }
 }
 
-// Tests mapping for a one layer to two antenna ports configuration, generated by the function
-// make_one_layer_two_ports.
+// Tests mapping for a one layer to two antenna ports configuration, generated from a two-antenna-port PMI.
 TEST_F(ResourceGridMapperFixture, OneLayerTwoPorts)
 {
   constexpr unsigned nof_layers = 1;
@@ -481,8 +493,8 @@ TEST_F(ResourceGridMapperFixture, OneLayerTwoPorts)
     grid->set_all_zero();
 
     // Create a single layer to two ports precoding configuration.
-    precoding_configuration precoding_config =
-        precoding_configuration::make_wideband(make_one_layer_two_ports(codebook_index));
+    precoding_configuration precoding_config = precoding_configuration::make_wideband(
+        make_precoding(pmi_two_antenna_port{static_cast<uint8_t>(codebook_index)}, nof_layers));
 
     // Generate resource grid allocation.
     re_pattern_list allocation = generate_random_allocation(MAX_NOF_PRBS);
@@ -497,7 +509,10 @@ TEST_F(ResourceGridMapperFixture, OneLayerTwoPorts)
     std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
     // Map into the resource grid.
-    mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+    mapper->map(grid->get_writer(),
+                input_data,
+                allocation.get_re_patterns().front(),
+                to_precoding_beamforming_configuration(precoding_config));
 
     // Generate the golden precoded data.
     const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -507,8 +522,7 @@ TEST_F(ResourceGridMapperFixture, OneLayerTwoPorts)
   }
 }
 
-// Tests mapping for a two layers to two antenna ports configuration, generated by the function
-// make_two_layer_two_ports.
+// Tests mapping for a two layers to two antenna ports configuration, generated from a two-antenna-port PMI.
 TEST_F(ResourceGridMapperFixture, TwoLayerTwoPorts)
 {
   constexpr unsigned nof_layers = 2;
@@ -521,8 +535,8 @@ TEST_F(ResourceGridMapperFixture, TwoLayerTwoPorts)
     grid->set_all_zero();
 
     // Create a single layer to two ports precoding configuration.
-    precoding_configuration precoding_config =
-        precoding_configuration::make_wideband(make_two_layer_two_ports(codebook_index));
+    precoding_configuration precoding_config = precoding_configuration::make_wideband(
+        make_precoding(pmi_two_antenna_port{static_cast<uint8_t>(codebook_index)}, nof_layers));
 
     // Generate resource grid allocation.
     re_pattern_list allocation = generate_random_allocation(MAX_NOF_PRBS);
@@ -537,7 +551,10 @@ TEST_F(ResourceGridMapperFixture, TwoLayerTwoPorts)
     std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
     // Map into the resource grid.
-    mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+    mapper->map(grid->get_writer(),
+                input_data,
+                allocation.get_re_patterns().front(),
+                to_precoding_beamforming_configuration(precoding_config));
 
     // Generate the golden precoded data.
     const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -557,19 +574,20 @@ TEST_F(ResourceGridMapperFixture, OneLayerFourPorts)
   // Create resource grid.
   std::unique_ptr<resource_grid> grid = rg_factory->create(nof_ports, MAX_NSYMB_PER_SLOT, MAX_NOF_SUBCARRIERS);
 
-  for (unsigned i_beam = 0; i_beam != 8; ++i_beam) {
-    for (unsigned i_pol_phase = 0; i_pol_phase != 4; ++i_pol_phase) {
+  for (uint8_t i_beam = 0; i_beam != 8; ++i_beam) {
+    for (uint8_t i_pol_phase = 0; i_pol_phase != 4; ++i_pol_phase) {
       // Initialize grid to zero.
       grid->set_all_zero();
 
       // Create a single layer to four ports precoding matrix.
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::two_one,
-                                                              .i_1_1        = i_beam,
-                                                              .i_1_2        = std::nullopt,
-                                                              .i_1_3        = std::nullopt,
-                                                              .i_2          = i_pol_phase};
-      precoding_weight_matrix    precoding        = make_type1_sp_mode1(pmi, nof_layers);
-      precoding_configuration    precoding_config = precoding_configuration::make_wideband(precoding);
+      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+          .panel_config = {pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
+          .i_1_1        = i_beam,
+          .i_1_2        = std::nullopt,
+          .i_1_3        = std::nullopt,
+          .i_2          = i_pol_phase};
+      precoding_weight_matrix precoding        = make_precoding(pmi, nof_layers);
+      precoding_configuration precoding_config = precoding_configuration::make_wideband(precoding);
 
       // Generate resource grid allocation.
       re_pattern_list allocation = generate_random_allocation(MAX_NOF_PRBS);
@@ -584,7 +602,10 @@ TEST_F(ResourceGridMapperFixture, OneLayerFourPorts)
       std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
       // Map into the resource grid.
-      mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+      mapper->map(grid->get_writer(),
+                  input_data,
+                  allocation.get_re_patterns().front(),
+                  to_precoding_beamforming_configuration(precoding_config));
 
       // Generate the golden precoded data.
       const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -605,20 +626,20 @@ TEST_F(ResourceGridMapperFixture, TwoLayerFourPorts)
   // Create resource grid.
   std::unique_ptr<resource_grid> grid = rg_factory->create(nof_ports, MAX_NSYMB_PER_SLOT, MAX_NOF_SUBCARRIERS);
 
-  for (unsigned i_beam = 0; i_beam != 8; ++i_beam) {
-    for (unsigned i_beam_offset = 0; i_beam_offset != 1; ++i_beam_offset) {
-      for (unsigned i_pol_phase = 0; i_pol_phase != 2; ++i_pol_phase) {
+  for (uint8_t i_beam = 0; i_beam != 8; ++i_beam) {
+    for (uint8_t i_beam_offset = 0; i_beam_offset != 1; ++i_beam_offset) {
+      for (uint8_t i_pol_phase = 0; i_pol_phase != 2; ++i_pol_phase) {
         // Initialize grid to zero.
         grid->set_all_zero();
 
         // Create a two layer to four ports precoding matrix.
-        precoding_matrix_indicator pmi =
-            pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::two_one,
-                                   .i_1_1        = i_beam,
-                                   .i_1_2        = std::nullopt,
-                                   .i_1_3        = i_beam_offset,
-                                   .i_2          = i_pol_phase};
-        precoding_weight_matrix precoding        = make_type1_sp_mode1(pmi, nof_layers);
+        precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+            .panel_config = {pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
+            .i_1_1        = i_beam,
+            .i_1_2        = std::nullopt,
+            .i_1_3        = i_beam_offset,
+            .i_2          = i_pol_phase};
+        precoding_weight_matrix precoding        = make_precoding(pmi, nof_layers);
         precoding_configuration precoding_config = precoding_configuration::make_wideband(precoding);
 
         // Generate resource grid allocation.
@@ -634,7 +655,10 @@ TEST_F(ResourceGridMapperFixture, TwoLayerFourPorts)
         std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
         // Map into the resource grid.
-        mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+        mapper->map(grid->get_writer(),
+                    input_data,
+                    allocation.get_re_patterns().front(),
+                    to_precoding_beamforming_configuration(precoding_config));
 
         // Generate the golden precoded data.
         const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -656,19 +680,20 @@ TEST_F(ResourceGridMapperFixture, ThreeLayerFourPorts)
   // Create resource grid.
   std::unique_ptr<resource_grid> grid = rg_factory->create(nof_ports, MAX_NSYMB_PER_SLOT, MAX_NOF_SUBCARRIERS);
 
-  for (unsigned i_beam = 0; i_beam != 8; ++i_beam) {
-    for (unsigned i_pol_phase = 0; i_pol_phase != 2; ++i_pol_phase) {
+  for (uint8_t i_beam = 0; i_beam != 8; ++i_beam) {
+    for (uint8_t i_pol_phase = 0; i_pol_phase != 2; ++i_pol_phase) {
       // Initialize grid to zero.
       grid->set_all_zero();
 
       // Create a three layer to four ports precoding matrix.
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::two_one,
-                                                              .i_1_1        = i_beam,
-                                                              .i_1_2        = std::nullopt,
-                                                              .i_1_3        = std::nullopt,
-                                                              .i_2          = i_pol_phase};
-      precoding_weight_matrix    precoding        = make_type1_sp_mode1(pmi, nof_layers);
-      precoding_configuration    precoding_config = precoding_configuration::make_wideband(precoding);
+      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+          .panel_config = {pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
+          .i_1_1        = i_beam,
+          .i_1_2        = std::nullopt,
+          .i_1_3        = std::nullopt,
+          .i_2          = i_pol_phase};
+      precoding_weight_matrix precoding        = make_precoding(pmi, nof_layers);
+      precoding_configuration precoding_config = precoding_configuration::make_wideband(precoding);
 
       // Generate resource grid allocation.
       re_pattern_list allocation = generate_random_allocation(MAX_NOF_PRBS);
@@ -683,7 +708,10 @@ TEST_F(ResourceGridMapperFixture, ThreeLayerFourPorts)
       std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
       // Map into the resource grid.
-      mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+      mapper->map(grid->get_writer(),
+                  input_data,
+                  allocation.get_re_patterns().front(),
+                  to_precoding_beamforming_configuration(precoding_config));
 
       // Generate the golden precoded data.
       const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -704,19 +732,20 @@ TEST_F(ResourceGridMapperFixture, FourLayerFourPorts)
   // Create resource grid.
   std::unique_ptr<resource_grid> grid = rg_factory->create(nof_ports, MAX_NSYMB_PER_SLOT, MAX_NOF_SUBCARRIERS);
 
-  for (unsigned i_beam = 0; i_beam != 8; ++i_beam) {
-    for (unsigned i_pol_phase = 0; i_pol_phase != 2; ++i_pol_phase) {
+  for (uint8_t i_beam = 0; i_beam != 8; ++i_beam) {
+    for (uint8_t i_pol_phase = 0; i_pol_phase != 2; ++i_pol_phase) {
       // Initialize grid to zero.
       grid->set_all_zero();
 
       // Create a four layer to four ports precoding matrix.
-      precoding_matrix_indicator pmi = pmi_typeI_single_panel{.panel_config = pmi_codebook_single_panel_config::two_one,
-                                                              .i_1_1        = i_beam,
-                                                              .i_1_2        = std::nullopt,
-                                                              .i_1_3        = std::nullopt,
-                                                              .i_2          = i_pol_phase};
-      precoding_weight_matrix    precoding        = make_type1_sp_mode1(pmi, 4);
-      precoding_configuration    precoding_config = precoding_configuration::make_wideband(precoding);
+      precoding_matrix_indicator pmi = pmi_typeI_single_panel{
+          .panel_config = {pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
+          .i_1_1        = i_beam,
+          .i_1_2        = std::nullopt,
+          .i_1_3        = std::nullopt,
+          .i_2          = i_pol_phase};
+      precoding_weight_matrix precoding        = make_precoding(pmi, nof_layers);
+      precoding_configuration precoding_config = precoding_configuration::make_wideband(precoding);
 
       // Generate resource grid allocation.
       re_pattern_list allocation = generate_random_allocation(MAX_NOF_PRBS);
@@ -731,7 +760,10 @@ TEST_F(ResourceGridMapperFixture, FourLayerFourPorts)
       std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
       // Map into the resource grid.
-      mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+      mapper->map(grid->get_writer(),
+                  input_data,
+                  allocation.get_re_patterns().front(),
+                  to_precoding_beamforming_configuration(precoding_config));
 
       // Generate the golden precoded data.
       const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);
@@ -784,7 +816,10 @@ TEST_P(ResourceGridMapperFixture, MultiplePrg)
     std::unique_ptr<resource_grid_mapper> mapper = mapper_factory->create();
 
     // Map into the resource grid.
-    mapper->map(grid->get_writer(), input_data, allocation.get_re_patterns().front(), precoding_config);
+    mapper->map(grid->get_writer(),
+                input_data,
+                allocation.get_re_patterns().front(),
+                to_precoding_beamforming_configuration(precoding_config));
 
     // Generate the golden precoded data.
     const re_buffer_reader<>& golden = generate_golden(input_data, allocation, precoding_config);

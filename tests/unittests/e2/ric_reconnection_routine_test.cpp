@@ -87,7 +87,7 @@ protected:
     task_worker.run_pending_tasks();
   }
 
-  e2ap_configuration                                                   cfg;
+  e2ap_config                                                          cfg;
   timer_manager                                                        timers;
   manual_task_worker                                                   task_worker{64};
   timer_factory                                                        factory;

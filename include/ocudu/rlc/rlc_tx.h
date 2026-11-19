@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/byte_buffer.h"
+#include "ocudu/ran/rb_id.h"
 #include "ocudu/rlc/rlc_buffer_state.h"
 #include <optional>
 
@@ -73,9 +74,10 @@ public:
   /// \param is_retx Determines wheter the SDU is a PDCP retransmission or not
   virtual void handle_sdu(byte_buffer sdu_buf, bool is_retx) = 0;
 
-  /// \brief Interface for higher layers to discard SDUs from RLC queue
-  /// \param pdcp_sn PDCP sequence number (SN) of the SDU that is to be discarded
-  virtual void discard_sdu(uint32_t pdcp_sn) = 0;
+  /// \brief Interface for higher layers to discard a block of SDUs from RLC queue.
+  /// \param pdcp_sn_start PDCP sequence number (SN) of the first SDU in of the block that is to be discarded.
+  /// \param block_size Number of consecutive PDCP SNs to be discarded.
+  virtual void discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) = 0;
 };
 
 /// This interface represents the data upper layer that the TX RLC bearer must notify on transmission and/or delivery of
@@ -130,8 +132,8 @@ public:
   rlc_tx_upper_layer_control_notifier(rlc_tx_upper_layer_control_notifier&&)                 = delete;
   rlc_tx_upper_layer_control_notifier& operator=(rlc_tx_upper_layer_control_notifier&&)      = delete;
 
-  virtual void on_protocol_failure() = 0;
-  virtual void on_max_retx()         = 0;
+  virtual void on_protocol_failure(rb_id_t rb_id) = 0;
+  virtual void on_max_retx(rb_id_t rb_id)         = 0;
 };
 
 /***************************************

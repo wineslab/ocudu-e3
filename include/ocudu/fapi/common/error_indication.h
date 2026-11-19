@@ -5,6 +5,7 @@
 
 #include "ocudu/fapi/common/error_code.h"
 #include "ocudu/ran/slot_point.h"
+#include "fmt/format.h"
 #include <optional>
 
 namespace ocudu {

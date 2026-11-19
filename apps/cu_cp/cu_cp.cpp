@@ -3,8 +3,11 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "apps/cu_cp/cu_cp_appconfig_cli11_schema.h"
+#include "apps/helpers/config/config_yaml_schema.h"
 #include "apps/helpers/e2/e2_config_translators.h"
+#include "apps/helpers/f1/f1_gateway_helpers.h"
 #include "apps/helpers/metrics/metrics_helpers.h"
+#include "apps/helpers/network/dtls_config_translators.h"
 #include "apps/helpers/network/sctp_config_translators.h"
 #include "apps/services/app_execution_metrics/executor_metrics_manager.h"
 #include "apps/services/app_resource_usage/app_resource_usage.h"
@@ -22,6 +25,7 @@
 #include "apps/units/o_cu_cp/pcap_factory.h"
 #include "cu_cp_appconfig.h"
 #include "cu_cp_appconfig_yaml_writer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/scope_exit.h"
 #include "ocudu/cu_cp/cu_cp_operation_controller.h"
 #include "ocudu/e1ap/gateways/e1_network_server_factory.h"
@@ -168,6 +172,10 @@ int main(int argc, char** argv)
   // Fill the generic application arguments to parse.
   populate_cli11_generic_args(app);
 
+  // Register the configuration-schema root so the add_* helpers capture the schema as options are declared.
+  config::schema_node config_schema_root{"OCUDU 5G CU-CP configuration"};
+  app_helpers::register_config_schema(app, config_schema_root, "cu-cp");
+
   // Configure CLI11 with the CU application configuration schema.
   cu_cp_appconfig cu_cp_cfg;
   configure_cli11_with_cu_cp_appconfig_schema(app, cu_cp_cfg);
@@ -224,7 +232,7 @@ int main(int argc, char** argv)
   if (not cu_cp_cfg.trace_cfg.filename.empty()) {
     app_tracer.enable_tracer(cu_cp_cfg.trace_cfg.filename,
                              cu_cp_cfg.trace_cfg.max_tracing_events_per_file,
-                             cu_cp_cfg.trace_cfg.nof_tracing_events_after_severe,
+                             cu_cp_cfg.trace_cfg.nof_tracing_events_before_severe,
                              cu_cp_logger);
   }
 
@@ -292,15 +300,19 @@ int main(int argc, char** argv)
       o_cu_cp_app_unit->get_o_cu_cp_unit_config(), workers.get_cu_cp_pcap_executors(), cleanup_signal_dispatcher);
   auto on_pcap_close_init = make_scope_exit([&cu_cp_logger]() { cu_cp_logger.info("Closing PCAP files..."); });
 
-  // Create XN-C GWs. (TODO cleanup port and PPID args with factory)
+  // Create Xn-C GWs. (TODO cleanup port and PPID args with factory)
   cu_cp_unit_config cp_unit_cfg = o_cu_cp_app_unit->get_o_cu_cp_unit_config().cucp_cfg;
   std::vector<std::unique_ptr<ocucp::xnc_connection_gateway>> xnc_gws;
   for (const auto& gw_cfg : cp_unit_cfg.xnap_config.gateways) {
     sctp_network_gateway_config xnc_sctp_cfg = {};
-    xnc_sctp_cfg.if_name                     = "XN-C";
+    xnc_sctp_cfg.if_name                     = "Xn-C";
     xnc_sctp_cfg.non_blocking_mode           = true;
     xnc_sctp_cfg.bind_addresses              = gw_cfg.bind_addrs;
     fill_sctp_network_gateway_config_socket_params(xnc_sctp_cfg, gw_cfg.sctp);
+    if (gw_cfg.dtls.enabled) {
+      xnc_sctp_cfg.dtls_cfg.emplace();
+      fill_dtls_network_gateway_config_params(*xnc_sctp_cfg.dtls_cfg, gw_cfg.dtls);
+    }
     xnc_sctp_cfg.bind_port = XNAP_PORT;
     xnc_sctp_cfg.ppid      = XNAP_PPID;
     xnc_sctp_gateway_config xnc_server_cfg({xnc_sctp_cfg,
@@ -312,19 +324,15 @@ int main(int argc, char** argv)
     xnc_gws.push_back(create_xnc_connection_gateway(xnc_server_cfg));
   }
 
-  // Create F1-C GW (TODO cleanup port and PPID args with factory)
-  sctp_network_gateway_config f1c_sctp_cfg = {};
-  f1c_sctp_cfg.if_name                     = "F1-C";
-  f1c_sctp_cfg.bind_addresses              = cu_cp_cfg.f1ap_cfg.bind_addrs;
-  f1c_sctp_cfg.bind_port                   = F1AP_PORT;
-  f1c_sctp_cfg.ppid                        = F1AP_PPID;
-  fill_sctp_network_gateway_config_socket_params(f1c_sctp_cfg, cu_cp_cfg.f1ap_cfg.sctp);
-  f1c_cu_sctp_gateway_config                    f1c_server_cfg({f1c_sctp_cfg,
-                                                                *epoll_broker,
-                                                                workers.get_cu_cp_executor_mapper().f1c_rx_executor(),
-                                                                workers.get_cu_cp_executor_mapper().ctrl_executor(),
-                                                                *cu_cp_dlt_pcaps.f1ap});
-  std::unique_ptr<ocucp::f1c_connection_server> cu_f1c_gw = ocudu::create_f1c_gateway_server(f1c_server_cfg);
+  std::unique_ptr<ocucp::f1c_connection_server> cu_f1c_gw = ocudu::create_f1c_gateway_server(
+      ocudu::f1c_gateway_config{.bind_addrs = cu_cp_cfg.f1ap_cfg.bind_addrs,
+                                .sctp_cfg   = cu_cp_cfg.f1ap_cfg.sctp,
+                                .dtls_cfg   = cu_cp_cfg.f1ap_cfg.dtls,
+                                .if_name    = "F1-C"},
+      ocudu::f1c_gateway_dependencies{.broker         = *epoll_broker,
+                                      .io_rx_executor = workers.get_cu_cp_executor_mapper().f1c_rx_executor(),
+                                      .ctrl_exec      = workers.get_cu_cp_executor_mapper().ctrl_executor(),
+                                      .pcap           = *cu_cp_dlt_pcaps.f1ap});
 
   // Instantiate E1 GW
   // > Create E1 config
@@ -334,6 +342,11 @@ int main(int argc, char** argv)
   e1_sctp_cfg.bind_port      = E1AP_PORT;
   e1_sctp_cfg.ppid           = E1AP_PPID;
   fill_sctp_network_gateway_config_socket_params(e1_sctp_cfg, cu_cp_cfg.e1ap_cfg.sctp);
+  if (cu_cp_cfg.e1ap_cfg.dtls.enabled) {
+    e1_sctp_cfg.dtls_cfg.emplace();
+    fill_dtls_network_gateway_config_params(*e1_sctp_cfg.dtls_cfg, cu_cp_cfg.e1ap_cfg.dtls);
+  }
+
   // > Create E1 gateway
   std::unique_ptr<ocucp::e1_connection_server> e1_gw =
       create_e1_gateway_server(e1_cu_cp_sctp_gateway_config{e1_sctp_cfg,
@@ -405,7 +418,7 @@ int main(int argc, char** argv)
   // Connect E1AP to O-CU-CP.
   e1_gw->attach_cu_cp(o_cucp_obj.get_cu_cp().get_e1_handler());
 
-  // Connect each XN-C gateway to O-CU-CP and start listening for new XN-C connection requests.
+  // Connect each Xn-C gateway to O-CU-CP and start listening for new Xn-C connection requests.
   for (auto& gw : xnc_gws) {
     gw->attach_cu_cp(o_cucp_obj.get_cu_cp().get_xnc_handler());
   }
@@ -415,13 +428,11 @@ int main(int argc, char** argv)
   o_cucp_obj.get_operation_controller().start();
   cu_cp_logger.info("CU-CP started successfully");
 
-  // Check connection to AMF.
-  if (not o_cucp_obj.get_cu_cp().get_ng_handler().amfs_are_connected()) {
-    report_error("CU-CP failed to connect to AMF");
-  }
+  // Note: An AMF that is not reachable on startup is reconnected to in the background.
 
   // Configure the remote commands and start the service.
   if (remote_control_server) {
+    remote_control_server->add_commands(o_cucp_unit.commands.remote);
     remote_control_server->get_operation_controller().start();
   }
 
@@ -436,7 +447,8 @@ int main(int argc, char** argv)
         app_name,
         cu_cp_cfg.log_cfg.filename == "stdout" ? std::string_view() : cu_cp_cfg.log_cfg.filename,
         ocudulog::fetch_basic_logger("CU-CP"),
-        cu_cp_cfg.log_cfg.all_level);
+        cu_cp_cfg.log_cfg.all_level,
+        cu_cp_cfg.log_cfg.flush_app_banner);
 
     auto exec_metrics_session = exec_metrics_service.service
                                     ? exec_metrics_service.service->create_session(workers.get_metrics_executor())

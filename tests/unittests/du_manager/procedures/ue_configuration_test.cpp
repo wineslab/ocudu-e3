@@ -7,8 +7,10 @@
 
 #include "du_manager_procedure_test_helpers.h"
 #include "lib/du/du_high/du_manager/procedures/ue_configuration_procedure.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/pdcp/pdcp_pdu_generator.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/cell_group_config.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include "ocudu/mac/config/mac_config_helpers.h"
@@ -55,7 +57,7 @@ protected:
       new_drb.f1u.warn_on_drop     = false;
     }
 
-    proc = launch_async<ue_configuration_procedure>(req, ue_mng, cell_mng, params);
+    proc = launch_async<ue_configuration_procedure>(req, ue_mng, cell_mng, params, mem_resources);
     proc_launcher.emplace(proc);
   }
 
@@ -109,7 +111,7 @@ protected:
                          [&drb](const auto& b) {
                            return b.served_radio_bearer.type().value ==
                                       asn1::rrc_nr::rlc_bearer_cfg_s::served_radio_bearer_c_::types::drb_id and
-                                  b.served_radio_bearer.drb_id() == drb_id_to_uint(drb.drb_id);
+                                  b.served_radio_bearer.drb_id() == to_underlying(drb.drb_id);
                          });
         ASSERT_NE(drb_it, cell_group.rlc_bearer_to_add_mod_list.end());
         ASSERT_FALSE(is_srb(uint_to_lcid(drb_it->lc_ch_id)));
@@ -151,7 +153,7 @@ protected:
                                   [&drb](const auto& b) {
                                     return b.served_radio_bearer.type().value ==
                                                asn1::rrc_nr::rlc_bearer_cfg_s::served_radio_bearer_c_::types::drb_id and
-                                           b.served_radio_bearer.drb_id() == drb_id_to_uint(drb.drb_id);
+                                           b.served_radio_bearer.drb_id() == to_underlying(drb.drb_id);
                                   });
       ASSERT_NE(drb_it, cell_group.rlc_bearer_to_add_mod_list.end());
       ASSERT_FALSE(is_srb(uint_to_lcid(drb_it->lc_ch_id)));
@@ -443,6 +445,8 @@ TEST_F(ue_config_tester, when_drb_to_be_released_does_not_exist_then_request_is_
 TEST_F(ue_config_tester,
        when_reestablishment_is_signalled_then_bearers_are_marked_as_reestablishRLC_and_cell_config_are_sent)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   // Mark UE as reestablishing.
   test_ue->reestablished_cfg_pending = std::make_unique<du_ue_resource_config>();
   test_ue->reestablished_cfg_pending->srbs.emplace(srb_id_t::srb1);

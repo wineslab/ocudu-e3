@@ -22,27 +22,20 @@ struct ngap_pdu_session_resource_setup_request {
   byte_buffer                                                           nas_pdu; ///< optional NAS PDU
 };
 
-enum class ngap_qos_flow_map_ind { ul = 0, dl };
-
-struct ngap_associated_qos_flow {
-  qos_flow_id_t                        qos_flow_id = qos_flow_id_t::invalid;
-  std::optional<ngap_qos_flow_map_ind> qos_flow_map_ind;
-};
-
 struct ngap_qos_flow_failed_to_setup_item {
   qos_flow_id_t qos_flow_id = qos_flow_id_t::invalid;
   ngap_cause_t  cause;
 };
 
 struct ngap_qos_flow_per_tnl_information {
-  up_transport_layer_info                                    up_tp_layer_info;
-  slotted_id_vector<qos_flow_id_t, ngap_associated_qos_flow> associated_qos_flow_list;
+  up_transport_layer_info                                     up_tp_layer_info;
+  slotted_id_vector<qos_flow_id_t, cu_cp_associated_qos_flow> associated_qos_flow_list;
 };
 
 struct ngap_pdu_session_resource_setup_response_transfer {
   std::vector<ngap_qos_flow_per_tnl_information>                       add_dl_qos_flow_per_tnl_info;
   ngap_qos_flow_per_tnl_information                                    dlqos_flow_per_tnl_info;
-  slotted_id_vector<qos_flow_id_t, ngap_associated_qos_flow>           associated_qos_flow_list;
+  slotted_id_vector<qos_flow_id_t, cu_cp_associated_qos_flow>          associated_qos_flow_list;
   slotted_id_vector<qos_flow_id_t, ngap_qos_flow_failed_to_setup_item> qos_flow_failed_to_setup_list;
   std::optional<security_result_t>                                     security_result;
 };
@@ -160,7 +153,8 @@ struct qos_flow_add_or_mod_response_item {
 struct ngap_pdu_session_res_modify_response_transfer {
   std::vector<ngap_qos_flow_per_tnl_information> add_dl_qos_flow_per_tnl_info;
   std::optional<slotted_id_vector<qos_flow_id_t, qos_flow_add_or_mod_response_item>>
-      qos_flow_add_or_modify_response_list;
+                                                                       qos_flow_add_or_modify_response_list;
+  slotted_id_vector<qos_flow_id_t, ngap_qos_flow_failed_to_setup_item> qos_flow_failed_to_add_or_modify_list;
 };
 
 struct ngap_pdu_session_resource_modify_response_item {

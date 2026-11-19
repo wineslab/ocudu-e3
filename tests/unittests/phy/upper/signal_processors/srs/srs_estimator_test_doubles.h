@@ -9,6 +9,7 @@
 
 namespace ocudu {
 
+/// Dummy SRS estimator that always returns an empty result.
 class srs_estimator_dummy : public srs_estimator
 {
 public:
@@ -16,6 +17,24 @@ public:
   {
     return srs_estimator_result();
   }
+};
+
+/// Spy for \ref srs_estimator that tracks whether \c estimate() was called.
+class srs_estimator_spy : public srs_estimator
+{
+public:
+  srs_estimator_result estimate(const resource_grid_reader& grid, const srs_estimator_configuration& config) override
+  {
+    estimate_called = true;
+    return srs_estimator_result();
+  }
+
+  bool has_estimate_method_been_called() const { return estimate_called; }
+
+  void clear() { estimate_called = false; }
+
+private:
+  bool estimate_called = false;
 };
 
 } // namespace ocudu

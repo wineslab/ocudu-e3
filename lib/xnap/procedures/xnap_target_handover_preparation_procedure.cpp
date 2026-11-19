@@ -62,6 +62,10 @@ void xnap_target_handover_preparation_procedure::operator()(coro_context<async_t
   xnap_ue_context& ue_ctxt = ue_ctxt_list[ho_ack.ue_index];
   ue_ctxt_list.update_peer_xnap_ue_id(ue_ctxt.ue_ids.local_xnap_ue_id, target_xnap_ue_id);
 
+  // Remember the cell this context was prepared for. Parallel CHO preparations from one source share the Source NG-RAN
+  // node UE XnAP ID, so a message that omits our Target NG-RAN node UE XnAP ID can only be routed by target cell.
+  ue_ctxt.ho_target_cell = request.nr_cgi;
+
   if (!send_handover_request_ack(ue_ctxt.ue_ids.ue_index, ue_ctxt.ue_ids.local_xnap_ue_id, ho_ack)) {
     logger.debug("ue={}: \"{}\" failed. Cause: Failed to send Handover Request Ack", ho_ack.ue_index, name());
     CORO_EARLY_RETURN();
@@ -117,8 +121,8 @@ bool xnap_target_handover_preparation_procedure::send_handover_request_ack(cu_cp
   // Fill UE IDs.
   // This is sent from the target to the source, so the source UE ID is the peer XNAP UE ID and the target UE ID is the
   // local XNAP UE ID.
-  ho_request_ack->source_ng_ra_nnode_ue_xn_ap_id = peer_xnap_ue_id_to_uint(target_xnap_ue_id);
-  ho_request_ack->target_ng_ra_nnode_ue_xn_ap_id = local_xnap_ue_id_to_uint(local_xnap_ue_id);
+  ho_request_ack->source_ng_ra_nnode_ue_xn_ap_id = to_underlying(target_xnap_ue_id);
+  ho_request_ack->target_ng_ra_nnode_ue_xn_ap_id = to_underlying(local_xnap_ue_id);
 
   // TS 38.423 Section 8.2.1: if the request contained Conditional Handover Information Request IE,
   // the target shall include Conditional Handover Information Acknowledge IE in the response.
@@ -127,9 +131,9 @@ bool xnap_target_handover_preparation_procedure::send_handover_request_ack(cu_cp
     ho_request_ack->ch_oinfo_ack.requested_target_cell_global_id.set_nr() = cgi_to_asn1(request.nr_cgi);
   }
 
-  // Forward message to XN-C peer.
+  // Forward message to Xn-C peer.
   if (!tx_notifier.on_new_message(xnap_msg)) {
-    logger.warning("XN-C association is not set. Cannot send HandoverRequestAck");
+    logger.warning("Xn-C association is not set. Cannot send HandoverRequestAck");
     return false;
   }
 
@@ -147,11 +151,11 @@ void xnap_target_handover_preparation_procedure::send_handover_preparation_failu
 
   auto& ho_fail = xnap_msg.pdu.unsuccessful_outcome().value.ho_prep_fail();
   // This is sent from the target to the source, so the source UE ID is the peer XNAP UE ID.
-  ho_fail->source_ng_ra_nnode_ue_xn_ap_id = peer_xnap_ue_id_to_uint(target_xnap_ue_id);
+  ho_fail->source_ng_ra_nnode_ue_xn_ap_id = to_underlying(target_xnap_ue_id);
 
-  // Forward message to XN-C peer.
+  // Forward message to Xn-C peer.
   if (!tx_notifier.on_new_message(xnap_msg)) {
-    logger.warning("XN-C association is not set. Cannot send HandoverFailure");
+    logger.warning("Xn-C association is not set. Cannot send HandoverFailure");
     return;
   }
 }

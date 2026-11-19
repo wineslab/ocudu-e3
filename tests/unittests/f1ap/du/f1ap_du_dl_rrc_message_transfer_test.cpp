@@ -4,6 +4,8 @@
 
 #include "f1ap_du_test_helpers.h"
 #include "test_doubles/f1ap/f1ap_test_messages.h"
+#include "tests/ocudu_test_requirements.h"
+#include "ocudu/adt/format.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -60,6 +62,33 @@ TEST_F(f1ap_du_dl_rrc_message_transfer_test, when_dl_rrc_message_transfer_is_rec
       << "Invalid gNB-CU UE F1AP ID";
 }
 
+TEST_F(f1ap_du_dl_rrc_message_transfer_test, when_awaited_pdu_is_delivered_then_the_event_resources_are_released)
+{
+  // The events used to await the delivery of a PDU are taken from a pool, and each of them holds a timer. Run several
+  // await/delivery cycles and verify that the events do not accumulate resources as they are recycled.
+  auto run_delivery_cycle = [this](uint32_t pdcp_sn) {
+    byte_buffer      test_rrc_msg = test_helpers::create_dl_dcch_rrc_container(pdcp_sn, {0x1, 0x2, 0x3});
+    async_task<bool> t            = test_ue->f1c_bearers[1].bearer->handle_pdu_and_await_delivery(
+        std::move(test_rrc_msg), false, std::chrono::milliseconds{1000});
+    lazy_task_launcher<bool> launcher{t};
+    EXPECT_FALSE(t.ready()) << "The delivery of the PDU should not be reported yet";
+
+    test_ue->f1c_bearers[1].bearer->handle_delivery_notification(pdcp_sn);
+    this->tick();
+    EXPECT_TRUE(t.ready()) << "The delivery of the PDU should have been reported";
+  };
+
+  run_delivery_cycle(1);
+  const size_t nof_timers_after_first_cycle = timer_service.nof_timers();
+
+  for (uint32_t pdcp_sn = 2; pdcp_sn != 12; ++pdcp_sn) {
+    run_delivery_cycle(pdcp_sn);
+  }
+
+  ASSERT_EQ(timer_service.nof_timers(), nof_timers_after_first_cycle)
+      << "The resources of the events are not released when the events are recycled";
+}
+
 TEST_F(
     f1ap_du_dl_rrc_message_transfer_test,
     when_dl_rrc_message_transfer_contains_rrc_delivery_status_request_then_rrc_delivery_status_is_reported_after_container_delivery)
@@ -92,7 +121,7 @@ TEST_F(
   ASSERT_EQ(ret.value().pdu.init_msg().value.type().value,
             asn1::f1ap::f1ap_elem_procs_o::init_msg_c::types_opts::rrc_delivery_report);
   const asn1::f1ap::rrc_delivery_report_s& report = ret.value().pdu.init_msg().value.rrc_delivery_report();
-  ASSERT_EQ(report->gnb_du_ue_f1ap_id, gnb_du_ue_f1ap_id_to_uint(du_ue_id));
+  ASSERT_EQ(report->gnb_du_ue_f1ap_id, to_underlying(du_ue_id));
   ASSERT_EQ(report->srb_id, 1);
   ASSERT_EQ(report->rrc_delivery_status.trigger_msg, pdcp_sn);
   ASSERT_EQ(report->rrc_delivery_status.delivery_status, pdcp_sn);
@@ -136,6 +165,8 @@ TEST_F(f1ap_du_test,
 TEST_F(f1ap_du_test,
        when_dl_rrc_message_transfer_with_old_gnb_du_ue_id_then_du_is_notified_and_rrc_container_is_forwarded)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   // Run Test Preamble.
   run_f1_setup_procedure();
   // > create UE1
@@ -178,6 +209,8 @@ TEST_F(f1ap_du_test,
 
 TEST_F(f1ap_du_test, when_dl_rrc_message_transfer_has_duplicate_cu_ue_id_and_old_gnb_du_ue_id_then_cu_ue_id_is_updated)
 {
+  OCUDU_TEST_REQUIREMENTS("CU-GEN-3");
+
   // Run Test Preamble.
   run_f1_setup_procedure();
   // > create UE1

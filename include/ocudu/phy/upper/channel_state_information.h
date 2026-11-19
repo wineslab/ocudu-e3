@@ -233,11 +233,15 @@ public:
     }
 
     // Compute a global RSRP metric as the average of all valid RSRP values.
-    float rsrp_lin = 0;
+    float rsrp_lin = 0.0f;
     if (nof_valid_rsrp_values != 0) {
       rsrp_lin = rsrp_total_lin / static_cast<float>(nof_valid_rsrp_values);
     }
-    rsrp_dB = convert_power_to_dB(rsrp_lin);
+    if (rsrp_lin > 0.0f) {
+      rsrp_dB = convert_power_to_dB(rsrp_lin);
+    } else {
+      rsrp_dB = -std::numeric_limits<float>::infinity();
+    }
   }
 
   /// \brief Gets the Reference Signal Received Power (RSRP) in normalized dB units.

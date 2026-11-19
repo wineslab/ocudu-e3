@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ofh_closed_rx_window_handler.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/executors/task_executor.h"
 
 using namespace ocudu;

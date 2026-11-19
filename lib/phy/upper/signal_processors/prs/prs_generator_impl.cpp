@@ -4,6 +4,7 @@
 
 #include "prs_generator_impl.h"
 #include "prs_generator_validator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
 #include "ocudu/phy/upper/signal_processors/prs/prs_generator_configuration.h"
 
@@ -80,25 +81,25 @@ void prs_generator_impl::map(resource_grid_writer& grid, unsigned i_symbol, cons
   // Calculate the initial subcarrier.
   unsigned k_init = config.freq_alloc.start() * NOF_SUBCARRIERS_PER_RB + (config.comb_offset + re_offset) % comb_size;
 
-  // Extract the precoding weight matrix for the transmission.
-  const precoding_weight_matrix& precoding_weights = config.precoding.get_prg_coefficients(0);
+  // Extract the precoding and beamforming configuration of the transmission.
+  const precoding_beamforming_composite& precoding = config.precoding_and_beamforming.get_prg(0);
 
-  // Extract the number of transmit ports.
-  unsigned nof_ports = precoding_weights.get_nof_ports();
+  // Extract the number of beams that carry the transmission.
+  unsigned nof_beams = precoding.beams.size();
 
   // Prepare precoded symbol buffer.
-  symbols.resize(precoding_weights.get_nof_ports(), sequence.get_nof_re());
+  symbols.resize(nof_beams, sequence.get_nof_re());
 
-  // Apply precoding.
-  precoder->apply_precoding(symbols, sequence, config.precoding.get_prg_coefficients(0));
+  // Apply the MIMO precoding.
+  precoder->apply_precoding(symbols, sequence, precoding.mimo);
 
-  // Write the precoded symbols for each of the transmission ports.
-  for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+  // Write the precoded symbols in the resource grid port that carries each of the beams.
+  for (unsigned i_beam = 0; i_beam != nof_beams; ++i_beam) {
     // Get view of the destination OFDM symbol.
-    span<cbf16_t> grid_symbol_view = grid.get_view(i_port, i_symbol);
+    span<cbf16_t> grid_symbol_view = grid.get_view(to_underlying(precoding.beams[i_beam]), i_symbol);
 
     // Get view of the symbols to map.
-    span<const cbf16_t> symbols_to_map = symbols.get_slice(i_port);
+    span<const cbf16_t> symbols_to_map = symbols.get_slice(i_beam);
 
     // Write symbols in the grid OFDM symbol.
     for (unsigned i = 0, i_end = symbols_to_map.size(); i != i_end; ++i) {

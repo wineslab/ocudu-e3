@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "low_papr_sequence_collection_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/resource_block.h"
 #include "ocudu/support/math/math_utils.h"
 

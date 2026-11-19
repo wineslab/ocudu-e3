@@ -20,7 +20,7 @@
 #include "ocudu/security/security_engine.h"
 #include "ocudu/support/sdu_window.h"
 #include "ocudu/support/timers.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 
 namespace ocudu {
 
@@ -46,7 +46,7 @@ struct pdcp_rx_pdu_info {
   /// Indicates whether the integrity of \c buf is verified (true) or unverified/unchecked (false).
   bool integrity_verified;
   /// Time of arrival at the PDCP entity
-  std::chrono::system_clock::time_point time_of_arrival;
+  std::chrono::steady_clock::time_point time_of_arrival;
   /// The PDCP crypto token
   pdcp_crypto_token token;
 };
@@ -60,7 +60,7 @@ struct pdcp_rx_sdu_info {
   /// Indicates whether the integrity of \c buf is verified (true) or unverified/unchecked (false).
   bool integrity_verified;
   /// Time of arrival at the PDCP entity
-  std::chrono::system_clock::time_point time_of_arrival;
+  std::chrono::steady_clock::time_point time_of_arrival;
 };
 
 /// Base class used for receiving PDCP bearers.
@@ -211,7 +211,7 @@ private:
   /// \brief Handles a received data PDU.
   /// \param pdu The data PDU to be handled (including header and payload)
   /// \param time_of_arrival The time of arrival at the PDCP entity
-  void handle_data_pdu(byte_buffer pdu, std::chrono::system_clock::time_point time_of_arrival);
+  void handle_data_pdu(byte_buffer pdu, std::chrono::steady_clock::time_point time_of_arrival);
 
   void apply_security(pdcp_rx_pdu_info&& pdu_info);
 
@@ -221,12 +221,31 @@ private:
   /// \param buf The control PDU to be handled (including header and payload)
   void handle_control_pdu(byte_buffer_chain pdu);
 
+  /// \brief Deliver a single SDU to upper layers after optional header decompression.
+  ///
+  /// Applies ROHC decompression if configured; drops the SDU on decompression failure.
+  /// On success, updates SDU metrics and reordering delay statistics, then forwards the payload to the upper layers.
+  /// Does not modify any RX state variables (RX_DELIV, RX_NEXT).
+  /// \param sdu_info Deciphered SDU with associated metadata. The internal buffer is consumed (moved) on success.
   void deliver_sdu(pdcp_rx_sdu_info& sdu_info);
-  void deliver_all_consecutive_counts();
-  void deliver_all_sdus();
-  void discard_all_sdus();
 
-  void record_reordering_delay(std::chrono::system_clock::time_point time_of_arrival);
+  /// \brief Advance RX_DELIV through consecutively buffered COUNTs, stopping at the first gap or at \p stop_count.
+  ///
+  /// For each buffered SDU at RX_DELIV, delivers it to upper layers and removes it from the window. If the SDU was
+  /// already delivered out-of-order (OOO), only advances RX_DELIV and cleans the window entry.
+  ///
+  /// \param stop_count Exclusive upper bound on RX_DELIV advancement; the window is not advanced to or beyond this
+  ///                   COUNT value.
+  /// \param stop_on_gap Stop advancement on first gap, i.e. stop at the first count for which no SDU has been placed in
+  ///                   the receive window.
+  void advance_rx_window(uint32_t stop_count, bool stop_on_gap);
+
+  /// \brief Discard all buffered SDUs from the RX window without delivering. Used for reestablishment of SRBs.
+  ///
+  /// Iterates from RX_DELIV to RX_NEXT, removing each buffered entry and advancing RX_DELIV. Gaps are ignored.
+  void discard_rx_window();
+
+  void record_reordering_delay(std::chrono::steady_clock::time_point time_of_arrival);
 
   /// Apply deciphering and integrity check to the PDU
   security::security_status apply_deciphering_and_integrity_check(byte_buffer& buf, uint32_t count);
@@ -265,7 +284,7 @@ class pdcp_entity_rx::reordering_callback
 {
 public:
   explicit reordering_callback(pdcp_entity_rx* parent_) : parent(parent_) {}
-  void operator()(timer_id_t timer_id);
+  void operator()();
 
 private:
   pdcp_entity_rx* parent;

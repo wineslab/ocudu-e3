@@ -12,7 +12,9 @@ add_subdirectory(ue_security_manager)
 set(SOURCES
         cu_cp_factory.cpp
         cu_cp_impl.cpp
+        logical_cell_controller.cpp
         cu_configurator_impl.cpp
+        logical_cell_manager.cpp
         cu_cp_executor_mapper.cpp
         cu_cp_controller/cu_cp_controller.cpp
         cu_cp_controller/amf_connection_manager.cpp
@@ -27,6 +29,7 @@ set(SOURCES
         du_processor/du_processor_factory.cpp
         du_processor/du_processor_repository.cpp
         metrics_handler/metrics_handler_impl.cpp
+        ntn/cu_cp_ntn_ref_time_store.cpp
         ngap_repository.cpp
         paging/paging_message_handler.cpp
         routines/amf_connection_loss_routine.cpp
@@ -35,6 +38,10 @@ set(SOURCES
         routines/amf_reconnection_routine.cpp
         routines/cell_activation_routine.cpp
         routines/cell_deactivation_routine.cpp
+        routines/cell_barring_routine.cpp
+        routines/cell_lifecycle_target.cpp
+        routines/pws_sib_encoder.cpp
+        routines/write_replace_warning_routine.cpp
         routines/initial_context_setup_routine.cpp
         routines/pdu_session_routine_helpers.cpp
         routines/pdu_session_resource_setup_routine.cpp
@@ -48,6 +55,12 @@ set(SOURCES
         routines/ue_transaction_info_release_routine.cpp
         routines/ue_amf_context_release_request_routine.cpp
         routines/mobility/mobility_helpers.cpp
+        routines/mobility/ue_context_retrieval_helpers.cpp
+        routines/mobility/ue_context_retrieval_new_node_routine.cpp
+        routines/mobility/retrieved_context_helpers.cpp
+        routines/mobility/retrieved_context_path_switch_routine.cpp
+        routines/mobility/retrieved_context_resume_routine.cpp
+        routines/mobility/retrieved_context_setup_routine.cpp
         routines/mobility/intra_cu_handover_routine.cpp
         routines/mobility/intra_cu_handover_target_routine.cpp
         routines/mobility/inter_cu_handover_source_routine.cpp
@@ -88,6 +101,7 @@ target_link_libraries(ocudu_cu_cp
         ocudu_support
         ocudu_security
         ocudu_e2
+        ocudu_ntn_lib
         ${CMAKE_DL_LIBS}
 )
 

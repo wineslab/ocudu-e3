@@ -4,6 +4,7 @@
 
 #include "e1ap_cu_cp_test_helpers.h"
 #include "tests/test_doubles/utils/test_rng.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/support/async/async_test_utils.h"
 #include <gtest/gtest.h>
 
@@ -42,7 +43,7 @@ protected:
     }
     auto& req = this->e1ap_pdu_notifier.last_e1ap_msg.pdu.init_msg().value.bearer_context_setup_request();
 
-    return req->gnb_cu_cp_ue_e1ap_id == gnb_cu_cp_ue_e1ap_id_to_uint(cu_cp_ue_e1ap_id);
+    return req->gnb_cu_cp_ue_e1ap_id == to_underlying(cu_cp_ue_e1ap_id);
   }
 
   bool was_bearer_context_setup_successful() const
@@ -60,8 +61,8 @@ protected:
 TEST_F(e1ap_cu_cp_bearer_context_setup_test, when_request_sent_then_procedure_waits_for_response)
 {
   // Test Preamble.
-  auto request = generate_bearer_context_setup_request(uint_to_ue_index(test_rng::uniform_int<uint64_t>(
-      cu_cp_ue_index_to_uint(cu_cp_ue_index_t::min), cu_cp_ue_index_to_uint(cu_cp_ue_index_t::max))));
+  auto request = generate_bearer_context_setup_request(uint_to_ue_index(
+      test_rng::uniform_int<uint64_t>(to_underlying(cu_cp_ue_index_t::min), to_underlying(cu_cp_ue_index_t::max))));
 
   // Start BEARER CONTEXT SETUP procedure.
   this->start_procedure(request);
@@ -74,16 +75,15 @@ TEST_F(e1ap_cu_cp_bearer_context_setup_test, when_request_sent_then_procedure_wa
 TEST_F(e1ap_cu_cp_bearer_context_setup_test, when_response_received_then_procedure_successful)
 {
   // Test Preamble.
-  auto request = generate_bearer_context_setup_request(uint_to_ue_index(test_rng::uniform_int<uint64_t>(
-      cu_cp_ue_index_to_uint(cu_cp_ue_index_t::min), cu_cp_ue_index_to_uint(cu_cp_ue_index_t::max))));
+  auto request = generate_bearer_context_setup_request(uint_to_ue_index(
+      test_rng::uniform_int<uint64_t>(to_underlying(cu_cp_ue_index_t::min), to_underlying(cu_cp_ue_index_t::max))));
 
   // Start BEARER CONTEXT SETUP procedure and return back the response from the CU-UP.
   this->start_procedure(request);
 
   auto& ue            = test_ues[request.ue_index];
-  ue.cu_up_ue_e1ap_id = int_to_gnb_cu_up_ue_e1ap_id(
-      test_rng::uniform_int<uint64_t>(gnb_cu_up_ue_e1ap_id_to_uint(gnb_cu_up_ue_e1ap_id_t::min),
-                                      gnb_cu_up_ue_e1ap_id_to_uint(gnb_cu_up_ue_e1ap_id_t::max)));
+  ue.cu_up_ue_e1ap_id = int_to_gnb_cu_up_ue_e1ap_id(test_rng::uniform_int<uint64_t>(
+      to_underlying(gnb_cu_up_ue_e1ap_id_t::min), to_underlying(gnb_cu_up_ue_e1ap_id_t::max)));
   e1ap_message response =
       generate_bearer_context_setup_response(ue.cu_cp_ue_e1ap_id.value(), ue.cu_up_ue_e1ap_id.value());
   e1ap->handle_message(response);
@@ -92,24 +92,78 @@ TEST_F(e1ap_cu_cp_bearer_context_setup_test, when_response_received_then_procedu
   ASSERT_TRUE(was_bearer_context_setup_successful());
 }
 
+TEST_F(e1ap_cu_cp_bearer_context_setup_test, when_response_carries_data_forwarding_info_then_endpoints_are_reported)
+{
+  // Test Preamble.
+  auto request = generate_bearer_context_setup_request(uint_to_ue_index(
+      test_rng::uniform_int<uint64_t>(to_underlying(cu_cp_ue_index_t::min), to_underlying(cu_cp_ue_index_t::max))));
+
+  // Start BEARER CONTEXT SETUP procedure and return back a response carrying DL data forwarding endpoints.
+  this->start_procedure(request);
+
+  auto& ue            = test_ues[request.ue_index];
+  ue.cu_up_ue_e1ap_id = int_to_gnb_cu_up_ue_e1ap_id(test_rng::uniform_int<uint64_t>(
+      to_underlying(gnb_cu_up_ue_e1ap_id_t::min), to_underlying(gnb_cu_up_ue_e1ap_id_t::max)));
+  e1ap_message response =
+      generate_bearer_context_setup_response(ue.cu_cp_ue_e1ap_id.value(),
+                                             ue.cu_up_ue_e1ap_id.value(),
+                                             {{uint_to_pdu_session_id(1), {{drb_id_t::drb1, uint_to_qos_flow_id(1)}}}},
+                                             {},
+                                             true);
+  e1ap->handle_message(response);
+
+  ASSERT_TRUE(was_bearer_context_setup_successful());
+
+  // Both the PDU session level and the DRB level DL forwarding endpoints reached the CU-CP.
+  const auto& pdu_session = t.get().pdu_session_resource_setup_list[uint_to_pdu_session_id(1)];
+  ASSERT_TRUE(pdu_session.pdu_session_data_forwarding_info_resp.has_value());
+  ASSERT_TRUE(pdu_session.pdu_session_data_forwarding_info_resp->dl_data_forwarding.has_value());
+  ASSERT_FALSE(pdu_session.pdu_session_data_forwarding_info_resp->ul_data_forwarding.has_value());
+
+  const auto& drb = pdu_session.drb_setup_list_ng_ran[drb_id_t::drb1];
+  ASSERT_TRUE(drb.drb_data_forwarding_info_resp.has_value());
+  ASSERT_TRUE(drb.drb_data_forwarding_info_resp->dl_data_forwarding.has_value());
+  ASSERT_FALSE(drb.drb_data_forwarding_info_resp->ul_data_forwarding.has_value());
+  ASSERT_NE(drb.drb_data_forwarding_info_resp->dl_data_forwarding.value(),
+            pdu_session.pdu_session_data_forwarding_info_resp->dl_data_forwarding.value());
+}
+
 TEST_F(e1ap_cu_cp_bearer_context_setup_test, when_failure_received_then_procedure_unsuccessful)
 {
   // Test Preamble.
-  auto request = generate_bearer_context_setup_request(uint_to_ue_index(test_rng::uniform_int<uint64_t>(
-      cu_cp_ue_index_to_uint(cu_cp_ue_index_t::min), cu_cp_ue_index_to_uint(cu_cp_ue_index_t::max))));
+  auto request = generate_bearer_context_setup_request(uint_to_ue_index(
+      test_rng::uniform_int<uint64_t>(to_underlying(cu_cp_ue_index_t::min), to_underlying(cu_cp_ue_index_t::max))));
 
   // Start BEARER CONTEXT SETUP procedure and return back the failure response from the CU-UP.
   this->start_procedure(request);
 
   auto& ue            = test_ues[request.ue_index];
-  ue.cu_up_ue_e1ap_id = int_to_gnb_cu_up_ue_e1ap_id(
-      test_rng::uniform_int<uint64_t>(gnb_cu_up_ue_e1ap_id_to_uint(gnb_cu_up_ue_e1ap_id_t::min),
-                                      gnb_cu_up_ue_e1ap_id_to_uint(gnb_cu_up_ue_e1ap_id_t::max)));
+  ue.cu_up_ue_e1ap_id = int_to_gnb_cu_up_ue_e1ap_id(test_rng::uniform_int<uint64_t>(
+      to_underlying(gnb_cu_up_ue_e1ap_id_t::min), to_underlying(gnb_cu_up_ue_e1ap_id_t::max)));
 
   e1ap_message response =
       generate_bearer_context_setup_failure(ue.cu_cp_ue_e1ap_id.value(), ue.cu_up_ue_e1ap_id.value());
   e1ap->handle_message(response);
 
   // The BEARER CONTEXT SETUP FAILURE was received and the CU-CP completed the procedure with failure.
+  ASSERT_FALSE(was_bearer_context_setup_successful());
+}
+
+TEST_F(e1ap_cu_cp_bearer_context_setup_test,
+       when_e1ap_stopped_while_bearer_setup_in_flight_then_teardown_does_not_crash)
+{
+  // Test Preamble.
+  auto request = generate_bearer_context_setup_request(uint_to_ue_index(
+      test_rng::uniform_int<uint64_t>(to_underlying(cu_cp_ue_index_t::min), to_underlying(cu_cp_ue_index_t::max))));
+
+  // Start BEARER CONTEXT SETUP procedure, leaving its transaction unanswered.
+  this->start_procedure(request);
+
+  // Stop E1AP while the Bearer Context Setup transaction is still in flight.
+  async_task<void>         stop_task = e1ap->stop();
+  lazy_task_launcher<void> stop_launcher(stop_task);
+
+  ASSERT_TRUE(stop_task.ready());
+  ASSERT_TRUE(t.ready());
   ASSERT_FALSE(was_bearer_context_setup_successful());
 }

@@ -7,6 +7,7 @@
 
 #include "pucch_detector_format1.h"
 #include "ocudu/adt/bounded_bitset.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/tensor.h"
 #include "ocudu/ocuduvec/add.h"
 #include "ocudu/ocuduvec/compare.h"
@@ -189,8 +190,11 @@ pucch_detector_format1::detect(const resource_grid_reader&                  grid
     case 8:
       detection_threshold = 6.95F;
       break;
+    case 16:
+      detection_threshold = 11.35F;
+      break;
     default:
-      ocudu_terminate("The PUCCH detector does not support more than 4 ports, configured {}.", grid.get_nof_ports());
+      ocudu_terminate("The PUCCH detector does not support more than 8 ports, configured {}.", grid.get_nof_ports());
   }
 
   // Clear previous results.

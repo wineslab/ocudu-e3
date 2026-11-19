@@ -9,6 +9,7 @@
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/harq_id.h"
+#include "ocudu/support/memory_pool/free_list_memory_pool.h"
 #include "ocudu/support/shared_transport_block.h"
 
 namespace ocudu {
@@ -82,15 +83,20 @@ public:
   /// \brief Construction of a DL HARQ buffer pool for a given cell.
   ///
   /// \param cell_nof_prbs Number of PRBs of the cell.
-  /// \param nof_ports Number of ports of the cell.
+  /// \param max_nof_layers Maximum number of DL layers configured for the cell.
   /// \param max_harqs_per_cell Maximum number of HARQs per cell.
-  cell_dl_harq_buffer_pool(unsigned cell_nof_prbs, unsigned nof_ports, unsigned max_harqs_per_cell);
+  /// \param max_nof_ue_contexts Number of UE contexts that the cell is expected to hold.
+  cell_dl_harq_buffer_pool(unsigned cell_nof_prbs,
+                           unsigned max_nof_layers,
+                           unsigned max_harqs_per_cell,
+                           unsigned max_nof_ue_contexts);
 
   /// Called on cell deactivation to clear all available buffers.
   void clear();
 
-  /// Allocate DL HARQ buffers for a newly created UE.
-  void allocate_ue_buffers(du_ue_index_t ue_index, unsigned nof_harqs);
+  /// \brief Allocate DL HARQ buffers for a newly created UE.
+  /// \return Whether the buffers were allocated.
+  bool allocate_ue_buffers(du_ue_index_t ue_index, unsigned nof_harqs);
 
   /// Deallocate DL HARQ buffers for a removed UE.
   void deallocate_ue_buffers(du_ue_index_t ue_index);
@@ -99,9 +105,10 @@ public:
   expected<dl_harq_buffer_handle> allocate_dl_harq_buffer(du_ue_index_t ue_index, harq_id_t h_id)
   {
     ocudu_sanity_check(is_du_ue_index_valid(ue_index), "Invalid UE index");
-    ocudu_assert(cell_buffers[ue_index].size() > h_id, "Invalid HARQ ID={}", fmt::underlying(h_id));
+    ocudu_assert(cell_buffers[ue_index] != nullptr, "UE has no DL HARQ buffers allocated");
+    ocudu_assert(cell_buffers[ue_index]->size() > h_id, "Invalid HARQ ID={}", h_id);
 
-    auto* harq_buffer = cell_buffers[ue_index][h_id];
+    auto* harq_buffer = (*cell_buffers[ue_index])[h_id];
     if (harq_buffer->ref_cnt.load(std::memory_order_acquire) != 0) {
       return make_unexpected(default_error_t{});
     }
@@ -120,8 +127,11 @@ private:
   const unsigned nof_buffers;
   /// Logger.
   ocudulog::basic_logger& logger;
-  /// List of DL HARQ buffers currently allocated to UEs in the cell.
-  std::vector<ue_dl_harq_buffer_list> cell_buffers;
+  // Note: Declared before the list of UEs, as the cell holds objects taken from it.
+  /// Pool of DL HARQ buffer lists of the cell.
+  free_list_object_pool<ue_dl_harq_buffer_list> ue_buffer_list_pool;
+  /// DL HARQ buffers currently allocated to each UE of the cell, indexed by DU UE index.
+  std::vector<free_list_object_pool<ue_dl_harq_buffer_list>::ptr> cell_buffers;
   /// DL HARQ buffers that are not associated with any UE and can be allocated to newly created UEs.
   std::vector<dl_harq_buffer_storage*> free_buffer_list;
   /// Stores the DL HARQ buffers.

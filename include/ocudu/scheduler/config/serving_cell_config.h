@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/ran/configured_grant/cg_configuration.h"
 #include "ocudu/ran/csi_rs/csi_meas_config.h"
 #include "ocudu/ran/dmrs/dmrs_downlink_config.h"
 #include "ocudu/ran/harq_id.h"
@@ -108,8 +109,15 @@ struct pdsch_config {
   resource_allocation res_alloc = resource_allocation::resource_allocation_type_1;
   /// Number of repetitions for data. When the field is absent the UE applies the value 1.
   std::optional<pdsch_aggregation_factor> aggr_factor;
-  /// PDSCH time domain resource allocations. Size: (0..maxNrofDL-Allocations=16).
+  /// \brief PDSCH time domain resource allocations, either the legacy \e pdsch-TimeDomainAllocationList or (when
+  /// repetitions enabled
+  // the Rel-16 \e pdsch-TimeDomainAllocationList-r16, which replaces the legacy and
+  /// common lists for DCI format 1_1. Size: (0..maxNrofDL-Allocations=16).
   std::vector<pdsch_time_domain_resource_allocation> pdsch_td_alloc_list;
+  /// \brief Enables the Rel-16 slot-based repetition scheme, \e repetitionSchemeConfig-r16 with \e slotBased-r16.
+  /// Required by the UE to apply \e repetitionNumber-r16 of the Rel-16 TDRA list. With a single TCI state indicated in
+  /// the DCI, the TCI mapping is not used and is signalled as cyclic.
+  bool slot_based_repetition_enabled = false;
   /// Resources patterns which the UE should rate match PDSCH around. The UE rate matches around the union of all
   /// resources indicated in the rate match patterns. Rate match patterns defined here on cell level apply only to PDSCH
   /// of the same numerology. See 38.214, clause 5.1.4,1.
@@ -150,8 +158,9 @@ struct pdsch_config {
            pdsch_mapping_type_b_dmrs == rhs.pdsch_mapping_type_b_dmrs &&
            vrb_to_prb_interleaving == rhs.vrb_to_prb_interleaving && tci_states == rhs.tci_states &&
            res_alloc == rhs.res_alloc && aggr_factor == rhs.aggr_factor &&
-           pdsch_td_alloc_list == rhs.pdsch_td_alloc_list && rate_match_pattrn == rhs.rate_match_pattrn &&
-           rbg_sz == rhs.rbg_sz && mcs_table == rhs.mcs_table &&
+           pdsch_td_alloc_list == rhs.pdsch_td_alloc_list &&
+           slot_based_repetition_enabled == rhs.slot_based_repetition_enabled &&
+           rate_match_pattrn == rhs.rate_match_pattrn && rbg_sz == rhs.rbg_sz && mcs_table == rhs.mcs_table &&
            is_max_cw_sched_by_dci_is_two == rhs.is_max_cw_sched_by_dci_is_two && prb_bndlg == rhs.prb_bndlg &&
            zp_csi_rs_res_list == rhs.zp_csi_rs_res_list and p_zp_csi_rs_res == rhs.p_zp_csi_rs_res &&
            harq_process_num_size_dci_1_1 == rhs.harq_process_num_size_dci_1_1 &&
@@ -193,13 +202,15 @@ struct bwp_downlink {
 /// Used to configure the dedicated UE-specific parameters of an UL BWP.
 /// \remark See TS 38.331, BWP-UplinkDedicated.
 struct bwp_uplink_dedicated {
-  std::optional<pucch_config> pucch_cfg;
-  std::optional<pusch_config> pusch_cfg;
-  std::optional<srs_config>   srs_cfg;
+  std::optional<pucch_config>     pucch_cfg;
+  std::optional<pusch_config>     pusch_cfg;
+  std::optional<cg_configuration> cg_cfg;
+  std::optional<srs_config>       srs_cfg;
 
   bool operator==(const bwp_uplink_dedicated& other) const
   {
-    return pucch_cfg == other.pucch_cfg and pusch_cfg == other.pusch_cfg and srs_cfg == other.srs_cfg;
+    return pucch_cfg == other.pucch_cfg and pusch_cfg == other.pusch_cfg and srs_cfg == other.srs_cfg and
+           cg_cfg == other.cg_cfg;
   }
 };
 

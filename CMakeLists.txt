@@ -64,7 +64,9 @@ option(ENABLE_BACKWARD       "Enable backward"                              ON)
 option(ENABLE_UHD            "Enable UHD"                                   ON)
 option(ENABLE_SIDEKIQ        "Enable Sidekiq"                               ON)
 option(ENABLE_ZEROMQ         "Enable ZeroMQ"                                ON)
+option(ENABLE_DIFI           "Enable DIFI radio backend"                    ON)
 option(ENABLE_FFTW           "Enable FFTW"                                  ON)
+option(ENABLE_CUDA           "Enable NVIDIA CUDA acceleration"              OFF)
 option(ENABLE_MKL            "Enable Intel MKL"                             ON)
 option(ENABLE_FFTZ           "Enable AMD Optimized FFT for Zen"             ON)
 option(ENABLE_ARMPL          "Enable ARM performance library"               ON)
@@ -73,12 +75,15 @@ option(ENABLE_LIBNUMA        "Enable LibNUMA"                               OFF)
 option(ENABLE_EXPORT         "Enable PIC and export libraries"              OFF)
 option(ENABLE_TRX_DRIVER     "Enable Amarisoft TRX driver library"          OFF)
 option(ENABLE_PLUGINS        "Compile plugins in the plugin folder"         ON)
+option(ENABLE_SCHEDTRACE     "Enable the scheduler event tracer"            OFF)
 option(DISABLE_MBEDTLS       "Disable MBEDTLS library and related apps"     OFF)
 option(DISABLE_SCTP          "Disable SCTP library and related apps"        OFF)
 option(BUILD_TESTING         "Compile tests"                                ON)
+option(ENABLE_FUZZTESTS      "Build AFL++/libFuzzer fuzz test harnesses"    OFF)
 option(ENABLE_GPROF          "Enable gprof"                                 OFF)
 option(FORCE_DEBUG_INFO      "Add debug information to Release build"       OFF)
 option(ENABLE_OCUDU_TRACY   "Enable using the tracy profiler if available" OFF)
+option(ENABLE_SPLIT_DWARF    "Emit split DWARF (.dwo) objects to cut linker memory use" OFF)
 option(ENABLE_JBPF           "Enable jbpf"                              OFF)
 if (BUILD_TESTING)
     if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
@@ -111,9 +116,10 @@ set(EXIT_TIMEOUT "AUTO" CACHE STRING "Timer to wait for a clean exit")
 
 if (ENABLE_WERROR)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
-    # Disable gcc's maybe uninitialized analysis as it raises false positives
+    # Add GCC-specific flags
     if (CMAKE_COMPILER_IS_GNUCXX)
         include(CheckCXXCompilerFlag)
+        # Disable GCC's maybe uninitialized analysis as it raises false positives
         check_cxx_compiler_flag("-Wstringop-overflow" HAS_STRINGOP_OVERFLOW)
         if (HAS_STRINGOP_OVERFLOW)
             set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=stringop-overflow")
@@ -122,6 +128,14 @@ if (ENABLE_WERROR)
             check_cxx_compiler_flag("-Warray-bounds" HAS_ARRAY_BOUNDS)
             if (HAS_ARRAY_BOUNDS)
                 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=array-bounds")
+            endif()
+        endif()
+        # Disable GCC's noisy reports on ABI changes on ARM such as
+        # "parameter passing for argument of type ... when C++17 is enabled changed to match C++14 in GCC 10.1".
+        if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+            check_cxx_compiler_flag("-Wno-psabi" HAS_NO_PSABI)
+            if (HAS_NO_PSABI)
+                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-psabi")
             endif()
         endif()
     endif()
@@ -323,6 +337,11 @@ if (FORCE_DEBUG_INFO)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
 endif (FORCE_DEBUG_INFO)
 
+if (ENABLE_SPLIT_DWARF)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -gsplit-dwarf")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -gsplit-dwarf")
+endif (ENABLE_SPLIT_DWARF)
+
 if (ENABLE_GCOV)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage")
@@ -366,16 +385,18 @@ endif()
 ########################################################################
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/external/cmake-sbom")
 include(sbom)
+include(add_cuda_test)
 include(copyright)
 include(GNUInstallDirs)
 
 sbom_generate(
-    OUTPUT       "${CMAKE_INSTALL_PREFIX}/share/ocudu.spdx"
-    PROJECT      "OCUDU 5G CU DU"
-    SUPPLIER     "OCUDU Project"
-    SUPPLIER_URL "https://ocudu.org"
-    DOWNLOAD_URL "https://gitlab.com/ocudu/ocudu.git"
-    LICENSE      "LicenseRef-OCUDU"
+    OUTPUT            "${CMAKE_INSTALL_PREFIX}/share/ocudu.spdx"
+    INSTALL_COMPONENT SBOM
+    PROJECT           "OCUDU 5G CU DU"
+    SUPPLIER          "OCUDU Project"
+    SUPPLIER_URL      "https://ocudu.org"
+    DOWNLOAD_URL      "https://gitlab.com/ocudu/ocudu.git"
+    LICENSE           "LicenseRef-OCUDU"
 )
 
 ########################################################################
@@ -440,6 +461,51 @@ if(ROHC_FOUND)
         VERSION            ${PC_ROHC_VERSION}
     )
 endif()
+
+# OpenSSL for DTLS support
+find_package(OpenSSLWithDTLS)
+if(OPENSSL_HAS_DTLS_SCTP)
+    sbom_add(
+	PACKAGE            "OpenSSL library"
+        DOWNLOAD_LOCATION  "https://www.openssl.org/"
+        SUPPLIER           "OpenSSL Software Foundation"
+        LICENSE            "Apache-2.0"
+        VERSION            ${OPENSSL_VERSION}
+    )
+endif()
+
+# CUDA
+if (ENABLE_CUDA)
+    # The CUDA architecture cannot be guessed: nvcc needs it to emit device code for the
+    # target GPU, and a wrong value only fails at run time with "no kernel image is
+    # available for execution on the device".
+    if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        message(FATAL_ERROR "ENABLE_CUDA requires an explicit -DCMAKE_CUDA_ARCHITECTURES=<arch>. "
+                            "Query the target GPU with: "
+                            "nvidia-smi --query-gpu=gpu_name,compute_cap --format=csv")
+    endif()
+
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    sbom_add(
+        PACKAGE            "CUDA Toolkit"
+        DOWNLOAD_LOCATION  "https://developer.nvidia.com/cuda-toolkit"
+        SUPPLIER           "NVIDIA"
+        LICENSE            "LicenseRef-NVIDIA-CUDA-Toolkit-EULA"
+        VERSION            ${CUDAToolkit_VERSION}
+    )
+
+    # VkFFT is header-only and is not packaged by the distributions, so it is installed
+    # manually and located through VKFFT_ROOT. See docs/nvidia_cuda_build.md.
+    find_package(VkFFT REQUIRED)
+    sbom_add(
+        PACKAGE            "VkFFT"
+        DOWNLOAD_LOCATION  "https://github.com/DTolm/VkFFT"
+        SUPPLIER           "Dmitrii Tolmachev"
+        LICENSE            "MIT"
+        VERSION            ${VkFFT_VERSION}
+    )
+endif (ENABLE_CUDA)
 
 # FFTW
 if (ENABLE_FFTW)
@@ -511,9 +577,14 @@ if (BUILD_TESTING)
         _gtest_discover_tests(
             ${ARGV}
             DISCOVERY_MODE PRE_TEST
+            # Keep ctest names equal to the gtest names, so the recorded test requirements match.
+            NO_PRETTY_VALUES
             DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_VALUE}
         )
     endfunction()
+
+    # Collection of the requirement tags that the tests record. Set before any test target exists.
+    include(gtest_requirements)
 else()
     message(STATUS "Skipping Tests. Set BUILD_TESTING to On to compile tests.")
 endif (BUILD_TESTING)
@@ -623,15 +694,32 @@ else (ENABLE_DPDK)
     unset(DPDK_FOUND CACHE)
 endif (ENABLE_DPDK)
 
-if(SCTP_FOUND)
+# FlatBuffers, fetched at build time by the scheduler event tracer. Being fetched, it has no entry in
+# COPYRIGHTS.txt for parse_copyright_file() to pick up, so it is added to the SBOM here.
+if (ENABLE_SCHEDTRACE)
+    set(FLATBUFFERS_VERSION "25.12.19")
     sbom_add(
-        PACKAGE            "SCTP"
-        DOWNLOAD_LOCATION  "https://www.sctp.org/"
-        SUPPLIER           "SCTP project"
-        LICENSE            "BSD-3-Clause"
-        VERSION            ${PC_SCTP_VERSION}
+        PACKAGE            "FlatBuffers"
+        DOWNLOAD_LOCATION  "https://github.com/google/flatbuffers"
+        SUPPLIER           "Google LLC"
+        LICENSE            "Apache-2.0"
+        VERSION            ${FLATBUFFERS_VERSION}
     )
-endif (SCTP_FOUND)
+endif (ENABLE_SCHEDTRACE)
+
+find_package(Eigen3 NO_MODULE)
+if (Eigen3_FOUND)
+    message("-- Found Eigen3")
+    sbom_add(
+        PACKAGE            "Eigen3"
+        DOWNLOAD_LOCATION  "https://libeigen.gitlab.io/"
+        SUPPLIER           "The Eigen Authors"
+        LICENSE            "MPL-2.0"
+        VERSION            ${Eigen3_VERSION}
+    )
+else (Eigen3_FOUND)
+    message("-- Could not find Eigen3")
+endif (Eigen3_FOUND)
 
 ########################################################################
 # Instruction Set Architecture setup
@@ -708,12 +796,19 @@ add_custom_target(all_ocudu_headers SOURCES ${ALL_HEADER_FILES})
 # Simple function to notify binary targets + Add target to SBOM
 ########################################################################
 
-function(notify_binary_target)
-    message(STATUS "Adding binary target: ${ARGV}")
-    sbom_add(
-        TARGET       ${ARGV}
-        LICENSE      "LicenseRef-OCUDU"
-    )
+function(notify_binary_target TARGET)
+    set(oneValueArgs FILENAME)
+    cmake_parse_arguments(NOTIFY_BINARY "" "${oneValueArgs}" "" ${ARGN})
+    if(NOTIFY_BINARY_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "Unknown arguments: ${NOTIFY_BINARY_UNPARSED_ARGUMENTS}")
+    endif()
+
+    message(STATUS "Adding binary target: ${TARGET}")
+    set(SBOM_ARGS TARGET ${TARGET} OPTIONAL LICENSE "LicenseRef-OCUDU")
+    if(NOT "${NOTIFY_BINARY_FILENAME}" STREQUAL "")
+        list(APPEND SBOM_ARGS FILENAME "${NOTIFY_BINARY_FILENAME}")
+    endif()
+    sbom_add(${SBOM_ARGS})
 endfunction()
 
 ########################################################################
@@ -740,6 +835,10 @@ if (BUILD_TESTING)
         endif (TEST_GDB_PRINTERS)
     endif ()
 endif (BUILD_TESTING)
+
+if (ENABLE_FUZZTESTS)
+    add_subdirectory(tests/fuzz)
+endif (ENABLE_FUZZTESTS)
 
 if (ENABLE_PLUGINS)
     # Discover all subdirectories in the plugin directory (but not recursively)

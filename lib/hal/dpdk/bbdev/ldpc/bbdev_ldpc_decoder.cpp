@@ -4,6 +4,7 @@
 
 #include "ocudu/hal/dpdk/bbdev/ldpc/bbdev_ldpc_decoder.h"
 #include "ocudu/hal/phy/upper/channel_processors/pusch/ext_harq_buffer_context_repository.h"
+#include <array>
 #include <rte_bbdev.h>
 #include <rte_memcpy.h>
 

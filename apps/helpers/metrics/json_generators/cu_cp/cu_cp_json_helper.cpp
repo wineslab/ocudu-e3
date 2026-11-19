@@ -4,6 +4,7 @@
 
 #include "cu_cp_json_helper.h"
 #include "helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/gnb_du_id.h"
 #include "fmt/format.h"
 

@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_metrics_aggregator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/mac/mac_metrics.h"
 #include "ocudu/scheduler/scheduler_metrics.h"
 #include "ocudu/support/executors/execute_until_success.h"

@@ -4,6 +4,7 @@
 
 #include "ocudu/du/du_high/du_manager/du_manager_factory.h"
 #include "du_manager_impl.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace odu;

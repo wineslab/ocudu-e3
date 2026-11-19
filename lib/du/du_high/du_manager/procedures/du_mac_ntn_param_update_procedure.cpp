@@ -5,9 +5,12 @@
 #include "du_mac_ntn_param_update_procedure.h"
 #include "../converters/f1ap_configuration_helpers.h"
 #include "../du_cell_manager.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_high/du_manager/du_manager_params.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/subcarrier_spacing.h"
 #include "ocudu/support/async/async_no_op_task.h"
+#include <chrono>
 
 using namespace ocudu;
 using namespace odu;
@@ -65,6 +68,7 @@ bool du_mac_ntn_param_update_procedure::update_ntn_assistance_info(
   cell_cfg.ran.ntn_params->ntn_cfg.ta_info                  = cell_req.ntn_assistance_info->ta_info;
   cell_cfg.ran.ntn_params->ntn_cfg.epoch_time               = cell_req.ntn_assistance_info->epoch_time;
   cell_cfg.ran.ntn_params->ntn_cfg.ntn_ul_sync_validity_dur = cell_req.ntn_assistance_info->ntn_ul_sync_validity_dur;
+  cell_cfg.ran.ntn_params->ref_location_ul_ta               = cell_req.ntn_assistance_info->ref_location_ul_ta;
 
   return true;
 }
@@ -113,11 +117,26 @@ async_task<mac_cell_reconfig_response>
 du_mac_ntn_param_update_procedure::handle_cell_update(const du_cell_ntn_param_update_request& cell_req,
                                                       du_cell_index_t                         cell_idx)
 {
+  const du_cell_config&                          cell_cfg   = cell_mng.get_cell_cfg(cell_idx);
+  const std::optional<std::chrono::microseconds> prev_ul_ta = get_ref_location_ul_ta(cell_cfg.ran.ntn_params);
+
   // Update NTN assistance info to be used during HO (inside RRC reconfiguration msg).
   update_ntn_assistance_info(cell_idx, cell_req);
 
   // Build MAC reconfiguration request.
   mac_cell_reconfig_request req;
+
+  // The scheduler places the window at slot granularity, so it only needs to hear about T_TA crossing a slot boundary.
+  // Compare the quantised values, not their difference: T_TA drifts a few microseconds per update, so a difference
+  // would never reach a slot and the first value would stick forever.
+  const std::optional<std::chrono::microseconds> new_ul_ta = get_ref_location_ul_ta(cell_cfg.ran.ntn_params);
+  if (new_ul_ta.has_value()) {
+    const int64_t slot_dur_us =
+        1000 / get_nof_slots_per_subframe(cell_cfg.ran.dl_cfg_common.init_dl_bwp.generic_params.scs);
+    if (not prev_ul_ta.has_value() or (new_ul_ta->count() / slot_dur_us) != (prev_ul_ta->count() / slot_dur_us)) {
+      req.ntn_ul_ta_update.emplace(sched_cell_ntn_ul_ta_update{cell_idx, *new_ul_ta});
+    }
+  }
 
   // If SIB19 source is provided, bump SI version (valuetag change).
   if (cell_req.sib19.has_value()) {
@@ -148,8 +167,7 @@ du_mac_ntn_param_update_procedure::handle_cell_update(const du_cell_ntn_param_up
   }
 
   // Add SIB19 content update.
-  req.new_si_pdu_info = {.si_msg_idx     = cell_req.si_msg_idx,
-                         .sib_idx        = static_cast<uint8_t>(cell_req.sib_idx),
+  req.new_si_pdu_info = {.sib_idx        = sib_type::sib19,
                          .slot           = cell_req.slot,
                          .si_slot_period = cell_req.si_slot_period,
                          .si_messages    = cell_req.si_messages};

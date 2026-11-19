@@ -5,6 +5,8 @@
 #pragma once
 
 #include "ocudu/ran/pusch/tx_scheme_configuration.h"
+#include "ocudu/ran/resource_allocation/rb_interval.h"
+#include "ocudu/ran/rnti.h"
 #include "ocudu/ran/srs/srs_configuration.h"
 #include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include <optional>
@@ -17,10 +19,15 @@ struct ue_pucch_config {
   pucch_sr_resource_id         sr_res_id;
   unsigned                     sr_offset;
   unsigned                     max_pucch_payload;
+  /// Whether the UE supports dynamic PUCCH repetition (slotBasedDynamicPUCCH-Rep-r17) for Format 1/3/4 resources.
+  bool rep_f1_3_4_enabled = false;
+  /// Whether the UE supports dynamic PUCCH repetition (slotBasedDynamicPUCCH-Rep-r17) for Format 0/2 resources.
+  bool rep_f0_2_enabled = false;
 
   bool operator==(const ue_pucch_config& other) const
   {
-    return res_set_cfg_id == other.res_set_cfg_id and sr_res_id == other.sr_res_id and sr_offset == other.sr_offset;
+    return res_set_cfg_id == other.res_set_cfg_id and sr_res_id == other.sr_res_id and sr_offset == other.sr_offset and
+           rep_f1_3_4_enabled == other.rep_f1_3_4_enabled and rep_f0_2_enabled == other.rep_f0_2_enabled;
   }
 };
 
@@ -42,6 +49,13 @@ struct ue_pusch_config {
   bool operator==(const ue_pusch_config& other) const { return tx_cfg == other.tx_cfg; }
 };
 
+struct ue_cg_config {
+  unsigned     cg_offset;
+  vrb_interval vrbs;
+
+  bool operator==(const ue_cg_config& other) const { return cg_offset == other.cg_offset and vrbs == other.vrbs; }
+};
+
 struct ue_srs_config {
   srs_config::srs_resource::nof_srs_ports nof_ports;
   /// Offset (periodicity is common).
@@ -60,12 +74,13 @@ struct ue_uplink_bwp_config {
   // Only present if periodic CSI reporting is enabled in the cell.
   std::optional<ue_periodic_csi_config> periodic_csi_report;
   ue_pusch_config                       pusch;
+  std::optional<ue_cg_config>           cg;
   ue_srs_config                         srs;
 
   bool operator==(const ue_uplink_bwp_config& other) const
   {
     return pucch == other.pucch and periodic_csi_report == other.periodic_csi_report and pusch == other.pusch and
-           srs == other.srs;
+           srs == other.srs and cg == other.cg;
   }
 };
 

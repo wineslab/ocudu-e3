@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/scheduler/config/cell_bwp_res_config.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/scheduler/config/bwp_builder_params.h"
 #include "ocudu/scheduler/config/pucch_resource_generator.h"
 #include "ocudu/scheduler/config/ran_cell_config.h"

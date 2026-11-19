@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
+#include "ocudu/adt/format.h"
+#include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/dot_prod.h"
 #include "fmt/ostream.h"
 #include <gtest/gtest.h>
+#include <limits>
 #include <random>
 
 static std::mt19937 rgen(0);
@@ -149,6 +152,47 @@ TEST_P(OcuduvecDotProdFixture, OcuduvecDotProdTestAvgPowerCbf16)
       size,
       expected,
       z);
+}
+
+TEST_P(OcuduvecDotProdFixture, OcuduvecDotProdTestAvgPowerCi16)
+{
+  constexpr float                    scale = static_cast<float>(std::numeric_limits<int16_t>::max());
+  std::uniform_int_distribution<int> dist(-30000, 30000);
+
+  std::vector<ci16_t> x(size);
+  for (ci16_t& v : x) {
+    v = {static_cast<int16_t>(dist(rgen)), static_cast<int16_t>(dist(rgen))};
+  }
+
+  std::vector<cf_t> x_cf(size);
+  ocuduvec::convert(x_cf, x, scale);
+
+  float z_ci16 = ocuduvec::average_power(x, scale);
+  float z_cf   = ocuduvec::average_power(x_cf);
+
+  ASSERT_LT(std::abs(z_ci16 - z_cf), ASSERT_MAX_ERROR);
+}
+
+TEST(OcuduvecDotProdOverflowTest, AvgPowerCi16SimdExtremePairsMatchCf)
+{
+  constexpr float     scale           = static_cast<float>(std::numeric_limits<int16_t>::max());
+  std::vector<ci16_t> extreme_samples = {{std::numeric_limits<int16_t>::max(), std::numeric_limits<int16_t>::min()},
+                                         {std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::min()},
+                                         {std::numeric_limits<int16_t>::max(), std::numeric_limits<int16_t>::max()},
+                                         {std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max()}};
+
+  for (const ci16_t& sample : extreme_samples) {
+    std::vector<ci16_t> x(8192, sample);
+
+    std::vector<cf_t> x_cf(x.size());
+    ocuduvec::convert(x_cf, x, scale);
+
+    float z_ci16 = ocuduvec::average_power(x, scale);
+    float z_cf   = ocuduvec::average_power(x_cf);
+
+    // Saturated int16 parts can differ slightly from cf after scale/convert.
+    ASSERT_LT(std::abs(z_ci16 - z_cf), 1e-4F) << "sample re=" << sample.real() << " im=" << sample.imag();
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(OcuduvecDotProdTest, OcuduvecDotProdFixture, ::testing::Values(1, 5, 7, 19, 23, 65, 130, 257));

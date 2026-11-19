@@ -7,6 +7,7 @@
 #include "ocudu/adt/detail/concurrent_queue_params.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/support/executors/task_executor.h"
+#include <vector>
 
 namespace ocudu {
 namespace detail {

@@ -21,7 +21,7 @@ static void fill_cu_cp_appconfig_expert_execution_section(YAML::Node node, const
 
     if (config.affinities.main_pool_cpu_cfg.mask.any()) {
       affinities_node["main_pool_cpus"] =
-          fmt::format("{:,}", span<const size_t>(config.affinities.main_pool_cpu_cfg.mask.get_cpu_ids()));
+          fmt::format("{:n}", span<const size_t>(config.affinities.main_pool_cpu_cfg.mask.get_cpu_ids()));
     }
     affinities_node["main_pool_pinning"] = to_string(config.affinities.main_pool_cpu_cfg.pinning_policy);
   }

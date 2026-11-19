@@ -6,3 +6,6 @@
 add_subdirectory(ofh)
 add_subdirectory(phy)
 add_subdirectory(radio)
+if (ENABLE_SCHEDTRACE)
+    add_subdirectory(schedlog)
+endif (ENABLE_SCHEDTRACE)

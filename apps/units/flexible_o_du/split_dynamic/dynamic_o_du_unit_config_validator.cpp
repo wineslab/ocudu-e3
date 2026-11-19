@@ -7,6 +7,7 @@
 #include "apps/units/flexible_o_du/o_du_low/du_low_config_validator.h"
 #include "apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_validator.h"
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_config_validator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/prach/prach_configuration.h"
 
 using namespace ocudu;

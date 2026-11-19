@@ -3,8 +3,9 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "e1ap_cu_cp_test_helpers.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/utils/test_rng.h"
-#include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/cu_cp/cu_cp_configuration_helpers.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp_factory.h"
 #include "ocudu/support/async/async_test_utils.h"
@@ -17,8 +18,21 @@ e1ap_cu_cp_test::e1ap_cu_cp_test() :
     cu_cp_configuration cucfg     = config_helpers::make_default_cu_cp_config();
     cucfg.services.timers         = &timers;
     cucfg.services.cu_cp_executor = &ctrl_worker;
-    cucfg.admission.max_nof_ues   = 1024 * 4;
     return cucfg;
+  }()),
+  ue_cfg([this]() {
+    return ue_manager_config{.gnb_id              = cu_cp_cfg.node.gnb_id,
+                             .max_nof_ues         = cu_cp_cfg.admission.max_nof_ues,
+                             .drb_config          = cu_cp_cfg.bearers.drb_config,
+                             .max_nof_drbs_per_ue = cu_cp_cfg.admission.max_nof_drbs_per_ue,
+                             .int_algo_pref_list  = cu_cp_cfg.security.int_algo_pref_list,
+                             .enc_algo_pref_list  = cu_cp_cfg.security.enc_algo_pref_list,
+                             .enable_rrc_metrics  = cu_cp_cfg.metrics.layers_cfg.enable_rrc_metrics,
+                             .ue                  = cu_cp_cfg.ue};
+  }()),
+  ue_dependencies([this]() {
+    return ue_manager_dependencies{
+        .timers = timers, .cu_cp_executor = ctrl_worker, .logger = ocudulog::fetch_basic_logger("CU-CP")};
   }())
 {
   test_logger.set_level(ocudulog::basic_levels::debug);
@@ -83,10 +97,10 @@ e1ap_cu_cp_test::test_ue& e1ap_cu_cp_test::create_ue()
   ue_mng.set_plmn(ue_index, plmn_identity::test_value());
   auto request = generate_bearer_context_setup_request(ue_index);
 
-  run_bearer_context_setup(request.ue_index,
-                           int_to_gnb_cu_up_ue_e1ap_id(test_rng::uniform_int<uint64_t>(
-                               gnb_cu_up_ue_e1ap_id_to_uint(gnb_cu_up_ue_e1ap_id_t::min),
-                               gnb_cu_up_ue_e1ap_id_to_uint(gnb_cu_up_ue_e1ap_id_t::max) - 1)));
+  run_bearer_context_setup(
+      request.ue_index,
+      int_to_gnb_cu_up_ue_e1ap_id(test_rng::uniform_int<uint64_t>(to_underlying(gnb_cu_up_ue_e1ap_id_t::min),
+                                                                  to_underlying(gnb_cu_up_ue_e1ap_id_t::max) - 1)));
 
   return test_ues[request.ue_index];
 }

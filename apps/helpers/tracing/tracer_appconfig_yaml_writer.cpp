@@ -9,8 +9,8 @@ using namespace ocudu;
 
 void ocudu::fill_tracer_appconfig_in_yaml_schema(YAML::Node& node, const tracer_appconfig& config)
 {
-  YAML::Node log_node                         = node["trace"];
-  log_node["filename"]                        = config.filename;
-  log_node["max_tracing_events_per_file"]     = config.max_tracing_events_per_file;
-  log_node["nof_tracing_events_after_severe"] = config.nof_tracing_events_after_severe;
+  YAML::Node log_node                          = node["trace"];
+  log_node["filename"]                         = config.filename;
+  log_node["max_tracing_events_per_file"]      = config.max_tracing_events_per_file;
+  log_node["nof_tracing_events_before_severe"] = config.nof_tracing_events_before_severe;
 }

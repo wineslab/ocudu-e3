@@ -7,6 +7,7 @@
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/scheduler/test_utils/config_generators.h"
+#include "tests/unittests/scheduler/test_utils/indication_generators.h"
 #include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
 #include "ocudu/scheduler/result/sched_result.h"
 #include <gtest/gtest.h>
@@ -130,7 +131,8 @@ TEST_F(scheduler_metrics_handler_tester, when_ue_metrics_disabled_then_only_cell
   }
 
   ASSERT_GT(cell_only_notif.last_report.nof_slots, 0) << "Cell metrics must still be reported";
-  ASSERT_TRUE(cell_only_notif.last_report.ue_metrics.empty()) << "Per-UE metrics must be suppressed";
+  ASSERT_FALSE(cell_only_notif.last_report.ue_metrics.empty()) << "UE metrics must still be computed";
+  ASSERT_FALSE(cell_only_notif.last_report.report_ue_metrics) << "Per-UE reporting flag must be disabled";
 }
 
 TEST_F(scheduler_metrics_handler_tester, when_no_events_took_place_then_metrics_are_zero)
@@ -408,4 +410,56 @@ TEST_F(scheduler_metrics_handler_tester, failed_pdcch_allocs_are_accumulated_per
   ASSERT_EQ(metrics_notif.last_report.failed_common_dl_pdcch, 0);
   ASSERT_EQ(metrics_notif.last_report.failed_ul_pdcch, 0);
   ASSERT_EQ(metrics_notif.last_report.failed_common_ul_pdcch, 0);
+}
+
+class scheduler_metrics_handler_two_step_rach_tester : public ::testing::Test
+{
+protected:
+  static constexpr unsigned MSGA_PREAMBLE_OFFSET = 60;
+
+  static sched_cell_configuration_request_message make_two_step_rach_req()
+  {
+    auto  req  = sched_config_helper::make_default_sched_cell_configuration_request();
+    auto& rach = *req.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common;
+    // Reserve preamble IDs [60, 64) for 2-step CB RACH.
+    rach.nof_cb_preambles_per_ssb = MSGA_PREAMBLE_OFFSET;
+    rach.two_step_rach_cfg.emplace();
+    return req;
+  }
+
+  scheduler_metrics_handler_two_step_rach_tester() :
+    cfg_mng{config_helpers::make_default_scheduler_expert_config()},
+    cell_cfg(*cfg_mng.add_cell(make_two_step_rach_req())),
+    metrics(cell_cfg, sched_cell_configuration_request_message::metrics_config{&metrics_notif})
+  {
+    // Force the very first push_result() call to trigger a report.
+    metrics_notif.period_slots = 1;
+  }
+
+  test_scheduler_cell_metrics_notifier    metrics_notif;
+  test_helpers::test_sched_config_manager cfg_mng;
+  const cell_configuration&               cell_cfg;
+  cell_metrics_handler                    metrics;
+};
+
+/// Detected PRACH preambles whose ID falls in the 2-step RACH (MsgA) range must be counted separately via
+/// \c two_step_prachs_detected, while \c total_prach_preambles keeps counting every detected preamble regardless of
+/// RACH type.
+TEST_F(scheduler_metrics_handler_two_step_rach_tester, two_step_prach_preambles_are_counted_separately)
+{
+  const slot_point          sl_tx{to_numerology_value(cell_cfg.scs_common()), 0};
+  const slot_point_extended sl_tx_ext{cell_cfg.scs_common(), 0};
+
+  const rach_indication_message::preamble msg1_preamble = test_helper::create_preamble(0, to_rnti(0x4601));
+  const rach_indication_message::preamble msga_preamble =
+      test_helper::create_preamble(MSGA_PREAMBLE_OFFSET, to_rnti(0x4602));
+  metrics.handle_rach_indication(test_helper::create_rach_indication(cell_cfg, sl_tx, {msg1_preamble, msga_preamble}));
+
+  sched_result sched_res;
+  sched_res.dl.nof_dl_symbols = 14;
+  sched_res.ul.nof_ul_symbols = 14;
+  metrics.push_result(sl_tx_ext, sched_res, std::chrono::microseconds{0});
+
+  ASSERT_EQ(metrics_notif.last_report.total_prach_preambles, 2);
+  ASSERT_EQ(metrics_notif.last_report.two_step_prachs_detected, 1);
 }

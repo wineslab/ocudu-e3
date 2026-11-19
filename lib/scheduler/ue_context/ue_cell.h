@@ -12,8 +12,10 @@
 #include "ue_drx_controller.h"
 #include "ue_fsm_states.h"
 #include "ue_link_adaptation_controller.h"
+#include "ue_ta_report_tracker.h"
 #include "ocudu/scheduler/config/scheduler_expert_config.h"
 #include "ocudu/scheduler/scheduler_feedback_handler.h"
+#include "ocudu/support/memory_pool/free_list_memory_pool.h"
 
 namespace ocudu {
 
@@ -25,6 +27,8 @@ struct pusch_config_params;
 struct ue_shared_context {
   /// DRX controller.
   ue_drx_controller& drx_ctrl;
+  /// Tracker of the uplink timing advance reported by the UE.
+  ue_ta_report_tracker& ta_report_tracker;
 };
 
 /// State of the UE PCell.
@@ -36,15 +40,23 @@ struct ue_pcell_state {
   ue_conres_state conres_st = ue_conres_state::conres_completed;
   /// MSG3 rx-slot, set for RACH-created UEs (conres_st == pending_conres_ce).
   slot_point msg3_rx_slot;
+  /// Slot at which the PRACH preamble was received, set for RACH-created UEs tracked by the RA scheduler.
+  slot_point prach_slot_rx;
+
+  /// \brief Reference slot for the start of the ra-ContentionResolutionTimer window.
+  /// \c prach_slot_rx precedes \c msg3_rx_slot and is therefore the more accurate reference, but it is only known
+  /// if the RA scheduler still had a live entry for this UE by the time it was created; \c msg3_rx_slot is used as
+  /// a fallback otherwise.
+  slot_point conres_win_start() const { return prach_slot_rx.valid() ? prach_slot_rx : msg3_rx_slot; }
 };
 
 struct ue_cell_components {
   /// State relative to the PCell of the UE, if applicable.
-  ue_pcell_state*                pcell_state          = nullptr;
-  ue_channel_state_manager*      channel_state        = nullptr;
-  ue_link_adaptation_controller* ue_mcs_calculator    = nullptr;
-  pusch_power_controller*        pusch_pwr_controller = nullptr;
-  pucch_power_controller*        pucch_pwr_controller = nullptr;
+  ue_pcell_state*                                           pcell_state = nullptr;
+  free_list_object_pool<ue_channel_state_manager>::ptr      channel_state;
+  free_list_object_pool<ue_link_adaptation_controller>::ptr ue_mcs_calculator;
+  free_list_object_pool<pusch_power_controller>::ptr        pusch_pwr_controller;
+  free_list_object_pool<pucch_power_controller>::ptr        pucch_pwr_controller;
 };
 
 /// \brief Context respective to a UE serving cell.
@@ -56,7 +68,7 @@ public:
           const ue_cell_configuration& ue_cell_cfg_,
           cell_harq_manager&           cell_harq_pool,
           ue_shared_context            shared_ctx,
-          const ue_cell_components&    components,
+          ue_cell_components&&         components,
           ocudulog::basic_logger&      logger_);
 
   const du_ue_index_t   ue_index;
@@ -90,6 +102,14 @@ public:
   {
     return active and cfg().is_dl_enabled(dl_slot) and shared_ctx.drx_ctrl.is_pdcch_enabled();
   }
+  /// \brief Determines whether UL allocations are possible in the provided slot.
+  ///
+  /// Combines the configured uplink timeline with the UE runtime state the uplink measurement gap window depends on,
+  /// the same way \c is_pdcch_enabled combines the DL timeline with the DRX active time.
+  bool is_ul_enabled(slot_point ul_slot) const
+  {
+    return cfg().is_ul_enabled(ul_slot, shared_ctx.ta_report_tracker.last_reported_ul_ta());
+  }
   bool is_pdsch_enabled(slot_point pdcch_slot, slot_point pdsch_slot) const
   {
     // Verify that the DL is activated for the chosen slots (e.g. they are not UL slots in TDD or there is no measGap).
@@ -108,7 +128,7 @@ public:
   {
     // Verify that the DL is activated for the chosen PDCCH slot and UL is activated for the chosen PUSCH slot
     // (e.g the chosen slots fall in DL and UL slots of a TDD pattern respective, and there is no measGap).
-    return is_pdcch_enabled(pdcch_slot) and cfg().is_ul_enabled(pusch_slot) and
+    return is_pdcch_enabled(pdcch_slot) and is_ul_enabled(pusch_slot) and
            // Verify that the order of PUSCHs for the same UE matches the order of PDCCHs and that there is at most one
            // PUSCH per slot. [TS 38.214, 6.1] "For any HARQ process ID(s) in a given scheduled cell, the UE is not
            // expected to transmit a PUSCH that overlaps in time with another PUSCH". [TS 38.214, 6.1] "For any two HARQ
@@ -132,8 +152,31 @@ public:
     return cell_cfg.expert_cfg.ue.pusch_rv_sequence[nof_retxs % cell_cfg.expert_cfg.ue.pusch_rv_sequence.size()];
   }
 
+  /// Reason why a CRC PDU did not conclude an UL HARQ transmission of this UE cell.
+  enum class crc_not_concluded {
+    /// \brief No UL HARQ of this UE cell was expecting this CRC.
+    ///
+    /// Either the report is stale, or the HARQ it belongs to is owned elsewhere -- the Msg3 of a contention-free
+    /// access, for instance, which the RA scheduler drives.
+    unattributed,
+    /// \brief The CRC belongs to a PUSCH repetition bundle whose remaining occasions are still to be received.
+    ///
+    /// Its result has been folded into the transmission's accumulated CRC and will be acted upon at the last
+    /// occasion. This is an ordinary step of receiving a bundle, not a failure to attribute the report.
+    held_for_bundle
+  };
+
   /// \brief Handle CRC PDU indication.
-  expected<units::bytes> handle_crc_pdu(slot_point pusch_slot, const ul_crc_pdu_indication& crc_pdu);
+  ///
+  /// Dynamic PUSCH CRC always yields a "detected" outcome (i.e., ACK or NACK); whereas, the Configured Grant PUSCH CRC
+  /// can yield a not-detected outcome, e.g., when the SINR associated with its PUSCH is below the detection threshold.
+  /// When PUSCH repetitions are scheduled, the concluded crc is returned only in last slot occasion.
+  ///
+  /// \return A pair with the TBS that was (N)ACKed or not detected (DTX) and boolean indicating whether the PDU was
+  /// detected as transmitted (True if detected, false if not detected). Return unexpected, when the transmission was
+  /// not concluded for PUSCH repetition bundle; see \ref crc_not_concluded.
+  expected<std::pair<units::bytes, bool>, crc_not_concluded> handle_crc_pdu(slot_point                   pusch_slot,
+                                                                            const ul_crc_pdu_indication& crc_pdu);
 
   /// \brief Handle Sounding Reference Signal (SRS) channel matrix.
   void handle_srs_channel_matrix(const srs_channel_matrix& channel_matrix);

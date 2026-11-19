@@ -5,7 +5,6 @@
 #include "prach_processor_worker.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_reader_view.h"
 #include "ocudu/instrumentation/traces/ru_traces.h"
-#include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ran/prach/prach_preamble_information.h"
 
@@ -113,14 +112,9 @@ void prach_processor_worker::accumulate_samples(const baseband_gateway_buffer_re
 
           // Make a view of the first samples in the buffer.
           baseband_gateway_buffer_reader_view buffered_samples(temp_baseband.get_reader(), 0, nof_samples);
-          // Get a view over the temporary buffer holding float-based complex samples.
-          span<cf_t> cf_buf = temp_cf_baseband.get_view({i_port}).subspan(0, nof_samples);
-
-          // Convert them into floating-point samples using the temporary buffer.
-          ocuduvec::convert(cf_buf, buffered_samples.get_channel_buffer(i_port), scaling_factor_ci16_to_cf);
 
           // Demodulate all candidates.
-          demodulator->demodulate(*buffer, cf_buf, config);
+          demodulator->demodulate(*buffer, buffered_samples.get_channel_buffer(i_port), config);
         }
 
         ru_tracer << trace_event("prach_demodulate", tp);

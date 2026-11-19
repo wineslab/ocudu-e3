@@ -9,6 +9,7 @@
 #include "apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_yaml_writer.h"
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_config_yaml_writer.h"
 #include "dynamic_o_du_unit_config.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 
@@ -41,7 +42,7 @@ static void fill_ru_dummy_config(YAML::Node node, const ru_dummy_unit_config& co
     const auto& expert = config.cell_affinities[index];
 
     if (expert.ru_cpu_cfg.mask.any()) {
-      cell["ru_cpus"] = fmt::format("{:,}", span<const size_t>(expert.ru_cpu_cfg.mask.get_cpu_ids()));
+      cell["ru_cpus"] = fmt::format("{:n}", span<const size_t>(expert.ru_cpu_cfg.mask.get_cpu_ids()));
     }
     cell["ru_pinning"] = to_string(expert.ru_cpu_cfg.pinning_policy);
 

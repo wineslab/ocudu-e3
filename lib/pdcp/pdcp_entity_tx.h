@@ -84,7 +84,7 @@ struct pdcp_tx_buffer_info {
 struct pdcp_tx_pdu_info {
   byte_buffer                           pdu;     /// Buffer for PDU.
   uint32_t                              count;   /// COUNT associated with this SDU/PDU.
-  std::chrono::system_clock::time_point sdu_toa; /// Time of arrival of SDU.
+  std::chrono::steady_clock::time_point sdu_toa; /// Time of arrival of SDU.
 };
 
 /// Base class used for transmitting PDCP bearers.
@@ -291,6 +291,8 @@ private:
 
   early_drop_reason check_early_drop(const byte_buffer& buf);
   uint32_t          warn_on_drop_count = 0;
+
+  std::chrono::milliseconds compute_next_discard_timeout(tick_point_t oldest_pdu_arrival_tick_point);
 
   /// Crypto token manager. Used to wait for crypto engine to finish
   /// when destroying DRB.

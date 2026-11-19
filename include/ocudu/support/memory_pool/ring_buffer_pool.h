@@ -6,6 +6,7 @@
 #include "ocudu/support/compiler.h"
 #include "ocudu/support/error_handling.h"
 #include "ocudu/support/memory_pool/ring_memory_allocator.h"
+#include <vector>
 
 namespace ocudu {
 

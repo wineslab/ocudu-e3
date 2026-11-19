@@ -96,14 +96,13 @@ void iq_compression_bfp_avx2::compress(span<uint8_t>                buffer,
   }
 }
 
-void iq_compression_bfp_avx2::decompress(span<cbf16_t>                iq_data,
+bool iq_compression_bfp_avx2::decompress(span<cbf16_t>                iq_data,
                                          span<const uint8_t>          compressed_data,
                                          const ru_compression_params& params)
 {
   // Use generic implementation if AVX2 utils don't support requested bit width.
   if (!mm256::iq_width_packing_supported(params.data_width)) {
-    iq_compression_bfp_impl::decompress(iq_data, compressed_data, params);
-    return;
+    return iq_compression_bfp_impl::decompress(iq_data, compressed_data, params);
   }
 
   // Number of output PRBs.
@@ -130,8 +129,7 @@ void iq_compression_bfp_avx2::decompress(span<cbf16_t>                iq_data,
     // Get view over compressed PRB bytes.
     span<const uint8_t> comp_prb_buffer(&compressed_data[c_prb_idx * comp_prb_size], comp_prb_size);
 
-    // Compute scaling factor, first byte contains the exponent.
-    uint8_t exponent = comp_prb_buffer[0];
+    uint8_t exponent = decode_bfp_exponent(comp_prb_buffer[0]);
     float   scaler   = 1 << exponent;
 
     // Get view over the bytes following the compression parameter.
@@ -151,4 +149,6 @@ void iq_compression_bfp_avx2::decompress(span<cbf16_t>                iq_data,
 
   // Scale unpacked IQ samples using saved exponents and convert to complex samples.
   ocuduvec::convert(iq_data, unpacked_iq_int16_span, unpacked_iq_scaling_span);
+
+  return true;
 }

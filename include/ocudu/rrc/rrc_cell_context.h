@@ -7,6 +7,7 @@
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/nr_cgi.h"
+#include "ocudu/ran/ntn_location_mapping.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/tac.h"
 #include <cstdint>
@@ -28,6 +29,8 @@ struct rrc_timers_t {
   /// T311: RRC Connection Re-establishment procedure timer in ms. The timer starts upon initiating the RRC connection
   /// re-establishment procedure.
   std::chrono::milliseconds t311;
+  /// T319: RRC Connection Resume timer in ms. The timer starts upon transmission of RRCResumeRequest.
+  std::chrono::milliseconds t319;
   /// T304: RRC Reconfiguration timer in ms. The UE starts this timer upon receiving the RRC Reconfiguration including
   /// reconfigurationWithSync.
   std::optional<std::chrono::milliseconds> t304;
@@ -37,11 +40,14 @@ struct rrc_timers_t {
 struct rrc_cell_context {
   nr_cell_global_id_t        cgi;
   tac_t                      tac;
+  tac_list_t                 tac_list; ///< TACs broadcast in trackingAreaList, TS 38.331. Empty unless several.
   pci_t                      pci;
   arfcn_t                    ssb_arfcn; ///< Absolute SSB position.
   std::vector<nr_band>       bands;     ///< Required for capability band filter.
   rrc_timers_t               timers;
   std::vector<plmn_identity> plmn_identity_list; ///< PLMN identities broadcasted in SIB1.
+  /// Coarse UE location to TAC mapping of this cell, TS 38.413. Empty unless configured.
+  ntn_location_mapping location_mapping;
 };
 
 } // namespace ocucp

@@ -4,7 +4,7 @@
 
 #include "prach_configuration_test_data.h"
 #include "ocudu/ran/prach/prach_configuration.h"
-#include <fmt/ostream.h>
+#include "fmt/ostream.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;

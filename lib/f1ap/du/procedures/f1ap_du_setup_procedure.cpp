@@ -7,6 +7,7 @@
 #include "../../f1ap_asn1_utils.h"
 #include "../f1ap_asn1_converters.h"
 #include "../f1ap_du_context.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/asn1_utils.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/f1ap/f1ap_message.h"

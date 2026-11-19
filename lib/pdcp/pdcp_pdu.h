@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "fmt/format.h"
+#include "fmt/base.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -29,6 +29,11 @@ constexpr unsigned to_number(pdcp_dc_field dc)
 {
   return static_cast<unsigned>(dc);
 }
+inline const char* format_as(pdcp_dc_field dc)
+{
+  static constexpr const char* options[] = {"ctrl", "data"};
+  return options[to_number(dc)];
+}
 
 /// \brief Reads the D/C field from the first (header) byte of a PDCP PDU
 /// \param first_byte First byte of the PDU (passed by value)
@@ -49,6 +54,12 @@ enum class pdcp_control_pdu_type : unsigned {
 constexpr uint16_t to_number(pdcp_control_pdu_type type)
 {
   return static_cast<uint16_t>(type);
+}
+inline const char* format_as(pdcp_control_pdu_type cpt)
+{
+  static constexpr const char* options[] = {"status_report", "rohc_feedback", "ehc_feedback", "udc_feedback"};
+  auto                         idx       = to_number(cpt);
+  return (idx < std::size(options)) ? options[idx] : "invalid";
 }
 
 /// \brief Reads the CPT field from the first (header) byte of a PDCP control PDU
@@ -74,39 +85,6 @@ struct pdcp_control_pdu_header {
 } // namespace ocudu
 
 namespace fmt {
-
-template <>
-struct formatter<ocudu::pdcp_dc_field> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::pdcp_dc_field dc, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"ctrl", "data"};
-    return format_to(ctx.out(), "{}", options[to_number(dc)]);
-  }
-};
-
-template <>
-struct formatter<ocudu::pdcp_control_pdu_type> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::pdcp_control_pdu_type cpt, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"status_report", "rohc_feedback", "ehc_feedback", "udc_feedback"};
-    auto                         idx       = to_number(cpt);
-    return format_to(ctx.out(), "{}", (idx < std::size(options)) ? options[idx] : "invalid");
-  }
-};
 
 template <>
 struct formatter<ocudu::pdcp_data_pdu_header> {

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ocudu/f1ap/f1ap_message.h"
 #include "ocudu/f1ap/f1ap_ue_id_types.h"
 #include "ocudu/ran/nr_cgi.h"
 #include "ocudu/ran/rb_id.h"
@@ -90,9 +89,15 @@ bool is_valid_f1ap_positioning_measurement_request(const f1ap_message& msg);
 
 bool is_valid_f1ap_positioning_measurement_response(const f1ap_message& msg);
 
+/// \brief Check if an F1AP message is a valid E-CID MEASUREMENT INITIATION REQUEST, as per TS 38.473,
+/// Section 9.2.12.20.
+bool is_valid_e_cid_measurement_initiation_request(const f1ap_message& msg);
+
 bool is_valid_f1ap_positioning_measurement_failure(const f1ap_message& msg);
 
 bool is_valid_gnb_cu_configuration_update(const f1ap_message& msg);
+
+bool is_valid_gnb_cu_configuration_update_acknowledge(const f1ap_message& msg);
 
 } // namespace test_helpers
 } // namespace ocudu

@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "ocudu/adt/span.h"
+#include <cstddef>
 
 namespace ocudu {
 namespace detail {

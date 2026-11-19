@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "mac_ul_ue_manager.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocudulog/ocudulog.h"
 
 using namespace ocudu;
@@ -15,7 +16,7 @@ mac_ul_ue_manager::mac_ul_ue_manager(du_rnti_table& rnti_table_) :
 bool mac_ul_ue_manager::add_ue(const mac_ue_create_request& request)
 {
   ocudu_assert(is_crnti(request.crnti), "Invalid c-rnti={}", request.crnti);
-  ocudu_assert(is_du_ue_index_valid(request.ue_index), "Invalid UE index={}", fmt::underlying(request.ue_index));
+  ocudu_assert(is_du_ue_index_valid(request.ue_index), "Invalid UE index={}", request.ue_index);
 
   // > Insert UE
   if (ue_db.contains(request.ue_index)) {
@@ -25,8 +26,7 @@ bool mac_ul_ue_manager::add_ue(const mac_ue_create_request& request)
 
   // > Add UE Bearers
   if (not addmod_bearers(request.ue_index, request.bearers)) {
-    logger.warning("ue={}: \"MAC UE Creation\" failed. Cause: Failed to add/mod MAC UE UL bearers",
-                   fmt::underlying(request.ue_index));
+    logger.warning("ue={}: \"MAC UE Creation\" failed. Cause: Failed to add/mod MAC UE UL bearers", request.ue_index);
     return false;
   }
 
@@ -40,8 +40,7 @@ bool mac_ul_ue_manager::add_ue(const mac_ue_create_request& request)
 void mac_ul_ue_manager::remove_ue(du_ue_index_t ue_index)
 {
   if (not ue_db.contains(ue_index)) {
-    logger.warning("ue={}: \"UE Removal\" failed. Cause: UE with provided ID does not exist",
-                   fmt::underlying(ue_index));
+    logger.warning("ue={}: \"UE Removal\" failed. Cause: UE with provided ID does not exist", ue_index);
     return;
   }
   ue_db.erase(ue_index);
@@ -54,8 +53,7 @@ bool mac_ul_ue_manager::addmod_bearers(du_ue_index_t                            
     return true;
   }
   if (not ue_db.contains(ue_index)) {
-    logger.error("ue={}: Interrupting DEMUX update. Cause: The provided UE ID does not exist",
-                 fmt::underlying(ue_index));
+    logger.error("ue={}: Interrupting DEMUX update. Cause: The provided UE ID does not exist", ue_index);
     return false;
   }
   mac_ul_ue_context& u = ue_db[ue_index];
@@ -75,8 +73,7 @@ bool mac_ul_ue_manager::remove_bearers(du_ue_index_t ue_index, span<const lcid_t
     return true;
   }
   if (not ue_db.contains(ue_index)) {
-    logger.error("ue={} Interrupting DEMUX update. Cause: The provided index does not exist",
-                 fmt::underlying(ue_index));
+    logger.error("ue={} Interrupting DEMUX update. Cause: The provided index does not exist", ue_index);
     return false;
   }
   mac_ul_ue_context& u = ue_db[ue_index];

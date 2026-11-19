@@ -5,6 +5,7 @@
 
 #include "ocudu/gateways/sctp_network_client.h"
 #include "ocudu/gateways/sctp_network_gateway.h"
+#include <memory>
 
 namespace ocudu {
 

@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include "ocudu/phy/support/precoding_formatters.h"
 #include "ocudu/phy/upper/signal_processors/prs/prs_generator_configuration.h"
-#include "ocudu/ran/precoding/precoding_weight_matrix_formatters.h"
+#include "ocudu/ran/precoding_beamforming_formatters.h"
 
 namespace fmt {
 
@@ -40,7 +39,12 @@ struct formatter<ocudu::prs_generator_configuration> {
     helper.format_if_verbose(ctx, "rb_start={}", config.prb_start);
     helper.format_always(ctx, "f_alloc={}", config.freq_alloc);
     helper.format_if_verbose(ctx, "power_offset={}", config.power_offset_dB);
-    helper.format_if_verbose(ctx, "precoding={}", config.precoding);
+
+    if (helper.is_multiline()) {
+      helper.format_if_verbose(ctx, "{:n}", config.precoding_and_beamforming);
+    } else {
+      helper.format_if_verbose(ctx, "{}", config.precoding_and_beamforming);
+    }
 
     return ctx.out();
   }

@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/upper/channel_processors/pusch/factories.h"
 #include "ocudu/phy/upper/channel_processors/pusch/formatters.h"
 #include "ocudu/phy/upper/equalization/equalization_factories.h"
 #include "ocudu/support/executors/inline_task_executor.h"
 #include "fmt/ostream.h"
 #include "gtest/gtest.h"
+#include <numeric>
 #include <regex>
 
 using namespace ocudu;
@@ -20,9 +22,9 @@ constexpr unsigned max_supported_nof_layers = 2;
 const symbol_slot_mask dmrs_symbol_mask =
     {false, false, true, false, false, false, false, false, false, false, false, true, false, false};
 /// Default valid PUSCH processor configuration.
-const pusch_processor::pdu_t base_pdu = {.context          = std::nullopt,
+const pusch_processor::pdu_t base_pdu = {.harq_id          = INVALID_HARQ_ID,
                                          .slot             = {0, 9},
-                                         .rnti             = 8323,
+                                         .rnti             = to_rnti(8323),
                                          .bwp_size_rb      = 25,
                                          .bwp_start_rb     = 0,
                                          .cp               = cyclic_prefix::NORMAL,
@@ -60,7 +62,10 @@ const std::vector<test_case_t> pusch_processor_validator_test_data = {
        pdu.bwp_size_rb            = MAX_NOF_PRBS + 1;
        return pdu;
      },
-     R"(The sum of the BWP start \(i\.e\., 0\) and size \(i\.e\., 276\) exceeds the maximum grid size \(i\.e\., 275 PRB\)\.)"},
+     fmt::format(
+         R"(The sum of the BWP start \(i\.e\., 0\) and size \(i\.e\., {}\) exceeds the maximum grid size \(i\.e\., {} PRB\)\.)",
+         MAX_NOF_PRBS + 1,
+         MAX_NOF_PRBS)},
     {[] {
        pusch_processor::pdu_t pdu = base_pdu;
        pdu.nof_tx_layers          = max_supported_nof_layers + 1;
@@ -69,10 +74,15 @@ const std::vector<test_case_t> pusch_processor_validator_test_data = {
      R"(The number of transmit layers \(i\.e\., 3\) is out of the range \[1\.\.2\]\.)"},
     {[] {
        pusch_processor::pdu_t pdu = base_pdu;
-       pdu.rx_ports.emplace_back(pusch_constants::MAX_NOF_RX_PORTS);
+       // Configure one more receive port than the maximum supported to trigger the validation failure.
+       pdu.rx_ports.resize(pusch_constants::MAX_NOF_RX_PORTS + 1);
+       std::iota(pdu.rx_ports.begin(), pdu.rx_ports.end(), 0);
        return pdu;
      },
-     R"(The number of receive ports \(i\.e\., 5\) exceeds the maximum number of receive ports \(i\.e\., 4\)\.)"},
+     fmt::format(
+         R"(The number of receive ports \(i\.e\., {}\) exceeds the maximum number of receive ports \(i\.e\., {}\)\.)",
+         pusch_constants::MAX_NOF_RX_PORTS + 1,
+         pusch_constants::MAX_NOF_RX_PORTS)},
     {[] {
        pusch_processor::pdu_t pdu = base_pdu;
        pdu.bwp_size_rb            = 1;
@@ -86,6 +96,17 @@ const std::vector<test_case_t> pusch_processor_validator_test_data = {
        return pdu;
      },
      R"(CSI Part 1 UCI field length \(i\.e\., 0\) does not correspond with the CSI Part 2 \(i\.e\., entries=\[params=\[offset=0 width=10\] map=\[1\]\]\)\.)"},
+    {[] {
+       pusch_processor::pdu_t pdu = base_pdu;
+       pdu.uci.nof_harq_ack       = 1000;
+       pdu.uci.nof_csi_part1      = 700;
+       auto& part2                = pdu.uci.csi_part2_size;
+       part2.entries.clear();
+       auto& e0 = part2.entries.emplace_back();
+       e0.map.emplace_back(300);
+       return pdu;
+     },
+     R"(Total UCI size \(i\.e\., 2000\) exceeds the maximum size, i\.e\., 1706\.)"},
     {[] {
        pusch_processor::pdu_t pdu = base_pdu;
        pdu.dmrs_symbol_mask       = {true};
@@ -148,7 +169,9 @@ const std::vector<test_case_t> pusch_processor_validator_test_data = {
        pdu.dc_position            = MAX_NOF_SUBCARRIERS;
        return pdu;
      },
-     R"(DC position \(i\.e\., 3300\) is out of range \[0\.\.3300\)\.)"},
+     fmt::format(R"(DC position \(i\.e\., {}\) is out of range \[0\.\.{}\)\.)",
+                 MAX_NOF_SUBCARRIERS,
+                 MAX_NOF_SUBCARRIERS)},
     {[] {
        pusch_processor::pdu_t pdu = base_pdu;
        pdu.dmrs                   = pusch_processor::dmrs_transform_precoding_configuration{.n_rs_id = 0};
@@ -171,18 +194,6 @@ const std::vector<test_case_t> pusch_processor_validator_test_data = {
        return pdu;
      },
      R"(Transform precoding is only possible with a valid number of PRB\.)"},
-    {[] {
-       pusch_processor::pdu_t pdu = base_pdu;
-       pdu.uci.nof_harq_ack       = 12;
-       return pdu;
-     },
-     R"(UCI field sizes in bits \(12, 1\), exceed the maximum bit size, i\.e\., 11\.)"},
-    {[] {
-       pusch_processor::pdu_t pdu = base_pdu;
-       pdu.uci.nof_csi_part1      = 12;
-       return pdu;
-     },
-     R"(UCI field sizes in bits \(0, 12\), exceed the maximum bit size, i\.e\., 11\.)"},
 };
 
 class PuschProcessorFixture : public ::testing::TestWithParam<test_case_t>
@@ -345,6 +356,15 @@ TEST_P(PuschProcessorFixture, PuschProcessorValidatortest)
   ASSERT_FALSE(validator_out.has_value()) << "Validation should fail.";
   ASSERT_TRUE(std::regex_match(validator_out.error(), std::regex(param.expr)))
       << "The assertion message doesn't match the expected pattern.";
+}
+
+TEST_F(PuschProcessorFixture, PuschProcessorValidatorSuccessPath)
+{
+  ASSERT_NE(pdu_validator, nullptr);
+
+  // The base PDU is fully valid and should exercise the success return path.
+  error_type<std::string> validator_out = pdu_validator->is_valid(base_pdu);
+  ASSERT_TRUE(validator_out.has_value()) << "Validation should succeed.";
 }
 
 // Creates test suite that combines all possible parameters.

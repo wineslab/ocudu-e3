@@ -5,7 +5,7 @@
 #pragma once
 
 #include "apps/helpers/metrics/metrics_config.h"
-#include "apps/services/worker_manager/os_sched_affinity_manager.h"
+#include "ocudu/ocudulog/logger.h"
 #include <optional>
 #include <string>
 
@@ -19,6 +19,13 @@ struct du_low_unit_expert_upper_phy_config {
   /// demanding cell configurations, such as using large bandwidths or higher order MIMO. Higher values also increase
   /// the round trip latency of the radio link.
   unsigned max_processing_delay_slots = 5U;
+  /// \brief Correction factor for the PRACH detection threshold.
+  ///
+  /// Scales the default PRACH detection threshold for the current configuration by the given value. For instance,
+  /// setting prach_th_correction_factor to 0.8 implies that the detector will use a threshold value that is 80% of
+  /// the default value for the given PRACH configuration: as a result, both the detection probability and the false
+  /// alarm probability will increase.
+  float prach_th_correction_factor = 1.0F;
   /// Number of PUSCH LDPC decoder iterations.
   unsigned pusch_decoder_max_iterations = 6;
   /// Set to true to enable the PUSCH LDPC decoder early stop.
@@ -47,15 +54,23 @@ struct du_low_unit_expert_upper_phy_config {
   ///
   /// The \c average strategy is more robust against noise and interference while \c interpolate is more robust for
   /// fast fading channels.
-  std::string pusch_channel_estimator_td_strategy = "average";
+  std::string pusch_channel_estimator_td_strategy = "interpolate";
   /// PUSCH channel estimator CFO compensation.
-  bool pusch_channel_estimator_cfo_compensation = true;
+  bool pusch_channel_estimator_cfo_compensation = false;
   /// \brief PUSCH channel equalizer algorithm.
   ///
   /// Use one of these options:
   /// - \c zf: use zero-forcing algorithm, or
   /// - \c mmse: use minimum mean square error algorithm.
-  std::string pusch_channel_equalizer_algorithm = "zf";
+  std::string pusch_channel_equalizer_algorithm = "mmse";
+  /// Enable DOA features.
+  bool doa_enabled = false;
+  /// Distance between antenna elements, normalized with respect to the wavelength. Only meaningful if \ref doa_enabled
+  /// is set to true.
+  float doa_antenna_distance_over_wavelength = 0.5F;
+  /// Cross-polarization flag: set to true if the array elements consist of two collocated antennas with orthogonal
+  /// polarizations. Only meaningful if \ref doa_enabled is set to true.
+  bool doa_cross_polarized = false;
   /// \brief Request headroom size in slots.
   ///
   /// The request headroom size is the number of delayed slots that the upper physical layer will accept, ie, if the
@@ -68,7 +83,42 @@ struct du_low_unit_expert_upper_phy_config {
   /// Enables the PHY tap plugin if present.
   bool enable_phy_tap = false;
   /// PHY tap plugin arguments.
-  std::string phy_tap_arguments = "";
+  std::string phy_tap_arguments;
+};
+
+/// DU low receive symbols print trigger configuration.
+struct du_low_unit_rx_symbol_trigger_config {
+  /// \brief PRACH buffer print trigger: RSSI threshold in decibels.
+  ///
+  /// Saves the PRACH buffer in the file when the RSSI is above the selected threshold. Set to infinity for not saving
+  /// any PRACH buffer.
+  float prach_threshold_rssi_dB = std::numeric_limits<float>::infinity();
+  /// \brief UL resource grid print trigger: save the uplink grid when PUSCH message is not decoded successfully.
+  ///
+  /// Set to true for saving the uplink resource grid when a CRC check fails.
+  bool pusch_on_ko = false;
+  /// \brief UL resource grid print trigger: save the uplink grid when the measured SINR in a PUSCH message is below
+  /// the threshold.
+  ///
+  /// Saves the uplink resource grid in the file when a PUSCH SINR for a slot is below the given threshold. Set to
+  /// minus infinity for disabling this trigger.
+  float pusch_threshold_sinr_dB = -std::numeric_limits<float>::infinity();
+  /// \brief UL resource grid print trigger: save the uplink grid when the number of decoder iterations is above the
+  /// threshold.
+  ///
+  /// Saves the uplink resource grid in the file when a PUSCH transmission in a slot required more decoder iterations
+  /// than the given threshold. Set to infinity for disabling this trigger.
+  float pusch_threshold_iter = std::numeric_limits<float>::infinity();
+};
+
+/// DU low receive symbols printer configuration.
+struct du_low_unit_rx_symbols_printer_config {
+  /// Set to a valid file path to print the received symbols.
+  std::string filename;
+  /// Set to a valid Rx port number or empty for all ports.
+  std::optional<unsigned> port = 0;
+  /// Print triggers.
+  du_low_unit_rx_symbol_trigger_config triggers;
 };
 
 /// DU low logging functionalities.
@@ -81,12 +131,8 @@ struct du_low_unit_logger_config {
   bool broadcast_enabled = false;
   /// Maximum number of bytes to write when dumping hex arrays.
   int hex_max_size = 0;
-  /// Set to a valid file path to print the received symbols.
-  std::string phy_rx_symbols_filename;
-  /// Set to a valid Rx port number or empty for all ports.
-  std::optional<unsigned> phy_rx_symbols_port = 0;
-  /// If true, prints the PRACH frequency-domain symbols.
-  bool phy_rx_symbols_prach = false;
+  /// Physical layer receive symbol printer configuration.
+  du_low_unit_rx_symbols_printer_config phy_rx_symbol_printer;
 };
 
 /// DU low tracing functionalities.
@@ -97,26 +143,14 @@ struct du_low_unit_tracer_config {
 
 /// Expert threads configuration of the gNB app.
 struct du_low_unit_expert_threads_config {
-  du_low_unit_expert_threads_config()
-  {
-    unsigned nof_threads = cpu_architecture_info::get().get_host_nof_available_cpus();
-
-    max_pucch_concurrency = 0;
-    if (nof_threads <= 4) {
-      max_pusch_and_srs_concurrency = 1;
-    } else if (nof_threads < 8) {
-      max_pusch_and_srs_concurrency = 2;
-    } else if (nof_threads < 16) {
-      max_pusch_and_srs_concurrency = 2;
-    } else {
-      max_pusch_and_srs_concurrency = 4;
-    }
-  }
-
   /// Codeblock batch length for ensuring synchronous processing within the flexible PDSCH processor implementation.
   static constexpr unsigned synchronous_cb_batch_length = std::numeric_limits<unsigned>::max();
   /// Codeblock default batch length.
   static constexpr unsigned default_cb_batch_length = 4;
+  /// Concurrency value that indicates no limitation on the number of threads.
+  static constexpr unsigned concurrency_unlimited = 0;
+  /// Concurrency value that indicates the number of threads must be automatically derived.
+  static constexpr unsigned concurrency_auto = std::numeric_limits<unsigned>::max();
 
   /// \brief PDSCH processor type.
   ///
@@ -133,14 +167,15 @@ struct du_low_unit_expert_threads_config {
   unsigned pdsch_cb_batch_length = default_cb_batch_length;
   /// \brief Maximum concurrency level for PUCCH.
   ///
-  /// Maximum number of threads that can concurrently process Physical Uplink Control Channel (PUCCH). Set to zero for
-  /// no limitation.
-  unsigned max_pucch_concurrency = 0;
+  /// Maximum number of threads that can concurrently process Physical Uplink Control Channel (PUCCH). Set to
+  /// \c concurrency_unlimited for no limitation.
+  unsigned max_pucch_concurrency = concurrency_unlimited;
   /// \brief Maximum joint concurrency level for PUSCH and SRS.
   ///
   /// Maximum number of threads that can concurrently process Physical Uplink Shared Channel (PUSCH) and Sounding
-  /// Reference Signals (SRS). Set to zero for no limitation.
-  unsigned max_pusch_and_srs_concurrency = 1;
+  /// Reference Signals (SRS). Set to \c concurrency_unlimited for no limitation, or to \c concurrency_auto to derive it
+  /// from the cell bandwidth, number of cells and maximum number of layers.
+  unsigned max_pusch_and_srs_concurrency = concurrency_auto;
   /// \brief Maximum concurrency level for PDSCH processing.
   ///
   /// Maximum number of threads that can concurrently process Physical Downlink Shared Channel (PDSCH). Set to zero for
@@ -148,7 +183,7 @@ struct du_low_unit_expert_threads_config {
   ///
   /// This parameter is necessary when hardware acceleration is used to limit the number of threads accessing the
   /// physical resources.
-  unsigned max_pdsch_concurrency = 0;
+  unsigned max_pdsch_concurrency = concurrency_unlimited;
 };
 
 /// Expert configuration of the gNB app.
@@ -226,6 +261,17 @@ struct du_low_unit_metrics_config {
   bool                        enable_du_low = false;
 };
 
+/// Power calibration factors.
+struct power_calibration_factors {
+  /// Value in dBm at the antenna connector equivalent to 0 dBFS for a configured \c rx_gain_dB of 0 dB. When using
+  /// an SDR Radio Unit, the configured radio receive gain is subtracted automatically; for Open Fronthaul, the receive
+  /// gain applied by the O-RU is not visible to this application unit and must be accounted for manually.
+  float dbfs_to_dbm_conversion_factor = 0.0F;
+  /// Value in dB relative to Full Scale (dBFS) equivalent to 0 dB in normalized units, i.e., as coming from the
+  /// physical layer.
+  float db_to_dbfs_conversion_factor = 0.0F;
+};
+
 /// DU low configuration.
 struct du_low_unit_config {
   /// Loggers.
@@ -240,6 +286,8 @@ struct du_low_unit_config {
   std::optional<du_low_unit_hal_config> hal_config;
   /// Metrics configuration.
   du_low_unit_metrics_config metrics_cfg;
+  /// Power calibration factors.
+  power_calibration_factors power_calibration;
 };
 
 } // namespace ocudu

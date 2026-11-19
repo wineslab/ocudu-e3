@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "channel_precoder_avx2.h"
+#include "ocudu/adt/format.h"
 #include <immintrin.h>
 
 using namespace ocudu;

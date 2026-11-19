@@ -195,17 +195,21 @@ void ocudu::build_pdsch_f1_0_si_rnti(pdsch_information&                   pdsch,
   pdsch.n_id       = cell_cfg.params.pci;
   pdsch.nof_layers = 1;
 
+  pdsch.mcs_table = pdsch_mcs_table::qam64;
+
   pdsch_codeword& cw    = pdsch.codewords.emplace_back();
   cw.rv_index           = dci_cfg.redundancy_version;
   cw.mcs_index          = dci_cfg.modulation_coding_scheme;
-  cw.mcs_table          = pdsch_mcs_table::qam64;
-  cw.mcs_descr          = pdsch_mcs_get_config(cw.mcs_table, cw.mcs_index);
+  cw.mcs_descr          = pdsch_mcs_get_config(pdsch.mcs_table, cw.mcs_index);
   cw.tb_size_bytes      = tbs_bytes;
   pdsch.dmrs            = dmrs_info;
   pdsch.vrb_prb_mapping = vrb_to_prb::mapping_type::non_interleaved;
   pdsch.ss_set_type =
       dci_cfg.system_information_indicator == 0 ? search_space_set_type::type0 : search_space_set_type::type0A;
   pdsch.dci_fmt = dci_dl_format::f1_0;
+
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
@@ -243,15 +247,19 @@ void ocudu::build_pdsch_f1_0_p_rnti(pdsch_information&                  pdsch,
   pdsch.n_id       = cell_cfg.params.pci;
   pdsch.nof_layers = 1;
 
+  pdsch.mcs_table = pdsch_mcs_table::qam64;
+
   pdsch_codeword& cw    = pdsch.codewords.emplace_back();
   cw.mcs_index          = dci_cfg.modulation_coding_scheme;
-  cw.mcs_table          = pdsch_mcs_table::qam64;
-  cw.mcs_descr          = pdsch_mcs_get_config(cw.mcs_table, cw.mcs_index);
+  cw.mcs_descr          = pdsch_mcs_get_config(pdsch.mcs_table, cw.mcs_index);
   cw.tb_size_bytes      = tbs_bytes;
   pdsch.dmrs            = dmrs_info;
   pdsch.vrb_prb_mapping = vrb_to_prb::mapping_type::non_interleaved;
   pdsch.ss_set_type     = search_space_set_type::type2;
   pdsch.dci_fmt         = dci_dl_format::f1_0;
+
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
@@ -289,12 +297,14 @@ void ocudu::build_pdsch_f1_0_ra_rnti(pdsch_information&                   pdsch,
   pdsch.rbs         = vrbs;
   pdsch.symbols     = pdsch_td_res_alloc_list[dci_cfg.time_resource].symbols;
 
+  pdsch.mcs_table = pdsch_mcs_table::qam64;
+
   pdsch_codeword& cw = pdsch.codewords.emplace_back();
-  cw.mcs_table       = pdsch_mcs_table::qam64;
   cw.mcs_index       = dci_cfg.modulation_coding_scheme;
-  cw.rv_index        = 0; // Implementation-defined.
-  cw.mcs_descr       = pdsch_mcs_get_config(cw.mcs_table, cw.mcs_index);
+  cw.mcs_descr       = pdsch_mcs_get_config(pdsch.mcs_table, cw.mcs_index);
   cw.tb_size_bytes   = tbs_bytes;
+  // Implementation-defined.
+  cw.rv_index = 0;
 
   pdsch.dmrs = dmrs_info;
   // As per TS 38.211, Section 7.3.1.1, n_ID is set to Physical Cell ID for RA-RNTI.
@@ -303,6 +313,9 @@ void ocudu::build_pdsch_f1_0_ra_rnti(pdsch_information&                   pdsch,
   pdsch.vrb_prb_mapping = vrb_to_prb::mapping_type::non_interleaved;
   pdsch.ss_set_type     = search_space_set_type::type1;
   pdsch.dci_fmt         = dci_dl_format::f1_0;
+
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
@@ -350,6 +363,9 @@ void ocudu::build_pdsch_f1_0_tc_rnti(pdsch_information&                   pdsch,
   pdsch.harq_id     = to_harq_id(dci_cfg.harq_process_number);
   pdsch.nof_layers  = 1U;
 
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
+
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
     // [Implementation-defined] It is assumed that same powerControlOffset and powerControlOffsetSS is configured in
@@ -360,13 +376,14 @@ void ocudu::build_pdsch_f1_0_tc_rnti(pdsch_information&                   pdsch,
     }
   }
 
+  pdsch.mcs_table = pdsch_cfg.mcs_table;
+
   // One Codeword.
   pdsch_codeword& cw = pdsch.codewords.emplace_back();
   cw.new_data        = is_new_data;
   cw.rv_index        = dci_cfg.redundancy_version;
   cw.mcs_index       = dci_cfg.modulation_coding_scheme;
-  cw.mcs_table       = pdsch_cfg.mcs_table;
-  cw.mcs_descr       = pdsch_mcs_get_config(pdsch_cfg.mcs_table, cw.mcs_index);
+  cw.mcs_descr       = pdsch_mcs_get_config(pdsch.mcs_table, cw.mcs_index);
   cw.tb_size_bytes   = tbs_bytes;
 }
 
@@ -401,6 +418,9 @@ void ocudu::build_pdsch_f1_0_c_rnti(pdsch_information&                  pdsch,
       get_pdsch_n_id(cell_cfg.params.pci, active_bwp, dci_dl_format::f1_0, ss_info.cfg->is_common_search_space());
   pdsch.nof_layers = 1;
 
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
+
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
     // [Implementation-defined] It is assumed that same powerControlOffset and powerControlOffsetSS is configured in
@@ -411,13 +431,14 @@ void ocudu::build_pdsch_f1_0_c_rnti(pdsch_information&                  pdsch,
     }
   }
 
+  pdsch.mcs_table = pdsch_cfg.mcs_table;
+
   // One Codeword.
   pdsch_codeword& cw = pdsch.codewords.emplace_back();
   cw.new_data        = is_new_data;
   cw.rv_index        = dci_cfg.redundancy_version;
   cw.mcs_index       = dci_cfg.modulation_coding_scheme;
-  cw.mcs_table       = pdsch_cfg.mcs_table;
-  cw.mcs_descr       = pdsch_mcs_get_config(pdsch_cfg.mcs_table, cw.mcs_index);
+  cw.mcs_descr       = pdsch_mcs_get_config(pdsch.mcs_table, cw.mcs_index);
   cw.tb_size_bytes   = tbs_bytes;
 }
 
@@ -457,18 +478,19 @@ void ocudu::build_pdsch_f1_1_c_rnti(pdsch_information&              pdsch,
       get_pdsch_n_id(cell_cfg.params.pci, active_bwp, dci_dl_format::f1_1, ss_info.cfg->is_common_search_space());
   pdsch.nof_layers = pdsch_cfg.nof_layers;
 
+  pdsch.mcs_table = pdsch_cfg.mcs_table;
+
   // TODO: Add second Codeword when supported.
   // One Codeword.
   pdsch_codeword& cw = pdsch.codewords.emplace_back();
   cw.new_data        = is_new_data;
   cw.rv_index        = dci_cfg.tb1_redundancy_version;
   cw.mcs_index       = dci_cfg.tb1_modulation_coding_scheme;
-  cw.mcs_table       = pdsch_cfg.mcs_table;
-  cw.mcs_descr       = pdsch_mcs_get_config(pdsch_cfg.mcs_table, cw.mcs_index);
+  cw.mcs_descr       = pdsch_mcs_get_config(pdsch.mcs_table, cw.mcs_index);
   cw.tb_size_bytes   = mcs_tbs_info.tbs;
 
   // Beamforming and precoding.
-  pdsch.precoding = cs_mgr.get_precoding(pdsch_cfg.nof_layers, vrbs.length());
+  pdsch.precoding_and_beamforming = cs_mgr.get_precoding(pdsch_cfg.nof_layers);
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
@@ -493,6 +515,7 @@ void ocudu::build_pusch_f0_0_tc_rnti(pusch_information&                   pusch,
   // TODO.
   pusch.intra_slot_freq_hopping = false;
   pusch.pusch_second_hop_prb    = 0;
+  pusch.is_cg                   = false;
   pusch.tx_direct_current_location =
       dc_offset_helper::pack(cell_cfg.expert_cfg.ue.initial_ul_dc_offset, cell_cfg.nof_ul_prbs);
   pusch.ul_freq_shift_7p5khz = false;
@@ -527,7 +550,7 @@ void ocudu::build_pusch_f0_0_tc_rnti(pusch_information&                   pusch,
 
   pusch.tb_size_bytes = tbs_bytes;
   // Set number of CB to zero if no CBs are being used.
-  pusch.num_cb = 0;
+  pusch.nof_cb = 0;
 }
 
 void ocudu::build_pusch_f0_0_c_rnti(pusch_information&                  pusch,
@@ -542,6 +565,7 @@ void ocudu::build_pusch_f0_0_c_rnti(pusch_information&                  pusch,
 {
   // TODO.
   pusch.intra_slot_freq_hopping = false;
+  pusch.is_cg                   = false;
   pusch.pusch_second_hop_prb    = 0;
   pusch.tx_direct_current_location =
       dc_offset_helper::pack(cell_cfg.expert_cfg.ue.initial_ul_dc_offset, cell_cfg.nof_ul_prbs);
@@ -572,7 +596,7 @@ void ocudu::build_pusch_f0_0_c_rnti(pusch_information&                  pusch,
   // TBS.
   pusch.nof_layers    = pusch_cfg.nof_layers;
   pusch.tb_size_bytes = tbs_bytes;
-  pusch.num_cb        = 0;
+  pusch.nof_cb        = 0;
 
   // HARQ.
   pusch.rv_index = dci_cfg.redundancy_version;
@@ -600,6 +624,7 @@ void ocudu::build_pusch_f0_1_c_rnti(pusch_information&           pusch,
 
   // TODO: Populate based on config.
   pusch.intra_slot_freq_hopping = false;
+  pusch.is_cg                   = false;
   pusch.pusch_second_hop_prb    = 0;
   pusch.tx_direct_current_location =
       dc_offset_helper::pack(cell_cfg.expert_cfg.ue.initial_ul_dc_offset, cell_cfg.nof_ul_prbs);
@@ -645,10 +670,67 @@ void ocudu::build_pusch_f0_1_c_rnti(pusch_information&           pusch,
   pusch.nof_layers    = pusch_cfg.nof_layers;
   pusch.tb_size_bytes = mcs_tbs_info.tbs;
   // TODO: Set based on CobeBook config.
-  pusch.num_cb = 0;
+  pusch.nof_cb = 0;
 
   // HARQ.
   pusch.rv_index = dci_cfg.redundancy_version;
   pusch.harq_id  = to_harq_id(dci_cfg.harq_process_number);
   pusch.new_data = is_new_data;
+}
+
+void ocudu::build_pusch_cs_rnti(pusch_information&           pusch,
+                                rnti_t                       cs_rnti,
+                                const pusch_config_params&   pusch_cfg,
+                                sch_mcs_tbs                  mcs_tbs_info,
+                                const ue_cell_configuration& ue_cell_cfg,
+                                const sched_bwp_config&      bwp_info,
+                                const vrb_interval&          vrbs,
+                                uint8_t                      rv_index,
+                                harq_id_t                    harq_id)
+{
+  const cell_configuration& cell_cfg = ue_cell_cfg.cell_cfg_common;
+  ocudu_assert(bwp_info.ul.ded() != nullptr and bwp_info.ul.ded()->cg_cfg.has_value(),
+               "Configured Grant configuration doesn't exist");
+  const cg_configuration& cg_cfg = bwp_info.ul.ded()->cg_cfg.value();
+  ocudu_assert(cg_cfg.rrc_configured_ul_grant_cfg.has_value(), "RRC-ConfiguredUplinkGrant for CG type 1 not set");
+
+  pusch.intra_slot_freq_hopping = false;
+  pusch.is_cg                   = true;
+  pusch.pusch_second_hop_prb    = 0;
+  pusch.tx_direct_current_location =
+      dc_offset_helper::pack(cell_cfg.expert_cfg.ue.initial_ul_dc_offset, cell_cfg.nof_ul_prbs);
+  pusch.ul_freq_shift_7p5khz = false;
+  pusch.dmrs_hopping_mode    = pusch_information::dmrs_hopping_mode::no_hopping;
+  pusch.rnti                 = cs_rnti;
+  pusch.bwp_cfg              = &bwp_info.ul.cfg();
+  pusch.rbs                  = vrbs;
+  pusch.symbols              = pusch_cfg.symbols;
+  pusch.mcs_table            = pusch_cfg.mcs_table;
+
+  // Backup to MSG3 transform precode in RACH-ConfigCommon if CG transform precoding is not set.
+  pusch.transform_precoding = cg_cfg.trans_precoder.value_or(ue_cell_cfg.cell_cfg_common.use_msg3_transform_precoder());
+  pusch.mcs_table           = pusch.transform_precoding ? cg_cfg.mcs_table_transform_precoder : cg_cfg.mcs_table;
+  pusch.mcs_index           = mcs_tbs_info.mcs.value();
+  // tp_pi2bpsk is only set with dynamic grants;
+  constexpr bool tp_pi2bpsk_present = false;
+  pusch.mcs_descr =
+      pusch_mcs_get_config(pusch.mcs_table, pusch.mcs_index, pusch.transform_precoding, tp_pi2bpsk_present);
+
+  // As per TS 38.211, Section 6.3.1.1, for Configured Grant (which do not have any \c dataScramblingIdentityPUSCH
+  // field), n_ID defaults to the Physical Cell ID.
+  pusch.n_id = cell_cfg.params.pci;
+  // This is the only value we support, as \c nPUSCH-Identity in \c cg-DMRS-Configuration is not set at the moment (ref.
+  // to Section 6.4.1.1.1.2, TS 38.211).
+  pusch.pusch_dmrs_id = cell_cfg.params.pci;
+  pusch.dmrs          = pusch_cfg.dmrs;
+  pusch.nof_layers    = pusch_cfg.nof_layers;
+  pusch.tb_size_bytes = mcs_tbs_info.tbs;
+  // Only 1 Codeword supported.
+  pusch.nof_cb = 1U;
+
+  // HARQ.
+  pusch.rv_index = rv_index;
+  pusch.harq_id  = harq_id;
+  // In CG, the periodic grants are always new transmissions.
+  pusch.new_data = true;
 }

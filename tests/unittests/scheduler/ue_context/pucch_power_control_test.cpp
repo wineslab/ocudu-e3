@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "tests/test_doubles/scheduler/pucch_res_test_builder_helper.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "tests/unittests/scheduler/test_utils/sched_custom_test_bench.h"
 #include "ocudu/ran/power_control/tpc_mapping.h"
 #include "ocudu/ran/pucch/pucch_info.h"
 #include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
+#include "ocudu/scheduler/rrm/pucch_resource_manager.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -177,9 +178,9 @@ protected:
                  "For PUCCH resources set 1, Format 0 and are not valid");
 
     sched_ue_creation_request_message ue_req = cfg_mng.get_default_ue_config_request();
-    pucch_res_builder_test_helper     pucch_builder(cell_cfg.expert_cfg.ue.max_pucchs_per_slot);
-    pucch_builder.setup(cell_cfg.params);
-    pucch_builder.add_build_new_ue_pucch_cfg(ue_req.cfg.cells.value().front());
+    pucch_resource_manager            pucch_builder(cell_cfg.expert_cfg.ue.max_pucchs_per_slot);
+    pucch_builder.add_cell(to_du_cell_index(0), cell_cfg.params);
+    pucch_builder.alloc_resources(ue_req.cfg.cells.value().front());
     add_ue(ue_req);
   }
 
@@ -305,6 +306,8 @@ using namespace pucch_pw_ctrl_test;
 
 TEST_P(pucch_power_control_test_bench, when_phr_is_non_positive_cl_stops_increasing_pw_target)
 {
+  OCUDU_TEST_REQUIREMENTS("MVP-FUNC-BAS-16-3");
+
   // In this test, as assume TDD with 10 slots period, and 2 UL slots. We generate a PUCCH with a Bernoulli random
   // process with probability 0.5 in each UL slot. The PUCCH parameters and UCI bits are randomly set, to simulate
   // deterministic SINR variations due to the PUCCH parameters. The test succeeds if the SINR reaches convergence
@@ -327,7 +330,7 @@ TEST_P(pucch_power_control_test_bench, when_phr_is_non_positive_cl_stops_increas
   bool convergence_reached = false;
 
   for (unsigned sl_cnt = 0, sl_max = 1200; sl_cnt != sl_max; ++sl_cnt, ++sl) {
-    const unsigned slot_idx_tdd_slot = sl.to_uint() % TDD_PATTERN_LENGTH;
+    const unsigned slot_idx_tdd_slot = sl.count() % TDD_PATTERN_LENGTH;
     const bool     is_dl_slot        = slot_idx_tdd_slot <= 7U;
 
     // In DL slots, process the PUCCH SINR, which is supposed to be carried by the UCI indication.

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ocudu/ran/du_types.h"
 #include <cstdint>
 
 namespace ocudu {

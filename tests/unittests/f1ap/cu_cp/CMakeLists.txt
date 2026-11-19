@@ -9,12 +9,17 @@ target_link_libraries(f1ap_cu_test_helpers ocudu_f1ap_du ocudu_f1ap_cu ocudu_sup
 
 set(SOURCES
         f1ap_cu_gnb_cu_configuration_update_procedure_test.cpp
+        f1ap_cu_e_cid_measurement_initiation_procedure_test.cpp
+        f1ap_cu_positioning_measurement_procedure_test.cpp
+        f1ap_cu_trp_information_exchange_procedure_test.cpp
         f1ap_cu_ue_context_test.cpp
         f1ap_cu_ue_context_setup_procedure_test.cpp
         f1ap_cu_ue_context_modification_procedure_test.cpp
         f1ap_cu_ue_context_release_procedure_test.cpp
         f1ap_cu_test.cpp
-        f1ap_cu_paging_test.cpp)
+        f1ap_cu_paging_test.cpp
+        f1ap_cu_write_replace_warning_test.cpp
+        f1ap_cu_ref_time_info_report_test.cpp)
 
 add_executable(f1ap_cu_test ${SOURCES})
 target_include_directories(f1ap_cu_test PRIVATE ${CMAKE_SOURCE_DIR})

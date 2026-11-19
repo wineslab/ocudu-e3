@@ -8,6 +8,7 @@
 #pragma once
 
 #include "ocudu/phy/lower/amplitude_controller/amplitude_controller.h"
+#include <memory>
 
 namespace ocudu {
 

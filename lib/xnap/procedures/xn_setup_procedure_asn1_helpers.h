@@ -14,7 +14,26 @@
 
 namespace ocudu::ocucp {
 
-inline xnap_message generate_asn1_xn_setup_request(const xnap_configuration& xnap_cfg)
+/// \brief Fill the list of NR cells served by this node in an XN Setup Request/Response.
+/// \param[out] asn1_ies The IEs of the XN Setup Request/Response to fill.
+/// \param[in] served_cells The cells served by this node.
+template <typename T>
+inline void fill_asn1_list_of_served_cells_nr(T& asn1_ies, span<const cu_cp_served_cell_info> served_cells)
+{
+  if (served_cells.empty()) {
+    return;
+  }
+
+  asn1_ies->list_of_served_cells_nr_present = true;
+  for (const auto& served_cell : served_cells) {
+    asn1::xnap::served_cells_nr_item_s asn1_served_cell;
+    asn1_served_cell.served_cell_info_nr = served_cell_info_nr_to_asn1(served_cell);
+    asn1_ies->list_of_served_cells_nr.push_back(asn1_served_cell);
+  }
+}
+
+inline xnap_message generate_asn1_xn_setup_request(const xnap_configuration&          xnap_cfg,
+                                                   span<const cu_cp_served_cell_info> served_cells)
 {
   xnap_message xn_setup_req;
   xn_setup_req.pdu.set_init_msg();
@@ -70,10 +89,14 @@ inline xnap_message generate_asn1_xn_setup_request(const xnap_configuration& xna
     asn1_ies->amf_region_info.push_back(amf_region_info);
   }
 
+  // Fill list of served cells.
+  fill_asn1_list_of_served_cells_nr(asn1_ies, served_cells);
+
   return xn_setup_req;
 }
 
-inline xnap_message generate_asn1_xn_setup_response(const xnap_configuration& xnap_cfg)
+inline xnap_message generate_asn1_xn_setup_response(const xnap_configuration&          xnap_cfg,
+                                                    span<const cu_cp_served_cell_info> served_cells)
 {
   xnap_message xn_setup_resp;
 
@@ -119,6 +142,10 @@ inline xnap_message generate_asn1_xn_setup_response(const xnap_configuration& xn
       }
     }
   }
+
+  // Fill list of served cells.
+  fill_asn1_list_of_served_cells_nr(asn1_ies, served_cells);
+
   return xn_setup_resp;
 }
 

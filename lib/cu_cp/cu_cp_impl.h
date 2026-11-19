@@ -8,28 +8,39 @@
 #include "adapters/du_processor_adapters.h"
 #include "adapters/e1ap_adapters.h"
 #include "adapters/mobility_manager_adapters.h"
-#include "adapters/ngap_adapters.h"
 #include "adapters/nrppa_adapters.h"
 #include "cu_configurator_impl.h"
 #include "cu_cp_controller/cu_cp_controller.h"
 #include "cu_cp_impl_interface.h"
 #include "cu_up_processor/cu_up_processor_repository.h"
 #include "du_processor/du_processor_repository.h"
+#include "logical_cell_controller.h"
+#include "metrics_handler/metrics_handler_impl.h"
 #include "ngap_repository.h"
 #include "routines/mobility/inter_cu_handover_target_routine.h"
 #include "ue_manager/ue_manager_impl.h"
 #include "xnap_repository.h"
 #include "ocudu/cu_cp/cu_configurator.h"
 #include "ocudu/cu_cp/cu_cp.h"
+#include "ocudu/cu_cp/cu_cp_cell_command_handler.h"
+#include "ocudu/cu_cp/cu_cp_command_handler.h"
 #include "ocudu/cu_cp/cu_cp_configuration.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
+#include "ocudu/cu_cp/cu_cp_ntn_ref_time_store.h"
 #include "ocudu/nrppa/nrppa.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/support/async/async_task_scheduler.h"
-#include <dlfcn.h>
 #include <memory>
 
-namespace ocudu::ocucp {
+namespace ocudu {
+
+class cu_cp_ntn_ref_time_store;
+
+namespace ocudu_ntn {
+class ntn_configuration_manager;
+} // namespace ocudu_ntn
+
+namespace ocucp {
 
 class cu_cp_common_task_scheduler : public async_task_scheduler
 {
@@ -47,7 +58,10 @@ class cu_cp_impl final : public cu_cp,
                          public cu_cp_impl_interface,
                          public cu_cp_ng_handler,
                          public cu_cp_command_handler,
-                         public cu_cp_ue_release_command_handler
+                         public cu_cp_ue_release_command_handler,
+                         public cu_cp_ntn_meas_update_handler,
+                         public cu_cp_mobility_config_handler,
+                         public cu_cp_mobility_command_handler
 {
 public:
   explicit cu_cp_impl(const cu_cp_configuration& config_);
@@ -71,7 +85,11 @@ public:
   bool handle_ue_plmn_selected(cu_cp_ue_index_t ue_index, const plmn_identity& plmn) override;
   rrc_ue_reestablishment_context_response
   handle_rrc_reestablishment_request(pci_t old_pci, rnti_t old_c_rnti, cu_cp_ue_index_t ue_index) override;
+  async_task<rrc_ue_context_retrieval_response>
+                   handle_ue_context_retrieval_required(cu_cp_ue_index_t                        ue_index,
+                                                        const rrc_ue_context_retrieval_request& request) override;
   async_task<bool> handle_rrc_reestablishment_context_modification_required(cu_cp_ue_index_t ue_index) override;
+  async_task<bool> handle_retrieved_context_path_switch_required(cu_cp_ue_index_t ue_index) override;
 
   void             handle_rrc_reestablishment_failure(const cu_cp_ue_context_release_request& request) override;
   void             handle_rrc_reestablishment_complete(cu_cp_ue_index_t old_ue_index) override;
@@ -117,10 +135,11 @@ public:
   void handle_location_reporting_control_message(cu_cp_ue_index_t               ue_index,
                                                  const location_report_request& msg) override;
   void handle_n2_disconnection(cu_cp_amf_index_t amf_index) override;
+  async_task<ngap_write_replace_warning_response>
+  handle_write_replace_warning_request(const ngap_write_replace_warning_request& request) override;
 
   // cu_cp_inter_cu_handover_handler.
-  async_task<bool> handle_new_rrc_handover_command(cu_cp_ue_index_t                ue_index,
-                                                   byte_buffer                     command,
+  async_task<bool> handle_new_rrc_handover_command(cu_cp_rrc_handover_command      command,
                                                    std::optional<xnc_peer_index_t> xnc_index = std::nullopt) override;
   cu_cp_ue_index_t handle_ue_index_allocation_request(const nr_cell_global_id_t& cgi,
                                                       const plmn_identity&       plmn) override;
@@ -133,11 +152,15 @@ public:
 
   // cu_cp_xnap_handler.
   async_task<cu_cp_handover_resource_allocation_response>
-       handle_xnap_handover_request(const xnap_handover_request& request) override;
-  void handle_handover_cancel_received(cu_cp_ue_index_t ue_index) override;
-  void handle_xnap_handover_success_received(cu_cp_ue_index_t  source_ue_index,
-                                             peer_xnap_ue_id_t winner_peer_xnap_ue_id) override;
-  void handle_xnap_ue_context_release_received(cu_cp_ue_index_t ue_index) override;
+                                      handle_xnap_handover_request(const xnap_handover_request& request) override;
+  void                                handle_handover_cancel_received(cu_cp_ue_index_t ue_index) override;
+  void                                handle_xnap_handover_success_received(cu_cp_ue_index_t           source_ue_index,
+                                                                            const nr_cell_global_id_t& winner_cgi) override;
+  void                                handle_xnap_ue_context_release_received(cu_cp_ue_index_t ue_index) override;
+  std::vector<cu_cp_served_cell_info> handle_served_cells_required() override;
+  cu_cp_ue_index_t handle_xnap_ue_context_id_lookup(const xnap_ue_context_id& ue_context_id) override;
+  async_task<xnap_retrieve_ue_context_response>
+  handle_xnap_retrieve_ue_context_request(const xnap_retrieve_ue_context_request& request) override;
 
   // cu_cp_nrppa_handler.
   nrppa_cu_cp_ue_notifier* handle_new_nrppa_ue(cu_cp_ue_index_t ue_index) override;
@@ -178,9 +201,39 @@ public:
                        rnti_t                                        rnti,
                        std::optional<cu_cp_release_redirect_nr_info> redirect_info = std::nullopt) override;
 
-  cu_cp_mobility_command_handler&   get_mobility_command_handler() override { return mobility_mng; }
+  // cu_cp_ntn_meas_update_handler.
+  void update_ntn_neighbour_info(nr_cell_identity                              serving_nci,
+                                 std::vector<rrc_ntn_neighbour_cell_info_item> ncells) override;
+
+  cu_cp_mobility_command_handler&   get_mobility_command_handler() override { return *this; }
   cu_cp_ue_release_command_handler& get_ue_release_command_handler() override { return *this; }
-  metrics_handler&                  get_metrics_handler() override { return *metrics_hdlr; }
+  cu_cp_ntn_meas_update_handler&    get_ntn_meas_update_handler() override { return *this; }
+  cu_cp_cell_command_handler&       get_cell_command_handler() override { return cell_ctrl; }
+  cu_cp_mobility_config_handler&    get_mobility_config_handler() override { return *this; }
+  metrics_handler&                  get_metrics_handler() override { return metrics_hdlr; }
+
+  // cu_cp_mobility_command_handler.
+  bool trigger_handover(pci_t         source_pci,
+                        rnti_t        rnti,
+                        pci_t         target_pci,
+                        plmn_identity target_plmn,
+                        tac_t         target_tac) override;
+  bool trigger_conditional_handover(pci_t                                                source_pci,
+                                    rnti_t                                               rnti,
+                                    span<const pci_t>                                    target_pcis,
+                                    std::chrono::milliseconds                            timeout,
+                                    std::optional<std::chrono::system_clock::time_point> t1_thres_override) override;
+
+  // cu_cp_mobility_config_handler.
+  bool update_mobility_cell(const serving_cell_meas_config& cell_cfg) override;
+  bool remove_mobility_cell(nr_cell_identity nci) override;
+  bool update_neighbor(nr_cell_identity             serving_nci,
+                       nr_cell_identity             neighbor_nci,
+                       std::vector<report_cfg_id_t> report_cfg_ids) override;
+  bool remove_neighbor(nr_cell_identity serving_nci, nr_cell_identity neighbor_nci) override;
+  bool update_report_config(report_cfg_id_t report_cfg_id, const rrc_report_cfg_nr& report_cfg) override;
+  bool remove_report_config(report_cfg_id_t report_cfg_id) override;
+  bool set_periodic_report(nr_cell_identity nci, std::optional<report_cfg_id_t> report_cfg_id) override;
 
   // cu_cp_amf_reconnection_handler.
   void handle_amf_reconnection(cu_cp_amf_index_t amf_index) override;
@@ -211,7 +264,17 @@ private:
 
   byte_buffer handle_target_cell_sib1_required(cu_cp_du_index_t du_index, nr_cell_global_id_t cgi) override;
 
+  std::vector<nr_cell_identity> handle_du_cells_reported(cu_cp_du_index_t             du_index,
+                                                         span<const du_reported_cell> cells) override;
+  void                          handle_du_cells_removed(span<const nr_cell_identity> cells) override;
+
+  void handle_du_added(cu_cp_du_index_t du_index) override;
+
+  void handle_du_removed(cu_cp_du_index_t du_index) override;
+
   async_task<void> handle_transaction_info_loss(const ue_transaction_info_loss_event& ev) override;
+
+  void handle_served_cells_updated() override;
 
   // NGAP UE creation handler.
   ngap_cu_cp_ue_notifier* handle_new_ngap_ue(cu_cp_ue_index_t ue_index) override;
@@ -245,9 +308,18 @@ private:
   // Logger.
   ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("CU-CP");
 
+  task_executor& cu_cp_executor;
+  timer_manager& timers;
+
   // Components.
   // UE manager.
   ue_manager ue_mng;
+
+  // Controller of the CU-CP's logical cells (operator intent + realization + cell commands). Declared
+  // before du_db: DU teardown is forwarded here, so the controller must outlive the repository. Its
+  // constructor only stores the du_db/scheduler references, so binding them before their construction is
+  // safe.
+  logical_cell_controller cell_ctrl;
 
   // Cell measurement manager.
   cell_meas_manager cell_meas_mng;
@@ -263,11 +335,11 @@ private:
   // E1AP to CU-CP adapter.
   e1ap_cu_cp_adapter e1ap_ev_notifier;
 
-  // NGAP to CU-CP adapters.
-  ngap_cu_cp_adapter ngap_cu_cp_ev_notifier;
-
   // Mobility manager to CU-CP adapter.
   mobility_manager_adapter mobility_manager_ev_notifier;
+
+  // NTN neighbour cell measurement info handling.
+  cu_cp_ntn_ref_time_store ntn_ref_time_store;
 
   // DU connections being managed by the CU-CP.
   du_processor_repository du_db;
@@ -299,7 +371,7 @@ private:
   // Handler of the CU-CP connections to other remote nodes (e.g. AMF, CU-UPs, DUs).
   cu_cp_controller controller;
 
-  std::unique_ptr<metrics_handler> metrics_hdlr;
+  metrics_handler_impl metrics_hdlr;
 
   unique_timer statistics_report_timer;
 
@@ -310,6 +382,12 @@ private:
   // Metrics report session for the lifetime of the CU-CP.
   // Used, e.g., for logging metrics and JSON metrics.
   std::unique_ptr<metrics_report_session> metrics_session;
+
+  // Periodically refreshes the NTN neighbour cell info of the measurement configuration. References this CU-CP's
+  // command handler and the reference time store, so it is declared last and destroyed first.
+  std::unique_ptr<ocudu_ntn::ntn_configuration_manager> ntn_config_manager;
 };
 
-} // namespace ocudu::ocucp
+} // namespace ocucp
+
+} // namespace ocudu

@@ -6,6 +6,7 @@
 
 #include "apps/helpers/metrics/metrics_config.h"
 #include "apps/helpers/network/udp_appconfig.h"
+#include "apps/helpers/xnu/xnu_appconfig.h"
 #include "apps/units/o_cu_up/cu_up/cu_up_unit_pcap_config.h"
 #include "cu_up_unit_logger_config.h"
 #include "ocudu/ran/gnb_cu_up_id.h"
@@ -28,7 +29,7 @@ struct cu_up_unit_metrics_layer_config {
 /// Metrics configuration.
 struct cu_up_unit_metrics_config {
   /// CU-UP statistics report period in milliseconds.
-  unsigned                        cu_up_report_period = 1000;
+  std::chrono::milliseconds       cu_up_report_period = std::chrono::milliseconds(1000U);
   app_helpers::metrics_config     common_metrics_cfg;
   cu_up_unit_metrics_layer_config layers_cfg;
 };
@@ -58,6 +59,20 @@ struct cu_up_unit_ngu_config {
   bool                                      no_core = false;
   std::vector<cu_up_unit_ngu_socket_config> ngu_socket_cfg;
   cu_up_unit_ngu_gtpu_config                gtpu_cfg;
+};
+
+/// GTP-U parameters for Xn-U.
+struct cu_up_unit_xnu_gtpu_config {
+  unsigned                  gtpu_queue_size          = 2046;
+  unsigned                  gtpu_batch_size          = 256;
+  unsigned                  gtpu_reordering_timer_ms = 0;
+  std::chrono::milliseconds rate_limiter_period{100};
+  std::chrono::milliseconds gtpu_teid_release_linger_time{100};
+};
+
+struct cu_up_unit_xnu_config {
+  xnu_sockets_appconfig      sockets_cfg;
+  cu_up_unit_xnu_gtpu_config gtpu_cfg;
 };
 
 /// F1-U configuration at CU_UP side
@@ -106,6 +121,8 @@ struct cu_up_unit_config {
   bool warn_on_drop = false;
   /// NG-U configuration.
   cu_up_unit_ngu_config ngu_cfg;
+  /// Xn-U configuration.
+  cu_up_unit_xnu_config xnu_cfg;
   /// Execution configuration
   cu_up_unit_execution_config exec_cfg;
   /// Metrics.

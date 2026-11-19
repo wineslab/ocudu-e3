@@ -187,12 +187,23 @@ struct scheduler_ue_expert_config {
   float olla_ul_target_bler{0.01};
   /// Maximum UL SNR offset that the OLLA algorithm can apply on top of the estimated UL SINR.
   float olla_max_ul_snr_offset{5.0};
+  /// Minimum PUSCH SINR, in dB, that a CRC must report to be considered by the UL OLLA algorithm. CRCs reporting a
+  /// lower SINR are ignored, as they are unreliable indicators of the link adaptation bias.
+  float olla_ul_min_pusch_snr{-10.0};
+  /// \brief Effective CQI threshold below which the scheduler uses PDSCH repetitions
+  /// for UEs configured with the Rel-16 dedicated PDSCH TDRA list. Value 0 disables CQI-triggered repetitions.
+  float pdsch_cqi_rep_threshold{0.0f};
+  /// \brief Effective PUSCH SINR threshold, in dB, below which the scheduler uses PUSCH repetitions for UEs
+  /// configured with the Rel-16 dedicated PUSCH TDRA list. If not set, SINR-triggered repetitions are disabled.
+  std::optional<float> pusch_sinr_rep_threshold;
+  /// \brief If true, PUSCH repetitions are used for all UEs configured with the Rel-16 dedicated PUSCH TDRA list,
+  /// regardless of the estimated SINR. Intended for testing in setups without RF impairments, where the SINR never
+  /// drops below \c pusch_sinr_rep_threshold.
+  bool pusch_force_rep{false};
   /// Threshold for drop in CQI of the first HARQ transmission above which HARQ retransmissions are cancelled.
   uint8_t dl_harq_la_cqi_drop_threshold{2};
   /// Threshold for drop in nof. layers of the first HARQ transmission above which HARQ retransmission is cancelled.
   uint8_t dl_harq_la_ri_drop_threshold{1};
-  /// Automatic HARQ acknowledgement (used for NTN cases with no HARQ feedback)
-  bool auto_ack_harq{false};
   /// Boundaries in RB interval for resource allocation of UE PDSCHs.
   crb_interval pdsch_crb_limits{0, MAX_NOF_PRBS};
   /// Bundle size used for interleaving. Possible values: {0, 2, 4}. When set to 0, interleaving is disabled.
@@ -201,6 +212,11 @@ struct scheduler_ue_expert_config {
   crb_interval pusch_crb_limits{0, MAX_NOF_PRBS};
   /// Minimum distance between PUCCH and PUSCH in number of PRBs.
   unsigned min_pucch_pusch_prb_distance = 1;
+  /// \brief SINR threshold, in dB, below which PUCCH PDUs are always considered invalid.
+  /// If not set, no SINR-based filtering of PUCCH UCI indications is applied.
+  std::optional<float> pucch_sinr_threshold_dB;
+  /// \brief SINR threshold, in dB, below which CG PUSCH PDUs are always considered DTX (i.e., not transmitted).
+  float cg_pusch_sinr_threshold_dB = -8.0;
   /// Configuration of the scheduler policy. Currently, time-domain round-robin and time-domain QoS-aware are supported.
   scheduler_policy_config policy_cfg = time_qos_scheduler_config{};
   /// \brief Size of the group of UEs that is considered for newTx allocation in a given slot. The groups of UEs
@@ -237,8 +253,24 @@ struct scheduler_ra_expert_config {
   sch_mcs_index msg3_mcs_index = 0;
   /// Maximum number of Msg3 PUSCH retransmissions.
   unsigned max_nof_msg3_harq_retxs = 4;
-  /// Number of RBs that are used as guardband on each side of the PRACH RBs dedicated interval for short PRACH formats.
+  /// Number of RBs that are used as guardband on each side of the PRACH RBs dedicated interval.
   unsigned nof_prach_guardbands_rbs = 3;
+  /// \brief SNR threshold, in dB, below which a detected PRACH preamble is excluded from the RAR/Msg3 grant and
+  /// triggers the inclusion of a Backoff Indicator subheader in the RAR.
+  /// If not set, no SNR-based filtering of PRACH preambles is applied.
+  std::optional<float> backoff_indicator_snr_threshold_dB;
+  /// \brief Maximum number of preambles accepted per PRACH occasion. Preambles in excess of this number (weakest by
+  /// SNR first) are excluded from the RAR/Msg3 grant and trigger the inclusion of a Backoff Indicator subheader in
+  /// the RAR. Defaults to MAX_PREAMBLES_PER_PRACH_OCCASION, i.e. no filtering.
+  unsigned backoff_indicator_max_preambles = MAX_PREAMBLES_PER_PRACH_OCCASION;
+  /// \brief Requested Backoff Indicator duration signalled in the RAR when congestion control is triggered. Mapped
+  /// by the RA scheduler to the closest value in TS38.321, Table 7.2-1.
+  std::chrono::milliseconds backoff_indicator_duration{40};
+  /// \brief Whether pending UCI may be multiplexed into Contention-free (CF) RAR UL grants, rather than restricting
+  /// the CF RAR UL grants to slots where the UE has no pending PUCCH.
+  /// \remark The TS 38.321 and TS 38.213 are very unclear on whether UCI should be multiplexed in RAR UL grants for
+  /// CFRA (are CFRA RAR UL grants even Msg3s?), so we decided to support both options.
+  bool multiplex_uci_on_cf_rar_ul_grant = true;
 };
 
 /// \brief Paging scheduling statically configurable expert parameters.

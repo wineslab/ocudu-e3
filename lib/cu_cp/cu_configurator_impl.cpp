@@ -4,6 +4,7 @@
 
 #include "cu_configurator_impl.h"
 #include "du_processor/du_processor_repository.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace ocucp;

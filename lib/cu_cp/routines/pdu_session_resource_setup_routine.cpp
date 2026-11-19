@@ -4,6 +4,7 @@
 
 #include "pdu_session_resource_setup_routine.h"
 #include "pdu_session_routine_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cause/common.h"
 #include "ocudu/ran/cause/e1ap_cause.h"
 #include "ocudu/ran/cause/e1ap_cause_converters.h"
@@ -22,6 +23,7 @@ static bool handle_bearer_context_modification_response(
     const ngap_pdu_session_resource_setup_request&   setup_msg,
     const e1ap_bearer_context_modification_response& bearer_context_modification_response,
     up_resource_manager&                             up_resource_mng,
+    const static_vector<srb_id_t, MAX_NOF_SRBS>&     setup_srbs,
     const security_indication_t&                     default_security_indication,
     ocudulog::basic_logger&                          logger);
 
@@ -33,6 +35,7 @@ handle_bearer_context_setup_response(ngap_pdu_session_resource_setup_response&  
                                      const e1ap_bearer_context_setup_response&      bearer_context_setup_response,
                                      up_config_update&                              next_config,
                                      up_resource_manager&                           up_resource_mng_,
+                                     const static_vector<srb_id_t, MAX_NOF_SRBS>&   setup_srbs,
                                      const security_indication_t&                   default_security_indication,
                                      ocudulog::basic_logger&                        logger);
 
@@ -131,6 +134,7 @@ void pdu_session_resource_setup_routine::operator()(
                                               bearer_context_setup_response,
                                               next_config,
                                               up_resource_mng,
+                                              rrc_ue->get_srbs(),
                                               default_security_indication,
                                               logger)) {
       logger.warning("ue={}: \"{}\" failed to setup bearer at CU-UP", setup_msg.ue_index, name());
@@ -154,6 +158,7 @@ void pdu_session_resource_setup_routine::operator()(
                                                      setup_msg,
                                                      bearer_context_modification_response,
                                                      up_resource_mng,
+                                                     rrc_ue->get_srbs(),
                                                      default_security_indication,
                                                      logger)) {
       logger.warning("ue={}: \"{}\" failed to modify bearer at CU-UP", setup_msg.ue_index, name());
@@ -219,6 +224,7 @@ void pdu_session_resource_setup_routine::operator()(
                                                      setup_msg,
                                                      bearer_context_modification_response,
                                                      up_resource_mng,
+                                                     rrc_ue->get_srbs(),
                                                      default_security_indication,
                                                      logger)) {
       logger.warning("ue={}: \"{}\" failed to modify bearer at CU-UP", setup_msg.ue_index, name());
@@ -291,6 +297,9 @@ void pdu_session_resource_setup_routine::operator()(
     }
   }
 
+  // Asked for once the UE is set up, so the exchange competes with nothing. Nothing here waits for it.
+  rrc_ue->request_coarse_ue_location();
+
   // We are done, all good.
   CORO_RETURN(handle_pdu_session_resource_setup_result(true));
 }
@@ -304,6 +313,7 @@ void pdu_session_resource_setup_routine::operator()(
 /// \param[in] pdu_session_resource_setup_list Const reference to the PDU sessions of the Bearer Context
 /// Setup/Modification Response.
 /// \param[in] up_resource_mng Reference to the UP resource manager.
+/// \param[in] setup_srbs Const reference to the SRBs already configured for the UE.
 /// \param[in] default_security_indication Const reference to the default security indication.
 /// \param[in] logger Reference to the logger.
 /// \return True on success, false otherwise.
@@ -314,13 +324,19 @@ static bool update_setup_list_with_bearer_ctxt_setup_mod_response(
     up_config_update&                                                              next_config,
     const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>&   ngap_setup_list,
     const slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_resource_setup_modification_item>&
-                                  pdu_session_resource_setup_list,
-    up_resource_manager&          up_resource_mng,
-    const security_indication_t&  default_security_indication,
-    const ocudulog::basic_logger& logger)
+                                                 pdu_session_resource_setup_list,
+    up_resource_manager&                         up_resource_mng,
+    const static_vector<srb_id_t, MAX_NOF_SRBS>& setup_srbs,
+    const security_indication_t&                 default_security_indication,
+    const ocudulog::basic_logger&                logger)
 {
-  // Set up SRB2 if this is the first DRB to be setup.
-  if (up_resource_mng.get_nof_drbs() == 0) {
+  // Set up SRB2 if no DRB is set up and SRB2 isn't already setup for the UE.
+  bool srb2_already_setup =
+      std::find(setup_srbs.begin(), setup_srbs.end(), srb_id_t::srb2) != setup_srbs.end() ||
+      std::find_if(srb_setup_mod_list.begin(), srb_setup_mod_list.end(), [](const f1ap_srb_to_setup& srb) {
+        return srb.srb_id == srb_id_t::srb2;
+      }) != srb_setup_mod_list.end();
+  if (up_resource_mng.get_nof_drbs() == 0 && !srb2_already_setup) {
     f1ap_srb_to_setup srb2;
     srb2.srb_id = srb_id_t::srb2;
     srb_setup_mod_list.push_back(srb2);
@@ -558,6 +574,7 @@ bool handle_bearer_context_modification_response(
     const ngap_pdu_session_resource_setup_request&   setup_msg,
     const e1ap_bearer_context_modification_response& bearer_context_modification_response,
     up_resource_manager&                             up_resource_mng,
+    const static_vector<srb_id_t, MAX_NOF_SRBS>&     setup_srbs,
     const security_indication_t&                     default_security_indication,
     ocudulog::basic_logger&                          logger)
 {
@@ -570,6 +587,7 @@ bool handle_bearer_context_modification_response(
           setup_msg.pdu_session_res_setup_items,
           bearer_context_modification_response.pdu_session_resource_setup_list,
           up_resource_mng,
+          setup_srbs,
           default_security_indication,
           logger)) {
     return false;
@@ -601,6 +619,7 @@ bool handle_bearer_context_setup_response(ngap_pdu_session_resource_setup_respon
                                           const e1ap_bearer_context_setup_response&      bearer_context_setup_response,
                                           up_config_update&                              next_config,
                                           up_resource_manager&                           up_resource_mng_,
+                                          const static_vector<srb_id_t, MAX_NOF_SRBS>&   setup_srbs,
                                           const security_indication_t&                   default_security_indication,
                                           ocudulog::basic_logger&                        logger)
 {
@@ -613,6 +632,7 @@ bool handle_bearer_context_setup_response(ngap_pdu_session_resource_setup_respon
           setup_msg.pdu_session_res_setup_items,
           bearer_context_setup_response.pdu_session_resource_setup_list,
           up_resource_mng_,
+          setup_srbs,
           default_security_indication,
           logger)) {
     return false;

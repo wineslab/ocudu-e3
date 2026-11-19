@@ -53,7 +53,9 @@ void ue_history_repository::save_dl_newtx_grants(span<const dl_msg_alloc> dl_gra
   std::fill(last_samples_buffer.begin(), last_samples_buffer.begin() + dl_rate.size(), 0.0f);
   for (const dl_msg_alloc& grant : dl_grants) {
     unsigned offset = ue_db.get_offset(ue_row_ids[grant.context.ue_index]);
-    last_samples_buffer[offset] += grant.pdsch_cfg.codewords[0].tb_size_bytes.value();
+    for (const auto& cw : grant.pdsch_cfg.codewords) {
+      last_samples_buffer[offset] += cw.tb_size_bytes.value();
+    }
   }
   auto sample_it = last_samples_buffer.begin();
   for (auto rate_it = dl_rate.begin(), end_it = dl_rate.end(); rate_it != end_it; ++rate_it, ++sample_it) {
@@ -91,25 +93,27 @@ rate_estimator::rate_estimator(const cell_configuration& cell_cfg) :
                  .tb_scaling_field = 1,
                  .n_prb            = cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.crbs.length()}
 {
-  dl_dmrs_rbs_per_nof_layers.resize(cell_cfg.params.dl_carrier.nof_ant);
-  for (unsigned nof_layers = 1, max_layers = dl_dmrs_rbs_per_nof_layers.size(); nof_layers <= max_layers;
-       ++nof_layers) {
+  const unsigned nof_dl_ports  = cell_cfg.params.dl_carrier.nof_ant;
+  const unsigned max_dl_layers = cell_cfg.params.init_bwp.pdsch.max_nof_layers;
+  dl_dmrs_rbs_per_nof_layers.resize(max_dl_layers);
+  for (unsigned nof_layers = 1; nof_layers <= max_dl_layers; ++nof_layers) {
     const pdsch_time_domain_resource_allocation pdsch_td_cfg{
         0, sch_mapping_type::typeA, {0, NOF_OFDM_SYM_PER_SLOT_NORMAL_CP}};
     const dmrs_downlink_config dmrs_cfg{};
     auto                       dmrs = make_dmrs_info_dedicated(
-        pdsch_td_cfg, cell_cfg.params.pci, cell_cfg.params.dmrs_typeA_pos, dmrs_cfg, nof_layers, max_layers, false);
+        pdsch_td_cfg, cell_cfg.params.pci, cell_cfg.params.dmrs_typeA_pos, dmrs_cfg, nof_layers, nof_dl_ports, false);
     dl_dmrs_rbs_per_nof_layers[nof_layers - 1] = calculate_nof_dmrs_per_rb(dmrs);
   }
 
-  ul_dmrs_rbs_per_nof_layers.resize(cell_cfg.params.ul_carrier.nof_ant);
-  for (unsigned nof_layers = 1, max_layers = ul_dmrs_rbs_per_nof_layers.size(); nof_layers <= max_layers;
-       ++nof_layers) {
+  const unsigned nof_ul_ports  = cell_cfg.params.ul_carrier.nof_ant;
+  const unsigned max_ul_layers = cell_cfg.params.init_bwp.pusch.max_nof_layers;
+  ul_dmrs_rbs_per_nof_layers.resize(max_ul_layers);
+  for (unsigned nof_layers = 1; nof_layers <= max_ul_layers; ++nof_layers) {
     const pusch_time_domain_resource_allocation pusch_td_cfg{
         2, sch_mapping_type::typeA, {0, NOF_OFDM_SYM_PER_SLOT_NORMAL_CP}};
     const dmrs_uplink_config dmrs_cfg{};
     auto                     dmrs = make_dmrs_info_dedicated(
-        pusch_td_cfg, cell_cfg.params.pci, cell_cfg.params.dmrs_typeA_pos, dmrs_cfg, nof_layers, max_layers, false);
+        pusch_td_cfg, cell_cfg.params.pci, cell_cfg.params.dmrs_typeA_pos, dmrs_cfg, nof_layers, nof_ul_ports, false);
     ul_dmrs_rbs_per_nof_layers[nof_layers - 1] = calculate_nof_dmrs_per_rb(dmrs);
   }
 }

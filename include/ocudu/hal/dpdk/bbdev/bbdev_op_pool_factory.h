@@ -5,6 +5,7 @@
 
 #include "ocudu/hal/dpdk/bbdev/bbdev_op_pool.h"
 #include "ocudu/ocudulog/logger.h"
+#include <memory>
 #include <rte_bbdev_op.h>
 
 namespace ocudu {

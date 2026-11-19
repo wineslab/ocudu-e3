@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ocudu/adt/static_vector.h"
+#include "ocudu/fapi/fapi_power_unit.h"
 #include "ocudu/ran/phy_time_unit.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/ran/uci/uci_mapping.h"
@@ -32,10 +33,10 @@ struct uci_pucch_pdu_format_0_1 {
   uint32_t                           handle = 0U;
   rnti_t                             rnti;
   format_type                        pucch_format;
-  int16_t                            ul_sinr_metric;
+  std::optional<float>               ul_sinr_metric_dB;
   std::optional<phy_time_unit>       timing_advance_offset;
-  uint16_t                           rssi;
-  uint16_t                           rsrp;
+  std::optional<fapi_power_unit>     rssi;
+  std::optional<fapi_power_unit>     rsrp;
   std::optional<sr_pdu_format_0_1>   sr;
   std::optional<uci_harq_format_0_1> harq;
 };

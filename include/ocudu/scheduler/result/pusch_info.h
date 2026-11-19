@@ -19,10 +19,23 @@ namespace ocudu {
 
 /// Information relative to a PUSCH allocation.
 struct pusch_information {
+  /// \brief PUSCH repetition Type A / TTI-bundling parameters, set only when this PDU is one occasion of a Rel-16
+  /// bundle. Mirrors the FAPI \c ul_pusch_pdu::tti_bundling IE (SCF-222 v4.0, section 3.4.3.2), which the PHY uses
+  /// to soft-combine the occasions.
+  struct repetition_info {
+    /// Total number of repetitions in the bundle, constant across every occasion. FAPI \c tb_over_ms_num_total_slots.
+    uint8_t nof_repetitions;
+    /// \brief Repetitions remaining after this occasion: counts down from \c nof_repetitions - 1 to 0, the last one
+    /// triggering the PHY to decode the combined bundle. FAPI \c tb_over_ms_remaining_slots.
+    uint8_t nof_remaining_repetitions;
+  };
+
   rnti_t                   rnti;
   const bwp_configuration* bwp_cfg;
   vrb_alloc                rbs;
   ofdm_symbol_range        symbols;
+  /// \brief True if this is a PUSCH with Configured Grant.
+  bool is_cg = false;
   /// \brief For resource allocation type 1, it indicates if intra-slot frequency hopping is enabled, as per TS38.212
   /// Section 7.3.1.1.
   bool intra_slot_freq_hopping;
@@ -38,17 +51,17 @@ struct pusch_information {
   bool ul_freq_shift_7p5khz;
   /// Modulation and coding scheme.
   sch_mcs_description mcs_descr;
-  /// \brief MCS index, range {0, ..., 31} (See TS38.214 Section 5.1.4.1).
+  /// \brief MCS index, range {0, ..., 31} (See TS 38.214 Section 5.1.4.1).
   /// \note Should match value sent in DCI.
   sch_mcs_index mcs_index;
-  /// MCS table (See TS38.214 Section 6.1.4.1).
+  /// MCS table (See TS 38.214 Section 6.1.4.1).
   pusch_mcs_table mcs_table;
   /// Indicates if transform precoding is enabled or disabled (see TS 38.214, Section 6.1.4.1).
   bool transform_precoding;
-  /// Parameter \f$n_{ID}\f$ as per TS38.211 Section 6.3.1.1. Values: {0,...,1023}.
+  /// Parameter \f$n_{ID}\f$ as per TS 38.211 Section 6.3.1.1. Values: {0,...,1023}.
   uint16_t n_id;
-  /// Number of layers as per TS38.211, Section 6.3.1.3.
-  unsigned nof_layers;
+  /// Number of layers as per TS38.211, Section 6.3.1.3. Values: {1,...,4}.
+  uint8_t nof_layers;
   /// DMRS configuration as per TS38.211 Section 6.4.1.1.
   dmrs_information dmrs;
   /// \brief PUSCH DMRS ID \f$n_{ID}^{RS}\f$ as per TS38.211 Section 6.4.1.1.1.2. This field is only valid when
@@ -70,7 +83,9 @@ struct pusch_information {
   /// \brief Number of CBs in the TB (could be more than the number of CBs in this PUSCH transmission). Should be set
   /// to zero in any of the following conditions: 1) CBG is not supported or requested 2) newData=1 (new transmission)
   /// 3) tbSize=0.
-  uint16_t num_cb;
+  uint16_t nof_cb;
+  /// Where this PDU sits in its repetition bundle. Absent when the PUSCH is a single transmission.
+  std::optional<repetition_info> repetitions;
 };
 
 struct uci_info {
@@ -108,17 +123,19 @@ struct ul_sched_info {
   pusch_information       pusch_cfg;
   std::optional<uci_info> uci;
 
-  /// \brief Information relative to a PDSCH allocation decision that is used for the purpose of logging or
+  /// \brief Information relative to a PUSCH allocation decision that is used for the purpose of logging or
   /// tracing, but not passed to the PHY.
   struct decision_context {
     du_ue_index_t   ue_index;
     search_space_id ss_id;
-    /// Chosen k2 delay between UL PDCCH and PUSCH.
-    unsigned k2;
+    /// Chosen k2 delay between UL PDCCH and PUSCH. Values: {1,...,32}.
+    uint8_t k2;
     /// Number of times the HARQ process has been retransmitted.
-    unsigned nof_retxs;
+    uint8_t nof_retxs;
     /// Delay between PDSCH message with RAR and its corresponding PUSCH. Only set for the Msg3 first tx.
     std::optional<unsigned> msg3_delay;
+    /// RAPID (RACH preamble index) of the UE this PUSCH belongs to. Only set for MsgA PUSCH.
+    std::optional<unsigned> rapid;
     /// Offset that the OLLA algorithm applied to derive the UL MCS.
     std::optional<float> olla_offset;
     /// Number of overhead PRBs.

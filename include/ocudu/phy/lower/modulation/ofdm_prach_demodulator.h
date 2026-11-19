@@ -57,6 +57,6 @@ public:
   /// \param[out] buffer    Frequency-domain signal corresponding to one PRACH receive occasion.
   /// \param[in] input      PRACH receive window baseband samples.
   /// \param[in] config     PRACH demodulator configuration parameters.
-  virtual void demodulate(prach_buffer& buffer, span<const cf_t> input, const configuration& config) = 0;
+  virtual void demodulate(prach_buffer& buffer, span<const ci16_t> input, const configuration& config) = 0;
 };
 } // namespace ocudu

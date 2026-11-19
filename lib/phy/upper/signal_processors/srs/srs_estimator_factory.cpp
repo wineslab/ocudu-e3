@@ -7,6 +7,7 @@
 #include "srs_estimator_generic_impl.h"
 #include "srs_estimator_pool.h"
 #include "srs_validator_generic_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/time_alignment_estimator/time_alignment_estimator_factories.h"
 
 using namespace ocudu;
@@ -18,14 +19,18 @@ class srs_estimator_factory_generic : public srs_estimator_factory
 public:
   srs_estimator_factory_generic(std::shared_ptr<low_papr_sequence_generator_factory> sequence_generator_factory_,
                                 std::shared_ptr<time_alignment_estimator_factory>    ta_estimator_factory_,
+                                std::shared_ptr<doa_estimator_factory>               doa_factory_,
                                 unsigned                                             max_nof_prb_) :
     sequence_generator_factory(std::move(sequence_generator_factory_)),
     ta_estimator_factory(std::move(ta_estimator_factory_)),
+    doa_factory(std::move(doa_factory_)),
     max_nof_prb(max_nof_prb_)
   {
     ocudu_assert(sequence_generator_factory, "Invalid sequence generator factory.");
     ocudu_assert(ta_estimator_factory, "Invalid TA estimator factory.");
     ocudu_assert(max_nof_prb != 0, "Maximum number of PRB cannot be zero.");
+
+    // We don't check for doa_factory, since it's nullptr if DOA not configured.
   }
 
   std::unique_ptr<srs_estimator> create() override
@@ -33,6 +38,11 @@ public:
     srs_estimator_generic_impl::dependencies deps;
     deps.sequence_generator = sequence_generator_factory->create();
     deps.ta_estimator       = ta_estimator_factory->create();
+    if (doa_factory) {
+      deps.direction_estimator = doa_factory->create();
+      // We assert the creation of the DOA estimator since it's an optional dependency of the SRS estimator.
+      ocudu_assert(deps.direction_estimator, "DOA estimator couldn't be created.");
+    }
 
     return std::make_unique<srs_estimator_generic_impl>(std::move(deps), max_nof_prb);
   }
@@ -45,6 +55,7 @@ public:
 private:
   std::shared_ptr<low_papr_sequence_generator_factory> sequence_generator_factory;
   std::shared_ptr<time_alignment_estimator_factory>    ta_estimator_factory;
+  std::shared_ptr<doa_estimator_factory>               doa_factory;
   unsigned                                             max_nof_prb;
 };
 
@@ -91,10 +102,11 @@ private:
 std::shared_ptr<srs_estimator_factory> ocudu::create_srs_estimator_generic_factory(
     std::shared_ptr<low_papr_sequence_generator_factory> sequence_generator_factory,
     std::shared_ptr<time_alignment_estimator_factory>    ta_estimator_factory,
+    std::shared_ptr<doa_estimator_factory>               doa_factory,
     unsigned                                             max_nof_prb)
 {
   return std::make_shared<srs_estimator_factory_generic>(
-      std::move(sequence_generator_factory), std::move(ta_estimator_factory), max_nof_prb);
+      std::move(sequence_generator_factory), std::move(ta_estimator_factory), std::move(doa_factory), max_nof_prb);
 }
 
 std::shared_ptr<srs_estimator_factory>

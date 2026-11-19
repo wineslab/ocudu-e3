@@ -115,12 +115,11 @@ private:
     sectors[context.sector]->handle_new_uplink_slot(context, grid);
   }
 
-  /// Defer loop task if the RU is running.
-  /// \remark A fatal error is triggered if the executor fails to defer the loop task.
-  void defer_loop();
+  /// Main radio dummy loop.
+  void radio_loop(const rt_stop_event_token& tk) noexcept;
 
-  /// Loop execution task.
-  void loop();
+  /// Run the execution of each slot.
+  void run_slot();
 
   /// Flag that enables (or not) metrics.
   const bool are_metrics_enabled;
@@ -142,6 +141,8 @@ private:
   std::vector<std::unique_ptr<ru_dummy_sector>> sectors;
   /// RU dummy metrics collector.
   ru_dummy_metrics_collector metrics_collector;
+  /// Whether the RU is being stopped, i.e., it was signaled to stop and is being stopped.
+  std::atomic<bool> is_stop_requested = false;
 };
 
 } // namespace ocudu

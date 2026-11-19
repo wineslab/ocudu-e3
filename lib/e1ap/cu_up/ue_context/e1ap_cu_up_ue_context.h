@@ -77,7 +77,7 @@ public:
   {
     ocudu_assert(ue_index_to_ue_e1ap_id.find(ue_index) != ue_index_to_ue_e1ap_id.end(),
                  "ue={} gNB-CU-UP-UE-E1AP-ID not found",
-                 fmt::underlying(ue_index));
+                 ue_index);
     ocudu_assert(ues.find(ue_index_to_ue_e1ap_id.at(ue_index)) != ues.end(),
                  "cu_up_ue_e1ap_id={}: E1AP UE context not found",
                  fmt::underlying(ue_index_to_ue_e1ap_id.at(ue_index)));
@@ -89,7 +89,7 @@ public:
                           gnb_cu_cp_ue_e1ap_id_t        cu_cp_ue_e1ap_id,
                           activity_notification_level_t activity_notification_level)
   {
-    ocudu_assert(ue_index != INVALID_CU_UP_UE_INDEX, "Invalid ue_index={}", fmt::underlying(ue_index));
+    ocudu_assert(ue_index != INVALID_CU_UP_UE_INDEX, "Invalid ue_index={}", ue_index);
     ocudu_assert(cu_up_ue_e1ap_id != gnb_cu_up_ue_e1ap_id_t::invalid,
                  "Invalid cu_up_ue_e1ap_id={}",
                  fmt::underlying(cu_up_ue_e1ap_id));
@@ -98,7 +98,7 @@ public:
                  fmt::underlying(cu_cp_ue_e1ap_id));
 
     logger.log_debug("ue={} cu_up_ue_e1ap_id={} cu_cp_ue_e1ap_id={}: Adding E1AP UE context",
-                     fmt::underlying(ue_index),
+                     ue_index,
                      fmt::underlying(cu_up_ue_e1ap_id),
                      fmt::underlying(cu_cp_ue_e1ap_id));
     ues.emplace(std::piecewise_construct,
@@ -110,10 +110,10 @@ public:
 
   void remove_ue(cu_up_ue_index_t ue_index)
   {
-    ocudu_assert(ue_index != INVALID_CU_UP_UE_INDEX, "Invalid ue_index={}", fmt::underlying(ue_index));
+    ocudu_assert(ue_index != INVALID_CU_UP_UE_INDEX, "Invalid ue_index={}", ue_index);
 
     if (ue_index_to_ue_e1ap_id.find(ue_index) == ue_index_to_ue_e1ap_id.end()) {
-      logger.log_warning("ue={}: GNB-CU-UP-UE-E1AP-ID not found", fmt::underlying(ue_index));
+      logger.log_warning("ue={}: GNB-CU-UP-UE-E1AP-ID not found", ue_index);
       return;
     }
 
@@ -182,7 +182,7 @@ private:
       next_cu_up_ue_e1ap_id = gnb_cu_up_ue_e1ap_id_t::min;
     } else {
       // increase cu-up ue e1ap id counter
-      next_cu_up_ue_e1ap_id = int_to_gnb_cu_up_ue_e1ap_id(gnb_cu_up_ue_e1ap_id_to_uint(next_cu_up_ue_e1ap_id) + 1);
+      next_cu_up_ue_e1ap_id = int_to_gnb_cu_up_ue_e1ap_id(to_underlying(next_cu_up_ue_e1ap_id) + 1);
     }
   }
 

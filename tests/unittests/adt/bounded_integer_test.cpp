@@ -3,6 +3,7 @@
 
 #include "tests/test_doubles/utils/test_rng.h"
 #include "ocudu/adt/bounded_integer.h"
+#include "ocudu/adt/format.h"
 #include <cstdint>
 #include <gtest/gtest.h>
 

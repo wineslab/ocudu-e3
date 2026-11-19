@@ -6,6 +6,7 @@
 #include "apps/helpers/f1u/f1u_cli11_schema.h"
 #include "apps/helpers/hal/hal_cli11_schema.h"
 #include "apps/helpers/logger/logger_appconfig_cli11_schema.h"
+#include "apps/helpers/network/dtls_cli11_schema.h"
 #include "apps/helpers/network/sctp_cli11_schema.h"
 #include "apps/helpers/tracing/tracer_appconfig_cli11_schema.h"
 #include "apps/services/app_execution_metrics/executor_metrics_config_cli11_schema.h"
@@ -28,23 +29,35 @@ static void configure_cli11_metrics_args(CLI::App& app, odu::metrics_appconfig& 
 
 static void configure_cli11_f1ap_args(CLI::App& app, odu::f1ap_appconfig& f1c_params)
 {
-  app.add_option(
-         "--addrs,--cu_cp_addr", // TODO: old name kept for backward compatibility, should be removed in the future
-         f1c_params.cu_cp_addresses,
-         "CU-CP F1-C addresses to connect to. Multiple addresses can be specified for SCTP multi-homing")
+  add_option(app,
+             "--addrs,--cu_cp_addr",
+             f1c_params.cu_cp_addresses,
+             "CU-CP F1-C addresses to connect to. Multiple addresses can be specified for SCTP multi-homing. The "
+             "'--cu_cp_addr' name is a deprecated alias and should not be used.")
       ->capture_default_str();
-  app.add_option(
-         "--bind_addrs,--bind_addr", // TODO: old name kept for backward compatibility, should be removed in the future
-         f1c_params.bind_addresses,
-         "DU F1-C bind addresses. Multiple addresses can be specified for SCTP "
-         "multi-homing. If left empty, implicit bind is performed")
+  add_option(
+      app,
+      "--bind_addrs,--bind_addr",
+      f1c_params.bind_addresses,
+      "DU F1-C bind addresses. Multiple addresses can be specified for SCTP "
+      "multi-homing. If left empty, implicit bind is performed. The '--bind_addr' name is a deprecated alias and "
+      "should not be used.")
+      ->capture_default_str();
+  add_option(app,
+             "--retry_connection",
+             f1c_params.retry_connection,
+             "Keep retrying the F1-C connection setup instead of closing the application when it fails. Allows the DU "
+             "to be started before the CU-CP is reachable.")
       ->capture_default_str();
   configure_cli11_sctp_socket_args(app, f1c_params.sctp);
+
+  CLI::App* dtls_subcmd = add_subcommand(app, "dtls", "DTLS configuration");
+  configure_cli11_dtls_client_args(*dtls_subcmd, f1c_params.dtls);
 }
 
 static void configure_cli11_f1u_args(CLI::App& app, odu::f1u_appconfig& f1u_params)
 {
-  app.add_option("--queue_size", f1u_params.pdu_queue_size, "F1-U PDU queue size")->capture_default_str();
+  add_option(app, "--queue_size", f1u_params.pdu_queue_size, "F1-U PDU queue size")->capture_default_str();
   configure_cli11_f1u_sockets_args(app, f1u_params.f1u_sockets);
 }
 
@@ -65,11 +78,11 @@ void ocudu::configure_cli11_with_du_appconfig_schema(CLI::App& app, du_appconfig
   configure_cli11_with_worker_manager_appconfig_schema(app, du_cfg.expert_execution_cfg);
 
   // F1-C section.
-  CLI::App* f1ap_subcmd = app.add_subcommand("f1ap", "F1AP interface configuration")->configurable();
+  CLI::App* f1ap_subcmd = add_subcommand(app, "f1ap", "F1AP interface configuration");
   configure_cli11_f1ap_args(*f1ap_subcmd, du_cfg.f1ap_cfg);
 
   // F1-U section.
-  CLI::App* f1u_subcmd = app.add_subcommand("f1u", "F1-U interface configuration")->configurable();
+  CLI::App* f1u_subcmd = add_subcommand(app, "f1u", "F1-U interface configuration");
   configure_cli11_f1u_args(*f1u_subcmd, du_cfg.f1u_cfg);
 
   // Metrics section.

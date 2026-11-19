@@ -10,7 +10,7 @@ using namespace ocudu::ocucp;
 
 e1ap_ue_context* e1ap_ue_context_list::add_ue(cu_cp_ue_index_t ue_index, gnb_cu_cp_ue_e1ap_id_t cu_cp_ue_e1ap_id)
 {
-  ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", fmt::underlying(ue_index));
+  ocudu_assert(ue_index != cu_cp_ue_index_t::invalid, "Invalid ue_index={}", ue_index);
   ocudu_assert(cu_cp_ue_e1ap_id != gnb_cu_cp_ue_e1ap_id_t::invalid,
                "Invalid cu_cp_ue_e1ap_id={}",
                fmt::underlying(cu_cp_ue_e1ap_id));
@@ -136,6 +136,6 @@ void e1ap_ue_context_list::increase_next_cu_cp_ue_e1ap_id()
     next_cu_cp_ue_e1ap_id = gnb_cu_cp_ue_e1ap_id_t::min;
   } else {
     // increase cu-cp ue e1ap id counter
-    next_cu_cp_ue_e1ap_id = int_to_gnb_cu_cp_ue_e1ap_id(gnb_cu_cp_ue_e1ap_id_to_uint(next_cu_cp_ue_e1ap_id) + 1);
+    next_cu_cp_ue_e1ap_id = int_to_gnb_cu_cp_ue_e1ap_id(to_underlying(next_cu_cp_ue_e1ap_id) + 1);
   }
 }

@@ -29,7 +29,7 @@ public:
 
   void schedule_async_task(async_task<void> task) override { ue_db.schedule_async_task(ue_index, std::move(task)); }
 
-  void handle_rlf_detection(rlf_cause cause) override;
+  void handle_rlf_detection(rlf_cause cause, std::optional<rb_id_t> rb_id) override;
 
   void handle_crnti_ce_detection() override;
 

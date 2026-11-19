@@ -24,15 +24,17 @@ public:
 
   void slot_indication(slot_point sl_tx);
 
-  pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                              rnti_t                        rnti,
-                                              search_space_id               ss_id,
-                                              aggregation_level             aggr_lvl) override;
+  pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                              rnti_t                         rnti,
+                                              search_space_id                ss_id,
+                                              aggregation_level              aggr_lvl,
+                                              std::optional<beam_identifier> beam) override;
 
-  pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                              rnti_t                        rnti,
-                                              search_space_id               ss_id,
-                                              aggregation_level             aggr_lvl) override;
+  pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                              rnti_t                         rnti,
+                                              search_space_id                ss_id,
+                                              aggregation_level              aggr_lvl,
+                                              std::optional<beam_identifier> beam) override;
 
   pdcch_dl_information* alloc_dl_pdcch_ue(cell_slot_resource_allocator& slot_alloc,
                                           rnti_t                        rnti,
@@ -67,7 +69,8 @@ private:
                                               const sched_coreset_config&       cs_cfg,
                                               const search_space_configuration& ss_cfg,
                                               aggregation_level                 aggr_lvl,
-                                              span<const pdcch_candidate_type>  candidates);
+                                              span<const pdcch_candidate_type>  candidates,
+                                              std::optional<beam_identifier>    beam);
 
   pdcch_ul_information* alloc_ul_pdcch_helper(cell_slot_resource_allocator&     slot_alloc,
                                               rnti_t                            rnti,
@@ -75,7 +78,8 @@ private:
                                               const sched_coreset_config&       cs_cfg,
                                               const search_space_configuration& ss_cfg,
                                               aggregation_level                 aggr_lvl,
-                                              span<const pdcch_candidate_type>  candidates);
+                                              span<const pdcch_candidate_type>  candidates,
+                                              std::optional<beam_identifier>    beam);
 
   const cell_configuration& cell_cfg;
 

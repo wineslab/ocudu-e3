@@ -5,10 +5,10 @@
 #include "ocudu/cu_cp/o_cu_cp_factory.h"
 #include "adapters/ng_setup_e2_adapter.h"
 #include "o_cu_cp_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/cu_cp/cu_cp_factory.h"
 #include "ocudu/cu_cp/o_cu_cp_config.h"
 #include "ocudu/e2/e2_cu_cp_factory.h"
-#include "ocudu/support/ocudu_assert.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -31,10 +31,10 @@ std::unique_ptr<o_cu_cp> ocucp::create_o_cu_cp(const o_cu_cp_config& config, con
 
   auto cu = create_cu_cp(cu_cp_cfg);
 
-  auto e2agent = create_e2_cu_cp_agent(config.e2ap_config,
+  auto e2agent = create_e2_cu_cp_agent(config.e2ap_cfg,
                                        *dependencies.e2_client,
                                        dependencies.e2_cu_metric_iface,
-                                       &cu->get_cu_configurator(),
+                                       cu->get_cu_configurator(),
                                        timer_factory{*cu_cp_cfg.services.timers, *cu_cp_cfg.services.cu_cp_executor},
                                        *cu_cp_cfg.services.cu_cp_executor,
                                        std::move(collector));

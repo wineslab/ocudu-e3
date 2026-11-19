@@ -3,11 +3,12 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/scheduler/config/pucch_resource_generator.h"
-#include "../support/pucch/pucch_default_resource.h"
 #include "ocudu/adt/expected.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/pucch/pucch_constants.h"
 #include "ocudu/ran/pucch/pucch_info.h"
 #include "ocudu/ran/pucch/pucch_mapping.h"
+#include "ocudu/scheduler/config/pucch_default_resource.h"
 #include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include "ocudu/support/math/math_utils.h"
 #include "ocudu/support/ocudu_assert.h"
@@ -59,10 +60,8 @@ error_type<const char*> config_helpers::pucch_parameters_validator(const pucch_r
                              "for PUCCH resources");
     }
 
-    const unsigned nof_occ_codes = f1_params.occ_supported ? format1_symb_to_spreading_factor(f1_params.nof_syms) : 1;
-    const unsigned nof_css       = to_uint(f1_params.nof_cyc_shifts);
     // We define a block as a set of resources of the same format aligned over the same starting PRB.
-    const unsigned nof_f1_blocks = nof_occ_codes * nof_css * (max_nof_symbols / f1_params.nof_syms.value());
+    const unsigned nof_f1_blocks = params.mux_capacity_01() * (max_nof_symbols / f1_params.nof_syms.value());
     nof_rbs_01                   = divide_ceil(nof_res_01, nof_f1_blocks);
   }
   // With intraslot_freq_hopping, the number of RBs is even. Round up to the nearest even number if it's odd.

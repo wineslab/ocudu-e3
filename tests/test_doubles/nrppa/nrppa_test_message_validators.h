@@ -4,7 +4,11 @@
 
 #pragma once
 
-#include "ocudu/asn1/nrppa/nrppa.h"
+namespace asn1 {
+namespace nrppa {
+struct nr_ppa_pdu_c;
+} // namespace nrppa
+} // namespace asn1
 
 namespace ocudu::test_helpers {
 

@@ -6,6 +6,7 @@
 #include "lib/scheduler/config/logical_channel_config_pool.h"
 #include "lib/scheduler/ue_context/logical_channel_system.h"
 #include "lib/scheduler/ue_context/ue_drx_controller.h"
+#include "tests/ocudu_test_requirements.h"
 #include "tests/test_doubles/utils/test_rng.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include <gtest/gtest.h>
@@ -20,6 +21,7 @@ protected:
   base_ue_drx_controller_test(const std::optional<drx_config>& drx_cfg_) :
     drx_cfg(drx_cfg_), ue_lc_chs(lc_ch_sys.create_ue(to_du_ue_index(0), scs, false, cfg_pool.create({})))
   {
+    OCUDU_TEST_REQUIREMENTS("MVP-FUNC-SVCS-16-6");
   }
 
   void tick()
@@ -77,7 +79,7 @@ TEST_F(ue_drx_controller_test, when_drx_config_provided_slot_offset_and_on_durat
   for (unsigned i = 0; i != period_slots; ++i) {
     tick();
 
-    const unsigned slot_mod         = cur_slot.to_uint() % period_slots;
+    const unsigned slot_mod         = cur_slot.count() % period_slots;
     bool           enabled          = drx.is_pdcch_enabled();
     bool           in_active_window = slot_mod >= offset_slot and slot_mod < (offset_slot + on_dur_slots);
 
@@ -154,7 +156,7 @@ TEST_F(ue_drx_controller_test, when_conres_timer_is_running_then_drx_is_active)
   for (unsigned i = 0; i != period_slots; ++i) {
     tick();
 
-    const unsigned slot_mod         = cur_slot.to_uint() % period_slots;
+    const unsigned slot_mod         = cur_slot.count() % period_slots;
     bool           enabled          = drx.is_pdcch_enabled();
     bool           in_active_window = slot_mod >= offset_slot and slot_mod < (offset_slot + on_dur_slots);
 
@@ -182,7 +184,7 @@ TEST_F(ue_drx_controller_slot_point_limit_test,
   for (unsigned i = 0; i != 2 * period_slots; ++i) {
     tick();
 
-    const unsigned slot_mod         = cur_slot.to_uint() % period_slots;
+    const unsigned slot_mod         = cur_slot.count() % period_slots;
     bool           enabled          = drx.is_pdcch_enabled();
     bool           in_active_window = slot_mod >= offset_slot or slot_mod < (offset_slot + on_dur_slots) % period_slots;
     ASSERT_EQ(enabled, in_active_window);
@@ -203,7 +205,7 @@ TEST_F(ue_drx_controller_no_inactivity_test, when_pdcch_received_then_activity_i
   for (unsigned i = 0; i != period_slots; ++i) {
     tick();
 
-    const unsigned slot_mod         = cur_slot.to_uint() % period_slots;
+    const unsigned slot_mod         = cur_slot.count() % period_slots;
     bool           enabled          = drx.is_pdcch_enabled();
     bool           in_active_window = slot_mod >= offset_slot and slot_mod < (offset_slot + on_dur_slots);
 

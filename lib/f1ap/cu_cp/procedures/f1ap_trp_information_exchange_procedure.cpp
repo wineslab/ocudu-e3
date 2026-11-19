@@ -4,7 +4,10 @@
 
 #include "f1ap_trp_information_exchange_procedure.h"
 #include "asn1_helpers.h"
+#include "f1ap_asn1_utils.h"
+#include "f1ap_positioning_asn1_converters.h"
 #include "ocudu/adt/expected.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/asn1/f1ap/f1ap_ies.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
@@ -38,22 +41,6 @@ static trp_information_response_t create_trp_info_response(const asn1::f1ap::trp
 static dl_prs_muting_pattern_t
 asn1_to_dl_prs_muting_pattern(const asn1::f1ap::dl_prs_muting_pattern_c& asn1_dl_prs_muting_pattern);
 
-/// \brief Convert the NG RAN access point position from ASN.1 to common type.
-static inline ng_ran_access_point_position_t
-asn1_to_access_point_position(const asn1::f1ap::access_point_position_s& asn1_position);
-
-/// \brief Convert the NG RAN high accuracy access point position from ASN.1 to common type.
-static inline ng_ran_high_accuracy_access_point_position_t
-asn1_to_ha_access_point_position(const asn1::f1ap::ngran_high_accuracy_access_point_position_s& asn1_position);
-
-/// \brief Convert the relative geodetic location from ASN.1 to common type.
-static inline relative_geodetic_location_t
-asn1_to_relative_geodetic_location(const asn1::f1ap::relative_geodetic_location_s& asn_location);
-
-/// \brief Convert the relative cartesian location from ASN.1 to common type.
-static inline relative_cartesian_location_t
-asn1_to_relative_cartesian_location(const asn1::f1ap::relative_cartesian_location_s& asn1_location);
-
 // ---- TRP Information Procedure ----
 
 f1ap_trp_information_exchange_procedure::f1ap_trp_information_exchange_procedure(
@@ -71,9 +58,15 @@ void f1ap_trp_information_exchange_procedure::operator()(
 {
   CORO_BEGIN(ctx);
 
-  logger.debug("\"{}\" initialized", name());
+  logger.info("\"{}\" started...", name());
 
   transaction = ev_mng.transactions.create_transaction(f1ap_cfg.proc_timeout);
+
+  // The transaction may already be aborted at this point, e.g. if the F1AP is being stopped. Skip sending the
+  // request in that case, since nothing will ever observe its response.
+  if (transaction.aborted()) {
+    CORO_EARLY_RETURN(handle_procedure_outcome());
+  }
 
   // Send command to DU.
   send_trp_information_request();
@@ -107,7 +100,7 @@ f1ap_trp_information_exchange_procedure::handle_procedure_outcome()
 {
   if (transaction.aborted()) {
     // Timeout or cancellation case.
-    logger.debug("\"{}\" failed", name());
+    logger.warning("\"{}\" failed. Cause: Timeout or cancellation", name());
     return make_unexpected(create_trp_info_failure(f1ap_cause_radio_network_t::unspecified));
   }
 
@@ -116,10 +109,11 @@ f1ap_trp_information_exchange_procedure::handle_procedure_outcome()
   if (not du_pdu_response.has_value()) {
     procedure_outcome =
         make_unexpected(create_trp_info_failure(asn1_to_cause(du_pdu_response.error().value.trp_info_fail()->cause)));
-    logger.debug("\"{}\" failed", name());
+    logger.warning(
+        "\"{}\" failed. Cause: {}", name(), get_cause_str(du_pdu_response.error().value.trp_info_fail()->cause));
   } else {
     procedure_outcome = create_trp_info_response(du_pdu_response.value().value.trp_info_resp());
-    logger.debug("\"{}\" finished successfully", name());
+    logger.info("\"{}\" finished successfully", name());
   }
 
   // Send response to CU-CP.
@@ -343,118 +337,8 @@ trp_information_response_t create_trp_info_response(const asn1::f1ap::trp_info_r
         trp_info_type_resp_item = spatial_direction_info;
       } else if (asn1_trp_info_type_resp_item.type().value ==
                  asn1::f1ap::trp_info_type_resp_item_c::types_opts::options::geographical_coordinates) {
-        geographical_coordinates_t             geo_coords;
-        asn1::f1ap::geographical_coordinates_s asn1_geo_coords =
-            asn1_trp_info_type_resp_item.geographical_coordinates();
-
-        // Fill TRP position definition type.
-        if (asn1_geo_coords.trp_position_definition_type.type() ==
-            asn1::f1ap::trp_position_definition_type_c::types_opts::options::direct) {
-          trp_position_direct_t direct;
-          if (asn1_geo_coords.trp_position_definition_type.direct().accuracy.type() ==
-              asn1::f1ap::trp_position_direct_accuracy_c::types_opts::options::trp_position) {
-            direct.accuracy = asn1_to_access_point_position(
-                asn1_geo_coords.trp_position_definition_type.direct().accuracy.trp_position());
-          } else {
-            direct.accuracy = asn1_to_ha_access_point_position(
-                asn1_geo_coords.trp_position_definition_type.direct().accuracy.trph_aposition());
-          }
-          geo_coords.trp_position_definition_type = direct;
-        } else {
-          trp_position_refd_t refd;
-
-          // Fill ref point.
-          if (asn1_geo_coords.trp_position_definition_type.refd().ref_point.type() ==
-              asn1::f1ap::ref_point_c::types_opts::options::coordinate_id) {
-            refd.ref_point = asn1_geo_coords.trp_position_definition_type.refd().ref_point.coordinate_id();
-          } else if (asn1_geo_coords.trp_position_definition_type.refd().ref_point.type() ==
-                     asn1::f1ap::ref_point_c::types_opts::options::ref_point_coordinate) {
-            refd.ref_point = asn1_to_access_point_position(
-                asn1_geo_coords.trp_position_definition_type.refd().ref_point.ref_point_coordinate());
-          } else {
-            refd.ref_point = asn1_to_ha_access_point_position(
-                asn1_geo_coords.trp_position_definition_type.refd().ref_point.ref_point_coordinate_ha());
-          }
-
-          // Fill ref point type.
-          if (asn1_geo_coords.trp_position_definition_type.refd().ref_point_type.type() ==
-              asn1::f1ap::trp_ref_point_type_c::types_opts::options::trp_position_relative_geodetic) {
-            refd.ref_point_type = asn1_to_relative_geodetic_location(
-                asn1_geo_coords.trp_position_definition_type.refd().ref_point_type.trp_position_relative_geodetic());
-          } else {
-            refd.ref_point_type = asn1_to_relative_cartesian_location(
-                asn1_geo_coords.trp_position_definition_type.refd().ref_point_type.trp_position_relative_cartesian());
-          }
-
-          geo_coords.trp_position_definition_type = refd;
-        }
-
-        // Fill DL PRS res coordinates.
-        if (asn1_geo_coords.dl_prs_res_coordinates_present) {
-          dl_prs_res_coordinates_t dl_prs_res_coords;
-
-          for (const auto& asn1_dl_prs_res_set_arp : asn1_geo_coords.dl_prs_res_coordinates.listof_dl_prs_res_set_arp) {
-            dl_prs_res_set_arp_t dl_prs_res_set_arp;
-
-            // Fill DL PRS res set ID.
-            dl_prs_res_set_arp.dl_prs_res_set_id = asn1_dl_prs_res_set_arp.dl_prs_res_set_id;
-
-            // Fill DL PRS res set ARP location.
-            if (asn1_dl_prs_res_set_arp.dl_prs_res_set_arp_location.type() ==
-                asn1::f1ap::dl_prs_res_set_arp_location_c::types_opts::options::relative_geodetic_location) {
-              dl_prs_res_set_arp.dl_prs_res_set_arp_location = asn1_to_relative_geodetic_location(
-                  asn1_dl_prs_res_set_arp.dl_prs_res_set_arp_location.relative_geodetic_location());
-            } else {
-              dl_prs_res_set_arp.dl_prs_res_set_arp_location = asn1_to_relative_cartesian_location(
-                  asn1_dl_prs_res_set_arp.dl_prs_res_set_arp_location.relative_cartesian_location());
-            }
-
-            // Fill list of DL PRS res set ARP.
-            for (const auto& asn1_dl_prs_res_arp : asn1_dl_prs_res_set_arp.listof_dl_prs_res_arp) {
-              dl_prs_res_arp_t dl_prs_res_arp;
-
-              dl_prs_res_arp.dl_prs_res_id = asn1_dl_prs_res_arp.dl_prs_res_id;
-
-              if (asn1_dl_prs_res_arp.dl_prs_res_arp_location.type() ==
-                  asn1::f1ap::dl_prs_res_arp_location_c::types_opts::options::relative_geodetic_location) {
-                dl_prs_res_arp.dl_prs_res_arp_location = asn1_to_relative_geodetic_location(
-                    asn1_dl_prs_res_arp.dl_prs_res_arp_location.relative_geodetic_location());
-              } else {
-                dl_prs_res_arp.dl_prs_res_arp_location = asn1_to_relative_cartesian_location(
-                    asn1_dl_prs_res_arp.dl_prs_res_arp_location.relative_cartesian_location());
-              }
-
-              dl_prs_res_set_arp.listof_dl_prs_res_arp.push_back(dl_prs_res_arp);
-            }
-
-            dl_prs_res_coords.listof_dl_prs_res_set_arp.push_back(dl_prs_res_set_arp);
-          }
-
-          geo_coords.dl_prs_res_coordinates = dl_prs_res_coords;
-        }
-
-        // Fill IE exts.
-        for (const auto& asn1_ie_exts_container : asn1_geo_coords.ie_exts) {
-          if (asn1_ie_exts_container->type() ==
-              asn1::f1ap::geographical_coordinates_ext_ies_o::ext_c::types_opts::options::arp_location_info) {
-            for (const auto& asn1_arp_location_info_item : asn1_ie_exts_container->arp_location_info()) {
-              arp_location_info_item_t arp_location_info_item;
-              arp_location_info_item.arp_id = asn1_arp_location_info_item.arp_id;
-
-              if (asn1_arp_location_info_item.arp_location_type.type() ==
-                  asn1::f1ap::arp_location_type_c::types_opts::options::arp_position_relative_geodetic) {
-                arp_location_info_item.arp_location_type = asn1_to_relative_geodetic_location(
-                    asn1_arp_location_info_item.arp_location_type.arp_position_relative_geodetic());
-              } else {
-                arp_location_info_item.arp_location_type = asn1_to_relative_cartesian_location(
-                    asn1_arp_location_info_item.arp_location_type.arp_position_relative_cartesian());
-              }
-
-              geo_coords.arp_location_info.push_back(arp_location_info_item);
-            }
-          }
-        }
-
+        geographical_coordinates_t geo_coords =
+            asn1_to_geographical_coordinates(asn1_trp_info_type_resp_item.geographical_coordinates());
         trp_info_type_resp_item = geo_coords;
       } else {
         const asn1::protocol_ie_single_container_s<asn1::f1ap::trp_info_type_resp_item_ext_ies_o>& asn1_ie_ext =
@@ -637,124 +521,13 @@ asn1_to_dl_prs_muting_pattern(const asn1::f1ap::dl_prs_muting_pattern_c& asn1_dl
   return dl_prs_muting_pattern;
 }
 
-inline ng_ran_access_point_position_t
-asn1_to_access_point_position(const asn1::f1ap::access_point_position_s& asn1_position)
-{
-  ng_ran_access_point_position_t position;
-
-  if (asn1_position.latitude_sign == asn1::f1ap::access_point_position_s::latitude_sign_opts::options::north) {
-    position.latitude_sign = latitude_sign_t::north;
-  } else {
-    position.latitude_sign = latitude_sign_t::south;
-  }
-  position.latitude  = asn1_position.latitude;
-  position.longitude = asn1_position.longitude;
-  if (asn1_position.direction_of_altitude ==
-      asn1::f1ap::access_point_position_s::direction_of_altitude_opts::options::height) {
-    position.direction_of_altitude = direction_of_altitude_t::height;
-  } else {
-    position.direction_of_altitude = direction_of_altitude_t::depth;
-  }
-  position.altitude                  = asn1_position.altitude;
-  position.uncertainty_semi_major    = asn1_position.uncertainty_semi_major;
-  position.uncertainty_semi_minor    = asn1_position.uncertainty_semi_minor;
-  position.orientation_of_major_axis = asn1_position.orientation_of_major_axis;
-  position.uncertainty_altitude      = asn1_position.uncertainty_altitude;
-  position.confidence                = asn1_position.confidence;
-
-  return position;
-}
-
-inline ng_ran_high_accuracy_access_point_position_t
-asn1_to_ha_access_point_position(const asn1::f1ap::ngran_high_accuracy_access_point_position_s& asn1_position)
-{
-  ng_ran_high_accuracy_access_point_position_t position;
-
-  position.latitude                  = asn1_position.latitude;
-  position.longitude                 = asn1_position.longitude;
-  position.altitude                  = asn1_position.altitude;
-  position.uncertainty_semi_major    = asn1_position.uncertainty_semi_major;
-  position.uncertainty_semi_minor    = asn1_position.uncertainty_semi_minor;
-  position.orientation_of_major_axis = asn1_position.orientation_of_major_axis;
-  position.horizontal_confidence     = asn1_position.horizontal_confidence;
-  position.uncertainty_altitude      = asn1_position.uncertainty_altitude;
-  position.vertical_confidence       = asn1_position.vertical_confidence;
-
-  return position;
-}
-
-inline relative_geodetic_location_t
-asn1_to_relative_geodetic_location(const asn1::f1ap::relative_geodetic_location_s& asn_location)
-{
-  relative_geodetic_location_t location;
-
-  // Fill milli arc second units.
-  if (asn_location.milli_arc_second_units ==
-      asn1::f1ap::relative_geodetic_location_s::milli_arc_second_units_opts::options::zerodot03) {
-    location.milli_arc_second_units = milli_arc_second_units_t::zerodot03;
-  } else if (asn_location.milli_arc_second_units ==
-             asn1::f1ap::relative_geodetic_location_s::milli_arc_second_units_opts::options::zerodot3) {
-    location.milli_arc_second_units = milli_arc_second_units_t::zerodot3;
-  } else {
-    location.milli_arc_second_units = milli_arc_second_units_t::three;
-  }
-
-  // Fill height units.
-  if (asn_location.height_units == asn1::f1ap::relative_geodetic_location_s::height_units_opts::options::mm) {
-    location.height_units = height_units_t::mm;
-  } else if (asn_location.height_units == asn1::f1ap::relative_geodetic_location_s::height_units_opts::options::cm) {
-    location.height_units = height_units_t::cm;
-  } else {
-    location.height_units = height_units_t::m;
-  }
-
-  location.delta_latitude  = asn_location.delta_latitude;
-  location.delta_longitude = asn_location.delta_longitude;
-  location.delta_height    = asn_location.delta_height;
-
-  // Fill location uncertainty.
-  location.location_uncertainty.horizontal_uncertainty = asn_location.location_uncertainty.horizontal_uncertainty;
-  location.location_uncertainty.horizontal_confidence  = asn_location.location_uncertainty.horizontal_confidence;
-  location.location_uncertainty.vertical_uncertainty   = asn_location.location_uncertainty.vertical_uncertainty;
-  location.location_uncertainty.vertical_confidence    = asn_location.location_uncertainty.vertical_confidence;
-
-  return location;
-}
-
-inline relative_cartesian_location_t
-asn1_to_relative_cartesian_location(const asn1::f1ap::relative_cartesian_location_s& asn1_location)
-{
-  relative_cartesian_location_t location;
-
-  // Fill xyz unit.
-  if (asn1_location.xy_zunit == asn1::f1ap::relative_cartesian_location_s::xy_zunit_opts::options::mm) {
-    location.xyz_unit = xyz_unit_t::mm;
-  } else if (asn1_location.xy_zunit == asn1::f1ap::relative_cartesian_location_s::xy_zunit_opts::cm) {
-    location.xyz_unit = xyz_unit_t::cm;
-  } else {
-    location.xyz_unit = xyz_unit_t::dm;
-  }
-
-  location.xvalue = asn1_location.xvalue;
-  location.yvalue = asn1_location.yvalue;
-  location.zvalue = asn1_location.zvalue;
-
-  // Fill location uncertainty.
-  location.location_uncertainty.horizontal_uncertainty = asn1_location.location_uncertainty.horizontal_uncertainty;
-  location.location_uncertainty.horizontal_confidence  = asn1_location.location_uncertainty.horizontal_confidence;
-  location.location_uncertainty.vertical_uncertainty   = asn1_location.location_uncertainty.vertical_uncertainty;
-  location.location_uncertainty.vertical_confidence    = asn1_location.location_uncertainty.vertical_confidence;
-
-  return location;
-}
-
 static void fill_asn1_trp_information_request(asn1::f1ap::trp_info_request_s&  asn1_request,
                                               const trp_information_request_t& request)
 {
   // Fill TRP list.
   for (const auto& trp_id : request.trp_list) {
     asn1::f1ap::trp_list_item_s asn1_trp_list_item;
-    asn1_trp_list_item.trp_id = trp_id_to_uint(trp_id);
+    asn1_trp_list_item.trp_id = to_underlying(trp_id);
 
     asn1_request->trp_list.push_back(asn1_trp_list_item);
   }

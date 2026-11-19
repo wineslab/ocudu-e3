@@ -30,7 +30,7 @@ public:
 
     // For each bit of the initial state.
     for (unsigned i = 0; i != pseudo_random_generator_state_size; ++i) {
-      pseudo_random_generator_sequence sequence(1 << (31 - i), 0);
+      pseudo_random_generator_sequence sequence(1U << (31 - i), 0);
 
       unsigned n = 0;
       for (unsigned n_end = (Nc / max_step_size) * max_step_size; n != n_end; n += max_step_size) {
@@ -106,7 +106,7 @@ public:
 
     // For each bit of the seed.
     for (uint32_t i = 0; i != pseudo_random_generator_state_size; ++i) {
-      pseudo_random_generator_sequence sequence(0, 1 << (31 - i));
+      pseudo_random_generator_sequence sequence(0, 1U << (31 - i));
 
       unsigned n = 0;
       for (unsigned n_end = (Nc / max_step_size) * max_step_size; n != n_end; n += max_step_size) {

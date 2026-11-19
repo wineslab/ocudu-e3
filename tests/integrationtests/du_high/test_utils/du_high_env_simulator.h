@@ -10,10 +10,12 @@
 #include "lib/gtpu/gtpu_teid_pool_impl.h"
 #include "tests/test_doubles/f1u/dummy_f1u_du_gateway.h"
 #include "tests/test_doubles/mac/dummy_mac_result_notifier.h"
+#include "ocudu/adt/unique_function.h"
 #include "ocudu/du/du_high/du_high.h"
 #include "ocudu/du/du_high/du_high_configuration.h"
 #include "ocudu/f1ap/f1ap_ue_id_types.h"
 #include "ocudu/ran/slot_point_extended.h"
+#include "ocudu/ran/srs/srs_properties.h"
 #include "ocudu/scheduler/config/cell_config_builder_params.h"
 #include "ocudu/support/async/eager_async_task.h"
 #include "ocudu/support/async/event_signal.h"
@@ -22,6 +24,7 @@
 namespace ocudu {
 
 class io_broker;
+class mac_clock_controller;
 
 namespace odu {
 
@@ -35,6 +38,8 @@ struct du_high_env_sim_params {
   std::optional<unsigned>                      prach_frequency_start;
   std::optional<srs_periodicity>               srs_period;
   bool                                         active_cells_on_start = true;
+  /// Whether a failed F1-C TNL connection is retried instead of closing the application.
+  bool retry_f1c_connection = false;
 };
 
 du_high_configuration create_du_high_configuration(const du_high_env_sim_params& params = {});

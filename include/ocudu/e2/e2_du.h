@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ocudu/e2/e2.h"
 #include "ocudu/rlc/rlc_metrics.h"
 #include "ocudu/scheduler/scheduler_metrics.h"
 

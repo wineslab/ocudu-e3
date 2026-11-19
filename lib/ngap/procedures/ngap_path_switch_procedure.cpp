@@ -8,9 +8,9 @@
 #include "ocudu/asn1/ngap/common.h"
 #include "ocudu/asn1/ngap/ngap.h"
 #include "ocudu/asn1/ngap/ngap_ies.h"
-#include "ocudu/cu_cp/inter_cu_handover_messages.h"
 #include "ocudu/ngap/ngap_message.h"
 #include "ocudu/ran/cu_types.h"
+#include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/security/security_asn1_utils.h"
 #include <variant>
 
@@ -20,34 +20,45 @@ using namespace asn1::ngap;
 
 ngap_path_switch_procedure::ngap_path_switch_procedure(const cu_cp_path_switch_request& request_,
                                                        ngap_ue_context&                 ue_ctxt_,
+                                                       ngap_ue_context_list&            ue_ctxt_list_,
                                                        ngap_message_notifier&           amf_notifier_) :
-  request(request_), ue_ctxt(ue_ctxt_), amf_notifier(amf_notifier_)
+  request(request_),
+  ev_mng(ue_ctxt_.ev_mng),
+  ue_ctxt_list(ue_ctxt_list_),
+  amf_notifier(amf_notifier_),
+  ue_ids(ue_ctxt_.ue_ids),
+  logger(ue_ctxt_.logger)
 {
 }
 
 void ngap_path_switch_procedure::operator()(coro_context<async_task<cu_cp_path_switch_response>>& ctx)
 {
   CORO_BEGIN(ctx);
-  ue_ctxt.logger.log_debug("\"{}\" started...", name());
+  logger.log_info("\"{}\" started...", name());
 
   // Subscribe to respective publisher to receive PATH SWITCH REQUEST ACK/FAILURE message.
-  transaction_sink.subscribe_to(ue_ctxt.ev_mng.path_switch_outcome, std::chrono::milliseconds{5000});
+  transaction_sink.subscribe_to(ev_mng.path_switch_outcome, std::chrono::milliseconds{5000});
 
   // Send Path Switch Request to AMF.
   if (!send_path_switch_request()) {
-    ue_ctxt.logger.log_warning("\"{}\" failed. Cause: Couldn't send Path Switch Request to AMF", name());
+    logger.log_warning("\"{}\" failed. Cause: Couldn't send Path Switch Request to AMF", name());
     CORO_EARLY_RETURN(cu_cp_path_switch_request_failure{.ue_index = request.ue_index});
   }
 
   CORO_AWAIT(transaction_sink);
 
   if (transaction_sink.timeout_expired()) {
-    ue_ctxt.logger.log_warning("\"{}\" timed out after {}ms", name(), 5000);
+    logger.log_warning("\"{}\" timed out after {}ms", name(), 5000);
+    CORO_EARLY_RETURN(cu_cp_path_switch_request_failure{.ue_index = request.ue_index});
+  }
+
+  if (not transaction_sink.successful() and not transaction_sink.failed()) {
+    logger.log_warning("\"{}\" cancelled", name());
     CORO_EARLY_RETURN(cu_cp_path_switch_request_failure{.ue_index = request.ue_index});
   }
 
   if (not transaction_sink.successful()) {
-    ue_ctxt.logger.log_debug("\"{}\" failed", name());
+    logger.log_warning("\"{}\" failed", name());
     // Convert procedure outcome to procedure response and return.
     CORO_EARLY_RETURN(asn1_to_path_switch_request_failure(transaction_sink.failure()));
   }
@@ -56,9 +67,9 @@ void ngap_path_switch_procedure::operator()(coro_context<async_task<cu_cp_path_s
   procedure_response = handle_successful_outcome(transaction_sink.response());
 
   if (std::holds_alternative<cu_cp_path_switch_request_failure>(procedure_response)) {
-    ue_ctxt.logger.log_debug("\"{}\" failed. Cause: Failure at response handling", name());
+    logger.log_warning("\"{}\" failed. Cause: Failure at response handling", name());
   } else {
-    ue_ctxt.logger.log_debug("\"{}\" finished successfully", name());
+    logger.log_info("\"{}\" finished successfully", name());
   }
 
   CORO_RETURN(procedure_response);
@@ -72,8 +83,8 @@ bool ngap_path_switch_procedure::send_path_switch_request()
 
   path_switch_request_s& asn1_path_switch_request = ngap_msg.pdu.init_msg().value.path_switch_request();
   // Fill UE IDs.
-  asn1_path_switch_request->ran_ue_ngap_id        = ran_ue_id_to_uint(ue_ctxt.ue_ids.ran_ue_id);
-  asn1_path_switch_request->source_amf_ue_ngap_id = amf_ue_id_to_uint(ue_ctxt.ue_ids.amf_ue_id);
+  asn1_path_switch_request->ran_ue_ngap_id        = to_underlying(ue_ids.ran_ue_id);
+  asn1_path_switch_request->source_amf_ue_ngap_id = to_underlying(ue_ids.amf_ue_id);
   // Fill User Location Information.
   asn1_path_switch_request->user_location_info.set_user_location_info_nr() =
       cu_cp_user_location_info_to_asn1(request.user_location_info);
@@ -85,7 +96,7 @@ bool ngap_path_switch_procedure::send_path_switch_request()
   // Fill PDU session resource to be switched list.
   for (const auto& pdu_session_res : request.pdu_session_res_to_be_switched_dl_list) {
     pdu_session_res_to_be_switched_dl_item_s asn1_item;
-    asn1_item.pdu_session_id = pdu_session_id_to_uint(pdu_session_res.pdu_session_id);
+    asn1_item.pdu_session_id = to_underlying(pdu_session_res.pdu_session_id);
 
     asn1::ngap::path_switch_request_transfer_s path_switch_request_transfer;
     // Fill DL NGU UP TNL info.
@@ -111,7 +122,7 @@ bool ngap_path_switch_procedure::send_path_switch_request()
     for (const auto& qos_flow_id : pdu_session_res.qos_flow_accepted_list) {
       qos_flow_accepted_item_s qos_flow_accepted_item;
       // Fill QoS flow ID.
-      qos_flow_accepted_item.qos_flow_id = qos_flow_id_to_uint(qos_flow_id);
+      qos_flow_accepted_item.qos_flow_id = to_underlying(qos_flow_id);
       path_switch_request_transfer.qos_flow_accepted_list.push_back(qos_flow_accepted_item);
     }
 
@@ -134,7 +145,7 @@ bool ngap_path_switch_procedure::send_path_switch_request()
     }
     pdu_session_res_failed_to_setup_item_ps_req_s asn1_failed_item;
     // Fill PDU session ID.
-    asn1_failed_item.pdu_session_id = pdu_session_id_to_uint(failed_item.pdu_session_id);
+    asn1_failed_item.pdu_session_id = to_underlying(failed_item.pdu_session_id);
     // Fill Path Switch Request Setup Failed Transfer.
     path_switch_request_setup_failed_transfer_s asn1_failed_transfer;
     asn1_failed_transfer.cause = cause_to_asn1(std::get<ngap_cause_t>(failed_item.cause));
@@ -161,35 +172,41 @@ cu_cp_path_switch_response
 ngap_path_switch_procedure::handle_successful_outcome(const asn1::ngap::path_switch_request_ack_s& asn1_response)
 {
   // Compare context UE IDs based on UE IDs in the response.
-  if (ue_ctxt.ue_ids.ran_ue_id != uint_to_ran_ue_id(asn1_response->ran_ue_ngap_id) ||
-      ue_ctxt.ue_ids.amf_ue_id != uint_to_amf_ue_id(asn1_response->amf_ue_ngap_id)) {
-    ue_ctxt.logger.log_warning(
+  if (ue_ids.ran_ue_id != uint_to_ran_ue_id(asn1_response->ran_ue_ngap_id) ||
+      ue_ids.amf_ue_id != uint_to_amf_ue_id(asn1_response->amf_ue_ngap_id)) {
+    logger.log_warning(
         "UE ID mismatch between context and response. Patch Switch Request Ack: ran_ue_id={}, amf_ue_id={}",
         asn1_response->ran_ue_ngap_id,
         asn1_response->amf_ue_ngap_id);
-    return cu_cp_path_switch_request_failure{.ue_index = ue_ctxt.ue_ids.ue_index};
+    return cu_cp_path_switch_request_failure{.ue_index = ue_ids.ue_index};
   }
 
   cu_cp_path_switch_request_ack request_ack;
-  request_ack.ue_index = ue_ctxt.ue_ids.ue_index;
+  request_ack.ue_index = ue_ids.ue_index;
   if (!asn1_to_path_switch_request_ack(request_ack, asn1_response)) {
-    return cu_cp_path_switch_request_failure{.ue_index = ue_ctxt.ue_ids.ue_index};
+    return cu_cp_path_switch_request_failure{.ue_index = ue_ids.ue_index};
   }
 
-  // Store Core Network Assist Info for Inactive if present.
-  if (request_ack.core_network_assist_info_for_inactive.has_value()) {
-    ue_ctxt.core_network_assist_info_for_inactive = request_ack.core_network_assist_info_for_inactive.value();
-  }
+  // Resolve the UE context again, as it may have been removed while this procedure was suspended.
+  ngap_ue_context* ue_ctxt = ue_ctxt_list.find(ue_ids.ran_ue_id);
+  if (ue_ctxt == nullptr) {
+    logger.log_debug("Skipping the update of the UE context. Cause: UE context not found");
+  } else {
+    // Store Core Network Assist Info for Inactive if present.
+    if (request_ack.core_network_assist_info_for_inactive.has_value()) {
+      ue_ctxt->core_network_assist_info_for_inactive = request_ack.core_network_assist_info_for_inactive.value();
+    }
 
-  // Store RRC inactive transition report request if present.
-  if (request_ack.rrc_inactive_transition_report_request.has_value()) {
-    ue_ctxt.rrc_inactive_transition_report_request = request_ack.rrc_inactive_transition_report_request.value();
+    // Store RRC inactive transition report request if present.
+    if (request_ack.rrc_inactive_transition_report_request.has_value()) {
+      ue_ctxt->rrc_inactive_transition_report_request = request_ack.rrc_inactive_transition_report_request.value();
+    }
   }
 
   // Log security context.
-  ue_ctxt.logger.log_debug(request_ack.security_context.k.data(), 32, "K_gnb");
-  ue_ctxt.logger.log_debug("Supported integrity algorithms: {}", request_ack.security_context.supported_int_algos);
-  ue_ctxt.logger.log_debug("Supported ciphering algorithms: {}", request_ack.security_context.supported_enc_algos);
+  logger.log_debug(request_ack.security_context.k.data(), 32, "K_gnb");
+  logger.log_debug("Supported integrity algorithms: {}", request_ack.security_context.supported_int_algos);
+  logger.log_debug("Supported ciphering algorithms: {}", request_ack.security_context.supported_enc_algos);
 
   return request_ack;
 }
@@ -277,15 +294,15 @@ cu_cp_path_switch_request_failure ngap_path_switch_procedure::asn1_to_path_switc
   cu_cp_path_switch_request_failure fail;
 
   // Compare context UE IDs based on UE IDs in the response.
-  if (ue_ctxt.ue_ids.ran_ue_id != uint_to_ran_ue_id(asn1_fail->ran_ue_ngap_id) ||
-      ue_ctxt.ue_ids.amf_ue_id != uint_to_amf_ue_id(asn1_fail->amf_ue_ngap_id)) {
-    ue_ctxt.logger.log_warning(
+  if (ue_ids.ran_ue_id != uint_to_ran_ue_id(asn1_fail->ran_ue_ngap_id) ||
+      ue_ids.amf_ue_id != uint_to_amf_ue_id(asn1_fail->amf_ue_ngap_id)) {
+    logger.log_warning(
         "UE ID mismatch between context and response. Patch Switch Request Failure: ran_ue_id={}, amf_ue_id={}",
         asn1_fail->ran_ue_ngap_id,
         asn1_fail->amf_ue_ngap_id);
     return fail;
   }
-  fail.ue_index = ue_ctxt.ue_ids.ue_index;
+  fail.ue_index = ue_ids.ue_index;
 
   // Convert PDU session resource released list if present.
   for (const auto& asn1_release_item : asn1_fail->pdu_session_res_released_list_ps_fail) {

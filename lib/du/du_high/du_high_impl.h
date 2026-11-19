@@ -43,6 +43,8 @@ public:
 
   mac_subframe_time_mapper& get_subframe_time_mapper() override;
 
+  ocudu_ntn::ntn_configuration_manager* get_ntn_configuration_manager() override;
+
 private:
   class layer_connector;
 

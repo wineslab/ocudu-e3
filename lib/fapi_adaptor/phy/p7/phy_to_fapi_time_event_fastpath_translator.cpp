@@ -4,6 +4,7 @@
 
 #include "phy_to_fapi_time_event_fastpath_translator.h"
 #include "fapi_to_phy_fastpath_translator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi/p7/builders/slot_indication_builder.h"
 #include "ocudu/phy/upper/upper_phy_timing_context.h"
 

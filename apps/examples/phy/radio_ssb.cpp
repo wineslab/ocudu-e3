@@ -26,6 +26,7 @@
 #include "ocudu/phy/lower/lower_phy_controller.h"
 #include "ocudu/phy/lower/lower_phy_rx_symbol_context.h"
 #include "ocudu/radio/radio_factory.h"
+#include "ocudu/ran/antenna_topology.h"
 #include "ocudu/support/executors/task_worker.h"
 #include "ocudu/support/math/math_utils.h"
 #include "ocudu/support/signal_handling.h"
@@ -64,6 +65,7 @@ static double                                    ssb_center_freq            = 34
 static double                                    tx_gain                    = 60.0;
 static double                                    rx_freq                    = 3.5e9;
 static double                                    rx_gain                    = 60.0;
+static antenna_topology                          tx_ant_topology            = antenna_topology::one_port;
 static unsigned                                  nof_ports                  = 1;
 static unsigned                                  nof_sectors                = 1;
 static std::string                               driver_name                = "uhd";
@@ -357,7 +359,12 @@ static void parse_args(int argc, char** argv)
         break;
       case 'a':
         if (optarg != nullptr) {
-          nof_ports = std::strtol(optarg, nullptr, 10);
+          unsigned parsed = std::strtol(optarg, nullptr, 10);
+          if (!get_single_panel_antenna_topology(parsed).has_value()) {
+            fmt::print("Invalid number of ports {}. Expected 1, 2, 4 or 8.\n", parsed);
+            std::exit(0);
+          }
+          nof_ports = parsed;
         }
         break;
       case 'm':
@@ -463,7 +470,7 @@ create_lower_phy_configuration(task_executor*                rx_task_executor,
   phy_config.bandwidth_rb                      = bw_rb;
   phy_config.dl_freq_hz                        = dl_center_freq;
   phy_config.ul_freq_hz                        = rx_freq;
-  phy_config.nof_tx_ports                      = nof_ports;
+  phy_config.tx_ant_topology                   = tx_ant_topology;
   phy_config.nof_rx_ports                      = nof_ports;
   phy_config.dft_window_offset                 = 0.5F;
   phy_config.baseband_rx_buffer_size_policy    = lower_phy_baseband_buffer_size_policy::half_slot;
@@ -672,7 +679,8 @@ int main(int argc, char** argv)
   upper_phy_ssb_example::configuration upper_phy_sample_config;
   upper_phy_sample_config.log_level                    = log_level;
   upper_phy_sample_config.max_nof_prb                  = bw_rb;
-  upper_phy_sample_config.max_nof_ports                = nof_ports;
+  upper_phy_sample_config.nof_tx_beams                 = get_total_nof_beams(tx_ant_topology);
+  upper_phy_sample_config.nof_rx_ports                 = nof_ports;
   upper_phy_sample_config.rg_pool_size                 = 2 * max_processing_delay_slots;
   upper_phy_sample_config.ldpc_encoder_type            = "generic";
   upper_phy_sample_config.gateway                      = &rg_gateway_adapter;

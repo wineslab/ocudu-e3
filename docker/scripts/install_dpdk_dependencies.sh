@@ -17,12 +17,17 @@ install_dpdk_dependencies_debian_ubuntu() {
     local -a build_pkgs=(
         curl apt-transport-https ca-certificates xz-utils
         python3-pip ninja-build g++ build-essential pkg-config libnuma-dev libfdt-dev pciutils
+        libibverbs-dev
     )
     local -a extra_pkgs=(
         libatomic1 iproute2
     )
+    # DPDK links the runtime libraries; the development headers are only needed
+    # while building DPDK. All of these exist on every supported Debian and
+    # Ubuntu release, so no per-release selection is required.
     local -a run_pkgs=(
-        python3-pip libnuma-dev pciutils libfdt-dev libatomic1 iproute2
+        python3-pip libnuma1 pciutils libfdt1 libatomic1 iproute2
+        libibverbs1 ibverbs-providers libnl-3-200 libnl-route-3-200
     )
     local -a pip_build_pkgs=(meson pyelftools)
     local -a pip_run_pkgs=(pyelftools)
@@ -59,12 +64,14 @@ install_dpdk_dependencies_fedora() {
     local -a build_pkgs=(
         curl ca-certificates xz
         python3-pip ninja-build gcc gcc-c++ make pkgconf-pkg-config numactl-devel libfdt-devel pciutils
+        rdma-core-devel
     )
     local -a extra_pkgs=(
         libatomic iproute
     )
     local -a run_pkgs=(
         python3-pip numactl-libs pciutils libfdt libatomic iproute
+        libibverbs
     )
     local -a pip_build_pkgs=(meson pyelftools)
     local -a pip_run_pkgs=(pyelftools)
@@ -88,8 +95,79 @@ install_dpdk_dependencies_fedora() {
             ;;
     esac
 
-    install_fedora_pkgs "${pkgs[@]}"
+    install_rpm_pkgs "${pkgs[@]}"
     install_pip_pkgs --break-system-packages "${pip_pkgs[@]}"
+}
+
+install_dpdk_dependencies_centos() {
+    local mode="${1:?}"
+    local -a pkgs=()
+
+    local -a build_pkgs=(
+        curl ca-certificates xz ninja-build make numactl-devel libfdt-devel pciutils python3-pyelftools meson
+    )
+    local -a extra_pkgs=(
+        libatomic iproute
+    )
+    local -a run_pkgs=(
+        numactl-libs pciutils libfdt libatomic iproute libibverbs
+    )
+
+    case "$mode" in
+        all)
+            pkgs+=( "${build_pkgs[@]}" "${extra_pkgs[@]}" )
+            ;;
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    install_rpm_pkgs "${pkgs[@]}"
+}
+
+install_dpdk_dependencies_ubi10() {
+    local mode="${1:?}"
+
+    if [[ "$mode" == "run" ]] && rpm -q libfdt >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local -a pkgs=()
+
+    local -a build_pkgs=(
+        curl ca-certificates xz tar gzip ninja-build make numactl-devel libfdt-devel pciutils python3-pyelftools meson
+    )
+    local -a extra_pkgs=(
+        libatomic iproute
+    )
+    local -a run_pkgs=(
+        numactl-libs pciutils libfdt libatomic iproute libibverbs
+    )
+
+    case "$mode" in
+        all)
+            pkgs+=( "${build_pkgs[@]}" "${extra_pkgs[@]}" )
+            ;;
+        build)
+            pkgs+=( "${build_pkgs[@]}" )
+            ;;
+        run)
+            pkgs+=( "${run_pkgs[@]}" )
+            ;;
+        *)
+            echo >&2 "Unsupported mode: $mode"
+            exit 1
+            ;;
+    esac
+
+    install_rpm_pkgs "${pkgs[@]}"
 }
 
 install_dpdk_dependencies_arch() {
@@ -100,12 +178,14 @@ install_dpdk_dependencies_arch() {
     local -a build_pkgs=(
         curl ca-certificates xz
         python-pip ninja base-devel pkgconf numactl dtc pciutils
+        rdma-core
     )
     local -a extra_pkgs=(
         iproute2
     )
     local -a run_pkgs=(
         python-pip numactl dtc pciutils iproute2
+        rdma-core
     )
     local -a pip_build_pkgs=(meson pyelftools)
     local -a pip_run_pkgs=(pyelftools)
@@ -141,12 +221,14 @@ install_dpdk_dependencies_rhel() {
     local -a build_pkgs=(
         ca-certificates xz
         python3-pip ninja-build gcc gcc-c++ make pkgconf-pkg-config numactl-devel libfdt-devel pciutils
+        rdma-core-devel
     )
     local -a extra_pkgs=(
         libatomic iproute
     )
     local -a run_pkgs=(
         python3-pip numactl-libs pciutils libfdt libatomic iproute
+        libibverbs
     )
     local -a pip_build_pkgs=(meson pyelftools)
     local -a pip_run_pkgs=(pyelftools)
@@ -201,7 +283,14 @@ main() {
             install_dpdk_dependencies_fedora "$mode"
             ;;
         rhel)
-            install_dpdk_dependencies_rhel "$mode"
+            if is_ubi10; then
+                install_dpdk_dependencies_ubi10 "$mode"
+            else
+                install_dpdk_dependencies_rhel "$mode"
+            fi
+            ;;
+        centos)
+            install_dpdk_dependencies_centos "$mode"
             ;;
         arch)
             install_dpdk_dependencies_arch "$mode"

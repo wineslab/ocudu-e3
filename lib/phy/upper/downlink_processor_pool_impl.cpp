@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "downlink_processor_pool_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/slot_point.h"
 
 using namespace ocudu;

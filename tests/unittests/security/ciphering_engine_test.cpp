@@ -4,16 +4,20 @@
 
 #include "lib/security/ciphering_engine_nea1.h"
 #include "lib/security/ciphering_engine_nea2.h"
+#include "lib/security/ciphering_engine_nea2_psa.h"
 #include "lib/security/ciphering_engine_nea3.h"
 #include "nea1_test_set.h"
 #include "nea2_test_set.h"
 #include "nea3_test_set.h"
+#include "tests/test_doubles/security/security_test_keys.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/security/ciphering_engine.h"
 #include "ocudu/security/security.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
+using ocudu::test_helpers::make_sec_128_key;
+using ocudu::test_helpers::make_sec_key;
 using namespace ocudu::security;
 
 /// Fixture class for ciphering engine tests
@@ -53,24 +57,6 @@ class fxt_nea2 : public fxt_nea_base
 /// Fixture class for ciphering engine tests with NEA3
 class fxt_nea3 : public fxt_nea_base
 {};
-
-/// Converts a hex string (e.g. 01FA02) to a sec_as_key.
-sec_key make_sec_key(const std::string& hex_str)
-{
-  byte_buffer key_buf = make_byte_buffer(hex_str).value();
-  sec_key     key     = {};
-  std::copy(key_buf.begin(), key_buf.end(), key.begin());
-  return key;
-}
-
-/// Converts a hex string (e.g. 01FA02) to a sec_128_as_key.
-sec_128_key make_sec_128_key(const std::string& hex_str)
-{
-  byte_buffer key_buf = make_byte_buffer(hex_str).value();
-  sec_128_key key     = {};
-  std::copy(key_buf.begin(), key_buf.end(), key.begin());
-  return key;
-}
 
 /// Compares two byte arrays
 int arrcmp(uint8_t const* const a, uint8_t const* const b, uint32_t len)
@@ -130,8 +116,11 @@ TEST_P(fxt_nea2, ciphering_engine_nea2)
   byte_buffer ciphertext = make_byte_buffer(param.ciphertext_cstr).value();
 
   // Create ciphering engine
+#if !OCUDU_MBEDTLS_PSA
   std::unique_ptr<ciphering_engine> nea = std::make_unique<ciphering_engine_nea2>(key, param.bearer, dir);
-
+#else
+  std::unique_ptr<ciphering_engine> nea = std::make_unique<ciphering_engine_nea2_psa>(key, param.bearer, dir);
+#endif
   // Apply ciphering and compare results
   byte_buffer     buf    = plaintext.deep_copy().value();
   security_status status = nea->apply_ciphering(buf, 0, param.count);

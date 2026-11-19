@@ -3,6 +3,7 @@
 
 #include "ofh_data_flow_uplane_uplink_data_impl.h"
 #include "../support/uplane_bound_check_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
 #include "ocudu/ofh/serdes/ofh_message_decoder_properties.h"
 
@@ -29,13 +30,19 @@ data_flow_uplane_uplink_data_impl::data_flow_uplane_uplink_data_impl(
   ocudu_assert(uplane_decoder, "Invalid User-Plane decoder");
 }
 
-void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned eaxc, span<const uint8_t> message)
+void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned            eaxc,
+                                                             span<const uint8_t> message,
+                                                             bool                is_seq_id_correct)
 {
   trace_point decode_tp = ofh_tracer.now();
 
   uplane_message_decoder_results results;
   if (!uplane_decoder->decode(results, message)) {
     metrics_collector.increase_dropped_messages();
+    if (is_seq_id_correct) {
+      metrics_collector.increase_corrupted_messages();
+    }
+
     return;
   }
   ofh_tracer << trace_event("ofh_receiver_uplane_decode", decode_tp);
@@ -58,7 +65,7 @@ void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned eaxc, span
   }
 #endif
 
-  if (should_uplane_packet_be_filtered(eaxc, results)) {
+  if (should_uplane_packet_be_filtered(eaxc, results, is_seq_id_correct)) {
     metrics_collector.increase_dropped_messages();
 
     return;
@@ -73,9 +80,9 @@ void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned eaxc, span
   notification_sender.notify_received_symbol(results.params.slot, results.params.symbol_id);
 }
 
-bool data_flow_uplane_uplink_data_impl::should_uplane_packet_be_filtered(
-    unsigned                              eaxc,
-    const uplane_message_decoder_results& results) const
+bool data_flow_uplane_uplink_data_impl::should_uplane_packet_be_filtered(unsigned                              eaxc,
+                                                                         const uplane_message_decoder_results& results,
+                                                                         bool is_seq_id_correct)
 {
   if (OCUDU_UNLIKELY(results.params.filter_index == filter_index_type::reserved ||
                      is_a_prach_message(results.params.filter_index))) {
@@ -84,7 +91,11 @@ bool data_flow_uplane_uplink_data_impl::should_uplane_packet_be_filtered(
                 sector_id,
                 results.params.slot,
                 results.params.symbol_id,
-                to_value(results.params.filter_index));
+                to_underlying(results.params.filter_index));
+
+    if (is_seq_id_correct) {
+      metrics_collector.increase_corrupted_messages();
+    }
 
     return true;
   }
@@ -97,8 +108,8 @@ bool data_flow_uplane_uplink_data_impl::should_uplane_packet_be_filtered(
     logger.info("Sector#{}: dropped received Open Fronthaul User-Plane packet as the expected filter index '{}' does "
                 "not match with value '{}' for slot '{}', symbol '{}' and eAxC '{}'",
                 sector_id,
-                to_value(context.filter_index),
-                to_value(params.filter_index),
+                to_underlying(context.filter_index),
+                to_underlying(params.filter_index),
                 params.slot,
                 params.symbol_id,
                 eaxc);

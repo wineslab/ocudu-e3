@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/ssb/ssb_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/frame_types.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
@@ -17,8 +18,8 @@ ssb_helper::get_occupied_slot_offsets(const ssb_configuration& ssb_cfg, nr_band 
   const unsigned         nof_common_slots_per_sf = get_nof_slots_per_subframe(common_scs);
 
   std::vector<unsigned> slots;
-  for (unsigned ssb_idx = 0, sz = ssb_cfg.ssb_bitmap.size(); ssb_idx != sz; ++ssb_idx) {
-    if (!ssb_cfg.ssb_bitmap.test(ssb_idx)) {
+  for (unsigned ssb_idx = 0, sz = ssb_cfg.ssb_beams.get_L_max(); ssb_idx != sz; ++ssb_idx) {
+    if (!ssb_cfg.ssb_beams.is_transmitted(ssb_idx)) {
       continue;
     }
     const unsigned l_first = ssb_get_l_first(pattern_case, static_cast<ssb_id_t>(ssb_idx));

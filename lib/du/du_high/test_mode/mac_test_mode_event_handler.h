@@ -28,13 +28,13 @@ public:
 
   bool schedule(du_cell_index_t cell_index, task_type t)
   {
-    ocudu_assert(cell_index < cells.size(), "Invalid cell index {}", fmt::underlying(cell_index));
+    ocudu_assert(cell_index < cells.size(), "Invalid cell index {}", cell_index);
     return cells[cell_index]->try_push(std::move(t));
   }
 
   void process_pending_tasks(du_cell_index_t cell_index)
   {
-    ocudu_assert(cell_index < cells.size(), "Invalid cell index {}", fmt::underlying(cell_index));
+    ocudu_assert(cell_index < cells.size(), "Invalid cell index {}", cell_index);
     auto& c = *cells[cell_index];
 
     task_type task;

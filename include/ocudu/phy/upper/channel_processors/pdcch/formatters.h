@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ocudu/phy/support/precoding_formatters.h"
 #include "ocudu/phy/upper/channel_processors/pdcch/pdcch_processor.h"
 #include "ocudu/ran/pdcch/pdcch_context_formatter.h"
-#include "ocudu/ran/precoding/precoding_weight_matrix_formatters.h"
+#include "ocudu/ran/precoding_beamforming_formatters.h"
 
 namespace fmt {
 
@@ -72,7 +71,7 @@ struct formatter<ocudu::pdcch_processor::pdu_t> {
   template <typename FormatContext>
   auto format(const ocudu::pdcch_processor::pdu_t& pdu, FormatContext& ctx) const
   {
-    helper.format_always(ctx, "rnti=0x{:04x}", pdu.dci.rnti);
+    helper.format_always(ctx, "rnti={}", pdu.dci.rnti);
     if (pdu.context.has_value()) {
       helper.format_always(ctx, *pdu.context);
     }
@@ -80,14 +79,20 @@ struct formatter<ocudu::pdcch_processor::pdu_t> {
     helper.format_if_verbose(ctx, "cp={}", pdu.cp.to_string());
     helper.format_if_verbose(ctx, pdu.coreset);
     helper.format_always(ctx, "cce={}", pdu.dci.cce_index);
-    helper.format_always(ctx, "al={}", pdu.dci.aggregation_level);
+    helper.format_always(ctx, "al={}", ocudu::to_nof_cces(pdu.dci.dci_aggregation_level));
     helper.format_if_verbose(ctx, "size={}", pdu.dci.payload.size());
     helper.format_if_verbose(ctx, "n_id_dmrs={}", pdu.dci.n_id_pdcch_dmrs);
     helper.format_if_verbose(ctx, "n_id_data={}", pdu.dci.n_id_pdcch_data);
     helper.format_if_verbose(ctx, "n_rnti={}", pdu.dci.n_rnti);
     helper.format_if_verbose(ctx, "power_dmrs={:+.1f}dB", pdu.dci.dmrs_power_offset_dB);
     helper.format_if_verbose(ctx, "power_data={:+.1f}dB", pdu.dci.data_power_offset_dB);
-    helper.format_if_verbose(ctx, "precoding={}", pdu.dci.precoding);
+
+    if (helper.is_multiline()) {
+      helper.format_if_verbose(ctx, "{:n}", pdu.dci.precoding_and_beamforming);
+    } else {
+      helper.format_if_verbose(ctx, "{}", pdu.dci.precoding_and_beamforming);
+    }
+
     return ctx.out();
   }
 };

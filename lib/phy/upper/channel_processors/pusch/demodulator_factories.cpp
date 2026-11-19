@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pusch_demodulator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/generic_functions/transform_precoding/transform_precoding_factories.h"
 #include "ocudu/phy/upper/channel_modulation/channel_modulation_factories.h"
 #include "ocudu/phy/upper/channel_processors/pusch/factories.h"

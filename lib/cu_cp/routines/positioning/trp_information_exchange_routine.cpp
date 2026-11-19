@@ -3,19 +3,15 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "trp_information_exchange_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/support/async/coroutine.h"
 
 using namespace ocudu::ocucp;
 
-trp_information_exchange_routine::trp_information_exchange_routine(
-    const trp_information_request_t&                request_,
-    du_processor_repository&                        du_db_,
-    std::map<cu_cp_du_index_t, nrppa_f1ap_adapter>& nrppa_f1ap_ev_notifiers_) :
-  request(request_),
-  du_db(du_db_),
-  nrppa_f1ap_ev_notifiers(nrppa_f1ap_ev_notifiers_),
-  logger(ocudulog::fetch_basic_logger("CU-CP"))
+trp_information_exchange_routine::trp_information_exchange_routine(const trp_information_request_t& request_,
+                                                                   du_processor_repository&         du_db_) :
+  request(request_), du_db(du_db_), logger(ocudulog::fetch_basic_logger("CU-CP"))
 {
 }
 
@@ -42,13 +38,8 @@ void trp_information_exchange_routine::operator()(coro_context<async_task<trp_in
 void trp_information_exchange_routine::handle_sub_procedure_outcome()
 {
   if (sub_proc_outcome.has_value()) {
-    // Create and store NRPPA F1AP adapters.
-    nrppa_f1ap_ev_notifiers.emplace(du_index, nrppa_f1ap_adapter{});
-    nrppa_f1ap_ev_notifiers.at(du_index).connect_f1ap(*f1ap);
-
     // Append result to the response message.
     result_msg.trp_info_responses[du_index] = sub_proc_outcome.value();
-    result_msg.f1ap_notifiers.emplace(du_index, &nrppa_f1ap_ev_notifiers.at(du_index));
   } else {
     logger.warning("TRP Information Exchange Procedure failed for DU index={}", du_index);
   }

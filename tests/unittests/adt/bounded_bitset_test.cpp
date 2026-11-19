@@ -3,6 +3,7 @@
 
 #include "tests/test_doubles/utils/test_rng.h"
 #include "ocudu/adt/bounded_bitset.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 #include <bitset>
 #include <gtest/gtest.h>
@@ -16,131 +17,6 @@
 
 using namespace ocudu;
 
-template <typename T>
-class bitmask_test : public ::testing::Test
-{
-  static_assert(std::is_unsigned_v<T>, "Invalid type T");
-
-protected:
-  using Integer                    = T;
-  static constexpr size_t nof_bits = sizeof(Integer) * 8U;
-};
-using mask_integer_types = ::testing::Types<uint8_t, uint16_t, uint32_t, uint64_t>;
-TYPED_TEST_SUITE(bitmask_test, mask_integer_types);
-
-TYPED_TEST(bitmask_test, lsb_ones)
-{
-  using IntegerType = typename TestFixture::Integer;
-  // sanity checks.
-  ASSERT_EQ(0, mask_lsb_ones<IntegerType>(0));
-  ASSERT_EQ(static_cast<IntegerType>(-1), mask_lsb_ones<IntegerType>(this->nof_bits))
-      << "for nof_bits=" << (unsigned)this->nof_bits;
-  ASSERT_EQ(0b11, mask_lsb_ones<IntegerType>(2));
-
-  // test all combinations.
-  for (unsigned nof_ones = 0; nof_ones != this->nof_bits; ++nof_ones) {
-    IntegerType expected = (static_cast<uint64_t>(1U) << nof_ones) - 1U;
-    ASSERT_EQ(expected, mask_lsb_ones<IntegerType>(nof_ones)) << "for nof_ones=" << nof_ones;
-  }
-}
-
-TYPED_TEST(bitmask_test, lsb_zeros)
-{
-  using IntegerType = typename TestFixture::Integer;
-  // sanity checks.
-  ASSERT_EQ((IntegerType)-1, mask_lsb_zeros<IntegerType>(0));
-  ASSERT_EQ(0, mask_lsb_zeros<IntegerType>(this->nof_bits));
-
-  // test all combinations.
-  for (unsigned nof_zeros = 0; nof_zeros != this->nof_bits; ++nof_zeros) {
-    IntegerType expected = (static_cast<uint64_t>(1U) << nof_zeros) - 1U;
-    expected             = ~expected;
-    ASSERT_EQ(expected, mask_lsb_zeros<IntegerType>(nof_zeros)) << "for nof_zeros=" << nof_zeros;
-    ASSERT_EQ((IntegerType)~mask_lsb_ones<IntegerType>(nof_zeros), mask_lsb_zeros<IntegerType>(nof_zeros));
-  }
-}
-
-TYPED_TEST(bitmask_test, msb_ones)
-{
-  using IntegerType = typename TestFixture::Integer;
-  // sanity checks.
-  ASSERT_EQ(0, mask_msb_ones<IntegerType>(0));
-  ASSERT_EQ(static_cast<IntegerType>(-1), mask_msb_ones<IntegerType>(this->nof_bits));
-
-  // test all combinations.
-  for (unsigned nof_ones = 0; nof_ones != this->nof_bits; ++nof_ones) {
-    IntegerType expected = 0;
-    if (nof_ones > 0) {
-      unsigned nof_lsb_zeros = this->nof_bits - nof_ones;
-      expected               = ~((static_cast<IntegerType>(1U) << (nof_lsb_zeros)) - 1U);
-    }
-    ASSERT_EQ(expected, mask_msb_ones<IntegerType>(nof_ones)) << "for nof_ones=" << nof_ones;
-  }
-}
-
-TYPED_TEST(bitmask_test, msb_zeros)
-{
-  using IntegerType = typename TestFixture::Integer;
-  // sanity checks.
-  ASSERT_EQ((IntegerType)-1, mask_msb_zeros<IntegerType>(0));
-  ASSERT_EQ(0, mask_msb_zeros<IntegerType>(this->nof_bits));
-
-  // test all combinations.
-  for (unsigned nof_zeros = 0; nof_zeros != this->nof_bits; ++nof_zeros) {
-    IntegerType expected = 0;
-    if (nof_zeros > 0) {
-      unsigned nof_lsb_ones = this->nof_bits - nof_zeros;
-      expected              = ~((static_cast<IntegerType>(1U) << (nof_lsb_ones)) - 1U);
-    }
-    expected = ~expected;
-    ASSERT_EQ(expected, mask_msb_zeros<IntegerType>(nof_zeros)) << "for nof_zeros=" << nof_zeros;
-    ASSERT_EQ((IntegerType)~mask_lsb_ones<IntegerType>(nof_zeros), mask_lsb_zeros<IntegerType>(nof_zeros));
-  }
-}
-
-TYPED_TEST(bitmask_test, first_lsb_one)
-{
-  using IntegerType = typename TestFixture::Integer;
-  std::uniform_int_distribution<IntegerType> rd_int{0, std::numeric_limits<IntegerType>::max()};
-
-  // sanity checks.
-  ASSERT_EQ(std::numeric_limits<IntegerType>::digits, find_first_lsb_one<IntegerType>(0));
-  ASSERT_EQ(0, find_first_lsb_one<IntegerType>(-1));
-  ASSERT_EQ(0, find_first_lsb_one<IntegerType>(0b1));
-  ASSERT_EQ(1, find_first_lsb_one<IntegerType>(0b10));
-  ASSERT_EQ(0, find_first_lsb_one<IntegerType>(0b11));
-
-  // test all combinations.
-  for (unsigned one_idx = 0; one_idx != this->nof_bits - 1; ++one_idx) {
-    IntegerType mask  = mask_lsb_zeros<IntegerType>(one_idx);
-    IntegerType value = test_rng::uniform_int<IntegerType>() & mask;
-
-    ASSERT_EQ(find_first_lsb_one(mask), one_idx);
-    ASSERT_GE(find_first_lsb_one(value), one_idx) << fmt::format("for value {:#b}", value);
-  }
-}
-
-TYPED_TEST(bitmask_test, first_msb_one)
-{
-  using IntegerType = typename TestFixture::Integer;
-
-  // sanity checks.
-  ASSERT_EQ(std::numeric_limits<IntegerType>::digits, find_first_msb_one<IntegerType>(0));
-  ASSERT_EQ(this->nof_bits - 1, find_first_msb_one<IntegerType>(-1));
-  ASSERT_EQ(0, find_first_msb_one<IntegerType>(0b1));
-  ASSERT_EQ(1, find_first_msb_one<IntegerType>(0b10));
-  ASSERT_EQ(1, find_first_msb_one<IntegerType>(0b11));
-
-  // test all combinations.
-  for (unsigned one_idx = 0; one_idx != this->nof_bits - 1; ++one_idx) {
-    IntegerType mask  = mask_lsb_ones<IntegerType>(one_idx + 1);
-    IntegerType value = std::max<IntegerType>(test_rng::uniform_int<IntegerType>() & mask, 1U);
-
-    ASSERT_EQ(one_idx, find_first_msb_one(mask));
-    ASSERT_LE(find_first_msb_one(value), one_idx) << fmt::format("for value {:#b}", value);
-  }
-}
-
 // ** bounded_bitset constexpr tests
 
 static_assert(bounded_bitset<4>{}.max_size() == 4, "invalid max_size() method");
@@ -149,6 +25,7 @@ static_assert(bounded_bitset<4>{}.empty(), "invalid empty() method");
 static_assert(bounded_bitset<4>{{false, true, true}}.size() == 3, "invalid size() method");
 static_assert(bounded_bitset<4>{{false, true, true}}.test(2), "invalid test() method");
 static_assert(not bounded_bitset<4>{{false, true, true}}.test(0), "invalid test() method");
+static_assert(std::is_trivially_copyable_v<bounded_bitset<4>>, "bounded_bitset should be trivially copyable");
 
 // ** bounded_bitset runtime tests
 
@@ -192,6 +69,363 @@ protected:
     }
     return vec;
   }
+
+  void test_all_zeros()
+  {
+    auto zero_mask = this->create_bitset_with_zeros(this->get_random_size());
+    ASSERT_GT(zero_mask.size(), 0);
+    ASSERT_EQ(0, zero_mask.count());
+    ASSERT_TRUE(zero_mask.none());
+    ASSERT_FALSE(zero_mask.any());
+    ASSERT_FALSE(zero_mask.all());
+  }
+
+  void test_empty_bitset()
+  {
+    auto zero_sized_mask = this->create_bitset_with_zeros(0);
+    ASSERT_EQ(this->max_size(), zero_sized_mask.max_size());
+    ASSERT_EQ(0, zero_sized_mask.size());
+    ASSERT_EQ(0, zero_sized_mask.count());
+    ASSERT_TRUE(zero_sized_mask.none());
+    ASSERT_FALSE(zero_sized_mask.any());
+    ASSERT_TRUE(zero_sized_mask.all());
+
+    zero_sized_mask.flip();
+    ASSERT_TRUE(zero_sized_mask.none()) << "Flipping empty bitset should be a no-op";
+    ASSERT_EQ(0, zero_sized_mask.size()) << "Flipping empty bitset should be a no-op";
+
+    auto zero_mask = this->create_bitset_with_zeros(this->get_random_size());
+    ASSERT_NE(zero_mask, zero_sized_mask);
+    zero_sized_mask.resize(zero_mask.size());
+    ASSERT_EQ(zero_mask, zero_sized_mask);
+  }
+
+  void test_initializer_list_constructor()
+  {
+    bitset_type bitmap = {true, true, true, true, false};
+    ASSERT_EQ(bitmap.size(), 5);
+    ASSERT_TRUE(bitmap.test(0));
+    ASSERT_TRUE(bitmap.test(1));
+    ASSERT_TRUE(bitmap.test(2));
+    ASSERT_TRUE(bitmap.test(3));
+    ASSERT_FALSE(bitmap.test(4));
+  }
+
+  void test_iterator_constructor()
+  {
+    std::vector<bool> data = this->create_random_vector(this->get_random_size());
+    bitset_type       bitmap(data.begin(), data.end());
+    ASSERT_EQ(bitmap.size(), data.size());
+
+    for (unsigned i = 0; i != data.size(); ++i) {
+      ASSERT_EQ(data[i], bitmap.test(i));
+    }
+  }
+
+  void test_all_ones()
+  {
+    auto ones_bitmap = this->create_bitset_with_ones(this->get_random_size());
+
+    ASSERT_TRUE(ones_bitmap.all());
+    ASSERT_TRUE(ones_bitmap.any());
+    ASSERT_FALSE(ones_bitmap.none());
+    ASSERT_EQ(ones_bitmap.size(), ones_bitmap.count());
+  }
+
+  void test_flip()
+  {
+    auto bitmap          = this->create_random_bitset(this->get_random_size());
+    auto original_bitmap = bitmap;
+    bitmap.flip();
+
+    ASSERT_GT(bitmap.size(), 0);
+    ASSERT_EQ(bitmap.size(), original_bitmap.size());
+    for (unsigned i = 0; i != bitmap.size(); ++i) {
+      ASSERT_NE(bitmap.test(i), original_bitmap.test(i));
+    }
+  }
+
+  void test_set_bit()
+  {
+    std::vector<bool> data = this->create_random_vector(this->get_random_size());
+    bitset_type       bitmap(data.size());
+    bitset_type       expected_bitmap(data.begin(), data.end());
+
+    for (unsigned i = 0; i != data.size(); ++i) {
+      if (data[i]) {
+        bitmap.set(i);
+      }
+    }
+    ASSERT_EQ(bitmap, expected_bitmap);
+  }
+
+  void test_bitwise_or()
+  {
+    bitset_type bitmap       = this->create_random_bitset(this->get_random_size());
+    bitset_type zeros_bitmap = this->create_bitset_with_zeros(bitmap.size());
+    bitset_type ones_bitmap  = this->create_bitset_with_ones(bitmap.size());
+
+    ASSERT_EQ(bitmap | bitmap, bitmap);
+    ASSERT_EQ(bitmap | zeros_bitmap, bitmap);
+    ASSERT_EQ(bitmap | ones_bitmap, ones_bitmap);
+
+    auto flipped_bitmap = bitmap;
+    flipped_bitmap.flip();
+    bitmap |= flipped_bitmap;
+    ASSERT_EQ(bitmap, ones_bitmap);
+  }
+
+  void test_bitwise_and()
+  {
+    bitset_type bitmap       = this->create_random_bitset(this->get_random_size());
+    bitset_type zeros_bitmap = this->create_bitset_with_zeros(bitmap.size());
+    bitset_type ones_bitmap  = this->create_bitset_with_ones(bitmap.size());
+
+    ASSERT_EQ(bitmap & bitmap, bitmap);
+    ASSERT_EQ(bitmap & zeros_bitmap, zeros_bitmap);
+    ASSERT_EQ(bitmap & ones_bitmap, bitmap);
+
+    auto flipped_bitmap = bitmap;
+    flipped_bitmap.flip();
+    bitmap &= flipped_bitmap;
+    ASSERT_EQ(bitmap, zeros_bitmap);
+  }
+
+  void test_any_range()
+  {
+    std::vector<bool> vec = this->create_random_vector(this->get_random_size());
+    bitset_type       bitmap(vec.begin(), vec.end());
+
+    for (unsigned l = 1; l < vec.size(); ++l) {
+      for (unsigned i = 0; i < vec.size() - l; ++i) {
+        bool expected_val = false;
+        for (unsigned j = 0; j != l; ++j) {
+          if (vec[i + j]) {
+            expected_val = true;
+            break;
+          }
+        }
+        ASSERT_EQ(expected_val, bitmap.any(i, i + l)) << "l=" << l << " i=" << i;
+      }
+    }
+  }
+
+  void test_all_range()
+  {
+    std::vector<bool> vec = this->create_random_vector(this->get_random_size());
+    bitset_type       bitmap(vec.begin(), vec.end());
+
+    for (unsigned l = 1; l < vec.size(); ++l) {
+      for (unsigned i = 0; i < vec.size() - l; ++i) {
+        bool expected_val = true;
+        for (unsigned j = 0; j != l; ++j) {
+          if (not vec[i + j]) {
+            expected_val = false;
+            break;
+          }
+        }
+        ASSERT_EQ(expected_val, bitmap.all(i, i + l)) << "l=" << l << " i=" << i;
+      }
+    }
+  }
+
+  void test_is_subset_of()
+  {
+    std::vector<bool> vec1 = this->create_random_vector(this->get_random_size());
+    std::vector<bool> vec2 = this->create_random_vector(vec1.size());
+    bitset_type       bitmap1(vec1.begin(), vec1.end());
+    bitset_type       bitmap2(vec2.begin(), vec2.end());
+
+    for (unsigned l = 1; l < vec1.size(); ++l) {
+      for (unsigned i = 0; i < vec1.size() - l; ++i) {
+        bool expected_val = true;
+        for (unsigned j = 0; j != l; ++j) {
+          if (vec1[i + j] and not vec2[i + j]) {
+            expected_val = false;
+            break;
+          }
+        }
+        ASSERT_EQ(expected_val, bitmap1.is_subset_of(bitmap2, i, i + l)) << "l=" << l << " i=" << i;
+      }
+    }
+
+    const auto zeros_bitmap = this->create_bitset_with_zeros(bitmap1.size());
+    const auto ones_bitmap  = this->create_bitset_with_ones(bitmap1.size());
+
+    ASSERT_TRUE(zeros_bitmap.is_subset_of(zeros_bitmap, 0, zeros_bitmap.size()));
+    ASSERT_TRUE(zeros_bitmap.is_subset_of(bitmap1, 0, bitmap1.size())) << "The empty set is a subset of any other set";
+    ASSERT_TRUE(bitmap1.is_subset_of(ones_bitmap, 0, bitmap1.size())) << "Any set is a subset of the universal set";
+    ASSERT_TRUE(bitmap1.is_subset_of(bitmap1, 0, bitmap1.size())) << "A set is always a subset of itself";
+    ASSERT_FALSE(ones_bitmap.is_subset_of(zeros_bitmap, 0, ones_bitmap.size()))
+        << "The universal set is not a subset of the empty set";
+  }
+
+  void test_fill_ones()
+  {
+    unsigned   bitset_size  = this->get_random_size();
+    const auto zeros_bitmap = this->create_bitset_with_zeros(bitset_size);
+
+    for (unsigned l = 1; l < bitset_size; ++l) {
+      for (unsigned i = 0; i < bitset_size - l; ++i) {
+        auto bitmap = zeros_bitmap;
+        bitmap.fill(i, i + l);
+        ASSERT_FALSE(bitmap.any(0, i));
+        ASSERT_TRUE(bitmap.all(i, i + l)) << "l=" << l << " i=" << i;
+        ASSERT_FALSE(bitmap.any(i + l, bitset_size));
+      }
+    }
+  }
+
+  void test_fill_zeros()
+  {
+    unsigned   bitset_size = this->get_random_size();
+    const auto ones_bitmap = this->create_bitset_with_ones(bitset_size);
+
+    for (unsigned l = 1; l < bitset_size; ++l) {
+      for (unsigned i = 0; i < bitset_size - l; ++i) {
+        auto bitmap = ones_bitmap;
+        bitmap.fill(i, i + l, false);
+        ASSERT_TRUE(bitmap.all(0, i)) << "l=" << l << " i=" << i;
+        ASSERT_FALSE(bitmap.any(i, i + l));
+        ASSERT_TRUE(bitmap.all(i + l, bitset_size)) << "l=" << l << " i=" << i;
+      }
+    }
+  }
+
+  void test_slice()
+  {
+    using big_bitset_type                   = bitset_type;
+    unsigned                big_bitset_size = this->get_random_size();
+    const std::vector<bool> vec             = this->create_random_vector(big_bitset_size);
+    big_bitset_type         big_bitmap(vec.begin(), vec.end());
+
+    constexpr size_t N_small   = bitset_type::max_size() / 2;
+    using small_bitset_type    = bounded_bitset<N_small, big_bitset_type::bit_order()>;
+    unsigned small_bitset_size = test_rng::uniform_int<unsigned>(0, std::min((unsigned)N_small, big_bitset_size - 1));
+    unsigned offset            = test_rng::uniform_int<unsigned>(0, small_bitset_size);
+    unsigned end_offset        = test_rng::uniform_int<unsigned>(offset, small_bitset_size);
+
+    small_bitset_type small_bitmap = big_bitmap.template slice<N_small>(offset, end_offset);
+    ASSERT_EQ(end_offset - offset, small_bitmap.size());
+
+    for (unsigned i = 0; i != small_bitmap.size(); ++i) {
+      ASSERT_EQ(small_bitmap.test(i), big_bitmap.test(i + offset)) << "mismatch at position " << i;
+    }
+  }
+
+  void test_resize_keeps_existing_bit_values()
+  {
+    const unsigned large_size   = this->get_random_size(2);
+    const unsigned smaller_size = this->get_random_size(1, large_size - 1);
+
+    auto ones_bitmap = this->create_bitset_with_ones(large_size);
+    ASSERT_EQ(ones_bitmap.count(), large_size);
+    ones_bitmap.resize(smaller_size);
+    ASSERT_EQ(ones_bitmap.count(), smaller_size);
+    ones_bitmap.resize(large_size);
+    ASSERT_EQ(ones_bitmap.count(), smaller_size);
+  }
+
+  void test_copy_preserves_size_and_values()
+  {
+    const unsigned size1 = this->get_random_size();
+    const unsigned size2 = this->get_random_size();
+
+    bitset_type bitset1 = this->create_random_bitset(size1);
+    bitset_type bitset2 = this->create_random_bitset(size2);
+
+    bitset2 = bitset1;
+    ASSERT_EQ(bitset1, bitset2);
+  }
+
+  void test_binary_format_is_mirror_of_binary_format_reverse()
+  {
+    static constexpr size_t         N        = bitset_type::max_size();
+    static constexpr bool           BitOrder = bitset_type::bit_order();
+    std::vector<bool>               vec      = this->create_random_vector(this->get_random_size());
+    bounded_bitset<N, BitOrder>     bitmap(vec.begin(), vec.end());
+    bounded_bitset<N, not BitOrder> bitmap_reversed(vec.begin(), vec.end());
+
+    std::string str          = fmt::format("{:b}", bitmap);
+    std::string str_reverse  = fmt::format("{:br}", bitmap);
+    std::string str2         = fmt::format("{:b}", bitmap_reversed);
+    std::string str2_reverse = fmt::format("{:br}", bitmap_reversed);
+
+    ASSERT_TRUE(std::equal(str.begin(), str.end(), str_reverse.rbegin(), str_reverse.rend()));
+    ASSERT_TRUE(std::equal(str2.begin(), str2.end(), str2_reverse.rbegin(), str2_reverse.rend()));
+    ASSERT_EQ(str, str2_reverse);
+  }
+
+  void test_bit_positions_format_is_agnostic_to_reverse()
+  {
+    static constexpr size_t         N        = bitset_type::max_size();
+    static constexpr bool           BitOrder = bitset_type::bit_order();
+    std::vector<bool>               vec      = this->create_random_vector(this->get_random_size());
+    bounded_bitset<N, BitOrder>     bitmap(vec.begin(), vec.end());
+    bounded_bitset<N, not BitOrder> bitmap_reversed(vec.begin(), vec.end());
+
+    std::string str         = fmt::format("{:n}", bitmap);
+    std::string str_reverse = fmt::format("{:n}", bitmap_reversed);
+
+    ASSERT_EQ(str, str_reverse);
+  }
+
+  void test_hex_format_is_mirror_of_hex_format_reverse()
+  {
+    static constexpr size_t         N        = bitset_type::max_size();
+    static constexpr bool           BitOrder = bitset_type::bit_order();
+    std::vector<bool>               vec      = this->create_random_vector(this->get_random_size());
+    bounded_bitset<N, BitOrder>     bitmap(vec.begin(), vec.end());
+    bounded_bitset<N, not BitOrder> bitmap_reversed(vec.begin(), vec.end());
+
+    ASSERT_EQ(fmt::format("{:x}", bitmap), fmt::format("{:xr}", bitmap_reversed));
+    ASSERT_EQ(fmt::format("{:xr}", bitmap), fmt::format("{:x}", bitmap_reversed));
+  }
+
+  void test_push_back()
+  {
+    std::vector<bool> vec = this->create_random_vector(this->get_random_size());
+    bitset_type       bitmap;
+
+    unsigned count = 0;
+    for (bool v : vec) {
+      bitmap.push_back(v);
+      ASSERT_EQ(bitmap.size(), count + 1);
+      ASSERT_EQ(bitmap.test(count), v);
+      ++count;
+    }
+
+    ASSERT_EQ(bitmap.size(), vec.size());
+    std::vector<bool> actual(vec.size());
+    for (unsigned i = 0; i < vec.size(); ++i) {
+      actual[i] = bitmap.test(i);
+    }
+    ASSERT_EQ(actual, vec);
+  }
+
+  void test_push_back_multiple_bits()
+  {
+    std::vector<bool> vec      = this->create_random_vector(this->get_random_size());
+    const unsigned    bit_step = test_rng::uniform_int<unsigned>(1U, std::min(32U, (unsigned)vec.size()));
+    bitset_type       bitmap;
+
+    for (unsigned offset = 0; offset < vec.size(); offset += bit_step) {
+      unsigned nof_packed = std::min(bit_step, (unsigned)vec.size() - offset);
+      uint32_t to_pack    = 0;
+      for (unsigned i = 0; i != nof_packed; ++i) {
+        to_pack <<= 1;
+        to_pack |= vec[offset + i];
+      }
+      bitmap.push_back(to_pack, nof_packed);
+    }
+
+    ASSERT_EQ(bitmap.size(), vec.size());
+    std::vector<bool> actual(vec.size());
+    for (unsigned i = 0; i < vec.size(); ++i) {
+      actual[i] = bitmap.test(i);
+    }
+    ASSERT_EQ(actual, vec);
+  }
 };
 using bitset_types = ::testing::Types<bounded_bitset<25>,
                                       bounded_bitset<25, true>,
@@ -209,361 +443,33 @@ using bitset_types = ::testing::Types<bounded_bitset<25>,
                                       bounded_bitset<512, true>>;
 TYPED_TEST_SUITE(bounded_bitset_tester, bitset_types);
 
-TYPED_TEST(bounded_bitset_tester, all_zeros)
+// A single TYPED_TEST calling out-of-line test_* methods, rather than one TYPED_TEST per case, avoids
+// per-declaration gtest type-registration overhead and keeps the compiler from inlining every case's
+// body into one function, both large -O2 compile-memory costs across the 14 instantiated types.
+TYPED_TEST(bounded_bitset_tester, all_tests_combined)
 {
-  auto zero_mask = this->create_bitset_with_zeros(this->get_random_size());
-  ASSERT_GT(zero_mask.size(), 0);
-  ASSERT_EQ(0, zero_mask.count());
-  ASSERT_TRUE(zero_mask.none());
-  ASSERT_FALSE(zero_mask.any());
-  ASSERT_FALSE(zero_mask.all());
-}
-
-TYPED_TEST(bounded_bitset_tester, empty_bitset)
-{
-  auto zero_sized_mask = this->create_bitset_with_zeros(0);
-  ASSERT_EQ(this->max_size(), zero_sized_mask.max_size());
-  ASSERT_EQ(0, zero_sized_mask.size());
-  ASSERT_EQ(0, zero_sized_mask.count());
-  ASSERT_TRUE(zero_sized_mask.none());
-  ASSERT_FALSE(zero_sized_mask.any());
-  ASSERT_TRUE(zero_sized_mask.all());
-
-  zero_sized_mask.flip();
-  ASSERT_TRUE(zero_sized_mask.none()) << "Flipping empty bitset should be a no-op";
-  ASSERT_EQ(0, zero_sized_mask.size()) << "Flipping empty bitset should be a no-op";
-
-  auto zero_mask = this->create_bitset_with_zeros(this->get_random_size());
-  ASSERT_NE(zero_mask, zero_sized_mask);
-  zero_sized_mask.resize(zero_mask.size());
-  ASSERT_EQ(zero_mask, zero_sized_mask);
-}
-
-TYPED_TEST(bounded_bitset_tester, initializer_list_constructor)
-{
-  typename TestFixture::bitset_type bitmap = {true, true, true, true, false};
-  ASSERT_EQ(bitmap.size(), 5);
-  ASSERT_TRUE(bitmap.test(0));
-  ASSERT_TRUE(bitmap.test(1));
-  ASSERT_TRUE(bitmap.test(2));
-  ASSERT_TRUE(bitmap.test(3));
-  ASSERT_FALSE(bitmap.test(4));
-}
-
-TYPED_TEST(bounded_bitset_tester, iterator_constructor)
-{
-  std::vector<bool>                 data = this->create_random_vector(this->get_random_size());
-  typename TestFixture::bitset_type bitmap(data.begin(), data.end());
-  ASSERT_EQ(bitmap.size(), data.size());
-
-  for (unsigned i = 0; i != data.size(); ++i) {
-    ASSERT_EQ(data[i], bitmap.test(i));
-  }
-}
-
-TYPED_TEST(bounded_bitset_tester, all_ones)
-{
-  auto ones_bitmap = this->create_bitset_with_ones(this->get_random_size());
-
-  ASSERT_TRUE(ones_bitmap.all());
-  ASSERT_TRUE(ones_bitmap.any());
-  ASSERT_FALSE(ones_bitmap.none());
-  ASSERT_EQ(ones_bitmap.size(), ones_bitmap.count());
-}
-
-TYPED_TEST(bounded_bitset_tester, flip)
-{
-  auto bitmap          = this->create_random_bitset(this->get_random_size());
-  auto original_bitmap = bitmap;
-  bitmap.flip();
-
-  ASSERT_GT(bitmap.size(), 0);
-  ASSERT_EQ(bitmap.size(), original_bitmap.size());
-  for (unsigned i = 0; i != bitmap.size(); ++i) {
-    ASSERT_NE(bitmap.test(i), original_bitmap.test(i));
-  }
-}
-
-TYPED_TEST(bounded_bitset_tester, set_bit)
-{
-  std::vector<bool>                 data = this->create_random_vector(this->get_random_size());
-  typename TestFixture::bitset_type bitmap(data.size());
-  typename TestFixture::bitset_type expected_bitmap(data.begin(), data.end());
-
-  for (unsigned i = 0; i != data.size(); ++i) {
-    if (data[i]) {
-      bitmap.set(i);
-    }
-  }
-  ASSERT_EQ(bitmap, expected_bitmap) << fmt::format("failed {} != {}", bitmap, expected_bitmap);
-}
-
-TYPED_TEST(bounded_bitset_tester, bitwise_or)
-{
-  typename TestFixture::bitset_type bitmap       = this->create_random_bitset(this->get_random_size());
-  typename TestFixture::bitset_type zeros_bitmap = this->create_bitset_with_zeros(bitmap.size());
-  typename TestFixture::bitset_type ones_bitmap  = this->create_bitset_with_ones(bitmap.size());
-
-  ASSERT_EQ(bitmap | bitmap, bitmap);
-  ASSERT_EQ(bitmap | zeros_bitmap, bitmap);
-  ASSERT_EQ(zeros_bitmap | bitmap, bitmap);
-  ASSERT_EQ(bitmap | ones_bitmap, ones_bitmap);
-  ASSERT_EQ(ones_bitmap | bitmap, ones_bitmap);
-
-  auto flipped_bitmap = bitmap;
-  flipped_bitmap.flip();
-  ASSERT_EQ(flipped_bitmap | bitmap, this->create_bitset_with_ones(bitmap.size()));
-  ASSERT_EQ(bitmap | flipped_bitmap, this->create_bitset_with_ones(bitmap.size()));
-
-  bitmap |= flipped_bitmap;
-  ASSERT_EQ(bitmap, this->create_bitset_with_ones(bitmap.size()));
-}
-
-TYPED_TEST(bounded_bitset_tester, bitwise_and)
-{
-  typename TestFixture::bitset_type bitmap       = this->create_random_bitset(this->get_random_size());
-  typename TestFixture::bitset_type zeros_bitmap = this->create_bitset_with_zeros(bitmap.size());
-  typename TestFixture::bitset_type ones_bitmap  = this->create_bitset_with_ones(bitmap.size());
-
-  ASSERT_EQ(bitmap & bitmap, bitmap);
-  ASSERT_EQ(bitmap & zeros_bitmap, zeros_bitmap);
-  ASSERT_EQ(zeros_bitmap & bitmap, zeros_bitmap);
-  ASSERT_EQ(bitmap & ones_bitmap, bitmap);
-  ASSERT_EQ(ones_bitmap & bitmap, bitmap);
-
-  auto flipped_bitmap = bitmap;
-  flipped_bitmap.flip();
-  ASSERT_EQ(flipped_bitmap & bitmap, this->create_bitset_with_zeros(bitmap.size()));
-  ASSERT_EQ(bitmap & flipped_bitmap, this->create_bitset_with_zeros(bitmap.size()));
-
-  bitmap &= flipped_bitmap;
-  ASSERT_EQ(bitmap, this->create_bitset_with_zeros(bitmap.size()));
-}
-
-TYPED_TEST(bounded_bitset_tester, any_range)
-{
-  std::vector<bool>                 vec = this->create_random_vector(this->get_random_size());
-  typename TestFixture::bitset_type bitmap(vec.begin(), vec.end());
-
-  for (unsigned l = 1; l < vec.size(); ++l) {
-    for (unsigned i = 0; i < vec.size() - l; ++i) {
-      bool expected_val = false;
-      for (unsigned j = 0; j != l; ++j) {
-        if (vec[i + j]) {
-          expected_val = true;
-          break;
-        }
-      }
-      ASSERT_EQ(expected_val, bitmap.any(i, i + l))
-          << fmt::format("For bitmap={:x} of size={} in [{}, {})", bitmap, bitmap.size(), i, i + l);
-    }
-  }
-}
-
-TYPED_TEST(bounded_bitset_tester, all_range)
-{
-  std::vector<bool>                 vec = this->create_random_vector(this->get_random_size());
-  typename TestFixture::bitset_type bitmap(vec.begin(), vec.end());
-
-  for (unsigned l = 1; l < vec.size(); ++l) {
-    for (unsigned i = 0; i < vec.size() - l; ++i) {
-      bool expected_val = true;
-      for (unsigned j = 0; j != l; ++j) {
-        if (not vec[i + j]) {
-          expected_val = false;
-          break;
-        }
-      }
-      ASSERT_EQ(expected_val, bitmap.all(i, i + l))
-          << fmt::format("For bitmap={:x} of size={} in [{}, {})", bitmap, bitmap.size(), i, i + l);
-    }
-  }
-}
-
-TYPED_TEST(bounded_bitset_tester, fill_ones)
-{
-  unsigned   bitset_size  = this->get_random_size();
-  const auto zeros_bitmap = this->create_bitset_with_zeros(bitset_size);
-
-  for (unsigned l = 1; l < bitset_size; ++l) {
-    for (unsigned i = 0; i < bitset_size - l; ++i) {
-      auto bitmap = zeros_bitmap;
-      bitmap.fill(i, i + l);
-      ASSERT_FALSE(bitmap.any(0, i));
-      ASSERT_TRUE(bitmap.all(i, i + l)) << fmt::format(
-          "For bitmap={:x} of size={} in [{}, {})", bitmap, bitmap.size(), i, i + l);
-      ASSERT_FALSE(bitmap.any(i + l, bitset_size));
-    }
-  }
-}
-
-TYPED_TEST(bounded_bitset_tester, fill_zeros)
-{
-  unsigned   bitset_size = this->get_random_size();
-  const auto ones_bitmap = this->create_bitset_with_ones(bitset_size);
-
-  for (unsigned l = 1; l < bitset_size; ++l) {
-    for (unsigned i = 0; i < bitset_size - l; ++i) {
-      auto bitmap = ones_bitmap;
-      bitmap.fill(i, i + l, false);
-      ASSERT_TRUE(bitmap.all(0, i)) << fmt::format(
-          "For bitmap={:x} of size={} in [{}, {})", bitmap, bitmap.size(), i, i + l);
-      ASSERT_FALSE(bitmap.any(i, i + l));
-      ASSERT_TRUE(bitmap.all(i + l, bitset_size))
-          << fmt::format("For bitmap={:x} of size={} in [{}, {})", bitmap, bitmap.size(), i, i + l);
-    }
-  }
-}
-
-TYPED_TEST(bounded_bitset_tester, slice)
-{
-  using big_bitset_type                   = typename TestFixture::bitset_type;
-  unsigned                big_bitset_size = this->get_random_size();
-  const std::vector<bool> vec             = this->create_random_vector(big_bitset_size);
-  big_bitset_type         big_bitmap(vec.begin(), vec.end());
-
-  constexpr size_t N_small   = TestFixture::bitset_type::max_size() / 2;
-  using small_bitset_type    = bounded_bitset<N_small, big_bitset_type::bit_order()>;
-  unsigned small_bitset_size = test_rng::uniform_int<unsigned>(0, std::min((unsigned)N_small, big_bitset_size - 1));
-  unsigned offset            = test_rng::uniform_int<unsigned>(0, small_bitset_size);
-  unsigned end_offset        = test_rng::uniform_int<unsigned>(offset, small_bitset_size);
-
-  small_bitset_type small_bitmap = big_bitmap.template slice<N_small>(offset, end_offset);
-  ASSERT_EQ(end_offset - offset, small_bitmap.size());
-
-  for (unsigned i = 0; i != small_bitmap.size(); ++i) {
-    ASSERT_EQ(small_bitmap.test(i), big_bitmap.test(i + offset))
-        << fmt::format("For slice={} of size={} taken from [{}, {}) of big_bitmap={} of size={}, there is a mismatch "
-                       "in position {} ({}!={})",
-                       small_bitmap,
-                       small_bitmap.size(),
-                       offset,
-                       end_offset,
-                       big_bitmap,
-                       big_bitmap.size(),
-                       i,
-                       small_bitmap.test(i),
-                       big_bitmap.test(i + offset));
-  }
-}
-
-TYPED_TEST(bounded_bitset_tester, resize_keeps_existing_bit_values)
-{
-  const unsigned large_size   = this->get_random_size(2);
-  const unsigned smaller_size = this->get_random_size(1, large_size - 1);
-
-  auto ones_bitmap = this->create_bitset_with_ones(large_size);
-  ASSERT_EQ(ones_bitmap.count(), large_size);
-  ones_bitmap.resize(smaller_size);
-  ASSERT_EQ(ones_bitmap.count(), smaller_size);
-  ones_bitmap.resize(large_size);
-  ASSERT_EQ(ones_bitmap.count(), smaller_size);
-}
-
-TYPED_TEST(bounded_bitset_tester, copy_preserves_size_and_values)
-{
-  const unsigned size1 = this->get_random_size();
-  const unsigned size2 = this->get_random_size();
-
-  typename TestFixture::bitset_type bitset1 = this->create_random_bitset(size1);
-  typename TestFixture::bitset_type bitset2 = this->create_random_bitset(size2);
-
-  bitset2 = bitset1;
-  ASSERT_EQ(bitset1, bitset2);
-}
-
-TYPED_TEST(bounded_bitset_tester, binary_format_is_mirror_of_binary_format_reverse)
-{
-  static constexpr size_t         N        = TestFixture::bitset_type::max_size();
-  static constexpr bool           BitOrder = TestFixture::bitset_type::bit_order();
-  std::vector<bool>               vec      = this->create_random_vector(this->get_random_size());
-  bounded_bitset<N, BitOrder>     bitmap(vec.begin(), vec.end());
-  bounded_bitset<N, not BitOrder> bitmap_reversed(vec.begin(), vec.end());
-
-  std::string str          = fmt::format("{:b}", bitmap);
-  std::string str_reverse  = fmt::format("{:br}", bitmap);
-  std::string str2         = fmt::format("{:b}", bitmap_reversed);
-  std::string str2_reverse = fmt::format("{:br}", bitmap_reversed);
-
-  ASSERT_TRUE(std::equal(str.begin(), str.end(), str_reverse.rbegin(), str_reverse.rend()));
-  ASSERT_TRUE(std::equal(str2.begin(), str2.end(), str2_reverse.rbegin(), str2_reverse.rend()));
-  ASSERT_EQ(str, str2_reverse);
-}
-
-TYPED_TEST(bounded_bitset_tester, bit_positions_format_is_agnostic_to_reverse)
-{
-  static constexpr size_t         N        = TestFixture::bitset_type::max_size();
-  static constexpr bool           BitOrder = TestFixture::bitset_type::bit_order();
-  std::vector<bool>               vec      = this->create_random_vector(this->get_random_size());
-  bounded_bitset<N, BitOrder>     bitmap(vec.begin(), vec.end());
-  bounded_bitset<N, not BitOrder> bitmap_reversed(vec.begin(), vec.end());
-
-  std::string str         = fmt::format("{:n}", bitmap);
-  std::string str_reverse = fmt::format("{:n}", bitmap_reversed);
-
-  ASSERT_EQ(str, str_reverse);
-}
-
-TYPED_TEST(bounded_bitset_tester, hex_format_is_mirror_of_hex_format_reverse)
-{
-  static constexpr size_t         N        = TestFixture::bitset_type::max_size();
-  static constexpr bool           BitOrder = TestFixture::bitset_type::bit_order();
-  std::vector<bool>               vec      = this->create_random_vector(this->get_random_size());
-  bounded_bitset<N, BitOrder>     bitmap(vec.begin(), vec.end());
-  bounded_bitset<N, not BitOrder> bitmap_reversed(vec.begin(), vec.end());
-
-  std::string str          = fmt::format("{:b}", bitmap);
-  std::string str_reverse  = fmt::format("{:br}", bitmap);
-  std::string str2         = fmt::format("{:b}", bitmap_reversed);
-  std::string str2_reverse = fmt::format("{:br}", bitmap_reversed);
-
-  ASSERT_EQ(str_reverse, str_reverse);
-  ASSERT_EQ(str, str2_reverse);
-}
-
-TYPED_TEST(bounded_bitset_tester, push_back)
-{
-  std::vector<bool>                 vec = this->create_random_vector(this->get_random_size());
-  typename TestFixture::bitset_type bitmap;
-
-  unsigned count = 0;
-  for (bool v : vec) {
-    bitmap.push_back(v);
-    ASSERT_EQ(bitmap.size(), count + 1);
-    ASSERT_EQ(bitmap.test(count), v);
-    ++count;
-  }
-
-  ASSERT_EQ(bitmap.size(), vec.size());
-  std::vector<bool> actual(vec.size());
-  for (unsigned i = 0; i < vec.size(); ++i) {
-    actual[i] = bitmap.test(i);
-  }
-  ASSERT_EQ(actual, vec);
-}
-
-TYPED_TEST(bounded_bitset_tester, push_back_multiple_bits)
-{
-  std::vector<bool>                 vec      = this->create_random_vector(this->get_random_size());
-  const unsigned                    bit_step = test_rng::uniform_int<unsigned>(1U, std::min(32U, (unsigned)vec.size()));
-  typename TestFixture::bitset_type bitmap;
-
-  for (unsigned offset = 0; offset < vec.size(); offset += bit_step) {
-    unsigned nof_packed = std::min(bit_step, (unsigned)vec.size() - offset);
-    uint32_t to_pack    = 0;
-    for (unsigned i = 0; i != nof_packed; ++i) {
-      to_pack <<= 1;
-      to_pack |= vec[offset + i];
-    }
-    bitmap.push_back(to_pack, nof_packed);
-  }
-
-  ASSERT_EQ(bitmap.size(), vec.size());
-  std::vector<bool> actual(vec.size());
-  for (unsigned i = 0; i < vec.size(); ++i) {
-    actual[i] = bitmap.test(i);
-  }
-  ASSERT_EQ(actual, vec);
+  this->test_all_zeros();
+  this->test_empty_bitset();
+  this->test_initializer_list_constructor();
+  this->test_iterator_constructor();
+  this->test_all_ones();
+  this->test_flip();
+  this->test_set_bit();
+  this->test_bitwise_or();
+  this->test_bitwise_and();
+  this->test_any_range();
+  this->test_all_range();
+  this->test_is_subset_of();
+  this->test_fill_ones();
+  this->test_fill_zeros();
+  this->test_slice();
+  this->test_resize_keeps_existing_bit_values();
+  this->test_copy_preserves_size_and_values();
+  this->test_binary_format_is_mirror_of_binary_format_reverse();
+  this->test_bit_positions_format_is_agnostic_to_reverse();
+  this->test_hex_format_is_mirror_of_hex_format_reverse();
+  this->test_push_back();
+  this->test_push_back_multiple_bits();
 }
 
 TEST(bounded_bitset_test, bitset_integer_conversion_consistent_with_std_bitset)
@@ -656,8 +562,8 @@ TEST(bounded_bitset_test, one_word_bitset_format)
   ASSERT_EQ(fmt::format("{:br}", bitset), "10000100000000000000000");
   ASSERT_EQ(fmt::format("{:x}", bitset), "000021");
   ASSERT_EQ(fmt::format("{:xr}", bitset), "420000");
-  ASSERT_EQ(fmt::format("{:n}", bitset), "0 5");
-  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "0 5");
+  ASSERT_EQ(fmt::format("{:n}", bitset), "[0, 5]");
+  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "[0, 5]");
   ASSERT_EQ(fmt::format("{:b}", bitset), fmt::format("{:br}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:br}", bitset), fmt::format("{:b}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:x}", bitset), fmt::format("{:xr}", bitset_reversed));
@@ -670,8 +576,8 @@ TEST(bounded_bitset_test, one_word_bitset_format)
   ASSERT_EQ(fmt::format("{:br}", bitset), "10000100000000000000001");
   ASSERT_EQ(fmt::format("{:x}", bitset), "400021");
   ASSERT_EQ(fmt::format("{:xr}", bitset), "420001");
-  ASSERT_EQ(fmt::format("{:n}", bitset), "0 5 22");
-  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "0 5 22");
+  ASSERT_EQ(fmt::format("{:n}", bitset), "[0, 5, 22]");
+  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "[0, 5, 22]");
   ASSERT_EQ(fmt::format("{:b}", bitset), fmt::format("{:br}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:br}", bitset), fmt::format("{:b}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:x}", bitset), fmt::format("{:xr}", bitset_reversed));
@@ -745,8 +651,8 @@ TEST(bounded_bitset_test, contiguous_bitset_format)
   ASSERT_EQ(fmt::format("{:br}", bitset), "010011011");
   ASSERT_EQ(fmt::format("{:x}", bitset), "1b2");
   ASSERT_EQ(fmt::format("{:xr}", bitset), "09b");
-  ASSERT_EQ(fmt::format("{:n}", bitset), "1 4 5 7 8");
-  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "1 4 5 7 8");
+  ASSERT_EQ(fmt::format("{:n}", bitset), "[1, 4, 5, 7, 8]");
+  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "[1, 4, 5, 7, 8]");
   ASSERT_EQ(fmt::format("{:i}", bitset), "{1, [4, 6), [7, 9)}");
   ASSERT_EQ(fmt::format("{:i}", bitset_reversed), "{1, [4, 6), [7, 9)}");
   ASSERT_EQ(fmt::format("{:b}", bitset), fmt::format("{:br}", bitset_reversed));
@@ -772,8 +678,8 @@ TEST(bounded_bitset_test, two_word_bitset_format)
             "1000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
   ASSERT_EQ(fmt::format("{:x}", bitset), "0000000000000000000000021");
   ASSERT_EQ(fmt::format("{:xr}", bitset), "8400000000000000000000000");
-  ASSERT_EQ(fmt::format("{:n}", bitset), "0 5");
-  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "0 5");
+  ASSERT_EQ(fmt::format("{:n}", bitset), "[0, 5]");
+  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "[0, 5]");
   ASSERT_EQ(fmt::format("{:b}", bitset), fmt::format("{:br}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:br}", bitset), fmt::format("{:b}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:x}", bitset), fmt::format("{:xr}", bitset_reversed));
@@ -788,8 +694,8 @@ TEST(bounded_bitset_test, two_word_bitset_format)
             "1000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001");
   ASSERT_EQ(fmt::format("{:x}", bitset), "8000000000000000000000021");
   ASSERT_EQ(fmt::format("{:xr}", bitset), "8400000000000000000000001");
-  ASSERT_EQ(fmt::format("{:n}", bitset), "0 5 99");
-  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "0 5 99");
+  ASSERT_EQ(fmt::format("{:n}", bitset), "[0, 5, 99]");
+  ASSERT_EQ(fmt::format("{:n}", bitset_reversed), "[0, 5, 99]");
   ASSERT_EQ(fmt::format("{:b}", bitset), fmt::format("{:br}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:br}", bitset), fmt::format("{:b}", bitset_reversed));
   ASSERT_EQ(fmt::format("{:x}", bitset), fmt::format("{:xr}", bitset_reversed));

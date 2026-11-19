@@ -3,7 +3,9 @@
 
 #include "ocudu/ocuduvec/compare.h"
 #include "ocudu/ocuduvec/simd.h"
-#include "ocudu/support/math/math_utils.h"
+#include "ocudu/support/math/complex_math_utils.h"
+#include <array>
+#include <cmath>
 #include <numeric>
 
 using namespace ocudu;
@@ -134,6 +136,60 @@ std::pair<unsigned, float> ocudu::ocuduvec::max_abs_element(span<const cf_t> x)
   return {max_index, max_abs2};
 }
 
+std::pair<unsigned, float> ocudu::ocuduvec::max_abs_element(span<const ci16_t> x, float scale)
+{
+  unsigned i         = 0;
+  unsigned len       = x.size();
+  unsigned max_index = 0;
+  uint64_t max_abs2  = 0;
+
+#if OCUDU_SIMD_CI16_SIZE
+  alignas(SIMD_BYTE_ALIGN) std::array<int32_t, OCUDU_SIMD_CI16_SIZE> simd_vector_max_indexes;
+  std::iota(simd_vector_max_indexes.begin(), simd_vector_max_indexes.end(), 0);
+  simd_i_t simd_indexes     = ocudu_simd_i_load(simd_vector_max_indexes.data());
+  simd_i_t simd_inc         = ocudu_simd_i_set1(OCUDU_SIMD_CI16_SIZE);
+  simd_i_t simd_max_indexes = ocudu_simd_i_set1(0);
+  simd_i_t simd_max_values  = ocudu_simd_i_set1(0);
+
+  for (unsigned simd_end = OCUDU_SIMD_CI16_SIZE * (len / OCUDU_SIMD_CI16_SIZE); i != simd_end;
+       i += OCUDU_SIMD_CI16_SIZE) {
+    simd_i16_t simd_v    = ocudu_simd_ci16_loadu(x.data() + i);
+    simd_i_t   simd_abs2 = ocudu_simd_ci16_norm_sq(simd_v);
+    simd_sel_t res       = ocudu_simd_u32_max(simd_abs2, simd_max_values);
+
+    simd_max_indexes = ocudu_simd_i_select(simd_max_indexes, simd_indexes, res);
+    simd_max_values  = ocudu_simd_i_select(simd_max_values, simd_abs2, res);
+    simd_indexes     = ocudu_simd_i_add(simd_indexes, simd_inc);
+  }
+
+  alignas(SIMD_BYTE_ALIGN) std::array<int32_t, OCUDU_SIMD_CI16_SIZE> simd_vector_max_values;
+  ocudu_simd_i_store(simd_vector_max_indexes.data(), simd_max_indexes);
+  ocudu_simd_i_store(simd_vector_max_values.data(), simd_max_values);
+
+  for (unsigned lane = 0; lane != OCUDU_SIMD_CI16_SIZE; ++lane) {
+    uint64_t lane_abs2 = static_cast<uint32_t>(simd_vector_max_values[lane]);
+    if (lane_abs2 > max_abs2) {
+      max_index = simd_vector_max_indexes[lane];
+      max_abs2  = lane_abs2;
+    }
+  }
+#endif // OCUDU_SIMD_CI16_SIZE
+
+  for (; i != len; ++i) {
+    int32_t  re = x[i].real();
+    int32_t  im = x[i].imag();
+    uint64_t abs2 =
+        static_cast<uint64_t>(re) * static_cast<uint64_t>(re) + static_cast<uint64_t>(im) * static_cast<uint64_t>(im);
+    if (abs2 > max_abs2) {
+      max_index = i;
+      max_abs2  = abs2;
+    }
+  }
+
+  float scale_sq = scale * scale;
+  return {max_index, static_cast<float>(max_abs2) / scale_sq};
+}
+
 std::pair<unsigned, float> ocudu::ocuduvec::max_element(span<const float> x)
 {
   unsigned i         = 0;
@@ -237,5 +293,50 @@ unsigned ocudu::ocuduvec::count_if_part_abs_greater_than(span<const ocudu::cf_t>
 
   return count + std::count_if(x.begin(), x.end(), [threshold](cf_t sample) {
            return (std::abs(sample.real()) > threshold) || (std::abs(sample.imag()) > threshold);
+         });
+}
+
+unsigned
+ocudu::ocuduvec::count_if_part_abs_greater_than(span<const ci16_t> x, float normalized_part_threshold, float scale)
+{
+  int32_t part_threshold = static_cast<int32_t>(std::lround(normalized_part_threshold * scale));
+
+  unsigned count = 0;
+
+#ifdef __AVX2__
+  __m256i avx_count         = _mm256_setzero_si256();
+  __m256i avx_threshold     = _mm256_set1_epi16(part_threshold);
+  __m256i avx_neg_threshold = _mm256_set1_epi16(static_cast<int16_t>(-part_threshold));
+  __m256i avx_ones          = _mm256_set1_epi32(1);
+
+  for (unsigned i = 0, simd_end = 8 * (x.size() / 8); i != simd_end; i += 8) {
+    // Load input.
+    __m256i in = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x.data()));
+
+    // Checks if the real or imaginary parts exceeded the threshold (|x| > t  <=>  x > t || x < -t).
+    __m256i pos_mask   = _mm256_cmpgt_epi16(in, avx_threshold);
+    __m256i neg_mask   = _mm256_cmpgt_epi16(avx_neg_threshold, in);
+    __m256i cmpgt_mask = _mm256_or_si256(pos_mask, neg_mask);
+
+    // Combine real and imaginary parts into one mask.
+    __m256i combined_mask = _mm256_or_si256(cmpgt_mask, _mm256_srli_si256(cmpgt_mask, 2));
+
+    // Increment count.
+    avx_count = _mm256_add_epi32(avx_count, _mm256_and_si256(combined_mask, avx_ones));
+
+    // Advance input.
+    x = x.last(x.size() - 8);
+  }
+
+  // Store the resultant count in a vector.
+  std::array<int, 8> count_vector;
+  _mm256_storeu_si256(reinterpret_cast<__m256i*>(count_vector.data()), avx_count);
+
+  // Sum values in the vector.
+  count = std::accumulate(count_vector.begin(), count_vector.end(), count);
+#endif // __AVX2__
+
+  return count + std::count_if(x.begin(), x.end(), [part_threshold](ci16_t sample) {
+           return (std::abs(sample.real()) > part_threshold) || (std::abs(sample.imag()) > part_threshold);
          });
 }

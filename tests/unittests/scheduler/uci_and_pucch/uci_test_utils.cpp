@@ -30,9 +30,8 @@ test_helpers::make_pucch_info(const cell_configuration& cell_cfg, const pucch_re
     } break;
     case pucch_format::FORMAT_1: {
       info.format_params.emplace<pucch_info::f1_config>(pucch_info::f1_config{
-          .group_hopping   = pucch_group_hopping::NEITHER,
-          .n_id_hopping    = cell_cfg.params.pci,
-          .slot_repetition = pucch_repetition_tx_slot::no_multi_slot,
+          .group_hopping = pucch_group_hopping::NEITHER,
+          .n_id_hopping  = cell_cfg.params.pci,
       });
     } break;
     case pucch_format::FORMAT_2: {
@@ -46,7 +45,6 @@ test_helpers::make_pucch_info(const cell_configuration& cell_cfg, const pucch_re
       info.format_params.emplace<pucch_info::f3_config>(pucch_info::f3_config{
           .group_hopping     = pucch_group_hopping::NEITHER,
           .n_id_hopping      = cell_cfg.params.pci,
-          .slot_repetition   = pucch_repetition_tx_slot::no_multi_slot,
           .n_id_scrambling   = cell_cfg.params.pci,
           .n_id_0_scrambling = cell_cfg.params.pci,
           .nof_prbs          = std::get<pucch_resource::f3_config>(res.format_params).nof_prbs,
@@ -56,7 +54,6 @@ test_helpers::make_pucch_info(const cell_configuration& cell_cfg, const pucch_re
       info.format_params.emplace<pucch_info::f4_config>(pucch_info::f4_config{
           .group_hopping     = pucch_group_hopping::NEITHER,
           .n_id_hopping      = cell_cfg.params.pci,
-          .slot_repetition   = pucch_repetition_tx_slot::no_multi_slot,
           .n_id_scrambling   = cell_cfg.params.pci,
           .n_id_0_scrambling = cell_cfg.params.pci,
       });
@@ -69,10 +66,21 @@ test_helpers::make_pucch_info(const cell_configuration& cell_cfg, const pucch_re
   return info;
 }
 
+std::vector<const pucch_info*> test_helpers::find_ue_pucchs(span<const pucch_info> pucch_pdus, rnti_t rnti)
+{
+  std::vector<const pucch_info*> ue_pucchs;
+  for (const pucch_info& pucch : pucch_pdus) {
+    if (pucch.crnti == rnti) {
+      ue_pucchs.push_back(&pucch);
+    }
+  }
+  return ue_pucchs;
+}
+
 bool ocudu::pucch_info_match(const pucch_info& expected, const pucch_info& test)
 {
   bool is_equal = expected.crnti == test.crnti && *expected.bwp_cfg == *test.bwp_cfg && *expected.res == *test.res &&
-                  expected.format() == test.format();
+                  expected.format() == test.format() && expected.repetition == test.repetition;
   if (not is_equal) {
     return false;
   }
@@ -90,8 +98,7 @@ bool ocudu::pucch_info_match(const pucch_info& expected, const pucch_info& test)
       const auto& test_f     = std::get<pucch_info::f1_config>(test.format_params);
       is_equal               = is_equal && expected_f.group_hopping == test_f.group_hopping &&
                  expected_f.n_id_hopping == test_f.n_id_hopping && expected.uci_bits.sr_bits == test.uci_bits.sr_bits &&
-                 expected.uci_bits.harq_ack_nof_bits == test.uci_bits.harq_ack_nof_bits &&
-                 expected_f.slot_repetition == test_f.slot_repetition;
+                 expected.uci_bits.harq_ack_nof_bits == test.uci_bits.harq_ack_nof_bits;
     } break;
     case pucch_format::FORMAT_2: {
       const auto& expected_f = std::get<pucch_info::f2_config>(expected.format_params);
@@ -110,7 +117,6 @@ bool ocudu::pucch_info_match(const pucch_info& expected, const pucch_info& test)
                  expected.uci_bits.sr_bits == test.uci_bits.sr_bits &&
                  expected.uci_bits.harq_ack_nof_bits == test.uci_bits.harq_ack_nof_bits &&
                  expected.uci_bits.csi_part1_nof_bits == test.uci_bits.csi_part1_nof_bits &&
-                 expected_f.slot_repetition == test_f.slot_repetition &&
                  expected_f.n_id_scrambling == test_f.n_id_scrambling &&
                  expected_f.n_id_0_scrambling == test_f.n_id_0_scrambling;
     } break;
@@ -121,7 +127,6 @@ bool ocudu::pucch_info_match(const pucch_info& expected, const pucch_info& test)
                  expected_f.n_id_hopping == test_f.n_id_hopping && expected.uci_bits.sr_bits == test.uci_bits.sr_bits &&
                  expected.uci_bits.harq_ack_nof_bits == test.uci_bits.harq_ack_nof_bits &&
                  expected.uci_bits.csi_part1_nof_bits == test.uci_bits.csi_part1_nof_bits &&
-                 expected_f.slot_repetition == test_f.slot_repetition &&
                  expected_f.n_id_scrambling == test_f.n_id_scrambling &&
                  expected_f.n_id_0_scrambling == test_f.n_id_0_scrambling;
     } break;
@@ -147,7 +152,7 @@ static cell_config_builder_params make_custom_cell_config_builder_params(const t
                                                                            .nof_dl_slots              = 6,
                                                                            .nof_dl_symbols            = 8,
                                                                            .nof_ul_slots              = 3,
-                                                                           .nof_ul_symbols            = 0},
+                                                                           .nof_ul_symbols = params.tdd_nof_ul_symbols},
                                                               .pattern2 = std::nullopt};
   }
 
@@ -198,18 +203,19 @@ test_bench::test_bench(const test_bench_params& params_) :
   }()),
   cfg_mng(make_custom_cell_config_builder_params(params), expert_cfg),
   cell_cfg(*cfg_mng.add_cell(make_custom_sched_cell_configuration_request(params))),
+  cell_ues(cell_cfg, nullptr),
   ues(expert_cfg.ue),
-  cell_ues(ues.add_cell(cell_cfg, nullptr)),
   pucch_builder(cell_cfg.expert_cfg.ue.max_pucchs_per_slot),
   res_grid(cell_cfg),
   k0(cell_cfg.params.dl_cfg_common.init_dl_bwp.pdsch_common.pdsch_td_alloc_list[0].k0),
   dci_info{make_default_dci(params.n_cces, &cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.coreset0.value())},
   pucch_alloc{cell_cfg, params.max_pucchs_per_slot, params.max_ul_grants_per_slot},
   uci_alloc(cell_cfg, pucch_alloc),
-  uci_sched{cell_cfg, uci_alloc, ues},
+  uci_sched{cell_cfg, uci_alloc, cell_ues},
   sl_tx{to_numerology_value(cell_cfg.params.dl_cfg_common.init_dl_bwp.generic_params.scs), 0}
 {
-  pucch_builder.setup(cell_cfg.params);
+  ues.register_cell(cell_ues);
+  pucch_builder.add_cell(to_du_cell_index(0), cell_cfg.params);
 
   // Add main UE.
   add_ue();
@@ -242,8 +248,11 @@ void test_bench::add_ue()
     ue_req.crnti = to_rnti(static_cast<std::underlying_type_t<rnti_t>>(ue_ded_cfgs.back()->crnti) + 1);
   }
 
-  const bool success = pucch_builder.add_build_new_ue_pucch_cfg(ue_req.cfg.cells->back());
+  const bool success = pucch_builder.alloc_resources(ue_req.cfg.cells->back());
   ocudu_assert(success, "UE PUCCH configuration couldn't be built");
+  if (params.ue_caps.has_value()) {
+    pucch_builder.update_resources(ue_req.cfg.cells->back(), *params.ue_caps);
+  }
 
   // TODO: rewrite this test, we should never modify the UE cell config like this in unittests.
   ue_req.cfg.cells->back().init_bwp().ul.pucch.sr_offset                                         = params.sr_offset;
@@ -255,10 +264,12 @@ void test_bench::add_ue()
     csi_report.report_slot_offset = params.csi_offset;
   }
 
+  ue_req.cfg.meas_gap_cfg = params.meas_gap;
+
   const ue_configuration* ue_cfg = cfg_mng.add_ue(ue_req);
   ocudu_assert(ue_cfg != nullptr, "Failed to create UE configuration");
   ue_ded_cfgs.push_back(ue_cfg);
-  ues.add_ue(*ue_ded_cfgs.back(), ue_req.starts_in_fallback, ue_req.ul_ccch_slot_rx, ue_req.cfra_enabled);
+  ues.add_ue(*ue_ded_cfgs.back(), {sched_config_helper::to_ue_creation_mode(ue_req), ue_req.ul_ccch_slot_rx});
   uci_sched.add_ue(ues[ue_req.ue_index].get_pcell().cfg());
 
   last_added_ue_idx  = ue_req.ue_index;

@@ -5,6 +5,7 @@
 #include "config_generators.h"
 #include "lib/scheduler/logging/scheduler_metrics_ue_configurator.h"
 #include "tests/test_doubles/scheduler/scheduler_config_helper.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 using namespace test_helpers;

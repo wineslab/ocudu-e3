@@ -7,9 +7,12 @@
 #include "ocudu/ran/nr_band.h"
 #include "ocudu/ran/pdcch/search_space.h"
 #include "ocudu/ran/sib/sib_configuration.h"
-#include "ocudu/ran/ssb/ssb_configuration.h"
 #include "ocudu/ran/subcarrier_spacing.h"
 #include <vector>
+
+namespace ocudu {
+struct ssb_configuration;
+} // namespace ocudu
 
 namespace ocudu::sib_helper {
 

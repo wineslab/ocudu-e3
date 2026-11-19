@@ -14,6 +14,7 @@ class pdcch_resource_allocator;
 class pucch_allocator;
 class uci_allocator;
 class cell_metrics_handler;
+class ra_ue_repository;
 struct cell_resource_allocator;
 struct pdcch_dl_information;
 struct pdcch_ul_information;
@@ -31,6 +32,7 @@ public:
                                  pucch_allocator&      pucch_alloc_,
                                  uci_allocator&        uci_alloc_,
                                  ue_repository&        ues_,
+                                 ra_ue_repository&     ra_ue_repo_,
                                  cell_metrics_handler& metrics_);
 
   /// Handles DL buffer state reported by upper layers.
@@ -161,8 +163,7 @@ private:
   const pdsch_time_domain_resource_allocation& get_pdsch_td_cfg(unsigned pdsch_time_res_idx) const;
 
   // Returns the PDSCH time resource index that is suitable for a given PDSCH configuration.
-  std::optional<unsigned> get_pdsch_time_res_idx(const pdsch_config_common&                   pdsch_cfg,
-                                                 slot_point                                   sl_tx,
+  std::optional<unsigned> get_pdsch_time_res_idx(slot_point                                   sl_tx,
                                                  const std::optional<dl_harq_process_handle>& h_dl_retx) const;
 
   /// Class that keeps track of the UEs' that are waiting for the SRB HARQ processes to be ACKed or retransmitted.
@@ -207,6 +208,7 @@ private:
   pucch_allocator&          pucch_alloc;
   uci_allocator&            uci_alloc;
   ue_repository&            ues;
+  ra_ue_repository&         ra_ue_repo;
   cell_metrics_handler&     metrics;
 
   bwp_configuration initial_active_dl_bwp;

@@ -8,6 +8,7 @@
 #include "../../ue_manager/ue_manager_impl.h"
 #include "conditional_handover_reconfiguration_routine.h"
 #include "intra_cu_handover_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/xnap/xnap_handover.h"
 
 using namespace ocudu;
@@ -134,6 +135,13 @@ std::vector<async_task<cu_cp_cho_candidate>> conditional_handover_coordinator_ro
       continue;
     }
 
+    if (!target.ssb_arfcn.has_value()) {
+      logger.warning("ue={}: CHO inter-CU candidate skipped: no SSB ARFCN for pci={}, cannot derive its key",
+                     request.source_ue_index,
+                     target.pci);
+      continue;
+    }
+
     xnap_interface* xnap = xnap_db->find_xnap(*target.xnc_index);
     if (xnap == nullptr) {
       logger.warning("ue={}: CHO inter-CU candidate skipped: XNAP not found for xnc_index={}",
@@ -147,8 +155,9 @@ std::vector<async_task<cu_cp_cho_candidate>> conditional_handover_coordinator_ro
         target.cgi,
         served_guami.value(),
         source_amf_ue_id,
+        ngap_ctxt.amf_addr,
         ue->get_ue_ambr(),
-        ue->get_security_manager().get_security_context(),
+        ue->get_security_manager().get_handover_security_context(target.pci, target.ssb_arfcn->value()),
         ue->get_up_resource_manager().get_pdu_sessions_map(),
         ue->get_rrc_ue()->get_rrc_ue_control_message_handler().get_packed_handover_preparation_message(),
         ue->get_location_manager().get_location_reporting_request());
@@ -202,6 +211,12 @@ void conditional_handover_coordinator_routine::operator()(coro_context<async_tas
   source_ue = ue_mng.find_du_ue(request.source_ue_index);
   if (source_ue == nullptr || !source_ue->get_cho_context().has_value()) {
     logger.warning("ue={}: CHO coordinator failed. Source UE/CHO context missing", request.source_ue_index);
+    CORO_EARLY_RETURN(response);
+  }
+
+  // Checked once here, not per candidate: the security context belongs to the UE, not to a candidate cell.
+  if (!source_ue->get_security_manager().is_security_context_initialized()) {
+    logger.warning("ue={}: CHO coordinator failed. Security context not initialized", request.source_ue_index);
     CORO_EARLY_RETURN(response);
   }
 

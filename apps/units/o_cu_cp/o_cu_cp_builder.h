@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "apps/helpers/e2/e2_metric_connector_manager.h"
 #include "apps/services/metrics/metrics_config.h"
 #include "apps/units/application_unit_commands.h"
 #include "o_cu_cp_unit_impl.h"
@@ -20,19 +19,16 @@ class remote_server_metrics_gateway;
 } // namespace app_services
 
 namespace ocucp {
-class n2_connection_client;
 class cu_cp_executor_mapper;
 } // namespace ocucp
 
 class dlt_pcap;
 class io_broker;
 struct o_cu_cp_unit_config;
-struct worker_manager;
 
 template <typename ConnectorType, typename NotifierType, typename InterfaceType>
 class e2_metric_connector_manager;
 class e2_connection_client;
-class e2_gateway_remote_connector;
 
 /// O-RAN CU-CP build dependencies.
 struct o_cu_cp_unit_dependencies {
@@ -54,6 +50,6 @@ struct o_cu_cp_unit {
 };
 
 /// Builds an O-RAN CU-CP unit with the given configuration and dependencies.
-o_cu_cp_unit build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_unit_dependencies& dependencies);
+o_cu_cp_unit build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, const o_cu_cp_unit_dependencies& dependencies);
 
 } // namespace ocudu

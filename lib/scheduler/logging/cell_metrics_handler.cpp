@@ -6,6 +6,7 @@
 #include "../config/cell_configuration.h"
 #include "../uci_scheduling/uci_indication_selector.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/prach/rach_config_common.h"
 #include "ocudu/ran/resource_allocation/rb_bitmap.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/scheduler/result/sched_result.h"
@@ -48,9 +49,12 @@ cell_metrics_handler::cell_metrics_handler(
   }
 
   // Pre-reserve space.
-  ues.reserve(MAX_NOF_DU_UES);
-  rnti_to_ue_index_lookup.reserve(MAX_NOF_DU_UES);
-  const unsigned pre_reserved_event_capacity = std::min(3U * MAX_NOF_DU_UES, metrics_cfg->max_ue_events_per_report);
+  // Note: The metrics of a UE are addressed by DU UE index, which is not bounded by the number of UE contexts of the
+  // cell, so the range of indexes is reserved separately.
+  ues.reserve(cell_cfg.max_nof_ue_contexts, MAX_NOF_DU_UES);
+  rnti_to_ue_index_lookup.reserve(cell_cfg.max_nof_ue_contexts);
+  const unsigned pre_reserved_event_capacity =
+      std::min(3U * cell_cfg.max_nof_ue_contexts, metrics_cfg->max_ue_events_per_report);
   pending_events.reserve(pre_reserved_event_capacity);
   unsigned tdd_period_slots = cell_cfg.is_tdd() ? nof_slots_per_tdd_period(*cell_cfg.params.tdd_cfg) : 0U;
   ul_prbs_used_per_tdd_slot_idx.resize(tdd_period_slots);
@@ -121,15 +125,21 @@ void cell_metrics_handler::handle_ue_deletion(du_ue_index_t ue_index)
   }
 }
 
-void cell_metrics_handler::handle_rach_indication(const rach_indication_message& msg, slot_point sl_tx)
+void cell_metrics_handler::handle_rach_indication(const rach_indication_message& msg)
 {
   if (not enabled()) {
     return;
   }
-  unsigned slot_diff = sl_tx - msg.slot_rx;
+  const rach_config_common& rach_cfg  = *cell_cfg.init_bwp.ul.rach_common();
+  const unsigned            slot_diff = last_slot_tx.valid() ? last_slot_tx.without_hyper_sfn() - msg.slot_rx : 0;
   for (const auto& occ : msg.occasions) {
-    data.nof_prach_preambles += occ.preambles.size();
+    data.total_prach_preambles += occ.preambles.size();
     data.sum_prach_delay_slots += slot_diff * occ.preambles.size();
+    for (const auto& preamble : occ.preambles) {
+      if (ra_helper::is_msga_cb_preamble(rach_cfg, static_cast<uint8_t>(preamble.preamble_id))) {
+        ++data.two_step_prachs_detected;
+      }
+    }
   }
 }
 
@@ -152,6 +162,14 @@ void cell_metrics_handler::handle_conres_timer_expired()
     return;
   }
   data.nof_conres_timer_expired++;
+}
+
+void cell_metrics_handler::handle_conres_ce_never_acked()
+{
+  if (not enabled()) {
+    return;
+  }
+  data.nof_conres_ce_never_acked++;
 }
 
 void cell_metrics_handler::handle_crc_indication(slot_point                   sl_rx,
@@ -406,13 +424,12 @@ void cell_metrics_handler::report_metrics()
   auto next_report = notifier.get_builder();
 
   const std::chrono::milliseconds report_period{data.nof_slots / last_slot_tx.nof_slots_per_subframe()};
-  if (report_ue_metrics) {
-    for (ue_metric_context& ue : ues) {
-      // Compute statistics of the UE metrics and push the result to the report. This includes the final report of UEs
-      // that were removed during this report period.
-      next_report->ue_metrics.push_back(ue.compute_report(report_period, nof_slots_per_sf));
-    }
+  for (ue_metric_context& ue : ues) {
+    // Compute statistics of the UE metrics and push the result to the report. This includes the final report of UEs
+    // that were removed during this report period.
+    next_report->ue_metrics.push_back(ue.compute_report(report_period, nof_slots_per_sf));
   }
+  next_report->report_ue_metrics = report_ue_metrics;
   // Now that their final metrics have been reported, erase the UEs that were removed during this report period.
   for (auto it = ues.begin(); it != ues.end();) {
     if (it->pending_removal) {
@@ -432,27 +449,30 @@ void cell_metrics_handler::report_metrics()
   next_report->nof_error_indications = data.error_indication_counter;
   next_report->average_decision_latency =
       next_report->nof_slots > 0 ? data.decision_latency_sum / next_report->nof_slots : std::chrono::microseconds{0};
-  next_report->max_decision_latency      = data.max_decision_latency;
-  next_report->max_decision_latency_slot = data.max_decision_latency_slot;
-  next_report->latency_histogram         = data.decision_latency_hist;
-  next_report->nof_prbs                  = cell_cfg.nof_dl_prbs; // TODO: to be removed from the report.
-  next_report->nof_dl_slots              = data.nof_dl_slots;
-  next_report->nof_ul_slots              = data.nof_ul_slots;
-  next_report->nof_prach_preambles       = data.nof_prach_preambles;
-  next_report->dl_grants_count           = data.nof_ue_pdsch_grants;
-  next_report->ul_grants_count           = data.nof_ue_pusch_grants;
-  next_report->failed_dl_pdcch           = data.failed_dl_pdcch;
-  next_report->failed_ul_pdcch           = data.failed_ul_pdcch;
-  next_report->failed_common_dl_pdcch    = data.failed_common_dl_pdcch;
-  next_report->failed_common_ul_pdcch    = data.failed_common_ul_pdcch;
-  next_report->nof_failed_uci_allocs     = data.nof_failed_uci_allocs;
-  next_report->nof_msg3_ok               = data.nof_msg3_ok;
-  next_report->nof_msg3_nok              = data.nof_msg3_nok;
-  next_report->nof_conres_timer_expired  = data.nof_conres_timer_expired;
-  next_report->avg_prach_delay_slots =
-      data.nof_prach_preambles > 0
-          ? std::optional{static_cast<float>(data.sum_prach_delay_slots) / static_cast<float>(data.nof_prach_preambles)}
-          : std::nullopt;
+  next_report->max_decision_latency               = data.max_decision_latency;
+  next_report->max_decision_latency_slot          = data.max_decision_latency_slot;
+  next_report->latency_histogram                  = data.decision_latency_hist;
+  next_report->nof_prbs                           = cell_cfg.nof_dl_prbs; // TODO: to be removed from the report.
+  next_report->nof_dl_slots                       = data.nof_dl_slots;
+  next_report->nof_ul_slots                       = data.nof_ul_slots;
+  next_report->total_prach_preambles              = data.total_prach_preambles;
+  next_report->two_step_prachs_detected           = data.two_step_prachs_detected;
+  next_report->dl_grants_count                    = data.nof_ue_pdsch_grants;
+  next_report->ul_grants_count                    = data.nof_ue_pusch_grants;
+  next_report->failed_dl_pdcch                    = data.failed_dl_pdcch;
+  next_report->failed_ul_pdcch                    = data.failed_ul_pdcch;
+  next_report->failed_common_dl_pdcch             = data.failed_common_dl_pdcch;
+  next_report->failed_common_ul_pdcch             = data.failed_common_ul_pdcch;
+  next_report->nof_failed_uci_allocs              = data.nof_failed_uci_allocs;
+  next_report->failed_fallback_uci_allocs         = data.failed_fallback_uci_allocs;
+  next_report->nof_msg3_ok                        = data.nof_msg3_ok;
+  next_report->nof_msg3_nok                       = data.nof_msg3_nok;
+  next_report->nof_conres_timer_expired           = data.nof_conres_timer_expired;
+  next_report->nof_conres_ce_never_acked          = data.nof_conres_ce_never_acked;
+  next_report->avg_prach_delay_slots              = data.total_prach_preambles > 0
+                                                        ? std::optional{static_cast<float>(data.sum_prach_delay_slots) /
+                                                           static_cast<float>(data.total_prach_preambles)}
+                                                        : std::nullopt;
   next_report->nof_failed_pdsch_allocs_late_harqs = data.nof_failed_pdsch_allocs_late_harqs;
   next_report->nof_failed_pusch_allocs_late_harqs = data.nof_failed_pusch_allocs_late_harqs;
   next_report->nof_filtered_events                = data.filtered_events_counter;
@@ -609,6 +629,14 @@ void cell_metrics_handler::handle_slot_result(slot_point_extended       sl_tx,
   data.failed_common_dl_pdcch += slot_result.failed_attempts.common_dl_pdcch;
   data.failed_common_ul_pdcch += slot_result.failed_attempts.common_ul_pdcch;
   data.nof_failed_uci_allocs += slot_result.failed_attempts.uci;
+  data.failed_fallback_uci_allocs += slot_result.failed_attempts.fallback_uci_allocs;
+}
+
+void cell_metrics_handler::handle_skipped_slot(slot_point_extended sl_tx)
+{
+  // A skipped slot scheduled nothing and took no time to decide.
+  static const sched_result empty_result{};
+  push_result(sl_tx, empty_result, std::chrono::microseconds{0});
 }
 
 void cell_metrics_handler::push_result(slot_point_extended       sl_tx,

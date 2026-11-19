@@ -12,6 +12,7 @@
 #include "ocudu/phy/upper/re_measurement.h"
 #include "ocudu/ran/pusch/pusch_constants.h"
 #include "ocudu/ran/subcarrier_spacing.h"
+#include <optional>
 
 namespace ocudu {
 

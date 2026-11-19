@@ -6,6 +6,7 @@
 #include "lib/f1ap/du/procedures/f1ap_du_reset_procedure.h"
 #include "test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "test_doubles/f1ap/f1ap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/common.h"
 #include <gtest/gtest.h>
 

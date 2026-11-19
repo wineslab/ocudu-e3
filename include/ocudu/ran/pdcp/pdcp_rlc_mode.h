@@ -4,31 +4,15 @@
 
 #pragma once
 
-#include "fmt/format.h"
-
 namespace ocudu {
 
 /// PDCP NR RLC mode information.
 enum class pdcp_rlc_mode { um, am };
 
+inline const char* format_as(pdcp_rlc_mode mode)
+{
+  static constexpr const char* options[] = {"UM", "AM"};
+  return options[static_cast<unsigned>(mode)];
+}
+
 } // namespace ocudu
-
-// Formatters.
-namespace fmt {
-
-template <>
-struct formatter<ocudu::pdcp_rlc_mode> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::pdcp_rlc_mode mode, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"UM", "AM"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(mode)]);
-  }
-};
-} // namespace fmt

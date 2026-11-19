@@ -12,6 +12,12 @@
 namespace ocudu {
 namespace ofh {
 
+/// Decodes the BFP shared exponent, the low 4 bits of a udCompParam octet (O-RAN.WG4.CUS clause 8.3.3.15).
+constexpr uint8_t decode_bfp_exponent(uint8_t comp_param)
+{
+  return comp_param & 0x0fU;
+}
+
 /// Implementation of the Block Floating Point IQ data compression.
 class iq_compression_bfp_impl : public iq_compressor, public iq_decompressor
 {
@@ -27,7 +33,7 @@ public:
   compress(span<uint8_t> buffer, span<const cbf16_t> iq_data, const ru_compression_params& params) override;
 
   // See interface for the documentation.
-  virtual void
+  virtual bool
   decompress(span<cbf16_t> iq_data, span<const uint8_t> compressed_data, const ru_compression_params& params) override;
 
 protected:

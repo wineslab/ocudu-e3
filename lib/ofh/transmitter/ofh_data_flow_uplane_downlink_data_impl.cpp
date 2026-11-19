@@ -3,6 +3,7 @@
 
 #include "ofh_data_flow_uplane_downlink_data_impl.h"
 #include "ofh_uplane_fragment_size_calculator.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ofh/ethernet/ethernet_frame_pool.h"
 #include "ocudu/ofh/timing/slot_symbol_point.h"

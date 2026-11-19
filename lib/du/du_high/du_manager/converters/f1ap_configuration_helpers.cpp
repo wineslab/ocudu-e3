@@ -5,6 +5,7 @@
 #include "f1ap_configuration_helpers.h"
 #include "asn1_rrc_config_helpers.h"
 #include "asn1_sys_info_packer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/bcch_dl_sch_msg.h"
 #include "ocudu/asn1/rrc_nr/rrc_nr.h"
 #include "ocudu/ran/band_helper.h"
@@ -90,6 +91,9 @@ gnb_du_sys_info ocudu::odu::make_f1ap_du_sys_info(const du_cell_config&     du_c
 {
   gnb_du_sys_info sys_info;
 
+  // The CU-CP forwards this System Information to UEs, so it must state what the cell broadcasts in the normal
+  // operation. An SI message carrying a warning is only broadcast while the warning is on air, and the MAC is the one
+  // that lists it in SIB1 for as long as that lasts.
   sys_info.packed_mib  = asn1_packer::pack_mib(du_cfg);
   sys_info.packed_sib1 = asn1_packer::pack_sib1(du_cfg, js_str);
 

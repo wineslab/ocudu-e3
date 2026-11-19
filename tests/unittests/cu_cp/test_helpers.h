@@ -10,13 +10,14 @@
 #include "lib/cu_cp/du_processor/du_processor.h"
 #include "lib/cu_cp/ue_manager/ue_manager_impl.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
+#include "ocudu/cu_cp/cu_cp_ref_time_report_notifier.h"
 #include "ocudu/ran/cause/f1ap_cause.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/support/async/async_no_op_task.h"
 #include "ocudu/support/async/async_task.h"
 #include "ocudu/support/async/fifo_async_task_scheduler.h"
-#include <cstdint>
 #include <list>
+#include <set>
 #include <variant>
 
 namespace ocudu::ocucp {
@@ -52,6 +53,20 @@ public:
 
     return true;
   }
+
+  std::vector<nr_cell_identity> on_du_cells_reported(cu_cp_du_index_t             du_index,
+                                                     span<const du_reported_cell> cells) override
+  {
+    // Accept and activate every reported cell, preserving the pre-logical-cell behaviour of these tests.
+    std::vector<nr_cell_identity> activate;
+    activate.reserve(cells.size());
+    for (const du_reported_cell& cell : cells) {
+      activate.push_back(cell.cgi.nci);
+    }
+    return activate;
+  }
+
+  void on_du_cells_removed(span<const nr_cell_identity> cells) override {}
 
   void on_rrc_ue_created(cu_cp_ue_index_t ue_index, rrc_ue_interface& rrc_ue) override
   {
@@ -117,10 +132,14 @@ public:
     return launch_no_op_task();
   }
 
+  void on_served_cells_updated() override { served_cells_updated = true; }
+
   async_task<void> on_access_success(const cu_cp_access_success_indication& msg) override
   {
     return launch_no_op_task();
   }
+
+  bool served_cells_updated = false;
 
 private:
   ocudulog::basic_logger&   logger              = ocudulog::fetch_basic_logger("TEST");
@@ -209,7 +228,19 @@ private:
 class dummy_du_connection_notifier : public du_connection_notifier
 {
 public:
-  bool on_du_setup_request(cu_cp_du_index_t du_index, const std::set<plmn_identity>& plmn_ids) override { return true; }
+  std::set<plmn_identity> on_connected_plmns_required(const std::set<plmn_identity>& plmn_ids) override
+  {
+    return plmn_ids;
+  }
+};
+
+class dummy_cu_cp_ref_time_report_notifier : public cu_cp_ref_time_report_notifier
+{
+public:
+  void on_ref_time_info_report(span<const nr_cell_global_id_t> served_cells,
+                               const cu_cp_ref_time_report&    report) override
+  {
+  }
 };
 
 struct dummy_ngap_ue_context_removal_handler : public ngap_ue_context_removal_handler {
@@ -230,7 +261,7 @@ struct pdu_session_modified_outcome_t {
 // Stuct to configure Bearer Context Setup/Modification result content.
 struct bearer_context_outcome_t {
   bool                outcome = false;
-  std::list<unsigned> pdu_sessions_setup_list;  // List of PDU session IDs that were successful to setup.
+  std::list<unsigned> pdu_sessions_setup_list;  // List of PDU session IDs that were successful to set up.
   std::list<unsigned> pdu_sessions_failed_list; // List of PDU sessions IDs that failed to be setup.
   std::list<pdu_session_modified_outcome_t>
       pdu_sessions_modified_list; // List of PDU session IDs that were successfully modified.
@@ -253,7 +284,7 @@ public:
       e1ap_pdu_session_resource_setup_modification_item res_setup_item;
       res_setup_item.pdu_session_id = uint_to_pdu_session_id(psi);
 
-      // Add a single DRB with the same ID like the PDU session it belongs to.
+      // Add a single DRB with the same ID as the PDU session it belongs to.
       drb_id_t                   drb_id = uint_to_drb_id(psi); // Note: we use the PDU session ID here also as DRB ID
       e1ap_drb_setup_item_ng_ran drb_item;
       drb_item.drb_id = drb_id;
@@ -303,13 +334,13 @@ public:
       res_mod_item.pdu_session_id = modified_item.psi;
 
       for (const auto& drb_id : modified_item.drb_added) {
-        // Add a single DRB with the same ID like the PDU session it belongs to.
+        // Add a single DRB with the same ID as the PDU session it belongs to.
         e1ap_drb_setup_item_ng_ran drb_item;
         drb_item.drb_id = drb_id;
 
         // Add a QoS flow.
         e1ap_qos_flow_item qos_item;
-        qos_item.qos_flow_id = uint_to_qos_flow_id(drb_id_to_uint(drb_id)); // QoS flow has same ID like DRB
+        qos_item.qos_flow_id = uint_to_qos_flow_id(to_underlying(drb_id)); // QoS flow has same ID like DRB
         drb_item.flow_setup_list.emplace(qos_item.qos_flow_id, qos_item);
 
         // Add one UP transport item.
@@ -339,8 +370,8 @@ public:
     // Store msg to verify content in TC.
     first_e1ap_request = msg;
 
-    return launch_async([res = e1ap_bearer_context_setup_response{}, msg, this](
-                            coro_context<async_task<e1ap_bearer_context_setup_response>>& ctx) mutable {
+    return launch_async([res = e1ap_bearer_context_setup_response{},
+                         this](coro_context<async_task<e1ap_bearer_context_setup_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
 
       if (first_e1ap_response.has_value()) {
@@ -427,9 +458,8 @@ public:
     return launch_no_op_task(ngap_handover_preparation_response{false});
   }
 
-  void handle_inter_cu_ho_rrc_recfg_complete(const cu_cp_ue_index_t     ue_index,
-                                             const nr_cell_global_id_t& cgi,
-                                             const tac_t                tac) override
+  void handle_inter_cu_ho_rrc_recfg_complete(const cu_cp_ue_index_t             ue_index,
+                                             const cu_cp_user_location_info_nr& user_location_info) override
   {
     logger.info("Received a RRC Reconfiguration Complete for Inter-CU Handover");
   }
@@ -443,7 +473,7 @@ private:
 
 struct ue_context_outcome_t {
   bool                outcome = false;
-  std::list<unsigned> drb_success_list; // List of DRB IDs that were successful to setup.
+  std::list<unsigned> drb_success_list; // List of DRB IDs that were successful to set up.
   std::list<unsigned> drb_failed_list;  // List of DRB IDs that failed to be setup.
   std::list<unsigned> drb_removed_list; // List of DRB IDs that were removed.
   byte_buffer         cell_group_cfg = make_byte_buffer("5800b24223c853a0120c7c080408c008").value();
@@ -562,7 +592,7 @@ public:
   timer_factory  get_timer_factory() override { return timer_factory{timer_db, exec}; }
   task_executor& get_executor() override { return exec; }
 
-  void tick_timer() { timer_db.tick(); }
+  void tick_timer() const { timer_db.tick(); }
 
 private:
   fifo_async_task_scheduler ctrl_loop{16};
@@ -582,6 +612,20 @@ public:
   {
     logger.info("ue={} old_pci={} old_c-rnti={}: Received RRC Reestablishment Request", ue_index, old_pci, old_c_rnti);
     return reest_context;
+  }
+
+  async_task<rrc_ue_context_retrieval_response>
+  handle_ue_context_retrieval_required(cu_cp_ue_index_t                        ue_index,
+                                       const rrc_ue_context_retrieval_request& request) override
+  {
+    logger.info("ue={}: Received UE Context Retrieval Required", ue_index);
+    return launch_no_op_task(rrc_ue_context_retrieval_response{});
+  }
+
+  async_task<bool> handle_retrieved_context_path_switch_required(cu_cp_ue_index_t ue_index) override
+  {
+    logger.info("ue={}: Received Retrieved Context Path Switch Required", ue_index);
+    return launch_no_op_task(true);
   }
 
   async_task<bool> handle_rrc_reestablishment_context_modification_required(cu_cp_ue_index_t ue_index) override
@@ -636,7 +680,7 @@ public:
 
   // RRC UL PDU handler
   void handle_ul_ccch_pdu(byte_buffer pdu, rnti_t rnti) override {}
-  void handle_ul_dcch_pdu(const srb_id_t srb_id, byte_buffer pdu) override {}
+  void handle_ul_dcch_pdu(srb_id_t srb_id, byte_buffer rrc_pdu, bool integrity_verified) override {}
 
   // RRC NGAP Message handler.
   void        handle_dl_nas_transport_message(byte_buffer nas_pdu) override {}
@@ -658,6 +702,24 @@ public:
     logger.info("Received a new request to get packed UE capabilities");
     return byte_buffer{};
   }
+
+  bool verify_reestablishment_short_mac_i(const security::sec_short_mac_i& short_mac_i,
+                                          pci_t                            source_pci,
+                                          rnti_t                           source_c_rnti,
+                                          nr_cell_identity                 target_nci) override
+  {
+    logger.info("Received a request to verify a ShortMAC-I");
+    short_mac_i_verified = true;
+    return mac_i_valid;
+  }
+
+  bool verify_resume_mac_i(const security::sec_short_mac_i& resume_mac_i, nr_cell_identity target_nci) override
+  {
+    logger.info("Received a request to verify a ResumeMAC-I");
+    resume_mac_i_verified = true;
+    return mac_i_valid;
+  }
+
   async_task<bool> handle_rrc_reconfiguration_request(const rrc_reconfiguration_procedure_request& msg) override
   {
     logger.info("Received a new RRC reconfiguration request");
@@ -703,6 +765,14 @@ public:
     return launch_no_op_task(ue_cap_transfer_outcome);
   }
 
+  void fill_ue_derived_location(cu_cp_user_location_info_nr& user_location_info) const override
+  {
+    user_location_info.ue_location_derived_tac = ue_location_derived_tac;
+    user_location_info.mapped_nci              = mapped_nci;
+  }
+
+  void request_coarse_ue_location() override {}
+
   rrc_ue_release_context
   get_rrc_ue_release_context(bool                                          requires_rrc_msg,
                              std::optional<std::chrono::seconds>           release_wait_time,
@@ -716,7 +786,7 @@ public:
 
   rrc_ue_transfer_context get_transfer_context() override
   {
-    logger.info("Received a new request to get RRC UE trasnfer context");
+    logger.info("Received a new request to get RRC UE transfer context");
     return rrc_ue_transfer_context{};
   }
 
@@ -737,6 +807,8 @@ public:
   }
 
   void update_meas_config(const rrc_meas_cfg& /* cfg */) override {}
+
+  std::optional<rrc_meas_cfg> get_meas_config() override { return std::nullopt; }
 
   std::optional<uint8_t> get_serving_cell_mo() override
   {
@@ -823,6 +895,7 @@ public:
 
   // RRC UE Reestablishment proc notifier.
   void on_new_as_security_context(bool security_mode_active) override {}
+  void on_as_security_activated() override {}
 
   // Interface functions.
   rrc_ue_controller&              get_controller() override { return *this; }
@@ -835,13 +908,21 @@ public:
   std::optional<rrc_radio_bearer_config> last_radio_bearer_cfg;
   void                                   reset() { last_radio_bearer_cfg.reset(); }
 
+  /// Outcome the dummy reports for a ShortMAC-I or ResumeMAC-I verification.
+  bool mac_i_valid = true;
+  /// Set when the corresponding token was verified, so a test can tell the two verification paths apart.
+  bool short_mac_i_verified  = false;
+  bool resume_mac_i_verified = false;
+
   unsigned    last_transaction_id;
   srb_id_t    last_srb_id;
   byte_buffer last_ue_capabilities;
 
 private:
-  ocudulog::basic_logger&               logger                      = ocudulog::fetch_basic_logger("TEST");
-  bool                                  ue_cap_transfer_outcome     = true;
+  ocudulog::basic_logger&               logger                  = ocudulog::fetch_basic_logger("TEST");
+  bool                                  ue_cap_transfer_outcome = true;
+  std::optional<tac_t>                  ue_location_derived_tac;
+  std::optional<nr_cell_identity>       mapped_nci;
   bool                                  rrc_reconfiguration_outcome = false;
   unsigned                              test_transaction_id;
   static_vector<srb_id_t, MAX_NOF_SRBS> srb_vec;
@@ -853,12 +934,12 @@ struct dummy_cu_cp_xnap_handler : public cu_cp_xnap_handler {
 public:
   dummy_cu_cp_xnap_handler(ue_manager& ue_mng_) : ue_mng(ue_mng_), logger(ocudulog::fetch_basic_logger("TEST")) {}
 
-  async_task<bool> handle_new_rrc_handover_command(cu_cp_ue_index_t                ue_index,
-                                                   byte_buffer                     command,
+  async_task<bool> handle_new_rrc_handover_command(cu_cp_rrc_handover_command      command,
                                                    std::optional<xnc_peer_index_t> xnc_index) override
   {
-    logger.info(
-        "ue={}: Received a new RRC Handover Command for {} handover", ue_index, xnc_index.has_value() ? "XN" : "NG");
+    logger.info("ue={}: Received a new RRC Handover Command for {} handover",
+                command.ue_index,
+                xnc_index.has_value() ? "XN" : "NG");
     last_handover_command = std::move(command);
     return launch_no_op_task(true);
   }
@@ -876,7 +957,7 @@ public:
     ocudu_assert(ue_mng.find_ue(ue_index) != nullptr, "UE must be present");
     logger.info("Received a handover request");
 
-    if (!ue_mng.find_ue(ue_index)->get_security_manager().init_security_context(sec_ctxt)) {
+    if (!ue_mng.find_ue(ue_index)->get_security_manager().init_handover_security_context(sec_ctxt)) {
       logger.info("Failed to initialize security context");
       return false;
     }
@@ -902,7 +983,7 @@ public:
   {
     logger.info("ue={}: Received a new {} request to handle inter-CU target handover execution",
                 ue_index,
-                xnap_ho_target_execution_ctxt.has_value() ? "XN-C" : "NG");
+                xnap_ho_target_execution_ctxt.has_value() ? "Xn-C" : "NG");
   }
 
   void handle_handover_cancel_received(cu_cp_ue_index_t ue_index) override
@@ -910,8 +991,8 @@ public:
     logger.info("ue={}: Received a handover cancel message", ue_index);
   }
 
-  void handle_xnap_handover_success_received(cu_cp_ue_index_t  source_ue_index,
-                                             peer_xnap_ue_id_t winner_peer_xnap_ue_id) override
+  void handle_xnap_handover_success_received(cu_cp_ue_index_t           source_ue_index,
+                                             const nr_cell_global_id_t& winner_cgi) override
   {
     logger.info("ue={}: Received a HandoverSuccess message", source_ue_index);
   }
@@ -921,7 +1002,23 @@ public:
     logger.info("ue={}: Received a XNAP UE context release message", ue_index);
   }
 
-  byte_buffer last_handover_command;
+  std::vector<cu_cp_served_cell_info> handle_served_cells_required() override { return served_cells; }
+
+  cu_cp_ue_index_t handle_xnap_ue_context_id_lookup(const xnap_ue_context_id& ue_context_id) override
+  {
+    logger.info("Received a UE Context ID lookup request");
+    return cu_cp_ue_index_t::invalid;
+  }
+
+  async_task<xnap_retrieve_ue_context_response>
+  handle_xnap_retrieve_ue_context_request(const xnap_retrieve_ue_context_request& request) override
+  {
+    logger.info("ue={}: Received a Retrieve UE Context Request", request.ue_index);
+    return launch_no_op_task(xnap_retrieve_ue_context_response{});
+  }
+
+  cu_cp_rrc_handover_command          last_handover_command;
+  std::vector<cu_cp_served_cell_info> served_cells;
 
 private:
   ue_manager&             ue_mng;

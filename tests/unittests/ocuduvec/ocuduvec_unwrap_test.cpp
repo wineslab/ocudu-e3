@@ -8,6 +8,7 @@
 /// the unwrapped phase angles.
 
 #include "ocudu/adt/complex.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/sc_prod.h"
 #include "ocudu/ocuduvec/unwrap.h"
 #include "fmt/ostream.h"

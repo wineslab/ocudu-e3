@@ -3,10 +3,10 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "inter_slice_scheduler.h"
+#include "../config/time_domain_mapper.h"
 #include "../policy/scheduler_policy_factory.h"
 #include "../ue_scheduling/ue_cell_grid_allocator.h"
 #include "ocudu/ocudulog/ocudulog.h"
-#include "ocudu/scheduler/config/pusch_td_resource_indices.h"
 
 using namespace ocudu;
 
@@ -56,18 +56,6 @@ inter_slice_scheduler::inter_slice_scheduler(const cell_configuration& cell_cfg_
         id_count, cell_cfg, rrm_adjusted, create_scheduler_strategy(rrm.policy_sched_cfg, cell_cfg), ues);
     ++id_count;
   }
-
-  // Generate the slot ring context.
-  ocudu_assert(cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.has_value(), "Expected PUSCH config common");
-  auto pusch_list =
-      get_pusch_td_resource_indices_per_slot(cell_cfg.scs_common(),
-                                             cell_cfg.params.tdd_cfg,
-                                             cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
-                                             cell_cfg.dl_data_to_ul_ack);
-  slot_ring.resize(pusch_list.size());
-  for (unsigned i = 0, sz = pusch_list.size(); i != sz; ++i) {
-    slot_ring[i].valid_pusch_td_list.assign(pusch_list[i].begin(), pusch_list[i].end());
-  }
 }
 
 void inter_slice_scheduler::slot_indication(slot_point slot_tx, const cell_resource_allocator& res_grid)
@@ -97,7 +85,12 @@ void inter_slice_scheduler::slot_indication(slot_point slot_tx, const cell_resou
   const bool pdsch_enabled =
       cell_cfg.expert_cfg.ue.enable_csi_rs_pdsch_multiplexing or res_grid[0].result.dl.csi_rs.empty();
   for (const auto& slice : slices) {
-    if (not pdsch_enabled or slice.inst.pdsch_rb_count >= slice.inst.cfg.rbs.max()) {
+    // NOTE: Unlike the old \c pdsch_rb_count member, which was always 0 at this point because slot_tx had not been
+    // scheduled yet, \c nof_pdsch_rbs_allocated(slot_tx) can already be non-zero here: a PDSCH repetition occasion
+    // targeting slot_tx may have been recorded by an earlier slot's allocation. We must therefore query the up-to-date,
+    // per-slot count instead of assuming the slice starts slot_tx with a clean budget.
+    const unsigned pdsch_rb_count = slice.inst.nof_pdsch_rbs_allocated(slot_tx);
+    if (not pdsch_enabled or pdsch_rb_count >= slice.inst.cfg.rbs.max()) {
       // PDSCH is disabled or slice already reached max RBs. We can skip this slice.
       continue;
     }
@@ -105,29 +98,31 @@ void inter_slice_scheduler::slot_indication(slot_point slot_tx, const cell_resou
     interval<unsigned> rb_lims;
     // When minRB > 0, minRB != maxRB, sliceRBs < min_RB, we create two candidates. One with limit set to minRB
     // with high priority, and another one with limit set to maxRB with normal priority.
-    if (slice.inst.pdsch_rb_count < slice.inst.cfg.rbs.min() and slice.inst.cfg.rbs.min() > 0 and
+    if (pdsch_rb_count < slice.inst.cfg.rbs.min() and slice.inst.cfg.rbs.min() > 0 and
         slice.inst.cfg.rbs.shared() > 0) {
-      // NOTE: slice.inst.pdsch_rb_count is always 0 after running slot_indication() for each slice at the beginning
-      // of this function; this is at least valid as long as k0 = 0. Even though pdsch_rb_count = 0, we still keep it
-      // in the rb_lim computation for it to be ready when we support k0 != 0.
-      rb_lims         = {slice.inst.pdsch_rb_count, slice.inst.cfg.rbs.min()};
+      // rb_lims starts at pdsch_rb_count (not 0) to account for RBs already reserved in slot_tx by repetition
+      // occasions from earlier slots, so the candidate's priority/limits reflect the slice's true remaining budget.
+      rb_lims         = {pdsch_rb_count, slice.inst.cfg.rbs.min()};
       const auto prio = slice.get_prio(true, slot_tx, slot_tx, rb_lims.stop());
       dl_prio_queue.push(slice_candidate_context{slice.inst.id, prio, rb_lims, slot_tx});
       rb_lims = {slice.inst.cfg.rbs.min(), slice.inst.cfg.rbs.max()};
     } else {
-      rb_lims = {slice.inst.pdsch_rb_count, slice.inst.cfg.rbs.max()};
+      rb_lims = {pdsch_rb_count, slice.inst.cfg.rbs.max()};
     }
     const auto prio = slice.get_prio(true, slot_tx, slot_tx, rb_lims.stop());
     dl_prio_queue.push(slice_candidate_context{slice.inst.id, prio, rb_lims, slot_tx});
   }
   dl_prio_queue.sort();
 
-  // TODO: Revisit when PUSCH time domain resource list is also defined in UE dedicated configuration.
+  // Candidate PUSCH slots come from the common list: this runs once per slot, before any UE is considered, so no
+  // dedicated list is available here. Nor is one needed -- a dedicated list is required to offer exactly the same
+  // k2 set as the common one, and only k2 is read below.
   span<const pusch_time_domain_resource_allocation> pusch_time_domain_list =
       cell_cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list;
   for (const auto& slice : slices) {
     std::optional<unsigned> allocated_k2;
-    for (const unsigned pusch_td_res_idx : slot_ring[slot_tx.count() % slot_ring.size()].valid_pusch_td_list) {
+    for (const uint8_t pusch_td_res_idx :
+         cell_cfg.init_bwp.ul.td_mapper().common_pusch_td_res_indices(slot_tx.count())) {
       unsigned pusch_delay = pusch_time_domain_list[pusch_td_res_idx].k2 + cell_cfg.ntn_cs_koffset;
       const cell_slot_resource_allocator& pusch_alloc = res_grid[pusch_delay];
       slot_point                          pusch_slot  = slot_tx + pusch_delay;
@@ -234,8 +229,9 @@ void inter_slice_scheduler::config_applied(du_ue_index_t ue_idx)
 
 void inter_slice_scheduler::add_impl(ue& u)
 {
-  const ue_configuration& ue_cfg = *u.ue_cfg_dedicated();
-  for (logical_channel_config_ptr lc_cfg : *ue_cfg.logical_channels()) {
+  // Iterate the logical channels tracked by the logical channel system rather than the UE dedicated config, as the
+  // latter also tracks deactivated logical channels.
+  for (logical_channel_config_ptr lc_cfg : u.logical_channels().cfg()) {
     ran_slice_instance& sl_inst = get_slice(*lc_cfg);
     if (lc_cfg->lcid != LCID_SRB0 and not sl_inst.get_ues().contains(u.ue_index)) {
       get_policy(sl_inst.id).add_ue(u.ue_index);
@@ -248,7 +244,7 @@ ue* inter_slice_scheduler::fetch_ue_to_update(du_ue_index_t ue_idx) const
 {
   if (not ues.contains(ue_idx)) {
     // UE should be added to the repository at this stage.
-    logger.warning("ue={}: Not configuring UE to slice scheduler. Cause: No UE context found", fmt::underlying(ue_idx));
+    logger.warning("ue={}: Not configuring UE to slice scheduler. Cause: No UE context found", ue_idx);
     return nullptr;
   }
 
@@ -264,8 +260,8 @@ ue* inter_slice_scheduler::fetch_ue_to_update(du_ue_index_t ue_idx) const
   const ue_cell* ue_cc = u.find_cell(cell_cfg.cell_index);
   if (ue_cc == nullptr) {
     logger.warning("ue={}: Not adding UE to slice scheduler. Cause: No UE context found in cell {}",
-                   fmt::underlying(ue_cfg.ue_index),
-                   fmt::underlying(cell_cfg.cell_index));
+                   ue_cfg.ue_index,
+                   cell_cfg.cell_index);
     return nullptr;
   }
   if (ue_cc->is_in_fallback_mode()) {
@@ -318,8 +314,8 @@ inter_slice_scheduler::get_next_candidate()
                                              : cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.crbs.length();
     // Consider the limit imposed by dedicated resources or RBs allocated for already scheduled slices.
     const unsigned nof_used_rbs = get_nof_used_reserved_rbs<IsDownlink>(pxsch_slot);
-    const unsigned rb_count =
-        IsDownlink ? chosen_slice.inst.pdsch_rb_count : chosen_slice.inst.nof_pusch_rbs_allocated(pxsch_slot);
+    const unsigned rb_count     = IsDownlink ? chosen_slice.inst.nof_pdsch_rbs_allocated(pxsch_slot)
+                                             : chosen_slice.inst.nof_pusch_rbs_allocated(pxsch_slot);
     // Subtract the dedicated RBs not yet assigned to the slice from \ref nof_used_rbs; without this, we would prevent
     // the slice candidate from using its own dedicated RBs.
     const unsigned rbs_to_discount =
@@ -371,8 +367,7 @@ void inter_slice_scheduler::handle_slice_reconfiguration_request(const du_cell_s
     }
 
     if (not found) {
-      logger.warning(
-          "No slice RRM policy found for {} in cell {}.", rrm.rrc_member, fmt::underlying(cell_cfg.cell_index));
+      logger.warning("No slice RRM policy found for {} in cell {}.", rrm.rrc_member, cell_cfg.cell_index);
     }
   }
 }
@@ -382,7 +377,8 @@ unsigned inter_slice_scheduler::get_nof_used_reserved_rbs(slot_point pxsch_slot)
 {
   unsigned nof_used_rbs = 0;
   for (const auto& slice : slices) {
-    const unsigned rb_count = IsDownlink ? slice.inst.pdsch_rb_count : slice.inst.nof_pusch_rbs_allocated(pxsch_slot);
+    const unsigned rb_count =
+        IsDownlink ? slice.inst.nof_pdsch_rbs_allocated(pxsch_slot) : slice.inst.nof_pusch_rbs_allocated(pxsch_slot);
     nof_used_rbs += std::max(slice.inst.cfg.rbs.dedicated(), rb_count);
   }
   return nof_used_rbs;

@@ -7,6 +7,8 @@
 #include "../../../modulation/ofdm_prach_demodulator_test_doubles.h"
 #include "prach_processor_notifier_test_doubles.h"
 #include "prach_processor_test_doubles.h"
+#include "support/compare_sequences.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_dynamic.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_reader_view.h"
 #include "ocudu/ocuduvec/conversion.h"
@@ -70,11 +72,6 @@ auto to_tuple(const prach_buffer_context& context)
 bool operator==(const prach_buffer_context& rhs, const prach_buffer_context& lhs)
 {
   return to_tuple(rhs) == to_tuple(lhs);
-}
-
-bool operator==(span<const cf_t> rhs, span<const cf_t> lhs)
-{
-  return std::equal(rhs.begin(), rhs.end(), lhs.begin(), lhs.end());
 }
 
 } // namespace ocudu
@@ -161,8 +158,8 @@ std::uniform_int_distribution<unsigned> PrachProcessorFixture::start_symbol_inde
 std::uniform_int_distribution<unsigned> PrachProcessorFixture::nof_td_occasions_dist(1, 3);
 std::uniform_int_distribution<unsigned> PrachProcessorFixture::nof_fd_occasions_dist(1, 8);
 std::uniform_int_distribution<unsigned> PrachProcessorFixture::max_nof_concurrent_requests_dist(1, 16);
-std::uniform_int_distribution<unsigned> PrachProcessorFixture::nof_prb_ul_grid_dist(25, 275);
-std::uniform_int_distribution<unsigned> PrachProcessorFixture::rb_offset_dist(0, 270);
+std::uniform_int_distribution<unsigned> PrachProcessorFixture::nof_prb_ul_grid_dist(25, MAX_NOF_PRBS);
+std::uniform_int_distribution<unsigned> PrachProcessorFixture::rb_offset_dist(0, MAX_NOF_PRBS - 5);
 
 // If there is no request, the PRACH processor shall:
 // - not notify any event,
@@ -500,10 +497,6 @@ TEST_P(PrachProcessorFixture, SingleBasebandSymbols)
   // Verify the OFDM PRACH demodulator.
   ASSERT_EQ(1, ofdm_prach_factory_spy->get_nof_total_demodulate_entries());
 
-  std::vector<cf_t> cf_buffer(prach_window_length);
-  ocuduvec::convert(
-      cf_buffer, samples.get_reader().get_channel_buffer(context.ports.front()).first(prach_window_length), INT16_MAX);
-
   // Verify demodulation entry.
   const auto demodulate_entry = std::move(ofdm_prach_factory_spy->get_total_demodulate_entries().back());
   ASSERT_EQ(demodulate_entry.buffer, buffer.get());
@@ -512,7 +505,13 @@ TEST_P(PrachProcessorFixture, SingleBasebandSymbols)
   ASSERT_EQ(demodulate_entry.config.format, context.format);
   ASSERT_EQ(demodulate_entry.config.rb_offset, context.rb_offset);
   ASSERT_EQ(demodulate_entry.config.nof_prb_ul_grid, context.nof_prb_ul_grid);
-  ASSERT_EQ(span<const cf_t>(demodulate_entry.input), cf_buffer);
+  {
+    span<const ci16_t> expected_input =
+        samples.get_reader().get_channel_buffer(context.ports.front()).first(prach_window_length);
+    error_type<std::string> compare_result =
+        compare_sequences(span<const ci16_t>(demodulate_entry.input), expected_input);
+    ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+  }
 
   // Verify the received PRACH window has been processed.
   ASSERT_EQ(1, notifier_spy.get_nof_notifications());
@@ -643,10 +642,6 @@ TEST_P(PrachProcessorFixture, ThreeBasebandSymbols)
   // Verify the OFDM PRACH demodulator.
   ASSERT_EQ(1, ofdm_prach_factory_spy->get_nof_total_demodulate_entries());
 
-  std::vector<cf_t> cf_buffer(prach_window_length);
-  ocuduvec::convert(
-      cf_buffer, samples.get_reader().get_channel_buffer(context.ports.front()).first(prach_window_length), INT16_MAX);
-
   // Verify demodulation entry.
   const auto demodulate_entry = std::move(ofdm_prach_factory_spy->get_total_demodulate_entries().back());
   ASSERT_EQ(demodulate_entry.buffer, buffer.get());
@@ -655,7 +650,12 @@ TEST_P(PrachProcessorFixture, ThreeBasebandSymbols)
   ASSERT_EQ(demodulate_entry.config.format, context.format);
   ASSERT_EQ(demodulate_entry.config.rb_offset, context.rb_offset);
   ASSERT_EQ(demodulate_entry.config.nof_prb_ul_grid, context.nof_prb_ul_grid);
-  ASSERT_EQ(demodulate_entry.input, cf_buffer);
+  {
+    span<const ci16_t> expected_input =
+        samples.get_reader().get_channel_buffer(context.ports.front()).first(prach_window_length);
+    ASSERT_EQ(demodulate_entry.input.size(), expected_input.size());
+    ASSERT_TRUE(std::equal(demodulate_entry.input.begin(), demodulate_entry.input.end(), expected_input.begin()));
+  }
 
   // Verify the received PRACH window has been processed.
   ASSERT_EQ(1, notifier_spy.get_nof_notifications());

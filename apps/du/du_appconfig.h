@@ -7,6 +7,7 @@
 #include "apps/helpers/f1u/f1u_appconfig.h"
 #include "apps/helpers/hal/hal_appconfig.h"
 #include "apps/helpers/logger/logger_appconfig.h"
+#include "apps/helpers/network/dtls_appconfig.h"
 #include "apps/helpers/network/sctp_appconfig.h"
 #include "apps/helpers/tracing/tracer_appconfig.h"
 #include "apps/services/app_execution_metrics/executor_metrics_config.h"
@@ -26,8 +27,15 @@ struct f1ap_appconfig {
   std::vector<std::string> cu_cp_addresses = {"127.0.10.1"};
   /// DU F1-C bind addresses.
   std::vector<std::string> bind_addresses = {"127.0.10.2"};
+  /// \brief Whether a failed F1-C connection setup is retried indefinitely.
+  ///
+  /// When enabled, the DU keeps retrying the F1-C TNL connection on startup, so that it does not require the CU-CP to
+  /// be reachable when it is started. When disabled, the DU closes the application if the connection fails.
+  bool retry_connection = false;
   /// SCTP socket options.
   sctp_appconfig sctp;
+  /// DTLS options.
+  dtls_appconfig dtls;
 };
 
 struct f1u_appconfig {

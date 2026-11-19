@@ -13,23 +13,32 @@ find_path(FFTZ_INCLUDE_DIR
         HINTS $ENV{FFTZ_DIR}/include/
         PATHS /usr/local/include/)
 
-find_library(FFTZ_LIBRARY
+find_library(FFTZ_LIBRARY_STATIC
+        NAMES libaocl_fftz.a
+        HINTS $ENV{FFTZ_DIR}/lib/
+        PATHS /usr/local/lib/)
+
+find_library(FFTZ_LIBRARY_SHARED
         NAMES libaocl_fftz.so
         HINTS $ENV{FFTZ_DIR}/lib/
         PATHS /usr/local/lib/)
 
-set(FFTZ_LIBRARIES ${FFTZ_LIBRARY})
+if (FFTZ_LIBRARY_STATIC)
+    set(FFTZ_LIBRARIES ${FFTZ_LIBRARY_STATIC})
+elseif (FFTZ_LIBRARY_SHARED)
+    set(FFTZ_LIBRARIES ${FFTZ_LIBRARY_SHARED})
+endif()
 set(FFTZ_INCLUDE_DIRS ${FFTZ_INCLUDE_DIR})
 
 include(FindPackageHandleStandardArgs)
 
 # Handle the QUIETLY and REQUIRED arguments and set FFTZ_FOUND to TRUE
 # if all listed variables are TRUE.
-find_package_handle_standard_args(FFTZ DEFAULT_MSG FFTZ_INCLUDE_DIR FFTZ_LIBRARY)
+find_package_handle_standard_args(FFTZ DEFAULT_MSG FFTZ_INCLUDE_DIR FFTZ_LIBRARIES)
 
 if (FFTZ_FOUND)
     MESSAGE(STATUS "Found FFTZ INCLUDE DIRS: ${FFTZ_INCLUDE_DIRS}")
     MESSAGE(STATUS "Found FFTZ LIBRARIES: ${FFTZ_LIBRARIES}")
 endif (FFTZ_FOUND)
 
-mark_as_advanced(FFTZ_INCLUDE_DIR FFTZ_LIBRARY)
+mark_as_advanced(FFTZ_INCLUDE_DIR FFTZ_LIBRARIES)

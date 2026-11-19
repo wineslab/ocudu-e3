@@ -4,6 +4,7 @@
 
 #include "port_channel_estimator_average_impl.h"
 #include "port_channel_estimator_helpers.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/add.h"
 #include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/dot_prod.h"

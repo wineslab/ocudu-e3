@@ -4,6 +4,7 @@
 
 #include "pdcch_processor_impl.h"
 #include "pdcch_processor_validator_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/pdcch/cce_to_prb_mapping.h"
 #include "ocudu/ran/resource_allocation/rb_bitmap.h"
 #include "ocudu/support/math/math_utils.h"
@@ -32,12 +33,15 @@ crb_bitmap pdcch_processor_impl::compute_rb_mask(const coreset_description& core
                                                 coreset.bwp_size_rb,
                                                 coreset.duration,
                                                 coreset.shift_index,
-                                                dci.aggregation_level,
+                                                dci.dci_aggregation_level,
                                                 dci.cce_index);
       break;
     case cce_to_reg_mapping_type::NON_INTERLEAVED:
-      prb_indexes = cce_to_prb_mapping_non_interleaved(
-          coreset.bwp_start_rb, coreset.frequency_resources, coreset.duration, dci.aggregation_level, dci.cce_index);
+      prb_indexes = cce_to_prb_mapping_non_interleaved(coreset.bwp_start_rb,
+                                                       coreset.frequency_resources,
+                                                       coreset.duration,
+                                                       dci.dci_aggregation_level,
+                                                       dci.cce_index);
       break;
     case cce_to_reg_mapping_type::INTERLEAVED:
       prb_indexes = cce_to_prb_mapping_interleaved(coreset.bwp_start_rb,
@@ -46,7 +50,7 @@ crb_bitmap pdcch_processor_impl::compute_rb_mask(const coreset_description& core
                                                    coreset.reg_bundle_size,
                                                    coreset.interleaver_size,
                                                    coreset.shift_index,
-                                                   dci.aggregation_level,
+                                                   dci.dci_aggregation_level,
                                                    dci.cce_index);
       break;
   }
@@ -72,22 +76,22 @@ void pdcch_processor_impl::process(resource_grid_writer& grid, const pdcch_proce
 
   // Populate PDCCH encoder configuration.
   pdcch_encoder::config_t encoder_config;
-  encoder_config.E    = dci.aggregation_level * NOF_REG_PER_CCE * NOF_RE_PDCCH_PER_RB * 2;
+  encoder_config.E    = to_nof_cces(dci.dci_aggregation_level) * NOF_REG_PER_CCE * NOF_RE_PDCCH_PER_RB * 2;
   encoder_config.rnti = dci.rnti;
 
   // Encode.
-  span<uint8_t> encoded = span<uint8_t>(temp_encoded).first(nof_encoded_bits(dci.aggregation_level));
+  span<uint8_t> encoded = span<uint8_t>(temp_encoded).first(nof_encoded_bits(to_nof_cces(dci.dci_aggregation_level)));
   encoder->encode(encoded, dci.payload, encoder_config);
 
   // Populate PDCCH modulator configuration.
   pdcch_modulator::config_t modulator_config;
-  modulator_config.rb_mask            = rb_mask;
-  modulator_config.start_symbol_index = coreset.start_symbol_index;
-  modulator_config.duration           = coreset.duration;
-  modulator_config.n_id               = dci.n_id_pdcch_data;
-  modulator_config.n_rnti             = dci.n_rnti;
-  modulator_config.scaling            = convert_dB_to_amplitude(dci.data_power_offset_dB);
-  modulator_config.precoding          = dci.precoding;
+  modulator_config.rb_mask                   = rb_mask;
+  modulator_config.start_symbol_index        = coreset.start_symbol_index;
+  modulator_config.duration                  = coreset.duration;
+  modulator_config.n_id                      = dci.n_id_pdcch_data;
+  modulator_config.n_rnti                    = dci.n_rnti;
+  modulator_config.scaling                   = convert_dB_to_amplitude(dci.data_power_offset_dB);
+  modulator_config.precoding_and_beamforming = dci.precoding_and_beamforming;
 
   // Modulate.
   modulator->modulate(grid, encoded, modulator_config);
@@ -97,15 +101,15 @@ void pdcch_processor_impl::process(resource_grid_writer& grid, const pdcch_proce
 
   // Populate DMRS for PDCCH configuration.
   dmrs_pdcch_processor::config_t dmrs_pdcch_config;
-  dmrs_pdcch_config.slot                 = pdu.slot;
-  dmrs_pdcch_config.cp                   = pdu.cp;
-  dmrs_pdcch_config.reference_point_k_rb = reference_point_k_rb;
-  dmrs_pdcch_config.rb_mask              = rb_mask;
-  dmrs_pdcch_config.start_symbol_index   = coreset.start_symbol_index;
-  dmrs_pdcch_config.duration             = coreset.duration;
-  dmrs_pdcch_config.n_id                 = dci.n_id_pdcch_dmrs;
-  dmrs_pdcch_config.amplitude            = convert_dB_to_amplitude(dci.dmrs_power_offset_dB);
-  dmrs_pdcch_config.precoding            = dci.precoding;
+  dmrs_pdcch_config.slot                      = pdu.slot;
+  dmrs_pdcch_config.cp                        = pdu.cp;
+  dmrs_pdcch_config.reference_point_k_rb      = reference_point_k_rb;
+  dmrs_pdcch_config.rb_mask                   = rb_mask;
+  dmrs_pdcch_config.start_symbol_index        = coreset.start_symbol_index;
+  dmrs_pdcch_config.duration                  = coreset.duration;
+  dmrs_pdcch_config.n_id                      = dci.n_id_pdcch_dmrs;
+  dmrs_pdcch_config.amplitude                 = convert_dB_to_amplitude(dci.dmrs_power_offset_dB);
+  dmrs_pdcch_config.precoding_and_beamforming = dci.precoding_and_beamforming;
 
   // Generate DMRS.
   dmrs->map(grid, dmrs_pdcch_config);

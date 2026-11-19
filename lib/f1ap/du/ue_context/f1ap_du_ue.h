@@ -6,16 +6,12 @@
 
 #include "f1ap_ue_context.h"
 #include "ue_bearer_manager.h"
-#include "ocudu/adt/slotted_array.h"
-#include "ocudu/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "ocudu/f1ap/du/f1ap_du.h"
 #include "ocudu/f1ap/f1ap_ue_id_types.h"
 #include "ocudu/ran/du_types.h"
 
 namespace ocudu {
 namespace odu {
-
-struct f1ap_du_context;
 
 class f1ap_du_ue
 {
@@ -38,10 +34,6 @@ public:
   f1ap_message_notifier& f1ap_msg_notifier;
   f1ap_du_configurator&  du_handler;
   ue_bearer_manager      bearers;
-
-  /// \brief Handles UE CONTEXT MODIFICATION REQUEST as per TS38.473, Section 8.3.2.
-  void handle_ue_context_modification_request(const asn1::f1ap::ue_context_mod_request_s& msg,
-                                              const f1ap_du_context&                      ctxt_);
 };
 
 } // namespace odu

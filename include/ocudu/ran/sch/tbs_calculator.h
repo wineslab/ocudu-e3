@@ -9,7 +9,6 @@
 
 #include "ocudu/ran/sch/sch_mcs.h"
 #include "ocudu/support/units.h"
-#include <array>
 
 namespace ocudu {
 

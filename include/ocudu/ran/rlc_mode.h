@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "fmt/format.h"
 #include <string>
 
 namespace ocudu {
@@ -37,24 +36,10 @@ inline bool from_string(rlc_mode& mode, const std::string& str)
   return false;
 }
 
+inline const char* format_as(rlc_mode mode)
+{
+  static constexpr const char* options[] = {"TM", "UM Bi-dir", "UM Uni-dir-UL", "UM Uni-dir-DL", "AM"};
+  return options[static_cast<unsigned>(mode)];
+}
+
 } // namespace ocudu
-
-namespace fmt {
-
-template <>
-struct formatter<ocudu::rlc_mode> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(ocudu::rlc_mode mode, FormatContext& ctx) const
-  {
-    static constexpr const char* options[] = {"TM", "UM Bi-dir", "UM Uni-dir-UL", "UM Uni-dir-DL", "AM"};
-    return format_to(ctx.out(), "{}", options[static_cast<unsigned>(mode)]);
-  }
-};
-
-} // namespace fmt

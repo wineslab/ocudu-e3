@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
 #include "ocudu/ran/csi_report/csi_report_data.h"
 #include "ocudu/ran/csi_report/csi_report_formatters.h"
 #include "ocudu/ran/csi_report/csi_report_on_pusch_helpers.h"
-#include <fmt/ostream.h>
+#include "fmt/ostream.h"
 #include <gtest/gtest.h>
 #include <random>
 
@@ -58,7 +59,7 @@ const std::vector<csi_validator_test_case> csi_pusch_validator_test_data = {
           entry.config.pmi_codebook       = pmi_codebook_two_port{};
           entry.config.ri_restriction.resize(1);
           entry.assert_message = fmt::format(
-              R"(The RI restriction set size\, i\.e\.\, {}\, is smaller than the number of CSI-RS ports\, i\.e\.\, 2\.)",
+              R"(The RI restriction set size\, i\.e\.\, {}\, is smaller than the maximum rank\, i\.e\.\, 2\.)",
               entry.config.ri_restriction.size());
           return entry;
         },
@@ -70,7 +71,7 @@ const std::vector<csi_validator_test_case> csi_pusch_validator_test_data = {
           entry.config.ri_restriction.resize(3);
           entry.config.ri_restriction.set(2);
           entry.assert_message = fmt::format(
-              R"(The RI restriction set\, i\.e\.\, {}\, allows higher rank values than the number of CSI-RS ports\, i\.e\.\, 2\.)",
+              R"(The RI restriction set\, i\.e\.\, {}\, allows higher rank values than the maximum rank\, i\.e\.\, 2\.)",
               entry.config.ri_restriction);
           return entry;
         },

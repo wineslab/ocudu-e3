@@ -5,6 +5,7 @@
 #include "f1ap_du_test_helpers.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include "ocudu/du/du_cell_config_helpers.h"
 #include <gtest/gtest.h>

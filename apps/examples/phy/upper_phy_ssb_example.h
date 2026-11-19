@@ -60,8 +60,10 @@ public:
     ocudulog::basic_levels log_level;
     /// Specifies the maximum number of PRBs.
     unsigned max_nof_prb;
-    /// Specifies the maximum number of antenna ports.
-    unsigned max_nof_ports;
+    /// Specifies the number of transmit beams.
+    unsigned nof_tx_beams;
+    /// Specifies the number of receive antenna ports.
+    unsigned nof_rx_ports;
     /// Specifies the resource grid pool size.
     unsigned rg_pool_size;
     /// Scheduling sample configuration.

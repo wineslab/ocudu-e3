@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_link_adaptation_controller.h"
+#include "../config/time_domain_mapper.h"
 #include "../support/mcs_calculator.h"
 
 using namespace ocudu;
@@ -54,10 +55,17 @@ void ue_link_adaptation_controller::handle_dl_ack_info(bool                     
 void ue_link_adaptation_controller::handle_ul_crc_info(bool                         crc,
                                                        sch_mcs_index                used_mcs,
                                                        pusch_mcs_table              mcs_table,
-                                                       std::optional<sch_mcs_index> olla_mcs)
+                                                       std::optional<sch_mcs_index> olla_mcs,
+                                                       std::optional<float>         pusch_snr_db)
 {
   if (not ul_olla.has_value()) {
     // UL OLLA is disabled.
+    return;
+  }
+
+  // A NACK reported at very low SINR (e.g. deep in a coverage hole) does not reflect a bias in the link adaptation
+  // and would spuriously drag the OLLA offset down, so such CRCs are excluded from the update.
+  if (pusch_snr_db.has_value() and pusch_snr_db.value() < cell_cfg.expert_cfg.ue.olla_ul_min_pusch_snr) {
     return;
   }
 
@@ -134,6 +142,75 @@ sch_mcs_index ue_link_adaptation_controller::calculate_ul_mcs(pusch_mcs_table mc
   mcs               = std::min(std::max(mcs, ul_mcs_lims.start()), ul_mcs_lims.stop());
 
   return mcs;
+}
+
+pucch_repetition_factor ue_link_adaptation_controller::get_recommended_pucch_rep_factor() const
+{
+  if (cell_cfg.params.init_bwp.pucch.resources.harq_ack_rep.has_value()) {
+    const auto& rep_params = cell_cfg.params.init_bwp.pucch.resources.harq_ack_rep.value();
+    const float eff_snr    = get_effective_snr();
+
+    for (unsigned i = rep_params.sinr_thresholds.size(); i > 0; --i) {
+      // Check if the effective SNR is below the threshold for the current repetition factor.
+      if (eff_snr < rep_params.sinr_thresholds[i - 1]) {
+        // 2 -> n8, 1 -> n4, 0 -> n2
+        return static_cast<pucch_repetition_factor>(2U << (i - 1));
+      }
+    }
+  }
+  return pucch_repetition_factor::n1;
+}
+
+std::optional<uint8_t>
+ue_link_adaptation_controller::select_pdsch_repetition_count(const search_space_info& ss_info) const
+{
+  if (cell_cfg.expert_cfg.ue.pdsch_cqi_rep_threshold == 0.0F) {
+    return std::nullopt;
+  }
+
+  // Repetitions are feature-gated and only apply to a SearchSpace whose dedicated PDSCH TDRA list carries a
+  // repetition row (i.e., a Rel-16 list).
+  const std::optional<uint8_t> max_reps =
+      ss_info.bwp->dl.td_mapper().max_pdsch_repetitions(ss_info.get_dl_dci_format());
+  if (not max_reps.has_value()) {
+    return std::nullopt;
+  }
+
+  // Repetitions are triggered when the effective CQI (reported CQI corrected by OLLA) is below the threshold.
+  if (get_effective_cqi() >= cell_cfg.expert_cfg.ue.pdsch_cqi_rep_threshold) {
+    return std::nullopt;
+  }
+
+  // Single repetition level for now: request the maximum configured. Future link adaptation may pick a lower level
+  // based on the effective CQI.
+  return max_reps;
+}
+
+std::optional<uint8_t>
+ue_link_adaptation_controller::select_pusch_repetition_count(const search_space_info& ss_info) const
+{
+  if (not cell_cfg.expert_cfg.ue.pusch_force_rep and not cell_cfg.expert_cfg.ue.pusch_sinr_rep_threshold.has_value()) {
+    return std::nullopt;
+  }
+
+  // Repetitions only apply to a SearchSpace whose dedicated PUSCH TDRA list carries a repetition row (Rel-16 list).
+  const std::optional<uint8_t> max_reps =
+      ss_info.bwp->ul.td_mapper().max_pusch_repetitions(ss_info.get_ul_dci_format());
+  if (not max_reps.has_value()) {
+    return std::nullopt;
+  }
+
+  if (cell_cfg.expert_cfg.ue.pusch_force_rep) {
+    return max_reps;
+  }
+
+  // Repetitions are triggered when the effective SNR (estimated UL SINR corrected by OLLA) is below the threshold.
+  if (get_effective_snr() >= cell_cfg.expert_cfg.ue.pusch_sinr_rep_threshold.value()) {
+    return std::nullopt;
+  }
+
+  // Single repetition level for now: request the maximum configured.
+  return max_reps;
 }
 
 void ue_link_adaptation_controller::update_dl_mcs_lims(pdsch_mcs_table mcs_table)

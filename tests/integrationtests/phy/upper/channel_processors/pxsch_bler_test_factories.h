@@ -6,8 +6,11 @@
 
 #include "ocudu/phy/upper/channel_processors/pdsch/factories.h"
 #include "ocudu/phy/upper/channel_processors/pusch/factories.h"
+#include "ocudu/phy/upper/equalization/channel_equalizer_algorithm_type.h"
+#include "ocudu/phy/upper/signal_processors/channel_estimator/port_channel_estimator_parameters.h"
 
 namespace ocudu {
+class task_executor;
 
 /// \brief Creates a PDSCH processor factory.
 /// \param[in] executor        Asynchronous executor.
@@ -27,6 +30,7 @@ std::shared_ptr<pdsch_processor_factory> create_sw_pdsch_processor_factory(task_
 /// \param[in] pxsch_type                Type of PxSCH implementation to be tested.
 /// \param[in] dec_enable_early_stop     Set to true to enable LDPC decoder early stop.
 /// \param[in] td_interpolation_strategy Channel estimator time-domain interpolation strategy.
+/// \param[in] fd_smoothing_strategy     Channel estimator frequency-domain smoothing strategy.
 /// \return A PUSCH processor factory if it is successful.
 std::shared_ptr<pusch_processor_factory>
 create_sw_pusch_processor_factory(task_executor&                                   executor,
@@ -35,6 +39,7 @@ create_sw_pusch_processor_factory(task_executor&                                
                                   bool                                             dec_enable_early_stop,
                                   const std::string&                               pxsch_type,
                                   port_channel_estimator_td_interpolation_strategy td_interpolation_strategy,
+                                  port_channel_estimator_fd_smoothing_strategy     fd_smoothing_strategy,
                                   channel_equalizer_algorithm_type                 equalizer_algorithm_type);
 
 } // namespace ocudu

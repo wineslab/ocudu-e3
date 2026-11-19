@@ -11,8 +11,8 @@
 #include "apps/units/flexible_o_du/o_du_low/o_du_low_unit_factory.h"
 #include "commands/ntn_config_update_remote_command.h"
 #include "flexible_o_du_impl.h"
-#include "flexible_o_du_ntn_configuration_manager_factory.h"
 #include "metrics/flexible_o_du_metrics_builder.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/du/du_high/du_high.h"
 #include "ocudu/du/du_high/du_high_clock_controller.h"
 #include "ocudu/du/o_du_factory.h"
@@ -25,7 +25,8 @@
 #include "ocudu/fapi_adaptor/phy/p7/phy_fapi_p7_sector_fastpath_adaptor.h"
 #include "ocudu/fapi_adaptor/phy/phy_fapi_fastpath_adaptor.h"
 #include "ocudu/fapi_adaptor/phy/phy_fapi_sector_fastpath_adaptor.h"
-#include "ocudu/ntn/ntn_configuration_manager_config.h"
+#include "ocudu/ntn/ntn_configuration_manager.h"
+#include <algorithm>
 
 using namespace ocudu;
 
@@ -47,8 +48,19 @@ static fapi::carrier_config generate_carrier_config_tlv(const odu::du_cell_confi
   return fapi_config;
 }
 
+/// Returns the NTN k_mac of the cell in slots, or zero if not configured.
+static unsigned get_ntn_k_mac_slots(const odu::du_cell_config& cell)
+{
+  const auto& ntn_params = cell.ran.ntn_params;
+  if (!ntn_params.has_value() || !ntn_params->ntn_cfg.k_mac.has_value()) {
+    return 0;
+  }
+  return static_cast<unsigned>(ntn_params->ntn_cfg.k_mac->count()) *
+         get_nof_slots_per_subframe(cell.ran.dl_cfg_common.init_dl_bwp.generic_params.scs);
+}
+
 static o_du_low_unit_config generate_o_du_low_config(const du_low_unit_config&            du_low_unit_cfg,
-                                                     float                                dBFS_calibration_value,
+                                                     float                                rx_gain_dB,
                                                      span<const odu::du_cell_config>      cells,
                                                      span<const du_high_unit_cell_config> du_hi_cells)
 {
@@ -68,9 +80,15 @@ static o_du_low_unit_config generate_o_du_low_config(const du_low_unit_config&  
         .scs                           = scs_common,
         .scs_common                    = scs_common,
         .carrier_cfg                   = generate_carrier_config_tlv(cell),
+        .tx_ant_topology               = cell.ran.dl_carrier.topology,
         .prach_cfg                     = *cell.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common,
         .prach_ports                   = du_hi_cell.cell.prach_cfg.ports,
-        .dBFS_calibration_value        = dBFS_calibration_value};
+        // The SDR Radio Unit gain is known to this application unit, so it is subtracted from the configured
+        // '--dbfs_to_dbm_conversion_factor' here. For Open Fronthaul, the receive gain is applied by the externalis
+        // applied (rx_gain_dB is 0).
+        .dbfs_to_dbm_conversion_factor = du_low_unit_cfg.power_calibration.dbfs_to_dbm_conversion_factor - rx_gain_dB,
+        .db_to_dbfs_conversion_factor  = du_low_unit_cfg.power_calibration.db_to_dbfs_conversion_factor,
+        .ntn_k_mac_slots               = get_ntn_k_mac_slots(cell)};
 
     odu_low_cfg.fapi_cfg.sectors.push_back({.p5_config = p5_cfg, .p7_config = p7_cfg});
 
@@ -85,6 +103,7 @@ static o_du_low_unit_config generate_o_du_low_config(const du_low_unit_config&  
         band_helper::get_n_rbs_from_bw(cell.ran.dl_carrier.carrier_bw, scs_common, du_low_cell.freq_range);
     du_low_cell.nof_rx_antennas = cell.ran.ul_carrier.nof_ant;
     du_low_cell.nof_tx_antennas = cell.ran.dl_carrier.nof_ant;
+    du_low_cell.tx_ant_topology = cell.ran.dl_carrier.topology;
     du_low_cell.prach_ports     = du_hi_cell.cell.prach_cfg.ports;
     du_low_cell.scs_common      = scs_common;
     du_low_cell.prach_config_index =
@@ -92,8 +111,9 @@ static o_du_low_unit_config generate_o_du_low_config(const du_low_unit_config&  
     du_low_cell.max_puschs_per_slot  = du_hi_cell.cell.pusch_cfg.max_puschs_per_slot;
     du_low_cell.pusch_max_nof_layers = cell.ran.init_bwp.pusch.max_nof_layers;
     du_low_cell.tdd_pattern          = cell.ran.tdd_cfg;
-    if (du_hi_cell.cell.ntn_cfg) {
-      du_low_cell.ntn_cs_koffset = du_hi_cell.cell.ntn_cfg->cell_specific_koffset;
+    if (du_hi_cell.cell.ntn_cfg && du_hi_cell.cell.ntn_cfg->serving) {
+      du_low_cell.ntn_cs_koffset = du_hi_cell.cell.ntn_cfg->serving->cell_specific_koffset;
+      du_low_cell.ntn_k_mac      = du_hi_cell.cell.ntn_cfg->serving->k_mac;
     }
   }
 
@@ -111,6 +131,7 @@ generate_o_du_ru_config(span<const odu::du_cell_config> cells, unsigned max_proc
     auto&                    out_cell   = out_cfg.cells.emplace_back();
     const subcarrier_spacing scs_common = cell.ran.dl_cfg_common.init_dl_bwp.generic_params.scs;
     out_cell.nof_tx_antennas            = cell.ran.dl_carrier.nof_ant;
+    out_cell.tx_ant_topology            = cell.ran.dl_carrier.topology;
     out_cell.nof_rx_antennas            = cell.ran.ul_carrier.nof_ant;
     out_cell.scs                        = scs_common;
     out_cell.dl_arfcn                   = cell.ran.dl_carrier.arfcn_f_ref.value();
@@ -121,85 +142,6 @@ generate_o_du_ru_config(span<const odu::du_cell_config> cells, unsigned max_proc
     out_cell.cp                         = cell.ran.dl_cfg_common.init_dl_bwp.generic_params.cp;
   }
 
-  return out_cfg;
-}
-
-/// Converts app-level ntn_config to library-level ntn_assistance_info.
-static ocudu_ntn::ntn_assistance_info convert_ntn_config_to_assistance_info(const du_high_unit_cell_ntn_config& cfg)
-{
-  ocudu_ntn::ntn_assistance_info info = {};
-
-  // SIB19 fields exempt from valuetag.
-  info.moving_reference_location = cfg.moving_ref_location;
-  info.ephemeris_info            = cfg.ephemeris_info;
-  info.ta_info                   = cfg.ta_info;
-  info.epoch_time                = cfg.epoch_time;
-  info.ntn_ul_sync_validity_dur  = cfg.ntn_ul_sync_validity_dur;
-
-  // SIB19 fields tracked by valuetag.
-  info.reference_location    = cfg.reference_location;
-  info.distance_threshold    = cfg.distance_threshold;
-  info.t_service             = cfg.t_service;
-  info.cell_specific_koffset = cfg.cell_specific_koffset;
-  info.k_mac                 = cfg.k_mac;
-  info.polarization          = cfg.polarization;
-  info.ta_report             = cfg.ta_report;
-
-  // SIB19 neighbor cells.
-  for (const auto& ncell : cfg.ncells) {
-    info.ncells.push_back(ncell);
-  }
-
-  // SIB19 tracked fields (R18 extensions).
-  info.sat_switch_with_resync = cfg.sat_switch_with_resync;
-
-  // Metadata fields.
-  info.epoch_timestamp      = cfg.epoch_timestamp;
-  info.epoch_sfn_offset     = cfg.epoch_sfn_offset;
-  info.use_state_vector     = cfg.use_state_vector;
-  info.feeder_link_info     = cfg.feeder_link_info;
-  info.ntn_gateway_location = cfg.ntn_gateway_location;
-  info.propagator_type      = cfg.propagator_type;
-
-  return info;
-}
-
-static ocudu_ntn::ntn_configuration_manager_config
-generate_ntn_configuration_manager_config(const gnb_id_t& gnb_id, span<const du_high_unit_cell_config> du_hi_cells)
-{
-  ocudu_ntn::ntn_configuration_manager_config out_cfg = {};
-  for (unsigned phy_sector_idx = 0; phy_sector_idx != du_hi_cells.size(); ++phy_sector_idx) {
-    const auto& cell_cfg = du_hi_cells[phy_sector_idx].cell;
-    if (cell_cfg.ntn_cfg.has_value()) {
-      auto&                      out_cell = out_cfg.cells.emplace_back();
-      expected<plmn_identity>    plmn     = plmn_identity::parse(cell_cfg.plmn);
-      expected<nr_cell_identity> nci      = nr_cell_identity::create(gnb_id, cell_cfg.sector_id.value());
-      if (not plmn.has_value()) {
-        report_error("Invalid PLMN: {}", cell_cfg.plmn);
-      }
-      if (not nci.has_value()) {
-        report_error("Invalid NR-NCI");
-      }
-      out_cell.sector_id       = phy_sector_idx;
-      out_cell.nr_cgi.plmn_id  = plmn.value();
-      out_cell.nr_cgi.nci      = nci.value();
-      out_cell.assistance_info = convert_ntn_config_to_assistance_info(*cell_cfg.ntn_cfg);
-
-      // SIB19 Scheduling info.
-      const auto& sib_cfg = cell_cfg.sib_cfg;
-      for (unsigned i = 0, ie = sib_cfg.si_sched_info.size(); i != ie; ++i) {
-        const auto& si_msg = sib_cfg.si_sched_info[i];
-        for (unsigned j = 0, je = si_msg.sib_mapping_info.size(); j != je; ++j) {
-          if (si_msg.sib_mapping_info[j] == 19) {
-            out_cell.si_msg_idx          = i;
-            out_cell.si_period_rf        = si_msg.si_period_rf;
-            out_cell.si_window_len_slots = sib_cfg.si_window_len_slots;
-            out_cell.si_window_position  = si_msg.si_window_position.value();
-          }
-        }
-      }
-    }
-  }
   return out_cfg;
 }
 
@@ -241,7 +183,7 @@ o_du_unit flexible_o_du_factory::create_flexible_o_du(const o_du_unit_dependenci
   auto du_impl = std::make_unique<flexible_o_du_impl>(nof_cells, flexible_odu_metrics_notifier);
 
   o_du_low_unit_config odu_low_cfg =
-      generate_o_du_low_config(du_lo, config.ru_cfg.dBFS_calibration_value, du_cells, du_hi.cells_cfg);
+      generate_o_du_low_config(du_lo, config.ru_cfg.rx_gain_dB, du_cells, du_hi.cells_cfg);
   o_du_low_unit_dependencies odu_low_dependencies = {.rg_gateway = du_impl->get_upper_ru_dl_rg_adapter(),
                                                      .rx_symbol_request_notifier =
                                                          du_impl->get_upper_ru_ul_request_adapter(),
@@ -266,6 +208,10 @@ o_du_unit flexible_o_du_factory::create_flexible_o_du(const o_du_unit_dependenci
                                                           *dependencies.metrics_notifier,
                                                           dependencies.remote_metrics_gateway,
                                                           {}};
+
+  // Bridge the NTN configuration manager of the DU-high to the RU, which is created further below. The adapter is
+  // owned by the flexible O-DU, so it outlives both.
+  odu_hi_unit_dependencies.o_du_hi_dependencies.du_hi.ntn_doppler_handler = &du_impl->get_ru_doppler_adapter();
 
   // Adjust the dependencies.
   for (unsigned i = 0, e = du_cells.size(); i != e; ++i) {
@@ -364,20 +310,10 @@ o_du_unit flexible_o_du_factory::create_flexible_o_du(const o_du_unit_dependenci
     o_du.commands.cmdline.commands.push_back(std::make_unique<tx_time_offset_app_command>(*controller));
   }
 
-  // Create the NTN Configuration Manager if at least one NTN cell is present.
-  ocudu_ntn::ntn_configuration_manager_config ntn_manager_config =
-      generate_ntn_configuration_manager_config(du_hi.gnb_id, du_hi.cells_cfg);
-
-  if (not ntn_manager_config.cells.empty()) {
-    o_du.ntn_configurator_manager =
-        create_ntn_configuration_manager(ntn_manager_config,
-                                         odu_instance->get_o_du_high().get_du_high().get_du_configurator(),
-                                         odu_instance->get_o_du_high().get_du_high().get_subframe_time_mapper(),
-                                         ru->get_controller(),
-                                         dependencies.timer_ctrl->get_timer_manager(),
-                                         dependencies.workers->get_du_high_executor_mapper().du_control_executor());
-    o_du.commands.remote.push_back(
-        std::make_unique<ocudu_ntn::ntn_config_update_remote_command>(*o_du.ntn_configurator_manager));
+  // The DU-high creates the NTN configuration manager only when at least one NTN cell is configured.
+  if (auto* ntn_manager = odu_instance->get_o_du_high().get_du_high().get_ntn_configuration_manager();
+      ntn_manager != nullptr) {
+    o_du.commands.remote.push_back(std::make_unique<ocudu_ntn::ntn_config_update_remote_command>(*ntn_manager));
   }
 
   // Configure the RU and DU in the dynamic DU.

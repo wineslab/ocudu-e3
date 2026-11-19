@@ -4,9 +4,11 @@
 
 #include "dmrs_pdcch_processor_impl.h"
 #include "../dmrs_helper.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/support/mask_types.h"
 #include "ocudu/phy/support/re_pattern.h"
 #include "ocudu/phy/support/resource_grid_mapper.h"
+#include "ocudu/ran/beamforming/beam_identifier_helpers.h"
 #include "ocudu/support/math/math_utils.h"
 
 using namespace ocudu;
@@ -46,20 +48,20 @@ void dmrs_pdcch_processor_impl::mapping(resource_grid_writer&     grid,
   pattern.re_mask = re_mask;
 
   // Actual mapping.
-  mapper->map(grid, d_pdcch, pattern, config.precoding);
+  mapper->map(grid, d_pdcch, pattern, config.precoding_and_beamforming);
 }
 
 void dmrs_pdcch_processor_impl::map(resource_grid_writer& grid, const dmrs_pdcch_processor::config_t& config)
 {
-  ocudu_assert(config.precoding.get_nof_layers() == 1,
+  ocudu_assert(config.precoding_and_beamforming.get_nof_layers() == 1,
                "Number of layers (i.e., {}) must be one.",
-               config.precoding.get_nof_layers());
-  ocudu_assert(config.precoding.get_nof_ports() >= 1,
-               "Number of ports (i.e., {}) must be equal to or greater than one.",
-               config.precoding.get_nof_ports());
-  ocudu_assert(config.precoding.get_nof_prg() >= 1,
+               config.precoding_and_beamforming.get_nof_layers());
+  ocudu_assert(config.precoding_and_beamforming.get_nof_beams() >= 1,
+               "Number of beams (i.e., {}) must be equal to or greater than one.",
+               config.precoding_and_beamforming.get_nof_beams());
+  ocudu_assert(config.precoding_and_beamforming.get_nof_prg() >= 1,
                "Number of PRG (i.e., {}) must be equal to or greater than one.",
-               config.precoding.get_nof_prg());
+               config.precoding_and_beamforming.get_nof_prg());
 
   // Number of DM-RS per symbol.
   unsigned nof_dmrs_symbol = config.rb_mask.count() * NOF_DMRS_PER_RB;

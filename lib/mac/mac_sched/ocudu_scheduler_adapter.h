@@ -70,7 +70,18 @@ public:
 
   void handle_ul_phr_indication(const mac_phr_ce_info& phr) override;
 
+  void handle_ul_ta_report_indication(const mac_ta_report_ce_info& ta_report) override;
+
   void handle_crnti_ce_indication(du_ue_index_t old_ue_index, du_cell_index_t cell_index) override;
+
+  std::optional<rnti_t> handle_msga_ccch_sdu(du_cell_index_t        cell_index,
+                                             rnti_t                 ra_rnti,
+                                             uint8_t                rapid,
+                                             slot_point             sl_rx,
+                                             const ue_con_res_id_t& con_res_id) override
+  {
+    return cell_handlers[cell_index].get_rach_handler().handle_msga_ccch_sdu(ra_rnti, rapid, sl_rx, con_res_id);
+  }
 
   void handle_paging_information(const paging_information& msg) override;
 
@@ -81,10 +92,13 @@ public:
                                mac_cell_slot_handler::error_event event) override;
 
   void handle_si_change_indication(const si_scheduling_update_request& request) override;
+  void handle_pws_si_change_indication(const pws_si_scheduling_update_request& request) override;
 
   mac_positioning_measurement_handler& get_positioning_handler() override { return *pos_handler; }
 
   void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& req) override;
+
+  void handle_ntn_ul_ta_update(const sched_cell_ntn_ul_ta_update& req) override;
 
   mac_cell_rach_handler& get_cell_rach_handler(du_cell_index_t cell_index) override
   {
@@ -152,8 +166,8 @@ private:
   /// Handler of RACH indications.
   mac_rach_handler rach_handler;
 
-  std::atomic<slot_point_extended>                            last_slot_point;
-  std::atomic<std::chrono::high_resolution_clock::time_point> last_slot_tp;
+  std::atomic<slot_point_extended>                   last_slot_point;
+  std::atomic<std::chrono::steady_clock::time_point> last_slot_tp;
 
   /// List of event flags used by scheduler to notify that the configuration is complete.
   struct ue_notification_context {

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../du_context/nrppa_du_context.h"
+#include "../du_context/nrppa_trp_registry.h"
 #include "../meas_context/nrppa_meas_context.h"
 #include "ocudu/asn1/nrppa/nrppa.h"
 #include "ocudu/nrppa/nrppa.h"
@@ -21,14 +22,14 @@ namespace ocudu::ocucp {
 class measurement_procedure
 {
 public:
-  measurement_procedure(cu_cp_amf_index_t                           amf_index_,
-                        const measurement_request_t&                request_,
-                        uint16_t                                    transaction_id_,
-                        const std::map<trp_id_t, cu_cp_du_index_t>& trp_id_to_du_idx_,
-                        nrppa_meas_context_list&                    meas_ctxt_list_,
-                        nrppa_du_context_list&                      du_ctxt_list_,
-                        nrppa_cu_cp_notifier&                       cu_cp_notifier_,
-                        ocudulog::basic_logger&                     logger_);
+  measurement_procedure(cu_cp_amf_index_t            amf_index_,
+                        const measurement_request_t& request_,
+                        uint16_t                     transaction_id_,
+                        const nrppa_trp_registry&    trp_registry_,
+                        nrppa_meas_context_list&     meas_ctxt_list_,
+                        nrppa_du_context_list&       du_ctxt_list_,
+                        nrppa_cu_cp_notifier&        cu_cp_notifier_,
+                        ocudulog::basic_logger&      logger_);
 
   void operator()(coro_context<async_task<void>>& ctx);
 
@@ -56,17 +57,14 @@ private:
   /// \brief Fill the procedure result, log it and forward it to the CU-CP.
   void handle_procedure_outcome();
 
-  /// \brief Send the measurement outcome to the CU-CP.
-  void send_ul_nrppa_pdu(const asn1::nrppa::nr_ppa_pdu_c& pdu);
-
-  cu_cp_amf_index_t                           amf_index;
-  const measurement_request_t                 meas_request;
-  uint16_t                                    transaction_id;
-  const std::map<trp_id_t, cu_cp_du_index_t>& trp_id_to_du_idx;
-  nrppa_meas_context_list&                    meas_ctxt_list;
-  nrppa_du_context_list&                      du_ctxt_list;
-  nrppa_cu_cp_notifier&                       cu_cp_notifier;
-  ocudulog::basic_logger&                     logger;
+  cu_cp_amf_index_t           amf_index;
+  const measurement_request_t meas_request;
+  uint16_t                    transaction_id;
+  const nrppa_trp_registry&   trp_registry;
+  nrppa_meas_context_list&    meas_ctxt_list;
+  nrppa_du_context_list&      du_ctxt_list;
+  nrppa_cu_cp_notifier&       cu_cp_notifier;
+  ocudulog::basic_logger&     logger;
 
   ran_meas_id_t ran_meas_id = ran_meas_id_t::min;
 
@@ -79,7 +77,6 @@ private:
   std::optional<measurement_response_t> procedure_outcome = std::nullopt;
 
   asn1::nrppa::nr_ppa_pdu_c meas_outcome;
-  byte_buffer               ul_nrppa_pdu;
 };
 
 } // namespace ocudu::ocucp

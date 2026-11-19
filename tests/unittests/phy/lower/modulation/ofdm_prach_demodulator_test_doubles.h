@@ -12,12 +12,12 @@ class ofdm_prach_demodulator_spy : public ofdm_prach_demodulator
 {
 public:
   struct demodulate_entry {
-    prach_buffer*     buffer;
-    std::vector<cf_t> input;
-    configuration     config;
+    prach_buffer*       buffer;
+    std::vector<ci16_t> input;
+    configuration       config;
   };
 
-  void demodulate(prach_buffer& buffer, span<const cf_t> input, const configuration& config) override
+  void demodulate(prach_buffer& buffer, span<const ci16_t> input, const configuration& config) override
   {
     demodulate_entries.emplace_back();
     demodulate_entry& entry = demodulate_entries.back();

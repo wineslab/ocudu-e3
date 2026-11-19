@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "tests/ocudu_test_requirements.h"
 #include "ocudu/ran/resource_allocation/resource_allocation_frequency.h"
-#include "ocudu/support/ocudu_test.h"
+#include <gtest/gtest.h>
 
 using namespace ocudu;
 
-static void test_ra_frequency_type1()
+TEST(resource_allocation_frequency_test, ra_frequency_type1)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-GEN-5");
+
   for (unsigned N_bwp_size : {24, 48, 96}) {
     for (unsigned start = 0; start != N_bwp_size - 1; ++start) {
       for (unsigned length = 1, length_end = N_bwp_size - start + 1; length != length_end; ++length) {
@@ -26,14 +29,16 @@ static void test_ra_frequency_type1()
           expected = N_bwp_size * (N_bwp_size - length + 1) + (N_bwp_size - 1 - start);
         }
 
-        TESTASSERT_EQ(riv, expected);
+        ASSERT_EQ(riv, expected);
       }
     }
   }
 }
 
-static void test_ra_frequency_type1_special()
+TEST(resource_allocation_frequency_test, ra_frequency_type1_special)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-GEN-5");
+
   for (unsigned N_bwp_initial : {24, 48, 96}) {
     for (unsigned N_bwp_active : {25, 52, 104, 272}) {
       // Determine K.
@@ -65,16 +70,9 @@ static void test_ra_frequency_type1_special()
             expected = N_bwp_initial * (N_bwp_initial - length_prime + 1) + (N_bwp_initial - 1 - start_prime);
           }
 
-          TESTASSERT_EQ(riv, expected);
+          ASSERT_EQ(riv, expected);
         }
       }
     }
   }
-}
-
-int main()
-{
-  test_ra_frequency_type1();
-  test_ra_frequency_type1_special();
-  return 0;
 }

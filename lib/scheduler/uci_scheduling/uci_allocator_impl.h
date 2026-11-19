@@ -24,29 +24,30 @@ public:
 
   ~uci_allocator_impl() override;
 
-  std::optional<uci_allocation> alloc_harq_ack(cell_resource_allocator&     res_alloc,
-                                               rnti_t                       crnti,
-                                               const ue_cell_configuration& ue_cell_cfg,
-                                               unsigned                     k0,
-                                               span<const uint8_t>          k1_list) override;
+  std::optional<uci_allocation>
+  alloc_harq_ack(cell_resource_allocator& res_alloc,
+                 const ue_cell&           ue_cc,
+                 unsigned                 k0,
+                 span<const uint8_t>      k1_list,
+                 pucch_repetition_factor  max_rep_factor = pucch_repetition_factor::n1) override;
 
-  void alloc_sr_opportunity(cell_slot_resource_allocator& slot_alloc,
-                            rnti_t                        crnti,
+  bool alloc_sr_opportunity(cell_slot_resource_allocator& slot_alloc,
                             const ue_cell_configuration&  ue_cell_cfg) override;
 
-  void alloc_csi_opportunity(cell_slot_resource_allocator& slot_alloc,
-                             rnti_t                        crnti,
+  bool alloc_csi_opportunity(cell_slot_resource_allocator& slot_alloc,
                              const ue_cell_configuration&  ue_cell_cfg) override;
 
   void multiplex_uci_on_pusch(ul_sched_info&                pusch_grant,
                               cell_slot_resource_allocator& slot_alloc,
                               const ue_cell_configuration&  ue_cell_cfg,
-                              rnti_t                        crnti,
-                              bool                          include_aperiodic_csi) override;
+                              bool                          include_aperiodic_csi,
+                              bool                          configured_grant = false) override;
 
   uint8_t get_scheduled_pdsch_counter_in_ue_uci(slot_point uci_slot, rnti_t crnti) override;
 
   bool has_harq_ack_on_common_pucch_res(rnti_t rnti, slot_point sl_tx) override;
+
+  bool has_pucch_repetition(rnti_t rnti, slot_point sl_tx) override;
 
 private:
   // \brief Information cached by the UCI scheduler relative to the UCIs scheduled in the cell resource grid. Store
@@ -79,7 +80,7 @@ private:
   ocudulog::basic_logger& logger;
 
   // \brief Ring of UCI allocations indexed by slot.
-  circular_vector<slot_alloc_list> uci_alloc_grid;
+  circular_vector<slot_alloc_list, true> uci_alloc_grid;
 
   const unsigned max_pucch_payload;
 };

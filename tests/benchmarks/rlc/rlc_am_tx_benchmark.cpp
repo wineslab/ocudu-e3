@@ -4,6 +4,7 @@
 
 #include "lib/rlc/rlc_tx_am_entity.h"
 #include "tests/test_doubles/pdcp/pdcp_pdu_generator.h"
+#include "ocudu/rlc/rlc_window_seg_pools.h"
 #include "ocudu/support/benchmark_utils.h"
 #include "ocudu/support/executors/manual_task_worker.h"
 #include <getopt.h>
@@ -34,8 +35,8 @@ public:
   void on_delivered_retransmitted_sdu(uint32_t max_deliv_retx_pdcp_sn) override {}
 
   // rlc_tx_upper_layer_control_notifier interface
-  void on_protocol_failure() override {}
-  void on_max_retx() override {}
+  void on_protocol_failure(rb_id_t rb_id) override {}
+  void on_max_retx(rb_id_t rb_id) override {}
 
   // rlc_tx_buffer_state_update_notifier interface
   void on_buffer_state_update(const rlc_buffer_state& bs) override {}
@@ -130,6 +131,8 @@ void benchmark_tx_pdu(const bench_params& params)
 
   null_rlc_pcap pcap;
 
+  rlc_drb_tx_window_seg_pool drb_tx_pool{rlc_drb_tx_window_seg_pool_size, rlc_drb_tx_window_seg_size};
+
   auto metrics_coll = std::make_unique<rlc_bearer_metrics_collector>(
       gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{1}, tester.get(), ue_worker);
 
@@ -145,7 +148,8 @@ void benchmark_tx_pdu(const bench_params& params)
                                                    pcap,
                                                    pcell_worker,
                                                    ue_worker,
-                                                   timers);
+                                                   timers,
+                                                   drb_tx_pool.get_pool_of_type<rlc_tx_am_sdu_info>());
 
   // Bind AM Rx/Tx interconnect
   rlc_tx->set_status_provider(tester.get());

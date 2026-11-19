@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "stdout_metrics_command.h"
+#include "ocudu/adt/format.h"
+#include "fmt/format.h"
 
 using namespace ocudu;
 using namespace app_services;
@@ -10,7 +12,7 @@ using namespace app_services;
 static std::string generate_command_description(span<const std::string_view> subcommands)
 {
   return fmt::format(
-      " <metric>:                           start/stop console trace. List of available metric [{:,}]. Default={}",
+      " <metric>:                           start/stop console trace. List of available metric {}. Default={}",
       span<const std::string_view>(subcommands),
       subcommands.front());
 }

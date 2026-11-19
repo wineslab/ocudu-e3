@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/ran/prach/prach_format_type.h"
 #include "ocudu/ran/subcarrier_spacing.h"
 #include "ocudu/support/ocudu_assert.h"
 
@@ -79,9 +80,24 @@ constexpr unsigned ra_scs_to_Hz(prach_subcarrier_spacing ra_scs)
   }
 }
 
-/// Adapts common resource grid subcarrier spacing to RA subcarrier spacing.
-constexpr prach_subcarrier_spacing to_ra_subcarrier_spacing(subcarrier_spacing scs)
+/// \brief Adapts common resource grid subcarrier spacing to RA subcarrier spacing.
+///
+/// Assume the PRACH subcarrier spacing is for formats with short preambles if the format is not provided.
+///
+/// \param[in] scs    Common subcarrier spacing.
+/// \param[in] format Optional PRACH format, necessary for deriving the subcarrier spacing in long format preambles.
+/// \return The PRACH subcarrier spacing.
+constexpr prach_subcarrier_spacing to_ra_subcarrier_spacing(subcarrier_spacing scs,
+                                                            prach_format_type  format = prach_format_type::invalid)
 {
+  if (format < prach_format_type::three) {
+    return prach_subcarrier_spacing::kHz1_25;
+  }
+
+  if (format == prach_format_type::three) {
+    return prach_subcarrier_spacing::kHz5;
+  }
+
   // Convert to numerology.
   unsigned numerology = to_numerology_value(scs);
 

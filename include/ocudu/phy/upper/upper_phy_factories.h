@@ -11,6 +11,7 @@
 #include "ocudu/phy/upper/downlink_processor.h"
 #include "ocudu/phy/upper/phy_tap/phy_tap.h"
 #include "ocudu/phy/upper/rx_buffer_pool.h"
+#include "ocudu/phy/upper/rx_symbol_printer_configuration.h"
 #include "ocudu/phy/upper/uplink_processor.h"
 #include "ocudu/phy/upper/upper_phy.h"
 #include "ocudu/phy/upper/upper_phy_execution_configuration.h"
@@ -26,6 +27,8 @@ class upper_phy_rx_symbol_request_notifier;
 
 /// Configuration parameters for uplink processors.
 struct uplink_processor_config {
+  /// Sector identifier.
+  unsigned sector;
   /// Uplink processor result notifier.
   upper_phy_rx_results_notifier& notifier;
   /// Rate Matching receive buffer pool.
@@ -205,8 +208,10 @@ std::unique_ptr<downlink_processor_pool> create_dl_processor_pool(downlink_proce
 
 /// Collects upper PHY configuration parameters used to create a new upper PHY object.
 struct upper_phy_configuration {
-  /// Number of transmit antenna ports.
-  unsigned nof_tx_ports;
+  /// Sector identifier.
+  unsigned sector;
+  /// Transmit antenna topology.
+  antenna_topology tx_ant_topology;
   /// Number of receive antenna ports.
   unsigned nof_rx_ports;
   /// Number of downlink resource grids. Downlink resource grids minimum reuse time is \c dl_rg_expire_timeout_slots
@@ -276,12 +281,8 @@ struct upper_phy_factory_configuration {
   bool enable_metrics;
   /// Selects the PUSCH SINR calculation method used for choosing the modulation and coding scheme.
   channel_state_information::sinr_type pusch_sinr_calc_method;
-  /// Receive symbol printer. Leave empty to disable.
-  std::string rx_symbol_printer_filename;
-  /// Receive port the UL symbols are dumped from. Leave emtpy for all ports.
-  std::optional<unsigned> rx_symbol_printer_port;
-  /// Boolean flag for dumping PRACH symbols when set to true.
-  bool rx_symbol_printer_prach;
+  /// Receive symbol printer. Leave the filename empty to disable.
+  rx_symbol_printer_configuration rx_symbol_printer;
   /// Enables the PHY tap plugin if present.
   std::optional<std::string> phy_tap_arguments;
   /// Informs the PHY tap plugin if the TDD configuration if present.
@@ -322,6 +323,10 @@ struct upper_phy_factory_configuration {
   /// - \c lut: for using a look-up table CRC calculator, or
   /// - \c clmul: for using a look-up table CRC calculator (x86_64 CPUs only).
   std::string crc_calculator_type;
+  /// \brief Correction factor for the PRACH detection threshold.
+  ///
+  /// Scales the default PRACH detection threshold for the current configuration by the given value.
+  float prach_th_correction_factor;
   /// \brief PUSCH channel estimator frequency-domain smoothing strategy.
   ///
   /// Use one of these options:
@@ -358,6 +363,14 @@ struct upper_phy_factory_configuration {
   unsigned ul_bw_rb;
   /// Maximum number of layers for PUSCH transmissions.
   unsigned pusch_max_nof_layers;
+  /// Enable DOA features.
+  bool doa_enabled = false;
+  /// Distance between antenna elements, normalized with respect to the wavelength. Only meaningful if \ref doa_enabled
+  /// is set to true.
+  float doa_antenna_distance_over_wavelength = 0.5F;
+  /// Cross-polarization flag: set to true if the array elements consist of two collocated antennas with orthogonal
+  /// polarizations. Only meaningful if \ref doa_enabled is set to true.
+  bool doa_cross_polarized = false;
   /// \brief PDSCH processor type.
   ///
   /// Use of these options:
@@ -402,17 +415,6 @@ public:
 ///                    slot are uplink.
 std::shared_ptr<upper_phy_rx_symbol_handler_factory>
 create_rx_symbol_handler_factory(std::optional<tdd_ul_dl_config_common> tdd_pattern = std::nullopt);
-
-/// \brief Creates an RX symbol handler printer decorator factory.
-///
-/// This factory is used to create an RX symbol handler that prints the received symbols to a file.
-std::shared_ptr<upper_phy_rx_symbol_handler_factory>
-create_rx_symbol_handler_printer_decorator_factory(std::shared_ptr<upper_phy_rx_symbol_handler_factory> factory_,
-                                                   ocudulog::basic_logger&                              logger_,
-                                                   const std::string&                                   filename_,
-                                                   unsigned                                             nof_rb_,
-                                                   interval<unsigned>                                   ul_print_ports_,
-                                                   bool                                                 print_prach_);
 
 /// Factory interface for creating an upper physical layer tap. This factory msut be defined in the physical layer tap
 /// plugin.

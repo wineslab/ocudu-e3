@@ -5,6 +5,7 @@
 #include "ru_ofh_config_translator.h"
 #include "apps/services/worker_manager/worker_manager_config.h"
 #include "ru_ofh_config.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 
@@ -60,7 +61,8 @@ tx_timing_window_params_us_to_symbols(std::chrono::microseconds                T
 static void generate_config(ru_ofh_configuration&                            out_cfg,
                             const ru_ofh_unit_config&                        ru_cfg,
                             span<const flexible_o_du_ru_config::cell_config> cells,
-                            unsigned                                         max_processing_delay_slots)
+                            unsigned                                         max_processing_delay_slots,
+                            bool                                             uses_dpdk)
 {
   out_cfg.gps_Alpha = ru_cfg.gps_Alpha;
   out_cfg.gps_Beta  = ru_cfg.gps_Beta;
@@ -77,7 +79,7 @@ static void generate_config(ru_ofh_configuration&                            out
     sector_cfg.max_processing_delay_slots   = max_processing_delay_slots;
     sector_cfg.dl_processing_time           = std::chrono::microseconds(ru_cfg.dl_processing_time);
     sector_cfg.ul_processing_time           = std::chrono::microseconds(ru_cfg.ul_processing_time);
-    sector_cfg.uses_dpdk                    = ru_cfg.hal_config.has_value();
+    sector_cfg.uses_dpdk                    = uses_dpdk;
     sector_cfg.interface                    = ofh_cell_cfg.network_interface;
     sector_cfg.is_promiscuous_mode_enabled  = ofh_cell_cfg.enable_promiscuous_mode;
     sector_cfg.is_link_status_check_enabled = ofh_cell_cfg.check_link_status;
@@ -139,6 +141,14 @@ static void generate_config(ru_ofh_configuration&                            out
     // TDD UL DL config.
     sector_cfg.tdd_config = cell.tdd_config;
 
+    if (ofh_cell_cfg.cell.dl_beamforming.has_value()) {
+      sector_cfg.dl_beamforming = ofh::transmitter_beamforming_config{
+          .topology         = cell.tx_ant_topology,
+          .bfw_compr_params = ofh::ru_compression_params{
+              .type       = ofh::to_compression_type(ofh_cell_cfg.cell.dl_beamforming->compression_method),
+              .data_width = ofh_cell_cfg.cell.dl_beamforming->compression_bitwidth}};
+    }
+
     // IQ scaling config.
     if (const auto* legacy_scaling_config =
             std::get_if<ru_ofh_legacy_scaling_config>(&ofh_cell_cfg.cell.iq_scaling_config)) {
@@ -173,10 +183,11 @@ static void generate_config(ru_ofh_configuration&                            out
 
 ru_ofh_configuration ocudu::generate_ru_ofh_config(const ru_ofh_unit_config&                        ru_cfg,
                                                    span<const flexible_o_du_ru_config::cell_config> cells,
-                                                   unsigned max_processing_delay_slots)
+                                                   unsigned max_processing_delay_slots,
+                                                   bool     uses_dpdk)
 {
   ru_ofh_configuration out_cfg;
-  generate_config(out_cfg, ru_cfg, cells, max_processing_delay_slots);
+  generate_config(out_cfg, ru_cfg, cells, max_processing_delay_slots, uses_dpdk);
 
   return out_cfg;
 }
@@ -187,6 +198,12 @@ void ocudu::fill_ofh_worker_manager_config(worker_manager_config& config, const 
   ofh_cfg.nof_cells       = ru_cfg.cells.size();
   ofh_cfg.ru_timing_cpu   = ru_cfg.expert_execution_cfg.ru_timing_cpu;
   ofh_cfg.txrx_affinities = ru_cfg.expert_execution_cfg.txrx_affinities;
+
+  // Provide the downlink eAxC identifiers per cell, used to create one serialization strand per eAxC.
+  ofh_cfg.dl_eaxc_per_sector.reserve(ru_cfg.cells.size());
+  for (const auto& cell : ru_cfg.cells) {
+    ofh_cfg.dl_eaxc_per_sector.push_back(cell.ru_dl_port_id);
+  }
 
   // If ru_txrx_cpus parameters are not specified, use the affinities of ru_cpus parameters of the cells.
   if (ofh_cfg.txrx_affinities.empty()) {

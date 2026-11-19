@@ -4,6 +4,7 @@
 
 #include "pdsch_block_processor_impl.h"
 #include "pdsch_processor_helpers.h"
+#include "ocudu/adt/format.h"
 
 using namespace ocudu;
 

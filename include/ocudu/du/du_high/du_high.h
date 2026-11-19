@@ -13,6 +13,11 @@
 #include "ocudu/ran/du_types.h"
 
 namespace ocudu {
+
+namespace ocudu_ntn {
+class ntn_configuration_manager;
+} // namespace ocudu_ntn
+
 namespace odu {
 
 class du_configurator;
@@ -56,6 +61,9 @@ public:
 
   /// Returns a mapper of slots to system time.
   virtual mac_subframe_time_mapper& get_subframe_time_mapper() = 0;
+
+  /// Returns the NTN configuration manager of this DU, or nullptr when no NTN cell is configured.
+  virtual ocudu_ntn::ntn_configuration_manager* get_ntn_configuration_manager() = 0;
 };
 
 } // namespace odu

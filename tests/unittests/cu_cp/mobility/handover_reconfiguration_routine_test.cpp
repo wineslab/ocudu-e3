@@ -5,6 +5,7 @@
 #include "lib/cu_cp/routines/mobility/handover_reconfiguration_routine.h"
 #include "mobility_test_helpers.h"
 #include "ocudu/adt/byte_buffer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cu_cp_types.h"
 #include "ocudu/rrc/rrc_types.h"
 #include "ocudu/support/async/async_test_utils.h"

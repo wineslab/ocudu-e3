@@ -80,3 +80,14 @@ sched_config_helper::create_empty_spcell_cfg_sched_ue_creation_request(const ran
 
   return msg;
 }
+
+ue_creation_mode sched_config_helper::to_ue_creation_mode(const sched_ue_creation_request_message& req)
+{
+  if (not req.starts_in_fallback) {
+    return ue_creation_mode::skip_fallback;
+  }
+  if (req.ul_ccch_slot_rx.has_value()) {
+    return ue_creation_mode::msg3_rach;
+  }
+  return req.cfra_enabled ? ue_creation_mode::cfra : ue_creation_mode::high_layers;
+}

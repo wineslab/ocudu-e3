@@ -16,6 +16,8 @@
 namespace ocudu {
 namespace ofh {
 
+class ofh_sector_executor_mapper;
+
 /// Open Fronthaul transmitter implementation dependencies.
 struct transmitter_impl_dependencies {
   /// Log.
@@ -24,8 +26,8 @@ struct transmitter_impl_dependencies {
   error_notifier* err_notifier = nullptr;
   /// Transmitter task executor.
   task_executor* executor = nullptr;
-  /// Downlink task executor.
-  task_executor* dl_executor = nullptr;
+  /// Sector executor mapper providing the per-eAxC downlink and uplink serialization strands.
+  ofh_sector_executor_mapper& exec_mapper;
   /// Data flow for downlink Control-Plane.
   std::unique_ptr<data_flow_cplane_scheduling_commands> dl_df_cplane;
   /// Data flow for downlink User-Plane.

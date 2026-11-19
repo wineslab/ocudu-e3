@@ -12,7 +12,9 @@
 #include "ocudu/gtpu/gtpu_teid_pool.h"
 #include "ocudu/support/async/fifo_async_task_scheduler.h"
 #include "ocudu/support/timers.h"
+#include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace ocudu {
 
@@ -21,7 +23,7 @@ namespace ocuup {
 /// UE manager configuration.
 struct ue_manager_config {
   uint32_t                      max_nof_ues;
-  const n3_interface_config&    n3_config;
+  const ngu_interface_config&   ngu_config;
   const cu_up_test_mode_config& test_mode_config;
 };
 
@@ -33,7 +35,7 @@ struct ue_manager_dependencies {
   ngu_session_manager&                                ngu_session_mngr;
   cu_up_manager_pdcp_interface&                       cu_up_mngr_pdcp_if;
   gtpu_demux_ctrl&                                    gtpu_rx_demux;
-  gtpu_teid_pool&                                     n3_teid_allocator;
+  gtpu_teid_pool&                                     ngu_teid_allocator;
   gtpu_teid_pool&                                     f1u_teid_allocator;
   cu_up_executor_mapper&                              exec_pool;
   dlt_pcap&                                           gtpu_pcap;
@@ -52,6 +54,7 @@ public:
   async_task<void> stop() override;
   ue_context*      add_ue(cu_up_e1_index_t e1_index, const ue_context_cfg& cfg) override;
   async_task<void> remove_all_ues() override;
+  async_task<void> remove_ues(const std::vector<cu_up_ue_index_t>& ue_indexes) override;
   async_task<void> remove_e1_ues(cu_up_e1_index_t e1_index) override;
   async_task<void> remove_ue(cu_up_ue_index_t ue_index) override;
   ue_context*      find_ue(cu_up_ue_index_t ue_index) override;
@@ -72,17 +75,25 @@ private:
   /// \return The UE index.
   cu_up_ue_index_t get_next_ue_index();
 
+  /// \brief Get a snapshot of the indexes of all UEs in the UE database, optionally filtered by E1 interface.
+  ///
+  /// The removal routines run on such a snapshot, so that they do not hold an iterator into the UE database across
+  /// their suspension points, given that UEs can be added and removed while they run.
+  /// \param e1_index If present, only the UEs of this E1 interface are returned.
+  /// \return The UE indexes.
+  std::vector<cu_up_ue_index_t> get_ue_indexes(std::optional<cu_up_e1_index_t> e1_index = std::nullopt) const;
+
   async_task<expected<>> schedule_and_wait_ue_removal(cu_up_ue_index_t ue_index);
 
   uint32_t                                            max_nof_ues;
-  const n3_interface_config&                          n3_config;
+  const ngu_interface_config&                         ngu_config;
   const cu_up_test_mode_config&                       test_mode_config;
   std::vector<std::reference_wrapper<e1ap_interface>> e1aps;
   f1u_cu_up_gateway&                                  f1u_gw;
   ngu_session_manager&                                ngu_session_mngr;
   cu_up_manager_pdcp_interface&                       cu_up_mngr_pdcp_if;
   gtpu_demux_ctrl&                                    gtpu_rx_demux;
-  gtpu_teid_pool&                                     n3_teid_allocator;
+  gtpu_teid_pool&                                     ngu_teid_allocator;
   gtpu_teid_pool&                                     f1u_teid_allocator;
   cu_up_executor_mapper&                              exec_pool;
   task_executor&                                      ctrl_executor;

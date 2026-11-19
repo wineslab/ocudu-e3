@@ -20,6 +20,21 @@ enum class ue_config_state : uint8_t {
   config_applied,
 };
 
+/// How a UE is being created, determining whether it starts in fallback mode and, if so, its initial contention
+/// resolution state.
+enum class ue_creation_mode : uint8_t {
+  /// UE does not start in fallback mode; it uses its dedicated configuration directly.
+  skip_fallback,
+  /// RACH-created UE (native 4-step Msg1/Msg3, or 2-step-fallback): ConRes CE MAC CE is pending.
+  msg3_rach,
+  /// RACH-created UE via 2-step RACH successRAR, which already resolved contention (TS38.321, 6.2.3a).
+  two_step_success_rar,
+  /// F1AP-created UE undergoing a Contention-Free RA.
+  cfra,
+  /// F1AP-created UE, not via RACH (e.g. reestablishment/handover): already RRC connected, awaiting the C-RNTI CE.
+  high_layers,
+};
+
 /// State tracking the UE's contention resolution progress in the scheduler.
 enum class ue_conres_state : uint8_t {
   /// RACH-created UE: waiting for the ConRes MAC CE to be ACKed by the UE.

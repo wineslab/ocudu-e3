@@ -4,12 +4,15 @@
 
 #include "lib/du/du_high/du_manager/converters/asn1_ntn_config_helpers.h"
 #include "lib/du/du_high/du_manager/converters/asn1_sys_info_packer.h"
+#include "tests/ocudu_test_requirements.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/bcch_dl_sch_msg.h"
 #include "ocudu/asn1/rrc_nr/sys_info.h"
 #include "ocudu/pcap/mac_pcap.h"
 #include "ocudu/ran/sib/system_info_config.h"
 #include "ocudu/support/executors/task_worker.h"
 #include <chrono>
+#include <cmath>
 #include <gtest/gtest.h>
 #include <string>
 #include <utility>
@@ -33,11 +36,12 @@ static std::pair<double, double> decode_ellipsoid_point_to_lat_lon_deg(const asn
   uint32_t lon_enc = static_cast<uint32_t>(bits & 0xffffffu);
   int32_t  lon_raw = static_cast<int32_t>(lon_enc) - 8388608;
 
-  double lat_deg = static_cast<double>(lat_enc) * 90.0 / 8388607.0;
+  // Inverse of the TS 23.032 sec. 6.1 encoding: latitude scale 2^23/90, longitude scale 2^24/360.
+  double lat_deg = static_cast<double>(lat_enc) * 90.0 / 8388608.0;
   if (south) {
     lat_deg = -lat_deg;
   }
-  double lon_deg = static_cast<double>(lon_raw) * 360.0 / 16777215.0;
+  double lon_deg = static_cast<double>(lon_raw) * 360.0 / 16777216.0;
 
   return {lat_deg, lon_deg};
 }
@@ -56,7 +60,7 @@ ntn_config make_test_ntn_config(unsigned koffset_ms       = 260,
 
   // Basic timing parameters
   cfg.cell_specific_koffset.emplace(std::chrono::milliseconds(koffset_ms));
-  cfg.k_mac                    = k_mac;
+  cfg.k_mac                    = std::chrono::milliseconds{k_mac};
   cfg.ntn_ul_sync_validity_dur = sync_validity;
 
   // ECEF ephemeris
@@ -92,8 +96,46 @@ ntn_config make_test_ntn_config(unsigned koffset_ms       = 260,
   return cfg;
 }
 
+TEST(srs_sib19_ntn_test, orbital_ephemeris_retrograde_inclination_packs)
+{
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-1");
+
+  const double sun_sync_inclination = 1.7104;
+
+  sib19_info sib19;
+  sib19.ntn_cfg.emplace();
+  auto& orbit         = sib19.ntn_cfg->ephemeris_info.emplace(orbital_coordinates_t{});
+  auto& orb           = std::get<orbital_coordinates_t>(orbit);
+  orb.semi_major_axis = 6900000.0;
+  orb.eccentricity    = 0.001;
+  orb.periapsis       = 1.0;
+  orb.longitude       = 2.0;
+  orb.mean_anomaly    = 3.0;
+  orb.inclination     = sun_sync_inclination;
+
+  std::string js_str;
+  auto        buf = asn1_packer::pack_sib19(sib19, &js_str);
+  EXPECT_FALSE(buf.empty());
+
+  asn1::cbit_ref            bref(buf);
+  asn1::rrc_nr::sib19_r17_s sib19_decoded;
+  ASSERT_EQ(sib19_decoded.unpack(bref), asn1::OCUDUASN_SUCCESS);
+
+  ASSERT_TRUE(sib19_decoded.ntn_cfg_r17_present);
+  ASSERT_EQ(sib19_decoded.ntn_cfg_r17.ephemeris_info_r17.type(),
+            asn1::rrc_nr::ephemeris_info_r17_c::types::orbital_r17);
+  const auto& decoded_orbit = sib19_decoded.ntn_cfg_r17.ephemeris_info_r17.orbital_r17();
+
+  // Negative branch is used and decodes back to the original inclination via field * step + pi.
+  EXPECT_LT(decoded_orbit.inclination_r17, 0);
+  const double decoded_inclination = decoded_orbit.inclination_r17 * 0.00000002341 + M_PI;
+  EXPECT_NEAR(decoded_inclination, sun_sync_inclination, 1e-6);
+}
+
 TEST(srs_sib19_ntn_test, distance_thresh_encoding)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-1");
+
   sib19_info sib19;
   sib19.distance_thres = 5000; // 5000 meters / 50 = 100
 
@@ -137,6 +179,8 @@ TEST(srs_sib19_ntn_test, make_asn1_rrc_cell_sib19_moving_ref_location)
 
 TEST(srs_sib19_ntn_test, make_asn1_rrc_cell_sib19_ref_location_positive_longitude)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-1");
+
   sib19_info sib19;
   sib19.ref_location.emplace();
   sib19.ref_location->latitude  = 48.135;
@@ -212,6 +256,8 @@ TEST(srs_sib19_ntn_test, make_asn1_rrc_cell_sib19_sat_switch)
 
 TEST(srs_sib19_ntn_test, make_asn1_rrc_cell_sib19_neighbor_cells)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-3");
+
   sib19_info sib19;
   // Add 2 neighbor cells with mixed optional fields
   neighbor_ntn_cell neighbor1;
@@ -248,6 +294,8 @@ TEST(srs_sib19_ntn_test, make_asn1_rrc_cell_sib19_neighbor_cells)
 
 TEST(srs_sib19_ntn_test, make_asn1_rrc_cell_sib19_neighbor_cells_extended)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-3");
+
   sib19_info sib19;
   // Add 6 neighbors (first 4 in base list, remaining 2 in extension list)
   for (int i = 0; i < 6; i++) {
@@ -321,6 +369,8 @@ TEST(srs_sib19_ntn_test, make_asn1_rrc_cell_sib19_all_r18_fields)
 
 TEST(srs_sib19_ntn_test, max_ncells_supported)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-3");
+
   sib19_info sib19;
   // Add maximum 8 neighbors (4 base + 4 extension)
   for (int i = 0; i < 8; i++) {
@@ -348,6 +398,8 @@ TEST(srs_sib19_ntn_test, max_ncells_supported)
 
 TEST(srs_sib19_ntn_test, complete_sib19_all_fields_with_pcap)
 {
+  OCUDU_TEST_REQUIREMENTS("DU-NTN-SI-1");
+
   sib19_info sib19;
 
   // ===== Base R17 Fields =====

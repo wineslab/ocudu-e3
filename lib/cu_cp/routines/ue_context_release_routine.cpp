@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_context_release_routine.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ran/cause/ngap_cause_converters.h"
 
 using namespace ocudu;

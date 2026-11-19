@@ -16,6 +16,9 @@
 #include "ocudu/hal/dpdk/mbuf_pool.h"
 #include "ocudu/hal/phy/upper/channel_processors/pusch/ext_harq_buffer_context_repository_factory.h"
 #include "ocudu/ran/sch/sch_constants.h"
+#include <array>
+#include <memory>
+#include <vector>
 
 namespace ocudu {
 namespace hal {

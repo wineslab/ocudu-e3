@@ -136,16 +136,35 @@ XARGS_BASE_ARGS=(
   "--max-procs=${XARGS_PROCS}"
 )
 
+# Output lines from reuse that are informational but not actionable
+REUSE_OUTPUT_FILTERS=(
+  "^Successfully changed header of "
+  "^Skipped unrecognised file "
+)
+
+# Run xargs+reuse and filter noisy informational output unless verbose
+run_annotate() {
+  if $VERBOSE; then
+    "${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" "$@"
+  else
+    local pattern tmpout
+    pattern=$(printf '%s\n' "${REUSE_OUTPUT_FILTERS[@]}" | paste -sd '|')
+    tmpout=$(mktemp "${tmpdir}/annotate_out.XXXXXX")
+    "${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" "$@" > "${tmpout}"
+    grep -v -E "${pattern}" "${tmpout}" || true
+  fi
+}
+
 # Prune copyright (if enabled)
 if $PRUNE; then
-  "${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" -a "${files_cpp}"     "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_CPP_ARGS}"     "${REUSE_HDR_PRUNED}"
-  "${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" -a "${files_generic}" "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_GENERIC_ARGS}" "${REUSE_HDR_PRUNED}"
+  run_annotate -a "${files_cpp}"     "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_CPP_ARGS}"     "${REUSE_HDR_PRUNED}"
+  run_annotate -a "${files_generic}" "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_GENERIC_ARGS}" "${REUSE_HDR_PRUNED}"
 fi
 
 # Apply new headers
-"${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" -a "${files_cpp_default}"     "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_CPP_ARGS}"     "${REUSE_HDR_DEFAULT}"
-"${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" -a "${files_cpp_alt}"         "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_CPP_ARGS}"     "${REUSE_HDR_ALT}"
-"${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" -a "${files_generic_default}" "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_GENERIC_ARGS}" "${REUSE_HDR_DEFAULT}"
-"${XARGS_APP}" "${XARGS_BASE_ARGS[@]}" -a "${files_generic_alt}"     "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_GENERIC_ARGS}" "${REUSE_HDR_ALT}"
+run_annotate -a "${files_cpp_default}"     "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_CPP_ARGS}"     "${REUSE_HDR_DEFAULT}"
+run_annotate -a "${files_cpp_alt}"         "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_CPP_ARGS}"     "${REUSE_HDR_ALT}"
+run_annotate -a "${files_generic_default}" "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_GENERIC_ARGS}" "${REUSE_HDR_DEFAULT}"
+run_annotate -a "${files_generic_alt}"     "${REUSE_APP}" "${REUSE_BASE_ARGS[@]}" "${REUSE_GENERIC_ARGS}" "${REUSE_HDR_ALT}"
 
 rm -rf "${tmpdir}"

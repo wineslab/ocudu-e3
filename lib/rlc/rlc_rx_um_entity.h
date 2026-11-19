@@ -7,10 +7,11 @@
 #include "rlc_rx_entity.h"
 #include "rlc_um_pdu.h"
 #include "ocudu/adt/expected.h"
+#include "ocudu/rlc/rlc_window_seg_pools.h"
 #include "ocudu/support/executors/task_executor.h"
-#include "ocudu/support/sdu_window.h"
+#include "ocudu/support/segmented_sdu_window.h"
 #include "ocudu/support/timers.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 #include <set>
 
 namespace ocudu {
@@ -73,7 +74,7 @@ private:
   const uint32_t um_window_size;
 
   /// Rx window
-  sdu_window<rlc_rx_um_sdu_info, rlc_bearer_logger> rx_window;
+  segmented_sdu_window<rlc_rx_um_sdu_info, rlc_bearer_logger> rx_window;
 
   /// \brief t-Reassembly
   /// This timer is used by [...] the receiving side of an UM RLC entity in order to detect loss of RLC PDUs at lower
@@ -93,7 +94,8 @@ public:
                    rlc_bearer_metrics_collector&     metrics_coll_,
                    rlc_pcap&                         pcap_,
                    task_executor&                    ue_executor,
-                   timer_manager&                    timers);
+                   timer_manager&                    timers,
+                   rlc_drb_um_rx_window_seg_pool&    window_seg_pool);
 
   void stop() final
   {

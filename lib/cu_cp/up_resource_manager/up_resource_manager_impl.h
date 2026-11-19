@@ -26,8 +26,11 @@ struct up_pdu_session_context_update {
   std::map<drb_id_t, up_drb_context> drb_to_modify;
   std::vector<drb_id_t>              drb_to_remove;
 
-  integrity_protection_result_t       integrity_protection_result;
-  confidentiality_protection_result_t confidentiality_protection_result;
+  // Security applied to this PDU session. Set once the CU-UP reports which protection it performed. Until then the
+  // protected setting is assumed, so that a path that fails to report the result never disables protection.
+  integrity_protection_result_t       integrity_protection_result = integrity_protection_result_t::performed;
+  confidentiality_protection_result_t confidentiality_protection_result =
+      confidentiality_protection_result_t::performed;
 };
 
 // Struct that contains all fields required to update the UP config based on an incoming
@@ -48,6 +51,12 @@ struct up_config_update {
   std::vector<pdu_session_id_t> pdu_sessions_failed_to_modify_list; // List of PDU sessions that failed to be modified.
   std::vector<drb_id_t>         drb_to_remove_list;                 // List of DRBs to be removed.
 };
+
+/// \brief Maps a QoS flow, scoped to its PDU session, to the DRB ID the source RAN node used for it. Derived from
+/// the (optional) DRBs to QoS Flows Mapping List conveyed in the source's Handover Preparation Information
+/// (TS 38.413 Section 9.3.1.29), and used to prefer the same DRB ID at the target during handover admission, since
+/// DRB IDs are otherwise allocated independently by each RAN node (TS 38.300 Section 9.2.3.2.3).
+using up_old_drb_association = std::map<pdu_session_id_t, std::map<qos_flow_id_t, drb_id_t>>;
 
 // Response given back to the UP resource manager containing the full context
 // that could be setup.
@@ -72,7 +81,8 @@ public:
   bool validate_request(const ngap_pdu_session_resource_release_command& pdu) const;
 
   up_config_update
-  calculate_update(const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_items);
+  calculate_update(const slotted_id_vector<pdu_session_id_t, cu_cp_pdu_session_res_setup_item>& setup_items,
+                   const up_old_drb_association& old_drb_association = {});
   up_config_update calculate_update(const ngap_pdu_session_resource_modify_request& pdu);
   up_config_update calculate_update(const ngap_pdu_session_resource_release_command& pdu);
 
@@ -82,6 +92,7 @@ public:
   bool                          key_refresh_useful();
   const up_pdu_session_context& get_pdu_session_context(pdu_session_id_t psi) const;
   const up_drb_context&         get_drb_context(drb_id_t drb_id) const;
+  bool                          has_drb(drb_id_t drb_id) const;
   bool                          has_pdu_session(pdu_session_id_t pdu_session_id) const;
   size_t                        get_nof_drbs() const;
   size_t                        get_nof_pdu_sessions() const;

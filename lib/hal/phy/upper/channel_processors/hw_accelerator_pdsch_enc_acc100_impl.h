@@ -15,6 +15,8 @@
 #include "ocudu/hal/dpdk/bbdev/ldpc/bbdev_ldpc_encoder.h"
 #include "ocudu/hal/dpdk/mbuf_pool.h"
 #include "ocudu/ran/sch/sch_constants.h"
+#include <array>
+#include <memory>
 
 namespace ocudu {
 namespace hal {

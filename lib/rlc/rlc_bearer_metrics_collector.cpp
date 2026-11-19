@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "rlc_bearer_metrics_collector.h"
+#include "ocudu/support/executors/task_executor.h"
 
 using namespace ocudu;
 

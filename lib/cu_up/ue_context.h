@@ -43,7 +43,7 @@ struct ue_context_dependencies {
   f1u_cu_up_gateway&                  f1u_gw;
   ngu_session_manager&                ngu_session_mngr;
   cu_up_manager_pdcp_interface&       cu_up_mngr_pdcp_if;
-  gtpu_teid_pool&                     n3_teid_allocator;
+  gtpu_teid_pool&                     ngu_teid_allocator;
   gtpu_teid_pool&                     f1u_teid_allocator;
   gtpu_demux_ctrl&                    gtpu_rx_demux;
   dlt_pcap&                           gtpu_pcap;
@@ -55,7 +55,7 @@ class ue_context : public pdu_session_manager_ctrl
 public:
   ue_context(cu_up_ue_index_t              index_,
              ue_context_cfg                cfg_,
-             const n3_interface_config&    n3_config_,
+             const ngu_interface_config&   ngu_config_,
              const cu_up_test_mode_config& test_mode_config_,
              ue_context_dependencies       dependencies) :
     task_sched(dependencies.task_sched),
@@ -67,7 +67,7 @@ public:
     pdu_session_manager(index,
                         cfg.qos,
                         cfg.security_info,
-                        n3_config_,
+                        ngu_config_,
                         test_mode_config_,
                         cfg.ue_dl_aggregate_maximum_bit_rate,
                         {logger,
@@ -79,7 +79,7 @@ public:
                          dependencies.f1u_gw,
                          dependencies.ngu_session_mngr,
                          dependencies.cu_up_mngr_pdcp_if,
-                         dependencies.n3_teid_allocator,
+                         dependencies.ngu_teid_allocator,
                          dependencies.f1u_teid_allocator,
                          dependencies.gtpu_rx_demux,
                          ue_exec_mapper->dl_pdu_executor(),
@@ -97,8 +97,7 @@ public:
             "Failed to create UE context. Activity notification level is UE, but no UE inactivity timer configured\n");
       }
       ue_inactivity_timer = ue_ctrl_timer_factory.create_timer();
-      ue_inactivity_timer.set(*cfg.ue_inactivity_timeout,
-                              [this](timer_id_t /*tid*/) { on_ue_inactivity_timer_expired(); });
+      ue_inactivity_timer.set(*cfg.ue_inactivity_timeout, [this]() { on_ue_inactivity_timer_expired(); });
       ue_inactivity_timer.run();
     }
   }
@@ -182,6 +181,9 @@ public:
 
   bool resume_pending() const { return resume_requested; }
 
+  /// \brief Checks whether the removal of this UE context is pending to avoid duplication.
+  bool remove_pending() const { return remove_requested; }
+
   void suspend()
   {
     ocudu_assert(st != bearer_context_state_t::suspended, "Trying to suspend already suspended bearer context");
@@ -196,6 +198,9 @@ public:
     pdu_session_manager.resume();
     resume_requested = false;
   }
+
+  /// \brief Flags the removal of this UE context as pending to avoid duplication.
+  void request_removal() { remove_requested = true; }
 
   cu_up_e1_index_t get_e1_index() { return e1ap.get_e1_index(); }
 
@@ -215,6 +220,7 @@ private:
   unique_timer           ue_inactivity_timer;
   bearer_context_state_t st{bearer_context_state_t::active};
   bool                   resume_requested{false};
+  bool                   remove_requested{false};
 
   /// Handle expired UE inactivity timer. This function is called from a timer that is run in UE executor,
   /// therefore it handovers the handling to control executor.
@@ -225,8 +231,7 @@ private:
           msg.ue_index                                    = index;
           e1ap.handle_bearer_context_inactivity_notification(msg);
         })) {
-      logger.log_warning("Could not handle expired UE inactivity handler, queue is full. ue={}",
-                         fmt::underlying(index));
+      logger.log_warning("Could not handle expired UE inactivity handler, queue is full. ue={}", index);
     }
   }
 };

@@ -20,69 +20,74 @@
 
 using namespace ocudu;
 
-std::unique_ptr<e2_agent>
-ocudu::create_e2_du_agent(const e2ap_configuration&                          e2ap_cfg_,
-                          e2_connection_client&                              e2_client_,
-                          e2_du_metrics_interface*                           e2_metrics_,
-                          odu::f1ap_ue_id_translator*                        f1ap_ue_id_translator_,
-                          odu::du_configurator*                              du_configurator_,
-                          timer_factory                                      timers_,
-                          task_executor&                                     e2_exec_,
-                          std::unique_ptr<e2_node_component_config_provider> node_component_config_provider_)
+std::unique_ptr<e2_agent> ocudu::create_e2_du_agent(const e2ap_config& e2ap_cfg_, e2ap_dependencies dependencies)
 {
-  ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("E2-DU");
-  e2_agent_dependencies   dependencies{
-      &logger, e2ap_cfg_, &e2_client_, &timers_, &e2_exec_, std::move(node_component_config_provider_)};
+  e2_agent_dependencies agent_dependencies{.logger    = dependencies.logger,
+                                           .e2_client = dependencies.e2_client,
+                                           .timers    = dependencies.timers,
+                                           .task_exec = dependencies.e2_exec,
+                                           .node_component_config_provider =
+                                               std::move(dependencies.node_component_config_provider),
+                                           .e2sm_modules = {}};
 
   // E2SM-KPM
   if (e2ap_cfg_.e2sm_kpm_enabled) {
-    auto e2sm_kpm_meas_provider = std::make_unique<e2sm_kpm_du_meas_provider_impl>(*f1ap_ue_id_translator_);
-    std::unique_ptr<e2sm_kpm_asn1_packer> e2sm_kpm_packer =
-        std::make_unique<e2sm_kpm_asn1_packer>(*e2sm_kpm_meas_provider);
-    std::unique_ptr<e2sm_kpm_impl> e2sm_kpm_iface =
-        std::make_unique<e2sm_kpm_impl>(logger, *e2sm_kpm_packer, *e2sm_kpm_meas_provider);
-    e2_metrics_->connect_e2_du_meas_provider(std::move(e2sm_kpm_meas_provider));
-    dependencies.e2sm_modules.emplace_back(e2sm_module{e2sm_kpm_asn1_packer::ran_func_id,
-                                                       e2sm_kpm_asn1_packer::oid,
-                                                       std::move(e2sm_kpm_packer),
-                                                       std::move(e2sm_kpm_iface)});
+    ocudu_assert(dependencies.f1ap_ue_id_translator, "Invalid F1AP UE id translator");
+    ocudu_assert(dependencies.e2_metrics_var, "Invalid E2 metrics");
+
+    auto e2sm_kpm_meas_provider = std::make_unique<e2sm_kpm_du_meas_provider_impl>(*dependencies.f1ap_ue_id_translator);
+    auto e2sm_kpm_packer        = std::make_unique<e2sm_kpm_asn1_packer>(*e2sm_kpm_meas_provider);
+    auto e2sm_kpm_iface =
+        std::make_unique<e2sm_kpm_impl>(dependencies.logger, *e2sm_kpm_packer, *e2sm_kpm_meas_provider);
+
+    dependencies.e2_metrics_var->connect_e2_du_meas_provider(std::move(e2sm_kpm_meas_provider));
+
+    agent_dependencies.e2sm_modules.emplace_back(e2sm_module{e2sm_kpm_asn1_packer::ran_func_id,
+                                                             e2sm_kpm_asn1_packer::oid,
+                                                             std::move(e2sm_kpm_packer),
+                                                             std::move(e2sm_kpm_iface)});
   }
 
   // E2SM-RC
   if (e2ap_cfg_.e2sm_rc_enabled) {
-    auto                                  e2sm_rc_packer = std::make_unique<e2sm_rc_asn1_packer>();
-    auto                                  e2sm_rc_iface  = std::make_unique<e2sm_rc_impl>(logger, *e2sm_rc_packer);
-    int                                   control_service_style_id = 2;
-    std::unique_ptr<e2sm_control_service> rc_control_service_style =
-        std::make_unique<e2sm_rc_control_service>(control_service_style_id);
-    std::unique_ptr<e2sm_control_action_executor> rc_control_action_executor =
-        std::make_unique<e2sm_rc_control_action_2_6_du_executor>(*du_configurator_, *f1ap_ue_id_translator_);
+    ocudu_assert(dependencies.du_configurator, "Invalid DU configurator");
+    ocudu_assert(dependencies.f1ap_ue_id_translator, "Invalid F1AP UE id translator");
+
+    auto e2sm_rc_packer             = std::make_unique<e2sm_rc_asn1_packer>();
+    auto e2sm_rc_iface              = std::make_unique<e2sm_rc_impl>(dependencies.logger, *e2sm_rc_packer);
+    int  control_service_style_id   = 2;
+    auto rc_control_service_style   = std::make_unique<e2sm_rc_control_service>(control_service_style_id);
+    auto rc_control_action_executor = std::make_unique<e2sm_rc_control_action_2_6_du_executor>(
+        *dependencies.du_configurator, *dependencies.f1ap_ue_id_translator);
+
     rc_control_service_style->add_e2sm_rc_control_action_executor(std::move(rc_control_action_executor));
     e2sm_rc_packer->add_e2sm_control_service(rc_control_service_style.get());
     e2sm_rc_iface->add_e2sm_control_service(std::move(rc_control_service_style));
-    dependencies.e2sm_modules.emplace_back(e2sm_module{e2sm_rc_asn1_packer::ran_func_id,
-                                                       e2sm_rc_asn1_packer::oid,
-                                                       std::move(e2sm_rc_packer),
-                                                       std::move(e2sm_rc_iface)});
+
+    agent_dependencies.e2sm_modules.emplace_back(e2sm_module{e2sm_rc_asn1_packer::ran_func_id,
+                                                             e2sm_rc_asn1_packer::oid,
+                                                             std::move(e2sm_rc_packer),
+                                                             std::move(e2sm_rc_iface)});
   }
 
   // E2SM-CCC
   if (e2ap_cfg_.e2sm_ccc_enabled) {
-    auto                                  e2sm_ccc_packer = std::make_unique<e2sm_ccc_asn1_packer>();
-    auto                                  e2sm_ccc_iface  = std::make_unique<e2sm_ccc_impl>(logger, *e2sm_ccc_packer);
+    auto e2sm_ccc_packer = std::make_unique<e2sm_ccc_asn1_packer>();
+    auto e2sm_ccc_iface  = std::make_unique<e2sm_ccc_impl>(dependencies.logger, *e2sm_ccc_packer);
     std::unique_ptr<e2sm_control_service> ccc_control_service_style =
         std::make_unique<e2sm_ccc_control_service_style_2>();
     std::unique_ptr<e2sm_control_action_executor> ccc_control_action_executor =
-        std::make_unique<e2sm_ccc_control_o_rrm_policy_ratio_executor>(*du_configurator_);
+        std::make_unique<e2sm_ccc_control_o_rrm_policy_ratio_executor>(*dependencies.du_configurator,
+                                                                       dependencies.e2_exec);
     ccc_control_service_style->add_e2sm_rc_control_action_executor(std::move(ccc_control_action_executor));
     e2sm_ccc_packer->add_e2sm_control_service(ccc_control_service_style.get());
     e2sm_ccc_iface->add_e2sm_control_service(std::move(ccc_control_service_style));
-    dependencies.e2sm_modules.emplace_back(e2sm_module{e2sm_ccc_asn1_packer::ran_func_id,
-                                                       e2sm_ccc_asn1_packer::oid,
-                                                       std::move(e2sm_ccc_packer),
-                                                       std::move(e2sm_ccc_iface)});
+
+    agent_dependencies.e2sm_modules.emplace_back(e2sm_module{e2sm_ccc_asn1_packer::ran_func_id,
+                                                             e2sm_ccc_asn1_packer::oid,
+                                                             std::move(e2sm_ccc_packer),
+                                                             std::move(e2sm_ccc_iface)});
   }
 
-  auto e2_ext = std::make_unique<e2_entity>(std::move(dependencies));
-  return e2_ext;
+  return std::make_unique<e2_entity>(e2ap_cfg_, std::move(agent_dependencies));
 }

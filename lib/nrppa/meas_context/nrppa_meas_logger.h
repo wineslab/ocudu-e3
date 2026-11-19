@@ -30,26 +30,12 @@ private:
   std::string prefix;
 };
 
+inline const char* format_as(const nrppa_meas_log_prefix& o)
+{
+  return o.to_c_str();
+}
+
 using nrppa_meas_logger = prefixed_logger<nrppa_meas_log_prefix>;
 
 } // namespace ocucp
 } // namespace ocudu
-
-namespace fmt {
-
-// associated formatter
-template <>
-struct formatter<ocudu::ocucp::nrppa_meas_log_prefix> {
-  template <typename ParseContext>
-  auto parse(ParseContext& ctx)
-  {
-    return ctx.begin();
-  }
-
-  template <typename FormatContext>
-  auto format(const ocudu::ocucp::nrppa_meas_log_prefix& o, FormatContext& ctx) const
-  {
-    return format_to(ctx.out(), "{}", o.to_c_str());
-  }
-};
-} // namespace fmt

@@ -4,20 +4,18 @@
 
 #pragma once
 
+#include "ocudu/support/units.h"
+#include <chrono>
 namespace ocudu {
 
 /// SSB constants.
 /// FR1 = [ 410 MHz – 7125 MHz] (TS 38.101, Section 5.1) and ARFCN corresponding to 7.125GHz is 875000.
-const unsigned FR1_MAX_FREQUENCY_ARFCN = 875000;
-const unsigned NOF_SSB_OFDM_SYMBOLS    = 4;
+constexpr unsigned FR1_MAX_FREQUENCY_ARFCN = 875000;
+constexpr unsigned NOF_SSB_OFDM_SYMBOLS    = 4;
 
 /// SIB1 constants.
 /// SIB1 periodicity, see TS 38.331, Section 5.2.1.
 constexpr unsigned SIB1_PERIODICITY = 160;
-/// [Implementation defined] Max numbers of beams, to be used for SIB1 scheduler.
-/// NOTE: This is temporary, and valid only for FR1.
-constexpr unsigned MAX_NUM_BEAMS = 8;
-
 /// [Implementation defined] Maximum allowed slot offset between DCI and its scheduled PDSCH. Values {0,..,32}.
 constexpr unsigned SCHEDULER_MAX_K0 = 15;
 
@@ -32,12 +30,23 @@ constexpr unsigned SCHEDULER_MAX_K1 = 15;
 /// and to reduce BLER, we restrict maximum value of k2 to 11.
 constexpr unsigned SCHEDULER_MAX_K2 = 11;
 
-/// [Implementation defined] Maximum allowed slot delay between PDSCH and BSR injection in triggered UL grant feature.
-constexpr unsigned SCHEDULER_MAX_TRIG_UL_DELAY = 10;
+/// [Implementation defined] Maximum allowed delay in ms, between PDSCH and BSR injection in triggered UL grant feature.
+constexpr std::chrono::milliseconds SCHEDULER_MAX_TRIG_UL_DELAY{16};
+
+/// [Implementation defined] Maximum allowed size of BSR injection in triggered UL grant feature. 1500 bytes coresponds
+/// to standard Ethernet packet size.
+constexpr units::bytes SCHEDULER_MAX_TRIG_GRANT_SIZE{1500};
+
+/// [Implementation defined] Hardcoded grant size for SRB1 triggered UL grant. The value base on maxiumum RCC processing
+/// delay defined in TS 38.331.
+constexpr units::bytes SRB1_TRIG_GRANT_SIZE{16};
 
 /// Maximum value of NTN Cell-specific K-offset. The field is expressed in slots for a subcarrier spacing of 15 kHz.
 /// See TS 38.331.
 constexpr unsigned NTN_CELL_SPECIFIC_KOFFSET_MAX = 1023;
+
+/// Maximum value of NTN k_mac. The field is expressed in slots for a subcarrier spacing of 15 kHz. See TS 38.331.
+constexpr unsigned NTN_K_MAC_MAX = 512;
 
 /// Maximum value of Msg delta. See table 6.1.2.1.1-5, in TS 38.214.
 constexpr unsigned MAX_MSG3_DELTA = 6;

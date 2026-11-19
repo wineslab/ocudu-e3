@@ -7,6 +7,7 @@
 #include "ocudu/phy/generic_functions/dft_processor.h"
 #include "ocudu/phy/generic_functions/transform_precoding/transform_precoder.h"
 #include "ocudu/ran/transform_precoding/transform_precoding_helpers.h"
+#include <memory>
 #include <unordered_map>
 
 namespace ocudu {

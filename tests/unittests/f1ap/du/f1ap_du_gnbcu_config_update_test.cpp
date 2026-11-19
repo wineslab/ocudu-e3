@@ -6,6 +6,7 @@
 #include "lib/f1ap/asn1_helpers.h"
 #include "tests/test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/asn1/f1ap/f1ap_pdu_contents.h"
 #include <gtest/gtest.h>
 
@@ -44,6 +45,28 @@ TEST_F(f1ap_du_gnbcu_config_update_test, when_gnbcu_config_request_is_received_t
                    .pdu.successful_outcome()
                    .value.gnb_cu_cfg_upd_ack()
                    ->cells_failed_to_be_activ_list_present);
+}
+
+TEST_F(f1ap_du_gnbcu_config_update_test, when_gnbcu_config_request_contains_cells_to_bar_then_du_receives_them)
+{
+  // DU receives GNB-CU Config Update Request carrying the Cells to be Barred List (one barred, one unbarred).
+  std::vector<f1ap_cell_to_bar> cells_to_bar = {
+      {nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(0).value()}, true},
+      {nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(1).value()}, false}};
+  f1ap_message msg = test_helpers::generate_gnb_cu_configuration_update_request(0, {}, {}, cells_to_bar);
+  this->f1ap->handle_message(msg);
+
+  // The decoded request carries the cells to bar with their CGIs and barred values.
+  ASSERT_TRUE(this->f1ap_du_cfg_handler.last_cu_upd_req.has_value());
+  const auto& du_req = this->f1ap_du_cfg_handler.last_cu_upd_req.value();
+  ASSERT_EQ(du_req.cells_to_bar.size(), 2);
+  ASSERT_EQ(du_req.cells_to_bar[0].cgi, cells_to_bar[0].cgi);
+  ASSERT_TRUE(du_req.cells_to_bar[0].barred);
+  ASSERT_EQ(du_req.cells_to_bar[1].cgi, cells_to_bar[1].cgi);
+  ASSERT_FALSE(du_req.cells_to_bar[1].barred);
+
+  // The DU acknowledges the update.
+  ASSERT_TRUE(test_helpers::is_gnb_cu_config_update_acknowledge_valid(this->f1c_gw.last_tx_pdu(), msg));
 }
 
 TEST_F(f1ap_du_gnbcu_config_update_test, when_du_fails_to_start_cell_then_du_adds_cell_in_failed_to_activate_list)

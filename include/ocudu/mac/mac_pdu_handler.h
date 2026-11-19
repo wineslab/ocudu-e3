@@ -6,11 +6,13 @@
 
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/adt/static_vector.h"
+#include "ocudu/mac/msg3_mac_ce.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/logical_channel/lcid.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/ran/slot_pdu_capacity_constants.h"
 #include "ocudu/ran/slot_point.h"
+#include <optional>
 
 namespace ocudu {
 
@@ -22,6 +24,8 @@ struct mac_rx_pdu {
   rnti_t         rnti;
   harq_pid_value harq_id;
   byte_buffer    pdu;
+  /// Index of the RA preamble that originated this PDU, set only for MsgA PUSCH receptions.
+  std::optional<uint8_t> rapid;
 };
 using mac_rx_pdu_list = static_vector<mac_rx_pdu, MAX_PUSCH_PDUS_PER_SLOT>;
 
@@ -48,6 +52,8 @@ struct ul_ccch_indication_message {
   rnti_t          tc_rnti;
   slot_point      slot_rx;
   byte_buffer     subpdu;
+  /// Decoded MAC CEs whose processing must be deferred until the UE context exists.
+  msg3_mac_ce_list msg3_mac_ces;
 };
 
 /// Used to indicate Msg3 C-RNTI CE detection.

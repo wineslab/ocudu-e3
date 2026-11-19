@@ -7,7 +7,7 @@
 #include "rlc_sdu_queue_lockfree.h"
 #include "rlc_tx_entity.h"
 #include "ocudu/support/executors/task_executor.h"
-#include "fmt/format.h"
+#include "fmt/base.h"
 
 namespace ocudu {
 
@@ -46,6 +46,9 @@ private:
   const uint32_t head_len_full;
   const uint32_t head_len_first;
   const uint32_t head_len_not_first;
+
+  /// PDCP SN mask for efficient SDU discard across SN wraparound.
+  const uint32_t pdcp_sn_mask;
 
   pcap_rlc_pdu_context pcap_context;
 
@@ -91,7 +94,7 @@ public:
 
   // Interfaces for higher layers
   void handle_sdu(byte_buffer sdu_buf, bool is_retx) override;
-  void discard_sdu(uint32_t pdcp_sn) override;
+  void discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size) override;
 
   // Interfaces for lower layers
   size_t           pull_pdu(span<uint8_t> mac_sdu_buf) noexcept override;

@@ -8,6 +8,7 @@
 #include "ocudu/phy/lower/modulation/modulation_factories.h"
 #include "ocudu/phy/lower/processors/downlink/pdxch/pdxch_processor.h"
 #include "ocudu/phy/lower/sampling_rate.h"
+#include "ocudu/ran/antenna_topology.h"
 #include <memory>
 
 namespace ocudu {
@@ -26,8 +27,8 @@ struct pdxch_processor_configuration {
   unsigned bandwidth_rb;
   /// Uplink center frequency in Hz.
   double center_freq_Hz;
-  /// Number of transmit ports.
-  unsigned nof_tx_ports;
+  /// Transmit antenna topology.
+  antenna_topology tx_ant_topology;
 };
 
 /// Lower physical layer PDxCH processor - Factory interface.

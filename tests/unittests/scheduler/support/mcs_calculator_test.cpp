@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lib/scheduler/support/mcs_calculator.h"
+#include "fmt/format.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
@@ -31,6 +32,12 @@ struct snr_to_ul_mcs_test_params {
   ocudu::pusch_mcs_table mcs_table;
   sch_mcs_index          expected_mcs;
 };
+
+void PrintTo(const snr_to_ul_mcs_test_params& p, std::ostream* os)
+{
+  *os << fmt::format(
+      "snr={}dB mcs_table={} expected_mcs={}", p.snr, pusch_mcs_table_to_string(p.mcs_table), p.expected_mcs.value());
+}
 
 class snr_to_ul_mcs_tester : public ::testing::TestWithParam<snr_to_ul_mcs_test_params>
 {};

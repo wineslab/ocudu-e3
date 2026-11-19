@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/bit.h"
 #include "ocudu/phy/upper/channel_coding/channel_coding_factories.h"
 #include "ocudu/phy/upper/channel_processors/pdsch/factories.h"
@@ -19,7 +20,6 @@
 #include "ocudu/ran/sch/sch_mcs.h"
 #include "ocudu/ran/sch/tbs_calculator.h"
 #include "ocudu/support/math/complex_normal_random.h"
-#include "ocudu/support/ocudu_test.h"
 #include "fmt/ostream.h"
 #include <gtest/gtest.h>
 #include <random>
@@ -64,17 +64,17 @@ private:
   static std::shared_ptr<pdsch_encoder_factory> create_sw_pdsch_encoder_factory()
   {
     std::shared_ptr<crc_calculator_factory> crc_calc_factory = create_crc_calculator_factory_sw("auto");
-    TESTASSERT(crc_calc_factory);
+    report_fatal_error_if_not(crc_calc_factory, "crc_calc_factory");
 
     std::shared_ptr<ldpc_encoder_factory> ldpc_encoder_factory = create_ldpc_encoder_factory_sw("auto");
-    TESTASSERT(ldpc_encoder_factory);
+    report_fatal_error_if_not(ldpc_encoder_factory, "ldpc_encoder_factory");
 
     std::shared_ptr<ldpc_rate_matcher_factory> ldpc_rate_matcher_factory = create_ldpc_rate_matcher_factory_sw();
-    TESTASSERT(ldpc_rate_matcher_factory);
+    report_fatal_error_if_not(ldpc_rate_matcher_factory, "ldpc_rate_matcher_factory");
 
     std::shared_ptr<ldpc_segmenter_tx_factory> segmenter_factory =
         create_ldpc_segmenter_tx_factory_sw(crc_calc_factory);
-    TESTASSERT(segmenter_factory);
+    report_fatal_error_if_not(segmenter_factory, "segmenter_factory");
 
     pdsch_encoder_factory_sw_configuration encoder_factory_config;
     encoder_factory_config.encoder_factory      = ldpc_encoder_factory;
@@ -86,19 +86,19 @@ private:
   static std::shared_ptr<pusch_decoder_factory> create_sw_pusch_decoder_factory()
   {
     std::shared_ptr<crc_calculator_factory> crc_calc_factory = create_crc_calculator_factory_sw("auto");
-    TESTASSERT(crc_calc_factory);
+    report_fatal_error_if_not(crc_calc_factory, "crc_calc_factory");
 
     ldpc_decoder_factory::ldpc_decoder_factory_configuration ldpc_dec_cfg = {.force_decoding      = false,
                                                                              .early_stop_syndrome = false};
     std::shared_ptr<ldpc_decoder_factory> ldpc_decoder_factory = create_ldpc_decoder_factory_sw("auto", ldpc_dec_cfg);
-    TESTASSERT(ldpc_decoder_factory);
+    report_fatal_error_if_not(ldpc_decoder_factory, "ldpc_decoder_factory");
 
     std::shared_ptr<ldpc_rate_dematcher_factory> ldpc_rate_dematcher_factory =
         create_ldpc_rate_dematcher_factory_sw("auto");
-    TESTASSERT(ldpc_rate_dematcher_factory);
+    report_fatal_error_if_not(ldpc_rate_dematcher_factory, "ldpc_rate_dematcher_factory");
 
     std::shared_ptr<ldpc_segmenter_rx_factory> segmenter_rx_factory = create_ldpc_segmenter_rx_factory_sw();
-    TESTASSERT(segmenter_rx_factory);
+    report_fatal_error_if_not(segmenter_rx_factory, "segmenter_rx_factory");
 
     pusch_decoder_factory_sw_configuration pusch_decoder_factory_sw_config;
     pusch_decoder_factory_sw_config.crc_factory               = crc_calc_factory;
@@ -143,28 +143,28 @@ protected:
   void SetUp() override
   {
     std::shared_ptr<pdsch_encoder_factory> pdsch_enc_factory = create_sw_pdsch_encoder_factory();
-    TESTASSERT(pdsch_enc_factory);
+    report_fatal_error_if_not(pdsch_enc_factory, "pdsch_enc_factory");
 
     std::shared_ptr<pusch_decoder_factory> pusch_dec_factory = create_sw_pusch_decoder_factory();
-    TESTASSERT(pusch_dec_factory);
+    report_fatal_error_if_not(pusch_dec_factory, "pusch_dec_factory");
 
     std::shared_ptr<modulation_mapper_factory> modulation_factory = create_modulation_mapper_factory();
-    TESTASSERT(modulation_factory);
+    report_fatal_error_if_not(modulation_factory, "modulation_factory");
 
     std::shared_ptr<demodulation_mapper_factory> demodulation_factory = create_demodulation_mapper_factory();
-    TESTASSERT(demodulation_factory);
+    report_fatal_error_if_not(demodulation_factory, "demodulation_factory");
 
     encoder = pdsch_enc_factory->create();
-    TESTASSERT(encoder);
+    report_fatal_error_if_not(encoder, "encoder");
 
     decoder = pusch_dec_factory->create();
-    TESTASSERT(decoder);
+    report_fatal_error_if_not(decoder, "decoder");
 
     modulator = modulation_factory->create();
-    TESTASSERT(modulator);
+    report_fatal_error_if_not(modulator, "modulator");
 
     demodulator = demodulation_factory->create();
-    TESTASSERT(demodulator);
+    report_fatal_error_if_not(demodulator, "demodulator");
   }
 
   std::unique_ptr<pdsch_encoder>       encoder;
@@ -218,7 +218,7 @@ TEST_P(PxschChainFixture, Ideal)
   rx_buffer_cfg.expire_timeout_slots                              = 1;
   rx_buffer_cfg.external_soft_bits                                = false;
   std::unique_ptr<rx_buffer_pool_controller> rx_bufffer_pool_ctrl = create_rx_buffer_pool(rx_buffer_cfg);
-  TESTASSERT(rx_bufffer_pool_ctrl);
+  ASSERT_TRUE(rx_bufffer_pool_ctrl);
 
   // Prepare encoder configuration.
   pdsch_encoder::configuration encoder_config;
@@ -261,7 +261,7 @@ TEST_P(PxschChainFixture, Ideal)
 
     // Get RM buffer.
     unique_rx_buffer rx_buffer =
-        rx_bufffer_pool_ctrl->get_pool().reserve({}, trx_buffer_identifier(0, 0), info.sch.nof_cb, true);
+        rx_bufffer_pool_ctrl->get_pool().reserve({}, trx_buffer_identifier(to_rnti(0), 0), info.sch.nof_cb, true);
 
     // Encode data.
     encoder->encode(tx_encoded_bits, tx_data.get_buffer(), encoder_config);

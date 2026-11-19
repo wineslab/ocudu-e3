@@ -19,22 +19,26 @@ public:
   /// \param rnti RNTI of allocation. Values: SI-RNTI, P-RNTI, RA-RNTIs.
   /// \param ss_id Search Space Id to use.
   /// \param aggr_lvl Aggregation Level of PDCCH allocation.
+  /// \param beam Beam that carries the PDCCH. Nullopt selects the default beams.
   /// \return Allocated PDCCH if successful.
-  virtual pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                                      rnti_t                        rnti,
-                                                      search_space_id               ss_id,
-                                                      aggregation_level             aggr_lvl) = 0;
+  virtual pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                                      rnti_t                         rnti,
+                                                      search_space_id                ss_id,
+                                                      aggregation_level              aggr_lvl,
+                                                      std::optional<beam_identifier> beam) = 0;
 
   /// Allocates RE space for common UL PDCCH, avoiding in the process collisions with other PDCCH allocations.
   /// \param slot_alloc Grid Resources for the slot where PDCCH is going to be allocated.
   /// \param rnti RNTI of allocation. Potential types: TC-RNTI.
   /// \param ss_id Search Space Id to use.
   /// \param aggr_lvl Aggregation Level of PDCCH allocation.
+  /// \param beam Beam that carries the PDCCH. Nullopt selects the default beams.
   /// \return Allocated PDCCH if successful.
-  virtual pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                                      rnti_t                        rnti,
-                                                      search_space_id               ss_id,
-                                                      aggregation_level             aggr_lvl) = 0;
+  virtual pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                                      rnti_t                         rnti,
+                                                      search_space_id                ss_id,
+                                                      aggregation_level              aggr_lvl,
+                                                      std::optional<beam_identifier> beam) = 0;
 
   /// Allocates RE space for UE-dedicated DL PDCCH, avoiding in the process collisions with other PDCCH allocations.
   /// \param rnti RNTI of UE being allocated.

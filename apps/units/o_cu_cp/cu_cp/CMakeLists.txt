@@ -9,8 +9,9 @@ set(SOURCES
         cu_cp_unit_config_cli11_schema.cpp
         cu_cp_config_translators.cpp
         cu_cp_unit_config_validator.cpp
-        cu_cp_unit_config_yaml_writer.cpp)
+        cu_cp_unit_config_yaml_writer.cpp
+        commands/cu_cp_remote_commands.cpp)
 
 add_library(ocudu_cu_cp_app_unit STATIC ${SOURCES})
 target_include_directories(ocudu_cu_cp_app_unit PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(ocudu_cu_cp_app_unit PRIVATE ocudu_cu_cp_unit_metrics_helpers ocudu_app_helpers)
+target_link_libraries(ocudu_cu_cp_app_unit PRIVATE ocudu_cu_cp_unit_metrics_helpers ocudu_app_helpers ocudu_ntn_app_helpers)

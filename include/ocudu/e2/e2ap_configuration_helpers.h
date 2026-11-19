@@ -4,16 +4,16 @@
 
 #pragma once
 
-#include "ocudu/e2/e2ap_configuration.h"
+#include "ocudu/e2/e2ap_config.h"
 #include "ocudu/ocudulog/ocudulog.h"
 
 namespace ocudu {
 namespace config_helpers {
 
 /// Generates default cell configuration used by gNB DU. The default configuration should be valid.
-inline e2ap_configuration make_default_e2ap_config()
+inline e2ap_config make_default_e2ap_config()
 {
-  e2ap_configuration cfg{};
+  e2ap_config cfg{};
   cfg.gnb_id            = {411, 22};
   cfg.plmn              = "00101";
   cfg.max_setup_retries = 5;
@@ -24,7 +24,7 @@ inline e2ap_configuration make_default_e2ap_config()
 }
 
 /// Returns true if the given E2 configuration is valid, otherwise false.
-inline bool is_valid_configuration(const e2ap_configuration& config)
+inline bool is_valid_configuration(const e2ap_config& config)
 {
   if (config.plmn.empty()) {
     fmt::print("PLMN id is empty\n");

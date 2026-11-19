@@ -6,6 +6,7 @@
 cell_cfg:
   ntn:
     cell_specific_koffset: 150 # sets the maximum possible channel delay
+    ntn_ul_sync_validity_dur: 900 # GEO ephemeris barely changes, so the assistance info stays valid the longest
     ta_common: 0
     ephemeris_info: # ecef ephemeris information for the satellite
       pos_x: 20922195
@@ -20,7 +21,10 @@ cell_cfg:
       - si_period: 16
         sib_mapping: 19
   pucch: # increases the scheduling period of PUCCH to allow for the larger channel delay
-    sr_period_ms: 320
+    sr_period_ms: 80 # largest SR period allowed
+  mac_cell_group:
+    sr_cfg:
+      sr_prohibit_timer: 320 # keeps the UE from retransmitting the SR while the grant crosses the channel
   csi:
     csi_rs_period: 80
   pdsch: # disables HARQ processing

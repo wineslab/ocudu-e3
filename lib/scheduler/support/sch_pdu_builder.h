@@ -147,4 +147,14 @@ void build_pusch_f0_1_c_rnti(pusch_information&           pusch,
                              const vrb_interval&          vrbs,
                              bool                         is_new_data);
 
+void build_pusch_cs_rnti(pusch_information&           pusch,
+                         rnti_t                       cs_rnti,
+                         const pusch_config_params&   pusch_cfg,
+                         sch_mcs_tbs                  mcs_tbs_info,
+                         const ue_cell_configuration& ue_cell_cfg,
+                         const sched_bwp_config&      bwp_info,
+                         const vrb_interval&          vrbs,
+                         uint8_t                      rv_index,
+                         harq_id_t                    harq_id);
+
 } // namespace ocudu

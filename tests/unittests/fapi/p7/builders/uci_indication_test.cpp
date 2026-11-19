@@ -14,26 +14,24 @@ TEST(uci_indication_builder, valid_pusch_pdu_metrics_passes)
     uci_pusch_pdu         pdu;
     uci_pusch_pdu_builder builder(pdu);
 
-    std::optional<float>         ul_sinr_metric;
-    std::optional<phy_time_unit> timing_advance_offset;
-    std::optional<float>         rssi;
-    std::optional<float>         rsrp;
-    bool                         rsrp_use_dB = i;
+    std::optional<float>           ul_sinr_metric;
+    std::optional<phy_time_unit>   timing_advance_offset;
+    std::optional<fapi_power_unit> rssi;
+    std::optional<fapi_power_unit> rsrp;
 
     if (i) {
       ul_sinr_metric.emplace(-30.1F);
       timing_advance_offset.emplace(phy_time_unit::from_seconds(10));
-      rssi.emplace(-59.3F);
-      rsrp.emplace(-36.2F);
+      rssi.emplace(fapi_power_unit{-59.3F, 0, 0});
+      rsrp.emplace(fapi_power_unit{-36.2F, 0, 0});
     }
 
-    builder.set_metrics_parameters(ul_sinr_metric, timing_advance_offset, rssi, rsrp, rsrp_use_dB);
+    builder.set_metrics_parameters(ul_sinr_metric, timing_advance_offset, rssi, rsrp);
 
-    ASSERT_EQ((ul_sinr_metric) ? static_cast<int>(ul_sinr_metric.value() * 500.F) : -32768, pdu.ul_sinr_metric);
+    ASSERT_EQ(ul_sinr_metric, pdu.ul_sinr_metric_dB);
     ASSERT_EQ(timing_advance_offset, pdu.timing_advance_offset);
-    ASSERT_EQ((rssi) ? static_cast<unsigned>((rssi.value() + 128.F) * 10.F) : 65535U, pdu.rssi);
-    ASSERT_EQ((rsrp) ? static_cast<unsigned>((rsrp.value() + ((rsrp_use_dB) ? 140.F : 128.F)) * 10.F) : 65535U,
-              pdu.rsrp);
+    ASSERT_EQ(rssi, pdu.rssi);
+    ASSERT_EQ(rsrp, pdu.rsrp);
   }
 }
 
@@ -97,26 +95,24 @@ TEST(uci_indication_builder, valid_pucch_f01_pdu_metrics_passes)
     uci_pucch_pdu_format_0_1         pdu;
     uci_pucch_pdu_format_0_1_builder builder(pdu);
 
-    std::optional<float>         ul_sinr_metric;
-    std::optional<phy_time_unit> timing_advance_offset;
-    std::optional<float>         rssi;
-    std::optional<float>         rsrp;
-    bool                         rsrp_use_dB = i;
+    std::optional<float>           ul_sinr_metric;
+    std::optional<phy_time_unit>   timing_advance_offset;
+    std::optional<fapi_power_unit> rssi;
+    std::optional<fapi_power_unit> rsrp;
 
     if (i) {
       ul_sinr_metric.emplace(-30.1F);
       timing_advance_offset.emplace(phy_time_unit::from_seconds(10));
-      rssi.emplace(-59.3F);
-      rsrp.emplace(-36.2F);
+      rssi.emplace(fapi_power_unit{-59.3F, 0, 0});
+      rsrp.emplace(fapi_power_unit{-36.2F, 0, 0});
     }
 
-    builder.set_time_advance(timing_advance_offset).set_metrics_parameters(ul_sinr_metric, rssi, rsrp, rsrp_use_dB);
+    builder.set_time_advance(timing_advance_offset).set_metrics_parameters(ul_sinr_metric, rssi, rsrp);
 
-    ASSERT_EQ((ul_sinr_metric) ? static_cast<int>(ul_sinr_metric.value() * 500.F) : -32768, pdu.ul_sinr_metric);
+    ASSERT_EQ(ul_sinr_metric, pdu.ul_sinr_metric_dB);
     ASSERT_EQ(timing_advance_offset, pdu.timing_advance_offset);
-    ASSERT_EQ((rssi) ? static_cast<unsigned>((rssi.value() + 128.F) * 10.F) : 65535U, pdu.rssi);
-    ASSERT_EQ((rsrp) ? static_cast<unsigned>((rsrp.value() + ((rsrp_use_dB) ? 140.F : 128.F)) * 10.F) : 65535U,
-              pdu.rsrp);
+    ASSERT_EQ(rssi, pdu.rssi);
+    ASSERT_EQ(rsrp, pdu.rsrp);
   }
 }
 
@@ -157,26 +153,24 @@ TEST(uci_indication_builder, valid_pucch_f234_pdu_metrics_passes)
     uci_pucch_pdu_format_2_3_4         pdu;
     uci_pucch_pdu_format_2_3_4_builder builder(pdu);
 
-    std::optional<float>         ul_sinr_metric;
-    std::optional<phy_time_unit> timing_advance_offset;
-    std::optional<float>         rssi;
-    std::optional<float>         rsrp;
-    bool                         rsrp_use_dB = i;
+    std::optional<float>           ul_sinr_metric;
+    std::optional<phy_time_unit>   timing_advance_offset;
+    std::optional<fapi_power_unit> rssi;
+    std::optional<fapi_power_unit> rsrp;
 
     if (i) {
       ul_sinr_metric.emplace(-30.1F);
       timing_advance_offset.emplace(phy_time_unit::from_seconds(10));
-      rssi.emplace(-59.3F);
-      rsrp.emplace(-36.2F);
+      rssi.emplace(fapi_power_unit{-59.3F, 0, 0});
+      rsrp.emplace(fapi_power_unit{-36.2F, 0, 0});
     }
 
-    builder.set_metrics_parameters(ul_sinr_metric, timing_advance_offset, rssi, rsrp, rsrp_use_dB);
+    builder.set_metrics_parameters(ul_sinr_metric, timing_advance_offset, rssi, rsrp);
 
-    ASSERT_EQ((ul_sinr_metric) ? static_cast<int>(ul_sinr_metric.value() * 500.F) : -32768, pdu.ul_sinr_metric);
+    ASSERT_EQ(ul_sinr_metric, pdu.ul_sinr_metric_dB);
     ASSERT_EQ(timing_advance_offset, pdu.timing_advance_offset);
-    ASSERT_EQ((rssi) ? static_cast<unsigned>((rssi.value() + 128.F) * 10.F) : 65535U, pdu.rssi);
-    ASSERT_EQ((rsrp) ? static_cast<unsigned>((rsrp.value() + ((rsrp_use_dB) ? 140.F : 128.F)) * 10.F) : 65535U,
-              pdu.rsrp);
+    ASSERT_EQ(rssi, pdu.rssi);
+    ASSERT_EQ(rsrp, pdu.rsrp);
   }
 }
 

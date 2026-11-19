@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "split6_o_du_low_plugin_dummy.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/fapi/common/error_indication_notifier.h"
 #include "ocudu/fapi/p5/p5_responses_notifier.h"
 #include "ocudu/fapi/p7/p7_indications_notifier.h"

@@ -11,6 +11,7 @@
 #include "pusch_processor_pool.h"
 #include "pusch_processor_validator_impl.h"
 #include "ulsch_demultiplex_impl.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/phy/upper/channel_processors/pusch/factories.h"
 
 using namespace ocudu;

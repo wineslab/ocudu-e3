@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+# SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+
+# Example config for a CU-CP using DTLS with E1 interface.
+
+cu_cp:
+  e1ap:
+    bind_addrs: 127.0.20.1
+    dtls:
+      cert_filename: "/tmp/server-cert.pem"
+      key_filename: "/tmp/server-key.pem"
+      ca_cert_filename: "/tmp/ca-cert.pem"

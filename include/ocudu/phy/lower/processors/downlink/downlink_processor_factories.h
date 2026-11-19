@@ -25,8 +25,8 @@ struct downlink_processor_configuration {
   unsigned bandwidth_prb;
   /// Center frequency in Hz.
   double center_frequency_Hz;
-  /// Number of transmit ports.
-  unsigned nof_tx_ports;
+  /// Transmit antenna topology.
+  antenna_topology tx_ant_topology;
   /// Number of slots notified in advance in the TTI boundary event.
   unsigned nof_slot_tti_in_advance;
 };

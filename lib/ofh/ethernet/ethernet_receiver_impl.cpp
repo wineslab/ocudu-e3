@@ -113,7 +113,9 @@ void receiver_impl::receive_loop()
   receive();
 
   // Retry the task deferring when it fails.
-  while (!executor.defer([this, tk = std::move(token)]() { receive_loop(); })) {
+  // Note: token is captured by copy so that a failed defer (which destroys the passed task and its token copy) does not
+  // leave it in a moved-from state for the retries.
+  while (!executor.defer([this, token]() { receive_loop(); })) {
     std::this_thread::sleep_for(std::chrono::microseconds(10));
   }
 }
